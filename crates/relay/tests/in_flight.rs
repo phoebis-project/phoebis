@@ -1722,8 +1722,9 @@ async fn a_retry_in_place_keeps_the_one_key_permit() {
 /// The rate-limit tier the slowed harness puts its account on, which its pricer keys on.
 const SLOWED_TIER: &str = "default_claude_max_20x";
 
-/// The burn average the slowed harness sets on its pool, and how far before the held turn's clock its turns run.
-const SLOWED_AVERAGE_SECONDS: u64 = 1_800;
+/// The burn average the slowed harness sets on its pool, and how far before the held turn's clock its turns run. Five
+/// minutes keeps every instant the harness dates after the epoch, since `NOW` lies a thousand seconds past it.
+const SLOWED_AVERAGE_SECONDS: u64 = 300;
 
 /// Every pin on `SLOWED_TIER` burns a tenth of the 5-hour window an hour whatever its usage, and nothing is charged, so
 /// the window reads what the test reports.
@@ -1734,12 +1735,13 @@ fn tenth_an_hour() -> SharePricer {
 }
 
 /// `a` priced by `tenth_an_hour`, the pool's slow-down turned on with a two-second cap, the shedding round off and the
-/// burn average at `SLOWED_AVERAGE_SECONDS`, and `a`'s 5-hour window at 0.9 an hour from its reset, then three turns of
-/// `s1` ten seconds apart one burn average before the clock this leaves: the first places the pin, the second starts
-/// its pace and the third builds its ten-second cycle. The read is the older one so the ramp has stood a burn average
-/// by `s1`'s next turn: the turns read the factor under 1 at a ramp near 0 and pass unheld, and the gap of one burn
-/// average to that turn is a pause that leaves the cycle standing. The room under the ceiling lasts half the time to
-/// the reset, so that turn reads a factor of about a half and waits the cap.
+/// burn average at `SLOWED_AVERAGE_SECONDS`, `a`'s 5-hour window at 0.9 an hour from its reset, and three turns of `s1`
+/// ten seconds apart. The reading and the turns are dated one burn average before `s1`'s next turn, at the clock this
+/// leaves, so the stamp the renewals write has stood a burn average by then. The first turn places the pin and reads
+/// no slow-down, the second starts its pace and stamps the ramp, and the third builds its ten-second cycle, both
+/// renewals passing unheld at a ramp near 0. The gap of one burn average to the next turn is a pause that leaves the
+/// cycle standing, and the room under the ceiling lasts half the time to the reset, so that turn reads a factor of
+/// about a half and waits the cap.
 async fn slowed_harness(up: &FakeUpstream) -> Harness {
     let h = harness_with_router_config(
         up,

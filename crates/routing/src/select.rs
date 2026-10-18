@@ -2511,8 +2511,8 @@ pub struct SlowDownRead {
     pub threshold_ms: i64,
     pub factor: f64,
     /// The share of the read's slow-down the holds apply: the time the stretch has read over zero over one burn
-    /// average, clamped to [0, 1], and 1 on a window at or past the ceiling, whose standing is measured and not a
-    /// projection a short burst could still retract.
+    /// average, clamped to [0, 1], 1 on a window at or past the ceiling, whose standing is measured and not a
+    /// projection a short burst could still retract, and 0 at a factor of 1, which holds nothing.
     pub ramp: f64,
     /// The factor the plan received, `1 - (1 - factor) x ramp`: the hold's outcome names it.
     pub ramped: f64,
@@ -2520,7 +2520,7 @@ pub struct SlowDownRead {
     /// The holds of the pool's pins on the account whose pace has a cycle, every kept pin weighted by its priced
     /// decayed rate on `five_hour`: a pin without a cycle runs unheld and a pin whose cycle is too long for the cap is
     /// held at the cap, and the rest share the remaining reduction at one speed, so the account's pins realize the
-    /// factor together as far as the cap lets them. Empty while no pin on the account has a cycle.
+    /// ramped factor together as far as the cap lets them. Empty while no pin on the account has a cycle.
     pub plan: Vec<PinHold>,
     /// The speed the account's pins realize under the plan, `sum(b x s) / sum(b)` over every kept pin with
     /// `s = c / (c + h)` and `s = 1` for a pin without a cycle, so 1 while the plan is empty: the one figure the
@@ -2612,7 +2612,8 @@ pub(crate) fn slow_down_of(
     // stretch first read over zero, so a burst of a few minutes whose demand projects past the ceiling costs holds in
     // proportion to how long it has stood, and a demand that lasts gets the full factor once the average has absorbed
     // it. A window at or past the ceiling is a measured fact and not a projection a burst could retract, so it takes
-    // the full factor at once. The entry of a passed window reads no stamp, so the ramp restarts with every window.
+    // the full factor at once. A factor of 1 applies no hold, so it applies no share. The entry of a passed window
+    // reads no stamp, so the ramp restarts with every window.
     let average_ms = burn_average_ms(pool);
     let stood = state
         .slow_down_in_force(pool, account_id, now)
@@ -2620,6 +2621,8 @@ pub(crate) fn slow_down_of(
         .map_or(0, |since| (now - since).max(0));
     let ramp = if at_ceiling {
         1.0
+    } else if factor >= 1.0 {
+        0.0
     } else {
         (stood as f64 / average_ms.max(1) as f64).clamp(0.0, 1.0)
     };

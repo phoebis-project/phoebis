@@ -1073,15 +1073,17 @@ async fn cycle_then_slow(h: &Harness) {
     h.clock.store(NOW + 20_000, Ordering::SeqCst);
 }
 
-/// The burn average `slow_then_cycle` sets on the pool, and how far before the held turn's clock its turns run.
-const SLOWED_AVERAGE_SECONDS: u64 = 1_800;
+/// The burn average `slow_then_cycle` sets on the pool, and how far before the held turn's clock its turns run. Five
+/// minutes keeps every instant the helper dates after the epoch, since `NOW` lies a thousand seconds past it.
+const SLOWED_AVERAGE_SECONDS: u64 = 300;
 
 /// The pool's slow-down turned on with a two-second cap, the shedding round off and the burn average at
-/// `SLOWED_AVERAGE_SECONDS`, and `a`'s 5-hour window at `utilization` with its reset at `reset`, then three turns of
-/// `s1` ten seconds apart one burn average before the clock this leaves, at `s1`'s next turn: the first places the
-/// pin, the second starts its pace and the third builds its ten-second cycle. The read is the older one so the ramp has
-/// stood a burn average by that turn: the turns read the factor under 1 at a ramp near 0 and pass unheld, and the gap
-/// of one burn average to that turn is a pause that leaves the cycle standing.
+/// `SLOWED_AVERAGE_SECONDS`, `a`'s 5-hour window at `utilization` with its reset at `reset`, and three turns of `s1`
+/// ten seconds apart. The reading and the turns are dated one burn average before `s1`'s next turn, at the clock this
+/// leaves, so the stamp the renewals write has stood a burn average by then. The first turn places the pin and reads
+/// no slow-down, the second starts its pace and stamps the ramp, and the third builds its ten-second cycle, both
+/// renewals passing unheld at a ramp near 0. The gap of one burn average to the next turn is a pause that leaves the
+/// cycle standing.
 async fn slow_then_cycle(h: &Harness, utilization: f64, reset: i64) {
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.slow_down = SlowDown {

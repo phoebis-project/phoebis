@@ -20679,11 +20679,15 @@ fn a_fresh_sessions_prior_reads_each_warm_pins_burn_over_its_accounts_speed() {
 
 /// The pool over `a` and `b` with the slow-down's cap at `hold_seconds` and the shedding round off, and its twin with
 /// the switch off, on which a case builds a pin's cycle: the fold reads no switch, so the cycle builds unheld and no
-/// entry is written.
+/// entry is written. The burn average is `AVERAGE_MS`, which the cases' stamps and speed folds are dated by.
 fn held_pools(hold_seconds: u32) -> (RegistrySnapshot, RegistrySnapshot) {
     let pool = |on: bool| Pool {
         members: vec![("a", 0), ("b", 1)],
         load_shedding: false,
+        shedding: Shedding {
+            burn_average_seconds: (AVERAGE_MS / 1_000) as u64,
+            ..Shedding::default()
+        },
         slow_down: SlowDown {
             slow_down: on,
             slow_down_stretch_seconds: 1800,
@@ -20970,6 +20974,7 @@ fn the_hold_is_capped_by_the_pools_hold_and_not_served_under_a_second() {
     // deadline is written.
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.77);
+    stamped(&mut st, &on, "s1", T + 2 * SECOND);
     cycled(&mut st, &off, "s1", SECOND, T + SECOND);
     let d = decide(
         &mut st,
@@ -20979,7 +20984,13 @@ fn the_hold_is_capped_by_the_pools_hold_and_not_served_under_a_second() {
     );
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
     assert_eq!(d.record.outcome.kind, "renewed");
-    let factor = number(fact(line(&d.record, "move:shed"), "factor"));
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        fact(shed, "ramp"),
+        &FactValue::Number(1.0),
+        "the plan receives the whole factor, so the floor and not the ramp leaves the pin unheld"
+    );
+    let factor = number(fact(shed, "factor"));
     let wanted = SECOND as f64 * (1.0 / factor - 1.0);
     assert!(
         (600.0..SLOW_DOWN_MIN_HOLD_MS as f64).contains(&wanted),
@@ -21181,25 +21192,30 @@ fn a_move_verdict_holds_nothing_and_a_wait_verdict_is_answered_first() {
     let mut st = shed_on_a();
     cycled(&mut st, &off, "s1", 10 * SECOND, T - 10 * SECOND);
     over_the_week_on_a(&mut st, T - SECOND);
+    stamped(&mut st, &on, "s1", T);
     past_the_wait(&mut st, &on, "p", "a", T);
     let d = decide(&mut st, &on, &main_turn(&on, "s1", T), &mut rng());
     assert_eq!(
         landed(d.result.clone()),
         ("b".into(), Some(MigrateReason::Shed))
     );
+    let shed = line(&d.record, "move:shed");
     assert!(
-        number(fact(line(&d.record, "move:shed"), "factor")) < 1.0,
-        "a reads slowed, so the pin would wait had it stayed"
+        number(fact(shed, "factor")) < 1.0 && fact(shed, "ramp") == &FactValue::Number(1.0),
+        "a reads slowed at the whole factor, so the pin would wait had it stayed: {:?}",
+        shed.facts
     );
 }
 
 /// The shedding pool over `a` and `b` with the slow-down on, every warmth markable so the round marks by burn, and
-/// its twin with both switches off, on which a case builds a pin's cycle.
+/// its twin with both switches off, on which a case builds a pin's cycle. The burn average is `AVERAGE_MS`, which the
+/// cases' stamps and pauses are dated by.
 fn shed_pools() -> (RegistrySnapshot, RegistrySnapshot) {
     let pool = |on: bool| Pool {
         members: vec![("a", 0), ("b", 1)],
         load_shedding: on,
         shedding: Shedding {
+            burn_average_seconds: (AVERAGE_MS / 1_000) as u64,
             warm_sessions: WarmSessions::Always,
             ..Shedding::default()
         },
@@ -21878,7 +21894,10 @@ fn a_held_decision_records_its_hold_and_the_row_names_it() {
         ),
         ("a", None, 120_000, "slow_down", Some(until))
     );
-    assert_eq!(outcome.factor, Some(number(fact(shed, "factor"))));
+    assert!(
+        (outcome.factor.expect("a factor") - number(fact(shed, "factor"))).abs() < 1e-12,
+        "the whole factor at a ramp of 1: {outcome:?}"
+    );
     assert_eq!(
         outcome.stretch_ms.map(|ms| ms as f64),
         Some(number(fact(shed, "stretch_ms")))
@@ -21967,14 +21986,15 @@ fn the_ramp_pulls_the_factor_toward_one_over_one_burn_average_after_the_stretch_
     let factor = shed_number(&d, "factor");
     about_a_half(factor);
     let ramp = shed_number(&d, "ramp");
+    let share = (10 * MINUTE) as f64 / AVERAGE_MS as f64;
     assert!(
-        (ramp - 1.0 / 3.0).abs() < 1e-3,
-        "ten minutes of a thirty-minute average: {ramp}"
+        (ramp - share).abs() < 1e-3,
+        "ten minutes of the burn average: {ramp}"
     );
     let outcome = d.record.outcome.hold.clone().expect("a held outcome");
     let ramped = outcome.factor.expect("the factor the hold was sized from");
     assert!(
-        (ramped - (1.0 - (1.0 - factor) / 3.0)).abs() < 1e-6,
+        (ramped - (1.0 - (1.0 - factor) * share)).abs() < 1e-6,
         "the hold is sized from a factor a third of the way from 1 to the read's: {ramped} against {factor}"
     );
     assert_cycle_over_factor(&d, req.received_at);
@@ -21984,7 +22004,7 @@ fn the_ramp_pulls_the_factor_toward_one_over_one_burn_average_after_the_stretch_
         "the ramped plan holds the pin: {length}"
     );
     // The ramped plan's realized speed folds into the entry once, over the ten minutes since the first read.
-    let w = (-600.0_f64 / 1_800.0).exp();
+    let w = (-(10 * MINUTE) as f64 / AVERAGE_MS as f64).exp();
     let speed = st.slow_down_state("p", "a").expect("an entry").speed;
     let realized = outcome.speed.expect("the realized speed");
     assert!(
@@ -22047,9 +22067,11 @@ fn a_read_whose_factor_is_one_clears_the_stamp_and_the_next_burst_ramps_from_not
         &main_turn(&on, "s1", T + 30 * SECOND),
         &mut rng(),
     );
+    let shed = line(&d.record, "move:shed");
     assert_eq!(
-        fact(line(&d.record, "move:shed"), "factor"),
-        &FactValue::Number(1.0)
+        (fact(shed, "factor"), fact(shed, "ramp")),
+        (&FactValue::Number(1.0), &FactValue::Number(0.0)),
+        "a factor of 1 applies no share of a slow-down"
     );
     assert_eq!(ramp_since(&st), None, "a read of 1 clears the stamp");
 
@@ -22207,12 +22229,14 @@ fn a_selection_on_an_entry_read_before_its_windows_passed_reset_replaces_it_and_
             entry.reset,
             entry.speed,
             entry.over_since,
+            entry.ramp_since,
             entry.slowed_since
         ),
         (
             T + 50 * MINUTE,
             Some(T + 50 * MINUTE + 5 * HOUR),
             1.0,
+            None,
             None,
             None
         ),
@@ -22321,9 +22345,15 @@ fn the_selection_that_opens_a_window_after_an_idle_gap_writes_an_entry_the_next_
         .cloned()
         .expect("the turn wrote a's entry");
     assert_eq!(
-        (entry.read_at, entry.reset, entry.factor, entry.slowed_since),
-        (T + 50 * MINUTE, None, 1.0, None),
-        "the write replaced the old window's entry, and no span opens at a factor of 1"
+        (
+            entry.read_at,
+            entry.reset,
+            entry.factor,
+            entry.ramp_since,
+            entry.slowed_since
+        ),
+        (T + 50 * MINUTE, None, 1.0, None, None),
+        "the write replaced the old window's entry, and neither the ramp nor a span starts at a factor of 1"
     );
     // The turn's upstream receipt opens the window a moment later, and its head names the reset five hours on.
     reading(&mut st, "a", 0.93, 5 * HOUR, T + 50 * MINUTE + 200);
@@ -22343,6 +22373,12 @@ fn the_selection_that_opens_a_window_after_an_idle_gap_writes_an_entry_the_next_
     assert!(
         factor < 1.0,
         "0.02 of room under the ceiling against five hours of s1's burn: {factor}"
+    );
+    assert_eq!(
+        st.slow_down_state("p", "a")
+            .and_then(|entry| entry.ramp_since),
+        Some(T + 51 * MINUTE),
+        "the new window's ramp starts at its first read under 1, not at the old window's"
     );
     let edges = st.take_slow_down_edges(T + 51 * MINUTE);
     assert_eq!(edges.len(), 2, "{edges:?}");

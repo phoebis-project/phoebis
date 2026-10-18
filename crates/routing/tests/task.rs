@@ -9475,8 +9475,8 @@ async fn slowed_router(now: &Arc<AtomicI64>) -> RouterHandle {
 /// The 5-hour reset `slowed_router` seeds on `a`.
 const SLOWED_RESET: i64 = AT + 40 * 60_000;
 
-/// The burn average `slowed_router` sets on its pool, which the stamp turn is dated at least one of before the held
-/// turn.
+/// The burn average that `slowed_router` and the projections case's router set on their pools. Their stamp turns are
+/// dated one of it before the first main turn, so the held turn after it reads the ramp at 1.
 const SLOWED_AVERAGE_MS: i64 = 30 * 60_000;
 
 /// Session `s1`'s main turn at `at` under its own request id.
