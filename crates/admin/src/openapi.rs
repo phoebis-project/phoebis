@@ -47,8 +47,8 @@ Each operation names its request (path segments, query parameters, or body field
     servers((url = "/", description = "This router's admin listener")),
     tags(
         (name = "Accounts"),
-        (name = "Analytics", description = "`GET /admin/analytics/breakdown` and `/series` share `range` \
-            (default `24h`), `group_by` (`account`, `all`, `client`, `effort`, `key`, `kind`, `model`, `pool`, \
+        (name = "Analytics", description = "`GET /admin/analytics/breakdown` and `/series` share `range` (default \
+            `24h`), `group_by` (`account`, `all`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, \
             `request_class`, `speed`, or `user_agent`), and filters `keys`, `pools`, `accounts`, `models`, `kinds` \
             (comma-separated lists), `user_agents` (newline-separated patterns over the agent's first product token, \
             `claude-cli/2.1.286` for `claude-cli/2.1.286 (external, cli)`: `*` matches any run of characters, `?` one, \

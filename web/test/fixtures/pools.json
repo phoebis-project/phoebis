@@ -133,13 +133,13 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "rKbKVPL_",
+            "prefix": "u-s5A9Dn",
             "enabled": true
           }
         ],
         "status": "active",
-        "requests_24h": 8,
-        "cost_24h": 0.024900000000000005,
+        "requests_24h": 10,
+        "cost_24h": 0.028450000000000007,
         "billed_24h": 0.0107,
         "equivalent_24h": {
           "five_hour": 0.000048175000000000005,
@@ -449,10 +449,10 @@
           },
           {
             "at": 1791716400000,
-            "requests": 4,
-            "failed": 2,
-            "tokens": 7200,
-            "cost_usd": 0.0142,
+            "requests": 6,
+            "failed": 3,
+            "tokens": 9000,
+            "cost_usd": 0.017750000000000002,
             "billed_usd": 0.0071,
             "equivalent": {
               "five_hour": 0.000017625,

@@ -8,42 +8,42 @@
       {
         "key": "business",
         "label": "business",
-        "requests": 6,
-        "succeeded": 4,
+        "requests": 7,
+        "succeeded": 5,
         "rate_limited": 0,
         "failed": 1,
         "exhausted": 0,
         "rejected": 0,
-        "attempts": 7,
+        "attempts": 8,
         "failovers": 1,
         "incomplete": 1,
-        "cache_hits": 6,
+        "cache_hits": 7,
         "cache_misses": 0,
         "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
-          "cache_read": 3500,
+          "cache_read": 4000,
           "cache_write_1h": 0,
-          "cache_write_5m": 1400,
-          "output": 700,
-          "thinking": 280,
-          "uncached_input": 7000,
+          "cache_write_5m": 1600,
+          "output": 800,
+          "thinking": 320,
+          "uncached_input": 8000,
           "web_fetch": 0,
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.00030000000000000003,
-          "cache_write": 0.003,
-          "input": 0.012,
-          "output": 0.006
+          "cache_read": 0.00035,
+          "cache_write": 0.0035,
+          "input": 0.014,
+          "output": 0.007
         },
-        "cost_usd": 0.0213,
+        "cost_usd": 0.02485,
         "errors": {
           "stream_incomplete": 1,
           "upstream_error": 1
         },
         "cache_miss_reasons": {
-          "none": 6
+          "none": 7
         },
         "histograms": {
           "duration_ms": [
@@ -84,7 +84,7 @@
             0,
             0,
             0,
-            6,
+            7,
             0,
             0,
             0,
@@ -141,7 +141,7 @@
             0,
             0,
             0,
-            5,
+            6,
             0,
             0,
             0,
@@ -205,7 +205,7 @@
             0,
             0,
             0,
-            5,
+            6,
             0,
             0,
             0,
@@ -276,7 +276,7 @@
             0,
             0,
             0,
-            5,
+            6,
             0,
             0,
             0,
@@ -368,8 +368,8 @@
           }
         },
         "probe_shares": {},
-        "plan_requests": 5,
-        "plan_output_tokens": 500,
+        "plan_requests": 6,
+        "plan_output_tokens": 600,
         "cost_equivalent": {
           "five_hour": 0.000048175000000000005,
           "seven_day": 0.000012846666666666668
@@ -772,18 +772,18 @@
       {
         "key": "-",
         "label": "unattributed",
-        "requests": 1,
+        "requests": 2,
         "succeeded": 0,
         "rate_limited": 0,
         "failed": 0,
         "exhausted": 0,
-        "rejected": 1,
+        "rejected": 2,
         "attempts": 0,
         "failovers": 0,
         "incomplete": 0,
         "cache_hits": 0,
         "cache_misses": 0,
-        "uncached": 1,
+        "uncached": 2,
         "expired_between_turns": 0,
         "tokens": {
           "cache_read": 0,
@@ -803,6 +803,7 @@
         },
         "cost_usd": 0.0,
         "errors": {
+          "client_contract": 1,
           "guardrail_blocked": 1
         },
         "cache_miss_reasons": {},
@@ -814,7 +815,7 @@
             0,
             0,
             0,
-            0,
+            1,
             1,
             0,
             0,
@@ -1074,7 +1075,7 @@
         },
         "percentiles": {
           "duration_ms": {
-            "p50": 3.854228868623104,
+            "p50": 3.219678444251377,
             "p90": 3.854228868623104,
             "p95": 3.854228868623104,
             "p99": 3.854228868623104
@@ -1117,7 +1118,7 @@
         "cost_shares": null,
         "cache_shares": null,
         "probe_shares": null,
-        "plan_requests": 1,
+        "plan_requests": 2,
         "plan_output_tokens": 0,
         "cost_equivalent": {},
         "cache_equivalent": {},

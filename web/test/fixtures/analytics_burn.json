@@ -786,9 +786,9 @@
         "seven_day_equivalent": 4.7e-6,
         "model_week_equivalent": null,
         "estimated": false,
-        "cached_tokens": 2000,
-        "tokens": 7200,
-        "uncached_tokens": 4000
+        "cached_tokens": 2500,
+        "tokens": 9000,
+        "uncached_tokens": 5000
       },
       {
         "at": 1791720000000,

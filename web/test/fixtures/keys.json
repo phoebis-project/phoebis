@@ -23,7 +23,7 @@
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "rKbKVPL_",
+        "prefix": "u-s5A9Dn",
         "created_at": 1791721000000,
         "updated_at": 1791721000000,
         "revision": 6189767511104,
@@ -51,24 +51,24 @@
         ],
         "usage_7d": {
           "billed_usd": 0.0107,
-          "cost_usd": 0.02135,
+          "cost_usd": 0.0249,
           "equivalent": {
             "five_hour": 0.0000393625,
             "seven_day": 0.000010496666666666667
           },
           "estimated": true,
-          "requests": 7,
-          "tokens": 12600
+          "requests": 9,
+          "tokens": 14400
         },
         "lifetime": {
           "billed_usd": 0.0107,
-          "cost_usd": 0.02135,
+          "cost_usd": 0.0249,
           "equivalent": {
             "five_hour": 0.0000393625,
             "seven_day": 0.000010496666666666667
           },
           "estimated": true,
-          "requests": 7
+          "requests": 9
         }
       }
     ]

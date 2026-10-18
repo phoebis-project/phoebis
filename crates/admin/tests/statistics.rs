@@ -959,7 +959,7 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
     assert_eq!(bad_group.status(), 400);
     assert_eq!(
         json(bad_group).await["error"],
-        "group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent"
+        "group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent"
     );
     let by_speed = get(
         &parts.app,
@@ -1019,6 +1019,254 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
     assert_eq!(
         json(too_many_clients).await["error"],
         "patterns are at most 256 characters, at most 32 of them"
+    );
+}
+
+/// One plan-funded request marked as the client's classifier call and one unmarked, both served on the Max 20x tier
+/// of the test cost model, which sizes both shared windows and weighs the model, so the unmarked one prices above
+/// zero without a figure read from the shipped files.
+async fn classifier_pair() -> common::Full {
+    let parts =
+        common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
+    for (id, classifier) in [("r-classifier", Some("client")), ("r-main", None)] {
+        let mut row = request(
+            id,
+            common::NOW - HOUR,
+            Some("desktop"),
+            "claude-sonnet-5-5",
+            "succeeded",
+            200,
+            "inference",
+        );
+        row.request_class = classifier.map(|_| "auxiliary".into());
+        row.classifier = classifier.map(String::from);
+        let mut served = attempt(id, "business", 200);
+        served.tier = Some("default_claude_max_20x".into());
+        parts.db.insert_request(&row, &[served], None).unwrap();
+    }
+    parts
+}
+
+#[tokio::test]
+async fn the_request_log_reads_the_classifiers_filter_and_the_show_route_prices_a_classifier_call_at_no_share(
+) {
+    let parts = classifier_pair().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (filter, listed) in [("client", "r-classifier"), ("-", "r-main")] {
+        let page = json(
+            get(
+                &parts.app,
+                &format!("/admin/requests?classifiers={filter}&limit=500"),
+                Some(&cookie),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            listed_ids(&page),
+            vec![listed],
+            "classifiers={filter}: {page}"
+        );
+    }
+    let marked = json(get(&parts.app, "/admin/requests/r-classifier", Some(&cookie)).await).await
+        ["request"]
+        .clone();
+    assert_eq!(
+        (
+            &marked["classifier"],
+            &marked["share_reason"],
+            &marked["estimated"]
+        ),
+        (
+            &serde_json::json!("client"),
+            &serde_json::json!("client_classifier"),
+            &serde_json::json!(false)
+        ),
+        "{marked}"
+    );
+    for figure in ["cost_shares", "cost_equivalent"] {
+        assert_eq!(
+            marked[figure],
+            serde_json::json!({ "five_hour": 0.0, "seven_day": 0.0 }),
+            "{figure}: each window the tier sizes reads zero by rule: {marked}"
+        );
+    }
+    let plain = json(get(&parts.app, "/admin/requests/r-main", Some(&cookie)).await).await
+        ["request"]
+        .clone();
+    assert!(
+        plain["classifier"].is_null()
+            && plain["share_reason"].is_null()
+            && plain["cost_shares"]["five_hour"]
+                .as_f64()
+                .is_some_and(|share| share > 0.0),
+        "an unmarked request prices from its counts and carries no reason: {plain}"
+    );
+}
+
+/// The breakdown answers the shares only where a filter names one account, so the grouped read without one asserts
+/// the 20x equivalent and the filtered read the shares.
+#[tokio::test]
+async fn the_analytics_group_on_the_classifier_dimension() {
+    let parts = classifier_pair().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let group = |body: &serde_json::Value, key: &str| {
+        body["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["key"] == key)
+            .cloned()
+            .unwrap_or_else(|| panic!("a {key} group: {body}"))
+    };
+    let breakdown = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=classifier",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let mut keys: Vec<&str> = breakdown["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["key"].as_str().unwrap())
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["-", "client"], "{breakdown}");
+    let (marked, plain) = (group(&breakdown, "client"), group(&breakdown, "-"));
+    assert!(
+        marked["cost_usd"].as_f64().is_some_and(|usd| usd > 0.0),
+        "the marked group keeps its dollar estimate: {marked}"
+    );
+    for window in ["five_hour", "seven_day"] {
+        assert_eq!(
+            marked["cost_equivalent"][window].as_f64(),
+            Some(0.0),
+            "{window}: {marked}"
+        );
+        assert!(
+            plain["cost_equivalent"][window]
+                .as_f64()
+                .is_some_and(|equivalent| equivalent > 0.0),
+            "{window}: {plain}"
+        );
+    }
+    let one_account = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=classifier&accounts=business",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let marked = group(&one_account, "client");
+    for window in ["five_hour", "seven_day"] {
+        assert_eq!(
+            marked["cost_shares"][window].as_f64(),
+            Some(0.0),
+            "{window}: {marked}"
+        );
+    }
+    let series = get(
+        &parts.app,
+        "/admin/analytics/series?range=24h&group_by=classifier",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(series.status(), 200);
+    let series = json(series).await;
+    let mut keys: Vec<&str> = series["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["groups"].as_array().unwrap())
+        .map(|g| g["key"].as_str().unwrap())
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    assert_eq!(keys, ["-", "client"], "{series}");
+    let burn = get(
+        &parts.app,
+        "/admin/analytics/burn?range=24h&group_by=classifier",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(burn.status(), 200, "the burn groups on the dimension too");
+    let burn = json(burn).await;
+    let mut groups: Vec<&str> = burn["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["group"].as_str().unwrap())
+        .collect();
+    groups.sort_unstable();
+    groups.dedup();
+    assert_eq!(groups, ["-", "client"], "{burn}");
+}
+
+#[tokio::test]
+async fn a_contract_refusal_lists_its_item() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let refused = RequestRecord {
+        attempts: 0,
+        ttfb_ms: None,
+        ttfc_ms: None,
+        error_code: Some("client_contract".into()),
+        client_contract: Some("class_header".into()),
+        ..request(
+            "r-refused",
+            now - HOUR,
+            Some("desktop"),
+            "claude-sonnet-5-5",
+            "rejected",
+            400,
+            "inference",
+        )
+    };
+    parts.db.insert_request(&refused, &[], None).unwrap();
+    parts
+        .db
+        .insert_request(
+            &request(
+                "r-served",
+                now - HOUR,
+                Some("desktop"),
+                "claude-sonnet-5-5",
+                "succeeded",
+                200,
+                "inference",
+            ),
+            &[attempt("r-served", "business", 200)],
+            None,
+        )
+        .unwrap();
+    let page = json(get(&parts.app, "/admin/requests?limit=500", Some(&cookie)).await).await;
+    let item = |id: &str| {
+        page["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .map(|r| r["client_contract"].clone())
+    };
+    assert_eq!(
+        (item("r-refused"), item("r-served")),
+        (
+            Some(serde_json::json!("class_header")),
+            Some(serde_json::Value::Null)
+        ),
+        "{page}"
+    );
+    let shown = json(get(&parts.app, "/admin/requests/r-refused", Some(&cookie)).await).await;
+    assert_eq!(
+        shown["request"]["client_contract"], "class_header",
+        "{shown}"
     );
 }
 

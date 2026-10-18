@@ -1816,7 +1816,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     assert_eq!(by_all.status(), 400, "the burn groups by no `all`");
     assert_eq!(
         json(by_all).await["error"],
-        "group_by is account, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent"
+        "group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent"
     );
     let by_pool = get(
         &parts.app,

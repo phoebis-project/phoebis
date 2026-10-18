@@ -1014,6 +1014,59 @@ async fn every_route_is_captured_and_holds_its_shape() {
         attempts: Vec::new(),
         bodies: None,
     });
+    // The client's own auto-mode classifier call, served on the plan at no window share, and a request refused for
+    // its missing class header. The refusal is a row of its own, since the guardrail step answers before the
+    // contract and the blocked row stays a guardrail refusal. Both are older than the blocked row, so the list's
+    // first rows keep their places, and under s2, so s1's session row keeps its count.
+    let classifier_at = blocked_at - 600;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            request_class: Some("auxiliary".into()),
+            classifier: Some("client".into()),
+            ..request(
+                key_generation,
+                "r-classifier",
+                classifier_at,
+                "desktop",
+                "s2",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![attempt(
+            "r-classifier",
+            1,
+            "business",
+            200,
+            "succeeded",
+            classifier_at,
+        )],
+        bodies: None,
+    });
+    let refused_at = blocked_at - 1_200;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            finished_at: Some(refused_at + 3),
+            attempts: 0,
+            ttfb_ms: None,
+            ttfc_ms: None,
+            duration_ms: Some(3),
+            error_code: Some("client_contract".into()),
+            client_contract: Some("class_header".into()),
+            stream_end_at: None,
+            ..request(
+                key_generation,
+                "r-contract",
+                refused_at,
+                "desktop",
+                "s2",
+                400,
+                "rejected",
+            )
+        },
+        attempts: Vec::new(),
+        bodies: None,
+    });
     parts
         .keepalive
         .apply_event(
@@ -1068,7 +1121,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 7
+        v["requests"].as_array().unwrap().len() == 9
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
