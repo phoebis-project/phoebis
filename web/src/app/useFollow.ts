@@ -73,8 +73,9 @@ export function useFollow<R>(input: {
     const failures = streak.current;
     const poll = () => {
       const { address: polled, compare: order, identity: identify, mark: landedAfter, read: reader, shown: start } = latest.current;
-      // Every page of one poll reads up to the same instant and from the same stamp, so its cursors walk one fixed
-      // range.
+      // Every page of one poll reads from the same stamp and is handed the same instant, so a reader that bounds its
+      // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
+      // instant still dates the poll's overrun and stand-in.
       const to = clock.now();
       const page = (cursor: string | undefined) => (failures.failing ? quietly(() => reader(cursor, to, landedAfter)) : reader(cursor, to, landedAfter));
       const last = start?.[start.length - 1];

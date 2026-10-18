@@ -359,6 +359,34 @@ test('a poll and an older page on a custom span read to the span\'s own end, and
   assert.equal(d.readEnd(false, end, polled), polled);
 });
 
+test("a preset poll under a watermark sends no end, so the route reads to its own clock, and a custom range's poll keeps its end", async () => {
+  const end = Date.UTC(2026, 8, 16, 13, 0);
+  const polled = Date.UTC(2026, 8, 16, 14, 30, 5);
+  const wire = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(new URL(String(url), 'http://x').searchParams);
+    return { headers: { get: () => null }, ok: true, status: 200, text: async () => JSON.stringify({ landed_through: 0, next_cursor: null, requests: [] }) };
+  };
+  try {
+    const query = { limit: 50, to: new Date(end).toISOString() };
+    await new d.HttpApi().listRequests(d.pollQuery(query, false, end, polled, undefined, 101));
+    await new d.HttpApi().listRequests(d.pollQuery(query, true, end, polled, undefined, 101));
+    await new d.HttpApi().listRequests(d.pollQuery(query, false, end, polled, 'c1', undefined));
+  } finally {
+    globalThis.fetch = wire;
+  }
+  assert.deepEqual(
+    urls.map((params) => [params.get('landed_after'), params.get('to'), params.get('cursor')]),
+    [
+      ['101', null, null],
+      ['101', String(end), null],
+      [null, String(polled), 'c1'],
+    ],
+    'the preset reads to the router, the custom range to its end, and a preset with no stamp to the poll',
+  );
+});
+
 test('turning auto reload off clears the fresh tint, since no poll follows to take it away', async () => {
   const clock = frozen();
   const f = follow();

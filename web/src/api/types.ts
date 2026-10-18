@@ -898,7 +898,10 @@ export interface RequestQuery {
 }
 
 export interface RequestPage {
-  /** The newest write instant the ledger held at the read, 0 on an empty ledger. */
+  /**
+   * The newest write instant among the rows the query's filters admit at the read, `to` included, the `landedAfter` it
+   * passed where none above it has landed, and 0 where neither is set.
+   */
   landedThrough: number;
   nextCursor: string | null;
   requests: RequestLog[];

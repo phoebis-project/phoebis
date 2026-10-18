@@ -1,3 +1,5 @@
+import { iso } from '@/api/decode';
+
 /** The pages one auto reload poll reads at most, so a burst of arrivals cannot keep a poll reading without end. */
 export const FOLLOW_PAGES = 8;
 /** The intervals the split Refresh button offers, 0 for off. */
@@ -27,6 +29,18 @@ export const spanEnded = (custom: boolean, end: number, takenAt: number): boolea
  * the Custom pill prints, and a preset reads up to the instant given (the poll's clock, or the end a cursor came from).
  */
 export const readEnd = (custom: boolean, end: number, at: number): number => (custom ? end : at);
+/**
+ * The query one page of a poll reads: the list's own query with the page's cursor and the poll's stamp. A preset under
+ * a watermark sends no end, so the route reads to its own clock and every row its filters admit is inside the page,
+ * where an end at the browser's instant would leave out a row received after it and written before the read. A custom
+ * span keeps its own end, and a preset with no stamp reads up to the poll's instant.
+ */
+export const pollQuery = <Q extends object>(query: Q, custom: boolean, end: number, at: number, cursor: string | undefined, landedAfter: number | undefined): Q & { cursor?: string; landedAfter?: number; to?: string } => ({
+  ...query,
+  cursor,
+  landedAfter,
+  to: !custom && landedAfter !== undefined ? undefined : iso(readEnd(custom, end, at)),
+});
 /** What the split button's title names while auto reload waits. The hidden tab is the control's own reading. */
 export const PAUSE_CAUSE = {
   dialog: 'paused while a dialog is open',

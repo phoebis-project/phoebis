@@ -11079,9 +11079,9 @@ m.unmount();
 }
 
 // Auto reload starts off on this view and reads the list again at the interval the split button's menu sets, over the
-// page's filters with the range ending at the poll, and lands what arrived at the top in the accent tint. The open
-// drawer, an older page and an open menu or popover under the bar pause it with the interval kept and the cause in the
-// part's title, and the address never holds it.
+// page's filters with a preset range sending no end, so the route reads to its own clock, and lands what arrived at the
+// top in the accent tint. The open drawer, an older page and an open menu or popover under the bar pause it with the
+// interval kept and the cause in the part's title, and the address never holds it.
 {
   const HOUR = 3_600_000;
   const requestRows = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')];
@@ -11117,7 +11117,7 @@ m.unmount();
     paused.restore();
     const drawer = { calls: paused.calls.length, id: idOf(requestRows(page)[0]), open: page.container.querySelector('.drawer') !== null, title: partTitle(page) };
     // The close comes a full period after the last answer, so the poll reads at once as it arms again, and the next
-    // tick's read ends a full period after the close and finds nothing new to tint.
+    // tick's read a full period after the close finds nothing new to tint.
     const resumed = countCalls('listRequests');
     page.container.querySelector('button[aria-label="Close details"]')?.click();
     await page.settle();
@@ -11136,7 +11136,7 @@ m.unmount();
     const paged = { calls: older.calls.length, rows: requestRows(page).length, title: partTitle(page), word: intervalWord(page) };
     page.container.querySelector('button[aria-label="First page"]')?.click();
     await page.settle();
-    // The first page arms the poll again, and the next tick reads up to it.
+    // The first page arms the poll again, and the next tick reads.
     const back = countCalls('listRequests');
     tick(5_000);
     await page.settle();
@@ -11147,11 +11147,11 @@ m.unmount();
       ok:
         start.word === 'Off' && start.title === 'Auto reload off' && chosen.word === '5 s' && chosen.title === 'Auto reload every 5 s' &&
         before !== newest.id &&
-        landed.calls === 1 && landed.cursor === undefined && landed.after === landedThrough && landedThrough > 0 && landed.to === isoAt(t + 3_000) && landed.id === newest.id && landed.isNew &&
+        landed.calls === 1 && landed.cursor === undefined && landed.after === landedThrough && landedThrough > 0 && landed.to === undefined && landed.id === newest.id && landed.isNew &&
         drawer.open && drawer.calls === 0 && drawer.id === newest.id && drawer.title === 'Auto reload every 5 s, paused while a request is open' &&
-        JSON.stringify(after.closing) === JSON.stringify([isoAt(t + 8_000)]) && after.calls === 1 && after.to === isoAt(t + 13_000) && after.id === newest.id && after.tinted === 0 &&
+        JSON.stringify(after.closing) === JSON.stringify([null]) && after.calls === 1 && after.to === undefined && after.id === newest.id && after.tinted === 0 &&
         paged.calls === 0 && paged.rows > 0 && paged.word === '5 s' && paged.title === 'Auto reload every 5 s, paused on an older page' &&
-        firstPage.calls > 0 && firstPage.to === isoAt(t + 23_000) && firstPage.title === 'Auto reload every 5 s',
+        firstPage.calls > 0 && firstPage.to === null && firstPage.title === 'Auto reload every 5 s',
       missing: [JSON.stringify(start), JSON.stringify(chosen), `first before ${before}, newest ${newest.id}`, JSON.stringify(landed), JSON.stringify(drawer), JSON.stringify(after), JSON.stringify(paged), JSON.stringify(firstPage)],
     });
     page.unmount();
@@ -11275,9 +11275,9 @@ m.unmount();
   {
     // Ninety requests arrive after the page loaded: the list reads up to the instant of the ninety-first newest, the
     // interval menu left open holds the poll while the clock moves past the ninety to the pinned origin, and the first
-    // poll after the menu closes finds more than its eight pages of ten read, every page from the list's stamp. Next
-    // reads on from the last row the poll read, up to the poll's end. The rows the poll reads are those the ledger holds
-    // at its end, so the late request, still running there, is not among them.
+    // poll after the menu closes finds more than its eight pages of ten read, every page from the list's stamp and to
+    // the router's clock. Next reads on from the last row the poll read, up to the poll's end. The rows the poll reads
+    // are those the ledger holds at its end, so the late request, still running there, is not among them.
     const end = isoAt(CLOCK_ORIGIN + 5_000);
     // Every row under the bounds, newest first.
     const rowsUnder = async (from) => {
@@ -11323,7 +11323,7 @@ m.unmount();
       ok:
         all.length >= 100 && atOf(near[89]) > loaded && loaded < CLOCK_ORIGIN && held.calls.length === 0 && JSON.stringify(listed) === JSON.stringify(atLoad.requests.map((r) => r.id)) &&
         listed.every((id) => all.indexOf(id) >= 89) &&
-        sent.length === 8 && sent.every((q) => q.to === end && q.limit === 10 && q.landedAfter === atLoad.landedThrough) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
+        sent.length === 8 && sent.every((q) => q.to === undefined && q.limit === 10 && q.landedAfter === atLoad.landedThrough) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
         drawn.length === 80 + listed.length && JSON.stringify(drawn.slice(0, 80)) === JSON.stringify(all.slice(0, 80)) &&
         overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === end && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
       missing: [`${all.length} rows, loaded ${isoAt(loaded)}, ${held.calls.length} reads while held`, `listed ${listed.slice(0, 2).join(' | ')}`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],

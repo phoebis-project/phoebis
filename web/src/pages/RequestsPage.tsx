@@ -23,7 +23,7 @@ import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, readEnd, spanEnded } from '@/lib/follow';
+import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, readEnd, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
@@ -290,7 +290,7 @@ export function RequestsPage() {
     list: requests.data && listed(requests.data),
     paging,
     paused: Boolean(requestId) || barOpen,
-    read: (c, to, landedAfter) => api.listRequests({ ...query, cursor: c, landedAfter, to: iso(readEnd(custom, span.to, to)) }).then(listed),
+    read: (c, to, landedAfter) => api.listRequests(pollQuery(query, custom, span.to, to, c, landedAfter)).then(listed),
     setPaging,
     stale: requests.stale,
   });
