@@ -42,14 +42,15 @@ whether its body was captured. It names the client's user agent and class (`clau
 or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted markers, and the summed
 tool durations of the turn before), the turn origin off its attribution line, and its auto-mode standing as admission
 read it: a server-side check asked for under an on setting, the `safeguards` member carried under an off setting,
-which the dispatch drops, or a refusal for the body's shape before any upstream saw it. The request's shape is
-recorded as the effort, the thinking mode and budget, the output limit, the tool, system-block and message counts,
-the context edits, the temperature, and the requested speed and service tier. The row also names
-a session that branched from another conversation: that conversation's root and the matched depth.
-The session the row names is the client's own,
-and the Sessions view groups a row by it.
-The request row records who put the cache diagnostics member on the body the upstream compared: the client,
-the router, or none.
+which the dispatch drops, or a refusal for the body's shape before any upstream saw it. It names its classifier
+standing, `client` for the client's own auto-mode classifier call (the class `auxiliary` with the beta), and the item a
+`client_contract` refusal named. The request's shape is recorded as the effort, the thinking mode and budget, the output
+limit, the tool, system-block and message counts, the context edits, the temperature, and the requested speed and
+service tier.
+A session that branched from another conversation
+carries that conversation's root and the matched depth as well. The session the row names is the client's own,
+and the Sessions view groups a row by it. The request row records who put the cache
+diagnostics member on the body the upstream compared: the client, the router, or none.
 
 The attempt row names the account and its kind, the upstream status, request id and message id, the outcome, the
 cooldown the attempt set, the stop reason, the model the answer names when it differs from the one the router resolved,
@@ -192,6 +193,9 @@ Spend per minute charts under every grouping. An answer in overage reads the sam
 Plan per hour and its dollars in `usd`. A member's budget counts a fast answer at the fast cells, a subscription
 member's as an API-key member's.
 
+A client classifier call reads a zero share and a zero equivalent on a subscription account, with the reason
+`client_classifier` on the request, and its dollars in the overage and on an API key.
+
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
 units per account tier, and a request's share of a window is the units it spent over that capacity, over the peak band's
@@ -251,10 +255,11 @@ share of a Max 20x window one million input tokens spend outside the band, deriv
 | `claude-haiku-5-5` | 0.1 | 2026-10-08 | 0.0667% | 0.0111% |
 | `claude-haiku-4-5` | 1 | 2026-10-05 | 0.667% | 0.111% |
 
-`claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price. The priced
-models the plan meter has not measured and the file leaves out (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`)
-have no weight row and read the weight of the latest weighed model of their model tier as an estimate, Fable 5 that of
-Fable 5.1 and the two Opus models that of Opus 5.5.
+`claude-sonnet-5` is not measured: its row takes Sonnet 5.5's weight, the model at the same list price, and stays
+unmeasured since the client sends Sonnet 5 for its classifier alone, whose calls the router prices at no share, so the
+ledger holds no Sonnet 5 main turn to measure. The priced models the plan meter has not measured and the file leaves out
+(`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`) have no weight row and read the weight of the latest weighed
+model of their model tier as an estimate, Fable 5 that of Fable 5.1 and the two Opus models that of Opus 5.5.
 
 Under the interactive regime a request spends half the table's 5-hour share and 0.8 of its 7-day share, since the regime
 doubles the 5-hour capacity and raises the 7-day by a quarter while the weights stay the same.

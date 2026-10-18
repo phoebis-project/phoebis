@@ -245,14 +245,18 @@ The Keys view, the key dialog and the secret dialog are described on [Keys](cons
 Every request carries a class, read off its user agent: `claude-code/<entrypoint>` for a `claude-cli/` caller (the
 entrypoint token it names, `cli` when it names none)
 and `other` for anything else.
+A Claude Code request
+without the headers and the body members the router reads is refused `400` `client_contract` before any account is
+chosen, the client page naming them ([The required set](client.md#the-required-set)).
 
 With the pool's `auto_mode_server` on, or a key's override on, the upstream reviews a Claude Code session's tool uses on
 the model's own turn. Off, the client reviews them with classifier requests of its own, which the router routes as
 requests of the session: they carry its id and pin, on the client's Sonnet default, so a session on another model takes
-a second pin beside its own, and they draw on the account's windows. A body whose `safeguards` member the router cannot
-cut under an off setting (spelled with an escape, or carried twice) is refused `400` with the error code `body_shape`
-before anything reaches the upstream. The mechanism is on
-[Auto mode behind the router](relay.md#auto-mode-behind-the-router).
+a second pin beside its own, and they take no share of a plan window on a subscription account and the normal price of
+their model in the account's overage and on an API-key account ([Plan meter](statistics.md#plan-meter)). A body whose
+`safeguards` member the router cannot cut under an off setting (spelled with an escape, or carried twice) is refused
+`400` with the error code `body_shape` before anything reaches the upstream. The mechanism is on [Auto mode behind the
+router](relay.md#auto-mode-behind-the-router).
 
 A conversation is identified by its session header: the session id the client sends names it, keys its pin and its
 session memory, and is what a turn that follows its own conversation's previous answer within milliseconds waits on, at

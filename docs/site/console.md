@@ -597,18 +597,19 @@ message id", matches the request id, the session, the key, the model, the error 
 upstream request id or upstream message id, literally (`_` and `%` are characters), and applies 400 milliseconds after
 the last keystroke, on Enter, or when the field loses focus. Add filter opens a "Filter by" field over the filters in
 four groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss reason, Guardrail, Held only, Outcome, Status),
-Request (Agent type, Client, Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject (Request,
-Session). Choosing one opens its values: a list with a Select all row that applies on each click, a pattern field for
-Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash quoting
-either, and a value with no wildcard matching in full), an id field for Request and Session, which match the id exactly,
-or the Kind choices (Any kind, Inference, Count tokens, Probe), while Held only applies at once. Guardrail lists the
-registry's guardrails by name, then the ids of deleted guardrails the loaded rows still carry as `{id} (deleted)`, then
-`none` for a request no guardrail matched ([Guardrails](guardrails.md)). A pattern or an id applies on Enter or Apply.
-Each filter in force stands as a chip on a line under the bar, such as "account: primary, nightly" or "held only": a
-click on the chip opens its values again, its x removes it, the chips past five fold behind "+N more", and from two
-chips on "Clear all" removes them and keeps the range, the search and the page size. The account filter keeps the
-requests whose serving attempt ran on the account, so a request that failed over lists under the account that answered
-it. Every filter, the range and the page size live in the page's address, so a reload or a shared link keeps them.
+Request (Agent type, Classifier, Client, Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject
+(Request, Session). Choosing one opens its values: a list with a Select all row that applies on each click, a pattern
+field for Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a
+backslash quoting either, and a value with no wildcard matching in full), an id field for Request and Session, which
+match the id exactly, or the Kind choices (Any kind, Inference, Count tokens, Probe), while Held only applies at once.
+Guardrail lists the registry's guardrails by name, then the ids of deleted guardrails the loaded rows still carry as
+`{id} (deleted)`, then `none` for a request no guardrail matched ([Guardrails](guardrails.md)). A pattern or an id
+applies on Enter or Apply. Each filter in force stands as a chip on a line under the bar, such as "account: primary,
+nightly" or "held only": a click on the chip opens its values again, its x removes it, the chips past five fold behind
+"+N more", and from two chips on "Clear all" removes them and keeps the range, the search and the page size. The account
+filter keeps the requests whose serving attempt ran on the account, so a request that failed over lists under the
+account that answered it. Every filter, the range and the page size live in the page's address, so a reload or a shared
+link keeps them.
 
 The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status,
 Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and shows
@@ -628,11 +629,12 @@ Native a request a subscription window paid reads its 20x 5-hour equivalent over
 `0.244% 20x 7d`), with every window, the model week among them, and the dollar equivalent on hover. Under the four other
 positions it reads its account's own window shares, each with its window's short word (`0.12% Fable week` over
 `0.42% 5h`, the full labels on hover). An overage, fast mode or API-key request reads dollars under every position, and
-a figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted model". The
-table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the
-moment you opened it so paging does not shift, and the split Refresh button's body brings it up to now. An empty table
-reads "No requests match" with "Widen the date range or clear a filter." and "Reset filters", which clears the filters,
-the search and the range. What each figure means is on [Statistics](statistics.md).
+a figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted model". A
+client classifier call on a subscription account reads `0%` with the hover "Free on the plan: a client classifier call
+takes no window share". The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next,
+holds the requests up to the moment you opened it so paging does not shift, and the split Refresh button's body brings
+it up to now. An empty table reads "No requests match" with "Widen the date range or clear a filter." and "Reset
+filters", which clears the filters, the search and the range. What each figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
@@ -650,10 +652,10 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
 
 - Outcome: Status, Outcome, Account, Model, Canonical model when it differs from the model the client spelled, TTFB,
-  Duration, Error, Client drift when set, then the serving attempt's Answer (the stop reason, the speed, the
-  geography, the service tier) and Cache (the miss reason, `{read} read, {written} written`, where the prompt
-  diverged), and a Diagnostics row naming who put the cache diagnostics member on the body: "sent by the client",
-  "added by the router" or none.
+  Duration, Error, Client drift when set, Client contract when set (the item the refusal named), then the serving
+  attempt's Answer (the stop reason, the speed, the geography, the service tier) and Cache (the miss reason, `{read}
+  read, {written} written`, where the prompt diverged), and a Diagnostics row naming who put the cache diagnostics
+  member on the body: "sent by the client", "added by the router" or none.
 - Guardrails: one row per guardrail that matched, in evaluation order, the guardrail's name (or `{id} (deleted)` for one
   the registry no longer holds) with a `blocked` badge in the critical tone or an `observed` badge muted, shown where
   the request carries a match ([Guardrails](guardrails.md)).
@@ -664,11 +666,14 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   its account's window shares under the four other positions, one chip per window with the dollar equivalent after them,
   and a billed request's dollars. Its hover names the serving account's tier (`Account tier {tier}`) and the price list
   and cost model in force when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`).
+  A client classifier call's row reads its zero shares with the hover "Free on the plan: a client classifier call takes
+  no window share".
 - Request: Session, Agent, Client with the request class badge, User agent (such as
   `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row per attempt with the upstream's
   request id and, on the answer that served, its message id.
 - Request shape: Effort (the level the upstream applies), Thinking, Max tokens, "Tools, system blocks, messages",
-  Context edits, Temperature, "Speed, service tier" and Auto mode, "not sent" where absent.
+  Context edits, Temperature, "Speed, service tier", Auto mode and Classifier (`client` for the client's own auto-mode
+  classifier call, `none` otherwise), "not sent" where absent.
 - Client hints: Agent type, Compaction, Context compacted, Turn origin and Tool time before this turn.
 - Captured bodies: the request and the response, each with Copy all and "Open wide", which draws a body of any size
   pretty-printed in a window of its lines and a streamed answer as its events, or "Not captured for this key. Enable
@@ -698,11 +703,11 @@ Session takes a session id, typed or pasted, which matches the session exactly. 
 a line under the bar, as on the Requests view, such as "client: claude-code*" or "include probes". The session chip
 prints the id's first eight characters, and its hover names the whole id with the key lifetime a link from the Sessions
 view carries ("under the key laptop@3"), which has no chip of its own and leaves when the session changes. "Group by"
-offers Account, Client, Key, Effort, Kind, Model, Pool, Request class, Speed, User agent or "Session (Burn only)", the
-last the Burn section's own grouping. While it reads User agent, "Groups (N)" opens the "User agent groups" box with one
-pattern per line, N the patterns it holds, where each pattern names a group and every other agent groups under `other`
-(`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first product
-token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`.
+offers Account, Classifier, Client, Key, Effort, Kind, Model, Pool, Request class, Speed, User agent or "Session (Burn
+only)", the last the Burn section's own grouping. While it reads User agent, "Groups (N)" opens the "User agent groups"
+box with one pattern per line, N the patterns it holds, where each pattern names a group and every other agent groups
+under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first
+product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
 out of the page's address. At each interval it reads the account list again and, once a new bucket of the range has
