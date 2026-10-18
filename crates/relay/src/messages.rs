@@ -4593,10 +4593,9 @@ fn ending(guard: &mut Option<EndGuard>, cause: &'static str) {
 /// Every live inference request and probe by request id, `false` until a leg's answer is final and `true` from then
 /// (a `message_start` commit, or the pass that answers the client) or from the leg's guard's drop, while a leg that
 /// fails over leaves it `false` for the next leg, so a waiter held for a later attempt's mark waits for that leg's
-/// head. The admission registers the entry before the first
-/// selection is enqueued, so a request a mark names always has one while it lives, and the `HeadEntry` the request's
-/// scope owns removes it at every end of the request. A waiter that finds no entry or `true` goes out at once and
-/// creates nothing. Nothing here outlives its request.
+/// head. The admission registers the entry before the first selection is enqueued, so a request a mark names always has
+/// one while it lives, and the `HeadEntry` the request's scope owns removes it at every end of the request. A waiter
+/// that finds no entry or `true` goes out at once and creates nothing. Nothing here outlives its request.
 type Heads = Mutex<HashMap<String, watch::Sender<bool>>>;
 
 // A poisoned map means a prior panic happened mid-update, so an entry may not describe its request.

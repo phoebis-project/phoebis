@@ -2595,7 +2595,7 @@ async fn the_forks_commit_alone_releases_the_waiter_and_an_error_event_releases_
     assert_eq!(waits[0].0, "rewrite");
     assert!(
         (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
-        "the wait ran to the error event: {waits:?}"
+        "the wait ran to c's answer on the fork's next leg: {waits:?}"
     );
     assert_eq!(
         last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
