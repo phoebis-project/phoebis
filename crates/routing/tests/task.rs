@@ -10518,6 +10518,46 @@ async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_ann
         (kept.utilization, kept.observed_at, kept.source),
         (1.0, 2_000, WindowSource::Poll)
     );
+    // A newer reading of a later cycle reads the reset and clears nothing, so the old cycle's announcement stands, and
+    // a poll naming the old reset at the wall again announces nothing. Had the late reading forgotten the
+    // announcement, that poll would announce the wall a second time.
+    now.store(2_800, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_800, FIVE_HOUR, 0.10, Some(15 * HOUR)),
+        ))
+        .await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            account_id,
+            window,
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            at,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                window.as_str(),
+                utilization_before,
+                Some(reset_at),
+                next_reset,
+                observed,
+                at
+            ),
+            ("a", FIVE_HOUR, 1.0, reset, Some(15 * HOUR), "sample", 2_800)
+        ),
+        other => panic!("{other:?}"),
+    }
+    now.store(2_900, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(2_900, FIVE_HOUR, 1.0, reset)))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
     // A head that names no reset reads another cycle than the poll's, so it lands as read under the wall, and read
     // before the stored reset it clears the window under that reset: the first clear is this head's, so the late
     // reading cleared nothing.
