@@ -577,10 +577,12 @@ against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`,
 account with the Burn section in view.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
-source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. The
-ledger folds the four routing conditions from its events once an hour and at start into one table, which the gauge and
-`GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds none of its events. The
-subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls, names their
+source, the prediction's among them, one per reset cycle, since a newer head of the same cycle within two points of 1.0
+after an announced wall neither clears nor repeats it, so a wall the router predicted counts before a head or the poll
+reads it. The ledger folds the four routing conditions from its events once an hour and at start into one table, which
+the gauge and `GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds none of its
+events. The subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls,
+names their
 windows and the settings `shed_cap` and `window_ceiling`, and gives the projection error: one less the projection of the
 newest shedding round on the wall's window within that window's length before the wall, null with none. The item opens
 the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
