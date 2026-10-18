@@ -107,6 +107,12 @@ session's pin and re-arms its keepalive recipe, and any other class does neither
 ([Which requests re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). Every header is optional, a request
 without one is relayed the same way, and `0` stops them on every connection.
 
+The client also sends a summary fork under the class `auxiliary` for each running subagent every 30 seconds: the
+subagent's whole context with one appended user block asking for a status line, which the router can block with the
+Subagent status summary preset. The prompt suggestion and the away recap are forks of the main thread with the same
+shape, each with its own preset, and the settings `promptSuggestionEnabled` and `awaySummaryEnabled` turn them off on
+one machine. The forks, the presets and what a blocked fork shows are on [Guardrails](guardrails.md).
+
 ### DISABLE_TELEMETRY
 
 Optional. Set to `1`, it stops the client's telemetry batches, which it posts to `api.anthropic.com` with the
@@ -229,7 +235,7 @@ with.
 | `client_not_allowed` | 403 | `permission_error` | `this key admits Claude Code clients only`, `the pool has no API-key member to serve a client that is not Claude Code` | Use Claude Code with this key, or ask the operator for a key whose pool admits your client ([clients](routing.md#clients)). |
 | `fast_credits_unavailable` | 429 | `rate_limit_error` | `no account in this pool can draw usage credits for fast mode` | Turn fast mode off, or wait for the credits. |
 | `fast_lane_exhausted` | 429 | `rate_limit_error` | `every account in this pool is at its fast limit` | Wait out the `Retry-After`, or turn fast mode off. |
-| `guardrail_blocked` | 400 | `invalid_request_error` | `blocked by guardrail "{name}"` | A guardrail the operator attached to your key matched the request, and the answer carries `x-should-retry: false`, so do not send it again unchanged. The Requests view names the guardrail. |
+| `guardrail_blocked` | 400 | `invalid_request_error` | `blocked by guardrail "{name}"` | A guardrail the operator attached to your key matched the request, and the answer carries `x-should-retry: false`, so do not send it again unchanged. The Requests view names the guardrail ([Guardrails](guardrails.md)). |
 | `invalid_body` | 400 | `invalid_request_error` | `the request body is not valid gzip`, `the request body nests deeper than the relay reads`, `the request body is not a valid Messages request` | Send a Messages request as Claude Code sends it. |
 | `invalid_limit` | 400 | `invalid_request_error` | `limit must be between 1 and 1000` | Ask `GET /v1/models` for 1 to 1000 rows. |
 | `invalid_model` | 400 | `invalid_request_error` | `the request body's model is not a usable model name` | Set a model the listing names ([the models listing](#the-models-listing)). |

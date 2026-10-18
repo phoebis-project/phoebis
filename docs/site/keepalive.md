@@ -107,6 +107,11 @@ The kept-warm credit follows the same rule: only a request that re-armed the rec
 whose entry that request read, a probe that rewrote the entry included. An auxiliary or a foreign request may still read
 a warm cache, but it never resets the recipe's schedule and settles nothing.
 
+A request a guardrail blocks is a refused request to the engine. A blocked `compaction`, `main` or `subagent` request,
+or one with no class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does, and a
+blocked auxiliary request leaves the recipe, its schedule and its credit untouched
+([Guardrails](guardrails.md#what-a-guardrail-is)).
+
 ## The four fields
 
 The pool's `keepalive` object carries four fields:

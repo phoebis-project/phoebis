@@ -32,10 +32,10 @@ a "Retry" button that reads the session again. A session that ends while a view 
 `Your session ended, so log in again.`
 
 The sidebar reads the brand "Phoebis Router" over the views in this order: Dashboard, Quota, Accounts, Pools, Keys,
-Models, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log, shown while
-the expert view is on or while the open view is a diagnostics view, so a link into the log opens it whatever the mode
-and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the router's version as
-`v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), the "Unit"
+Guardrails, Models, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log,
+shown while the expert view is on or while the open view is a diagnostics view, so a link into the log opens it whatever
+the mode and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the router's version
+as `v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), the "Unit"
 switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and System, stored under
 `phoebis.theme` (`system` until you pick one). The time format lives under `phoebis.timeFormat` (`24h` by default). The
 theme, the time format and the unit are browser preferences, which the Settings view's Appearance card also sets, and
@@ -105,14 +105,16 @@ answer together, the button and its answer take a second row.
 
 Four tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, and "Error rate, 24h" with "No requests",
-`Most common: {code}` or "No errors". Under Native the cost tile reads the subscription traffic's 20x 5-hour equivalent
-over the billed dollars, a side with no traffic left out, with `{usd} billed per hour` under them, or the equivalent per
-hour while no request was billed. Under All in dollars and Billed dollars it reads those dollars with `{usd} per hour`,
-under Dollar equivalent the subscription traffic's dollars at the API price list, and under Window shares a dash with
-the note "shares do not add across accounts", since the tile sums every account. An estimated figure carries the `~` and
-the estimate's hover. Under the tiles a line says when the figures were read, `As of {ago}`, by the oldest of the page's
-reads, or names the read whose last refresh failed and why: `Last refresh of the {read} failed: {error}. Showing data as
-of {ago}`, the read being the 24-hour figures, the accounts, the recent requests, the sessions or the settings.
+`Most common: {code}` or "No errors". The error rate and `Most common` leave out the requests a guardrail blocked, since
+a block is a refusal the operator asked for. Under Native the cost tile reads the subscription traffic's 20x 5-hour
+equivalent over the billed dollars, a side with no traffic left out, with `{usd} billed per hour` under them, or the
+equivalent per hour while no request was billed. Under All in dollars and Billed dollars it reads those dollars with
+`{usd} per hour`, under Dollar equivalent the subscription traffic's dollars at the API price list, and under Window
+shares a dash with the note "shares do not add across accounts", since the tile sums every account. An estimated figure
+carries the `~` and the estimate's hover. Under the tiles a line says when the figures were read, `As of {ago}`, by the
+oldest of the page's reads, or names the read whose last refresh failed and why: `Last refresh of the {read} failed:
+{error}. Showing data as of {ago}`, the read being the 24-hour figures, the accounts, the recent requests, the sessions
+or the settings.
 
 Two rings, "5h remaining" and "7d remaining", show how much of the pooled 5-hour and 7-day capacity is left, under the
 subtitle "Subscription accounts, 5-hour window, weighed by tier" (and its 7-day twin), the first with a "Cost
@@ -293,19 +295,20 @@ meaning is on [Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link ("No
 keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". A strip
-of badges names the features the pool has on and the state of its load shedding, in the rail's order: "server-side auto
-mode off", `sheds above 95 %` (the pool's window ceiling) with the pool's load shedding on or `shedding off` with it
-off, `slows above 2 h 30 min` (the pool's stretch threshold as a span, `slows above 30 min` on a pool set to 1800) with
-its slow-down on, "cache TTL" and "keepalive", each opening the dialog on the group that edits it, the last followed by
-the pool's resolved ceilings in whole hours, `idle {h} · parked {h} · horizon {h}` (a range such as `44h to 71h` where
-the pool's combinations differ). One sentence says what the status means, and attention rows under it list the
-dashboard's conditions filtered to this pool, one row per condition with its badge, its subject linked where it is fixed
-and its detail, ending with its age, the whole on hover. On a narrow card the detail and the age take a line of their
-own under the badge. The pool's own exhausted row and its Rounds without a destination row open the [routing
-log](#routing-log) on its exhausted decisions or its shedding rounds since the condition began, and an account's
-Destination spent within the hour row opens it on the account's moves and spent windows, its Wall reached under the
-ceiling row on its spent windows, and its Slowed past twice the stretch row on its slow-down starts and ends. An
-account's Meter drift against the table row opens [Analytics](#analytics) on the account with the Burn section in view.
+of badges names the features the pool has on and the state of its load shedding, in the rail's order: `1 guardrail` or
+`{n} guardrails` with any attached, "server-side auto mode off", `sheds above 95 %` (the pool's window ceiling) with the
+pool's load shedding on or `shedding off` with it off, `slows above 2 h 30 min` (the pool's stretch threshold as a span,
+`slows above 30 min` on a pool set to 1800) with its slow-down on, "cache TTL" and "keepalive", each opening the dialog
+on the group that edits it, the last followed by the pool's resolved ceilings in whole hours, `idle {h} · parked {h} ·
+horizon {h}` (a range such as `44h to 71h` where the pool's combinations differ). One sentence says what the status
+means, and attention rows under it list the dashboard's conditions filtered to this pool, one row per condition with its
+badge, its subject linked where it is fixed and its detail, ending with its age, the whole on hover. On a narrow card
+the detail and the age take a line of their own under the badge. The pool's own exhausted row and its Rounds without a
+destination row open the [routing log](#routing-log) on its exhausted decisions or its shedding rounds since the
+condition began, and an account's Destination spent within the hour row opens it on the account's moves and spent
+windows, its Wall reached under the ceiling row on its spent windows, and its Slowed past twice the stretch row on its
+slow-down starts and ends. An account's Meter drift against the table row opens [Analytics](#analytics) on the account
+with the Burn section in view.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `API keys P{n}` where the pool
 prefers subscription accounts), Account, Standing and Pins. Standing reads `next` for the member a fresh session lands
@@ -328,11 +331,12 @@ keys must be moved or revoked first."
 The pool dialog, "Create pool" or `Edit pool {name}`, is grouped: a rail "Pool settings" on the left, one group open
 at a time, a status line reading "Every group saves together." or `Save is held: {reason}` (a pool that changed since
 you opened it holds the save until "Reload"), and Cancel beside "Create pool" or "Save pool". On create the rail marks
-Identity and Members "needed" and Keys "after saving". The groups by rail parent, with what the expert view adds:
+Identity and Members "needed" and Keys and Guardrails "after saving". The groups by rail parent, with what the expert
+view adds:
 
 | Rail parent | Groups | In the expert view alone |
 | --- | --- | --- |
-| Pool | Identity, Members, Keys, Models, Auto mode | Auto mode |
+| Pool | Identity, Members, Keys, Models, Guardrails, Auto mode | Auto mode |
 | Routing | Selection, Placement, Pinning | Placement, and Pin sessions under Pinning |
 | Load | Windows, Load shedding, Slow-down, Failover, Overage and plan end | Slow-down, Failover, Burn average (s) under Windows, Preset, Shed cap (%), Shed dwell (s), Warm sessions and Preview under Load shedding, and Overage grace (min), Return to plan, Return dwell (s) and Wind down (min) under Overage and plan end |
 | Caching | Cache TTL, Keepalive | Add a cache marker to a request without one and the per-model overrides, both under Cache TTL |
@@ -441,14 +445,18 @@ Keys holds "Create key" and the pool's keys as Key, Prefix and Status with a men
 opens `Move key {name}` ("A key reaches only its own pool's members, so moving it ends its current session pins.") with
 the destination Pool, and "Revoke" asks `Revoke {name}`:
 `Requests with {name} are rejected immediately. The key stays in this pool and its history stays in the ledger.` A key
-created from here opens "Key created", the dialog the Keys section describes. Keepalive holds the switch "Keep prompt
-caches warm", the three ceilings and the return rate: a ceiling left off reads the break-even it resolves to,
-`Break-even: {range}`, one switched on past the break-even reads `Capped at the break-even, {range}`, the idle window
-reads its cost as a share of one re-write, `Costs {pct} of one re-write`, and while the field reads 0 or more than the
-break-even, the window in effect, `capped at the break-even, {time}`, with `at the saved {time}` for an unsaved edit.
-Return rate by idle age lists the pool's ten buckets with the windows that returned out of those that reached it and a
-bar of the rate, or "No idle windows recorded yet". The ceilings are explained under [The four
-fields](keepalive.md#the-four-fields) and the buckets under [The return rate by idle
+created from here opens "Key created", the dialog the Keys section describes. Guardrails lists the pool's guardrails in
+the order they run, each with its name, its mode as a badge (enforce in the warning tone, observe muted), `off` on a
+disabled one, move up, move down and remove, then "Attach guardrail" over the guardrails of the registry not yet
+attached, the hint "Top to bottom. A pool's guardrails run before a key's own." and the link "Manage guardrails" to the
+[Guardrails](#guardrails) view. On create the group reads "Guardrails can be attached once the pool is saved." and no
+control. Keepalive holds the switch "Keep prompt caches warm", the three ceilings and the return rate: a ceiling left
+off reads the break-even it resolves to, `Break-even: {range}`, one switched on past the break-even reads `Capped at the
+break-even, {range}`, the idle window reads its cost as a share of one re-write, `Costs {pct} of one re-write`, and
+while the field reads 0 or more than the break-even, the window in effect, `capped at the break-even, {time}`, with `at
+the saved {time}` for an unsaved edit. Return rate by idle age lists the pool's ten buckets with the windows that
+returned out of those that reached it and a bar of the rate, or "No idle windows recorded yet". The ceilings are
+explained under [The four fields](keepalive.md#the-four-fields) and the buckets under [The return rate by idle
 age](keepalive.md#the-return-rate-by-idle-age).
 
 ## Keys
@@ -482,10 +490,77 @@ button under "Copy the secret now. The router stores only a hash, so it cannot b
 The key dialog, "Create key" or `Edit {name}`, is grouped like the pool dialog, with the rail "Key settings" and the
 groups Key (Name, Pool, Notes), Access (Enabled on an existing key, Expiry,
 and Server-side auto mode with Inherit, On or Off), Models (Model rules, with Pool rules as Extend pool rules or
-Replace pool rules, and List [1m] twins in the models listing), Sessions (Cache warming opt-out) and Capture (Capture
-request and response bodies as Inherit from pool, an override in hours or off for this key). Server-side auto mode,
-Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group warns what the
-bodies hold, the warning [Keys](routing.md#keys) quotes.
+Replace pool rules, and List [1m] twins in the models listing), Guardrails (the pool's guardrails first in gray, each
+marked "inherited", then the key's own in their order with move up, move down, remove and "Attach guardrail", under the
+hint "The pool's guardrails run first and cannot be dropped here. This key's own run after them." and the link "Manage
+guardrails", reading "Guardrails can be attached once the key is saved." on create), Sessions (Cache warming opt-out)
+and Capture (Capture request and response bodies as Inherit from pool, an override in hours or off for this key).
+Server-side auto mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group
+warns what the bodies hold, the warning [Keys](routing.md#keys) quotes.
+
+## Guardrails
+
+![The Guardrails view: a preset's guardrail observing beside an enforcing one](assets/guardrails-light.png#only-light)
+![The Guardrails view: a preset's guardrail observing beside an enforcing one](assets/guardrails-dark.png#only-dark)
+
+The view opens on its bar: "Create guardrail", whose menu offers "Blank guardrail" and, under the heading "From a
+preset", one row per preset the build ships, three rows in the order of their ids (Away recap, Prompt suggestion,
+Subagent status summary), then at the right edge the split Refresh button and the count `{n} guardrails` (`1 guardrail`
+for one). Under it one sentence: "A guardrail checks each request against its conditions before any account is selected.
+Observe records the matches, enforce refuses them with a 400." Auto reload starts at 5 s and waits while a dialog or a
+row's menu is open. The columns are Name (the description muted beneath), Mode (a badge `observe` or `enforce`), Enabled
+(`on`, or `off` muted), "Applies to" (`{n} pools, {m} keys`, `1 pool, 0 keys` in the singular, the names on hover,
+`nowhere` muted when none), "Matches, 24h" (`{observed} observed` over `{blocked} blocked` from the last day's counts, a
+dash while unread) and Preset (the preset's name with `v{n}`, a `customized` badge where the conditions left the stamped
+version, an `update available` badge where the build ships a newer one, a dash without a stamp), and each row ends in
+its menu: Edit, Duplicate, Enable or Disable, "Switch to enforce" or "Switch to observe", and Delete. Duplicate opens
+the dialog in create mode with the source's fields, the name `{name} copy`, no attachment and the preset stamp kept, so
+the copy does not run twice on the source's keys and still says where it came from. Delete asks `Delete guardrail
+{name}`: "Removes the guardrail from every pool and key it is attached to. Requests it matched keep its id in the log."
+Before the first guardrail the table reads "No guardrails yet" with "Create guardrail". What a guardrail is, the presets
+and the conditions are on [Guardrails](guardrails.md).
+
+The guardrail dialog, "Create guardrail" or `Edit guardrail {name}`, is grouped like the pool dialog, with the rail
+"Guardrail settings", the groups Identity, Conditions, "Applies to" and Test, the status line "Every group saves
+together." or `Save is held: {reason}` with "Reload" on a stale save, and Cancel beside "Create guardrail" or "Save
+guardrail". No group is expert-only. Identity holds Name (the hint "The guardrail's id is made from this name when the
+guardrail is created." with the derived id on a create), Description, Enabled (the hint "A disabled guardrail stays
+attached and is skipped.") and Mode as Observe or Enforce (the hint "Observe records each match on the request. Enforce
+refuses a matching request with a 400 before any account is selected."). A guardrail created from a preset copies the
+preset's name, mode and conditions and leaves Description empty for your own words, and its Identity group opens on the
+line `From the preset {name} v{n}` with the preset's explanation muted under it and the badges `customized` and `update
+available` where they apply. Where the build ships a newer version, a notice reads "This build ships version {m} of the
+preset." with the button "Update to the current preset", which replaces the conditions with the current version's, after
+which the notice reads "Saving takes version {m}." until the save.
+
+Conditions holds the editor, one row per condition in the written order: a Subject select (Agent type, Body, Client,
+Header, Kind, Message, Model, Request class, User agent), the subject's own cell ("Header name" with the placeholder
+`x-claude-code-agent-type`, "Path" with `tools[*].name`, or a Selector of any message, any assistant message, any user
+message, first user message, last message, last assistant message and last user message), an Operator select with the
+subject's operators (is absent, equals, is greater than, is less than, matches, is present), and a Value cell for
+equals, is greater than, is less than and matches (`^Describe` as the placeholder under matches), which for Kind is a
+select of Count tokens or Inference. A subject change resets the operator to the subject's first and clears the cells it
+lacks. Each row has move up, move down and remove, "Add condition" appends a row up to 16 with the count `{n} of 16`,
+and the hint reads "Every condition must hold. The router checks the cheap conditions first, whatever their order here,
+and the message text last." The dialog holds the save on a row it cannot read (`Condition {n}: needs a header name`,
+`needs a path`, `needs a selector`, `needs a value`, `{value} is not a number`, `the pattern is longer than 2048
+characters`, or `the path ...` with the path grammar's own sentence), on an empty name ("The guardrail needs a name."),
+a taken id (`Another guardrail already has the id {id}.`), a reserved one (`The id {id} is reserved.` for `presets` and
+`test`), a name or description past 256 bytes and a count outside 1 to 16 ("A guardrail holds 1 to 16 conditions."). A
+pattern the router refuses on save lands under its row as `Condition {n}: pattern does not compile: {message}`.
+
+"Applies to" holds two pickers, Pools and Keys, each a button reading `{n} pools` or "No pools" (`{n} keys` or "No
+keys", a key labeled `{label} ({pool})`) that opens a searchable list with "Select all", under the hint "A pool's
+guardrails cover every key of the pool. A guardrail attached here joins the end of each pool's and key's order, which
+their own dialogs arrange." Test holds "Sample from" as Pool or Key with the pool or key select, Sample as 50, 200 or
+500, and "Run test", disabled while the conditions fail the dialog's own rules. The result reads `{matched} matched,
+{unmatched} unmatched, {indeterminate} indeterminate of {sampled} sampled` over a table of Time, Request (linked to the
+Requests view) and Verdict (`matched`, `failed at condition {n}` or `condition {n} needs the live header`), the matched
+rows first. An empty sample reads `No captured bodies for {name} in the last {h} hours.`, or where the key's effective
+capture or the pool's reads off, "Body capture is off, so there is nothing to test against. Turn it on in the key's
+Capture group." with the link "The pool's keys" to the Keys view filtered to the pool. The toasts read "Guardrail
+created", "Guardrail saved" and "Guardrail deleted". What the test evaluates and what a blocked client receives are on
+[Testing a guardrail](guardrails.md#testing-a-guardrail).
 
 ## Models
 
@@ -520,18 +595,19 @@ Refresh button and the count of rows shown ("25 shown, more available"). The ran
 message id", matches the request id, the session, the key, the model, the error code, and an attempt's account,
 upstream request id or upstream message id, literally (`_` and `%` are characters), and applies 400 milliseconds after
 the last keystroke, on Enter, or when the field loses focus. Add filter opens a "Filter by" field over the filters in
-four groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss reason, Held only, Outcome, Status), Request
-(Agent type, Client, Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject (Request, Session).
-Choosing one opens its values: a list with a Select all row that applies on each click, a pattern field for Client and
-User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash quoting either,
-and a value with no wildcard matching in full), an id field for Request and Session, which match the id exactly, or the
-Kind choices (Any kind, Inference, Count tokens, Probe), while Held only applies at once. A pattern or an id applies on
-Enter or Apply. Each filter in force stands as a chip on a line under the bar, such as "account: primary, nightly" or
-"held only": a click on the chip opens its values again, its x removes it, the chips past five fold behind "+N more",
-and from two chips on "Clear all" removes them and keeps the range, the search and the page size. The account filter
-keeps the requests whose serving attempt ran on the account, so a request that failed over lists under the account
-that answered it. Every filter, the range and the page size live in the page's address, so a reload or a shared link
-keeps them.
+four groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss reason, Guardrail, Held only, Outcome, Status),
+Request (Agent type, Client, Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject (Request,
+Session). Choosing one opens its values: a list with a Select all row that applies on each click, a pattern field for
+Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash quoting
+either, and a value with no wildcard matching in full), an id field for Request and Session, which match the id exactly,
+or the Kind choices (Any kind, Inference, Count tokens, Probe), while Held only applies at once. Guardrail lists the
+registry's guardrails by name, then the ids of deleted guardrails the loaded rows still carry as `{id} (deleted)`, then
+`none` for a request no guardrail matched ([Guardrails](guardrails.md)). A pattern or an id applies on Enter or Apply.
+Each filter in force stands as a chip on a line under the bar, such as "account: primary, nightly" or "held only": a
+click on the chip opens its values again, its x removes it, the chips past five fold behind "+N more", and from two
+chips on "Clear all" removes them and keeps the range, the search and the page size. The account filter keeps the
+requests whose serving attempt ran on the account, so a request that failed over lists under the account that answered
+it. Every filter, the range and the page size live in the page's address, so a reload or a shared link keeps them.
 
 The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status,
 Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and shows
@@ -576,6 +652,9 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   geography, the service tier) and Cache (the miss reason, `{read} read, {written} written`, where the prompt
   diverged), and a Diagnostics row naming who put the cache diagnostics member on the body: "sent by the client",
   "added by the router" or none.
+- Guardrails: one row per guardrail that matched, in evaluation order, the guardrail's name (or `{id} (deleted)` for one
+  the registry no longer holds) with a `blocked` badge in the critical tone or an `observed` badge muted, shown where
+  the request carries a match ([Guardrails](guardrails.md)).
 - Phases: a waterfall over Received, Selected, Written, Head, First content, Stream end and Finished, a phase the
   ledger holds no instant for reading "not measured".
 - Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain",
@@ -648,10 +727,15 @@ Exhausted), Errors by code, Failovers, Migration rewrites with its moves (one ba
 destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
 with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
 requests in the warning tone, its hover `12 requests held 14 min in all`, `no request held` on a bucket that held none,
-and its legend line the range's sum, or `none in range` with no chart), Requests by speed, Effort levels, and the table
-Traffic by the chosen group with Requests, OK, Rate limited, Failed, Incomplete, Exhausted, Rejected, Error rate,
-Failovers, Search and Fetch. Under the model grouping the requests the router rejected before routing group under "no
-model", which the Cache by model table leaves out.
+and its legend line the range's sum, or `none in range` with no chart), Requests by speed, Effort levels, then at full
+width the card "Guardrails" ("Matches by guardrail in range, every key") with one row per guardrail that matched in the
+range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alone and no other filter, a guardrail the
+registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range." where none did
+([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited, Failed,
+Incomplete, Exhausted, Rejected, Error rate, Failovers, Search and Fetch. Under the model grouping the requests the
+router rejected before routing group under "no model", which the Cache by model table leaves out. The "Errors by code"
+card and the Traffic table keep the requests a guardrail blocked under `guardrail_blocked`, as inventories of what the
+router answered, beside the Guardrails card that counts the same requests by guardrail.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply
