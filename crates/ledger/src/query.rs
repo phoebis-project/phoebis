@@ -664,12 +664,13 @@ pub fn guardrail_sample_page(
     Ok((rows, next))
 }
 
-/// The captured request body by primary key, `None` where the body row has aged out.
-pub fn request_body(conn: &Connection, id: &str) -> Result<Option<Vec<u8>>, LedgerError> {
+/// The captured request body by primary key, `None` where the body row has aged out or its expiry is at or before
+/// `now`, since the purge deletes an expired row only on its next pass.
+pub fn request_body(conn: &Connection, id: &str, now: i64) -> Result<Option<Vec<u8>>, LedgerError> {
     Ok(conn
         .query_row(
-            "SELECT request_body FROM bodies WHERE request_id = ?1",
-            params![id],
+            "SELECT request_body FROM bodies WHERE request_id = ?1 AND expires_at > ?2",
+            params![id, now],
             |r| r.get(0),
         )
         .optional()?)

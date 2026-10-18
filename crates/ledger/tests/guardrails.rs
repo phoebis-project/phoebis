@@ -605,16 +605,71 @@ fn request_body_answers_the_captured_bytes_and_none_where_the_body_row_is_gone()
     })
     .unwrap();
     assert_eq!(
-        db.read_blocking(|c| request_body(c, "kept")).unwrap(),
+        db.read_blocking(|c| request_body(c, "kept", 5_000))
+            .unwrap(),
         Some(body.to_vec())
     );
     assert_eq!(
-        db.read_blocking(|c| request_body(c, "aged")).unwrap(),
+        db.read_blocking(|c| request_body(c, "aged", 5_000))
+            .unwrap(),
         None,
         "the row still reads captured, and its body has aged out"
     );
     assert_eq!(
-        db.read_blocking(|c| request_body(c, "never")).unwrap(),
+        db.read_blocking(|c| request_body(c, "never", 5_000))
+            .unwrap(),
         None
+    );
+}
+
+/// A body row past its own expiry answers none before any purge has removed it, while a body inside its window still
+/// answers its bytes, so the dry run never reads content its key's capture window no longer covers.
+#[test]
+fn request_body_answers_none_for_a_body_past_its_expiry_that_no_purge_has_removed_yet() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let body = br#"{"model":"claude-sonnet-5","messages":[]}"#;
+    let now = 10 * HOUR_MS;
+    let live_expiry = now + HOUR_MS / 2;
+    // Both captured under a one-hour window: one received two hours ago, one half an hour ago.
+    for (id, expires_at) in [("expired", now - HOUR_MS), ("live", live_expiry)] {
+        db.insert_request(
+            &sampled(id, expires_at - HOUR_MS, "k", true, "inference"),
+            &[],
+            Some(&BodyRecord {
+                request_id: id.into(),
+                request_body: body.to_vec(),
+                response_body: None,
+                request_len_seen: body.len() as u64,
+                response_len_seen: 0,
+                expires_at,
+            }),
+        )
+        .unwrap();
+    }
+    let stored: i64 = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM bodies WHERE request_id = 'expired'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(stored, 1, "no purge has removed the expired body row");
+    assert_eq!(
+        db.read_blocking(|c| request_body(c, "expired", now))
+            .unwrap(),
+        None,
+        "the body's expiry passed an hour ago"
+    );
+    assert_eq!(
+        db.read_blocking(|c| request_body(c, "live", now)).unwrap(),
+        Some(body.to_vec())
+    );
+    assert_eq!(
+        db.read_blocking(|c| request_body(c, "live", live_expiry))
+            .unwrap(),
+        None,
+        "the expiry instant itself reads expired, as the purge deletes at it"
     );
 }

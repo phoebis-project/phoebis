@@ -798,7 +798,8 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
         Err(error) => return store_failure(error),
     }
     let window_hours = state.body_capture_max_hours;
-    let since = (state.clock)() - i64::from(window_hours) * 3_600_000;
+    let now = (state.clock)();
+    let since = now - i64::from(window_hours) * 3_600_000;
     let limit_rows = limit as usize;
     let mut sampled: Vec<(String, i64, Verdict)> = Vec::new();
     let mut cursor: Option<String> = None;
@@ -823,8 +824,9 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                 )?;
                 let mut out = Vec::with_capacity(rows.len());
                 for row in rows {
-                    // The row outlived its body's retention, so it answers nothing and takes no place in the sample.
-                    let Some(body) = request_body(c, &row.id)? else {
+                    // The body aged out, or its own key's capture window ended before the purge reached it, so the
+                    // row answers nothing and takes no place in the sample.
+                    let Some(body) = request_body(c, &row.id, now)? else {
                         continue;
                     };
                     let tree = parse_body(&body);

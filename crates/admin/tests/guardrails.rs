@@ -1684,6 +1684,39 @@ async fn the_limit_and_the_window_hold() {
 }
 
 #[tokio::test]
+async fn a_body_past_its_own_keys_capture_window_is_left_out_before_the_purge_removes_it() {
+    let (parts, cookie) = seeded_sample().await;
+    // Captured 61 minutes ago under a key's one-hour window, so its body expired a minute ago while the longest
+    // window still covers the row and no purge has run since.
+    let row = RequestRecord {
+        bodies_captured: true,
+        ..fork_row("r-expired", 61, "desktop")
+    };
+    let body = BodyRecord {
+        request_id: row.id.clone(),
+        request_body: FORK.to_vec(),
+        response_body: None,
+        request_len_seen: FORK.len() as u64,
+        response_len_seen: 0,
+        expires_at: common::NOW - MINUTE,
+    };
+    parts.db.insert_request(&row, &[], Some(&body)).unwrap();
+    let (status, answer) = dry_run(
+        &parts.app,
+        &cookie,
+        j!({"conditions": [condition()], "pool_id": "main"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        sample_ids(&answer),
+        ["r1-fork", "r2-classifier", "r3-fork", "r8-classifier"],
+        "the row whose body expired is left out"
+    );
+    assert_eq!(answer["totals"]["sampled"], 4);
+}
+
+#[tokio::test]
 async fn an_uncaptured_row_a_probe_and_a_row_whose_body_is_gone_are_skipped_without_counting() {
     let (parts, cookie) = seeded_sample().await;
     // The first page of four reads the row whose body is gone as its fourth, so a skipped row counted toward the
