@@ -1,5 +1,5 @@
-//! What the restoration reads off the body in one parse: the turn boundary, the version suffix, and the
-//! prompt id a first-party line already carries.
+//! What the restoration reads off the body in one parse: the version suffix and the attribution line at
+//! `system[0]`.
 
 use axum::http::HeaderMap;
 use phoebis_bus::RequestShape;
@@ -9,18 +9,12 @@ use crate::chains::Chains;
 
 #[derive(Debug, PartialEq)]
 pub struct BodyFacts {
-    /// The last `messages` entry whose role is not `system` has role `user` and carries no `tool_result`
-    /// block: a per-turn control entry after the user's turn is the client's, not a turn of its own.
-    pub fresh_user_turn: bool,
     /// UTF-16 code units 4, 7, and 20 of each `text` block of the first `user` message, in the wire's order,
     /// matching the client's own JavaScript string indexing; `b'0' as u16` where a text is shorter. The client
     /// hashes the first text of its first non-meta user message for the version suffix, and the meta flag never
     /// reaches the wire: the blocks it prepends (a system reminder, a slash command's caveat and output) and the
     /// user's own words all land as text blocks of one message, so every block is a candidate.
     pub prompt_units: Vec<[u16; 3]>,
-    /// The `cc_prompt_id` the caller's own attribution line carries, absent from a reduced-shape request and
-    /// from a value spelled any other way than the client spells one.
-    pub prompt_id: Option<String>,
     /// The `cc_turn_origin` the line carries, in the client's own spelling (a token of lowercase ASCII letters
     /// and underscores, at most 32 bytes); absent from a reduced-shape request.
     pub turn_origin: Option<String>,
@@ -55,6 +49,8 @@ pub struct ClientHints {
     pub per_turn_effort: bool,
     /// `<name>=<ms>;...` summed; absent when no entry parses or the value runs past 4 KiB.
     pub prev_tool_ms: Option<i64>,
+    /// `x-claude-code-prompt-id`, the client's own id of the turn, which the restoration writes as `cc_prompt_id`.
+    pub prompt_id: Option<String>,
     /// `x-claude-code-request-class`.
     pub request_class: Option<String>,
 }
@@ -68,9 +64,7 @@ impl BodyFacts {
             phoebis_cch::top_level_member_count(body, "safeguards").is_ok_and(|n| n >= 1);
         let Some(root) = phoebis_guardrails::parse_body(body) else {
             let facts = BodyFacts {
-                fresh_user_turn: false,
                 prompt_units: vec![[b'0' as u16; 3]],
-                prompt_id: None,
                 turn_origin: None,
                 entrypoint: None,
                 carries_line: false,
@@ -90,11 +84,6 @@ impl BodyFacts {
         };
         let messages = root.get("messages").and_then(Value::as_array);
         let is_system = |entry: &Value| entry.get("role").and_then(Value::as_str) == Some("system");
-        // The client appends its per-turn control entry after the user's turn, so the turn is judged on the last
-        // entry the user or the assistant wrote, not on the client's own.
-        let fresh_user_turn = messages
-            .and_then(|m| m.iter().rev().find(|entry| !is_system(entry)))
-            .is_some_and(is_fresh_user_turn);
         // The upstream applies the newest control entry's effort over the top-level member.
         let control_effort = messages.and_then(|m| {
             m.iter()
@@ -121,9 +110,6 @@ impl BodyFacts {
             .and_then(Value::as_str);
         let carries_line =
             first_system_text.is_some_and(|text| text.starts_with("x-anthropic-billing-header: "));
-        let prompt_id = first_system_text
-            .and_then(carried_prompt_id)
-            .map(String::from);
         let turn_origin = first_system_text
             .and_then(carried_turn_origin)
             .map(String::from);
@@ -162,9 +148,7 @@ impl BodyFacts {
         let chains = Chains::read(&root);
         let markers_ttl_ms = markers_ttl_ms(&root);
         let facts = BodyFacts {
-            fresh_user_turn,
             prompt_units,
-            prompt_id,
             turn_origin,
             entrypoint,
             carries_line,
@@ -218,6 +202,7 @@ impl ClientHints {
                 .get("x-claude-code-prev-tool-durations")
                 .and_then(|v| v.to_str().ok())
                 .and_then(tool_ms_sum),
+            prompt_id: header_prompt_id(headers),
             request_class: crate::identity::header_id(headers, "x-claude-code-request-class"),
         }
     }
@@ -274,20 +259,21 @@ fn carried_field<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     Some(value)
 }
 
-/// What a carried id may weigh. A UUID is 36; the session memory retains one per entry for a day, so a value
-/// past this is read as absent rather than held.
-const PROMPT_ID_MAX: usize = 64;
-
-/// The `cc_prompt_id` of an attribution line, accepted only as the client's own spelling of an id: the value
-/// is recorded and then restored onto a later turn of the same session, in a line this build signs, so a
-/// separator smuggled into it would become a field of that line.
-fn carried_prompt_id(text: &str) -> Option<&str> {
-    let value = carried_field(text, "cc_prompt_id")?;
-    let spelled = (1..=PROMPT_ID_MAX).contains(&value.len())
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-');
-    spelled.then_some(value)
+/// The `x-claude-code-prompt-id` header, read as the client's own spelling of a UUID alone: 36 bytes in the
+/// `8-4-4-4-12` shape of lowercase hexadecimal digits and hyphens. The value lands in a line this build signs, so
+/// anything the client would not have written reads as absent.
+pub(crate) fn header_prompt_id(headers: &HeaderMap) -> Option<String> {
+    let value = headers
+        .get("x-claude-code-prompt-id")?
+        .to_str()
+        .ok()?
+        .trim();
+    let shaped = value.len() == 36
+        && value.bytes().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_hexdigit() && !b.is_ascii_uppercase(),
+        });
+    shaped.then(|| value.to_string())
 }
 
 /// Bound on `cc_turn_origin`: the client's own token set, never wide enough to carry a separator that could
@@ -329,19 +315,6 @@ pub(crate) fn note_entrypoint_disagreement(
     }
 }
 
-fn is_fresh_user_turn(message: &Value) -> bool {
-    if message.get("role").and_then(Value::as_str) != Some("user") {
-        return false;
-    }
-    match message.get("content") {
-        Some(Value::String(_)) => true,
-        Some(Value::Array(blocks)) => !blocks
-            .iter()
-            .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result")),
-        _ => false,
-    }
-}
-
 /// The `text` blocks of a message in order: a string content is one text, an array yields each `text` block.
 fn texts(message: &Value) -> Box<dyn Iterator<Item = &str> + '_> {
     match message.get("content") {
@@ -369,51 +342,6 @@ fn prompt_units_of(text: &str) -> [u16; 3] {
 mod tests {
     use super::*;
     use crate::body::CLASSIFIER_BETA;
-
-    #[test]
-    fn a_string_content_last_message_is_a_fresh_turn() {
-        let body = br#"{"messages":[{"role":"user","content":"hi"}]}"#;
-        assert!(BodyFacts::read(body).fresh_user_turn);
-    }
-
-    #[test]
-    fn a_tool_result_block_in_the_last_message_is_not_a_fresh_turn() {
-        let body = br#"{"messages":[
-            {"role":"user","content":"hi"},
-            {"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},
-            {"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}
-        ]}"#;
-        assert!(!BodyFacts::read(body).fresh_user_turn);
-    }
-
-    #[test]
-    fn an_assistant_last_message_is_not_a_fresh_turn() {
-        let body = br#"{"messages":[
-            {"role":"user","content":"hi"},
-            {"role":"assistant","content":"hello"}
-        ]}"#;
-        assert!(!BodyFacts::read(body).fresh_user_turn);
-    }
-
-    #[test]
-    fn a_control_entry_after_the_user_turn_keeps_it_a_fresh_turn() {
-        let body = br#"{"messages":[
-            {"role":"user","content":"say hi again"},
-            {"role":"system","content":[{"type":"text","text":"hook context"}],"output_config":{"effort":"high"}}
-        ]}"#;
-        assert!(BodyFacts::read(body).fresh_user_turn);
-    }
-
-    #[test]
-    fn a_control_entry_after_a_tool_result_is_not_a_fresh_turn() {
-        let body = br#"{"messages":[
-            {"role":"user","content":"hi"},
-            {"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},
-            {"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},
-            {"role":"system","content":[{"type":"text","text":"hook context"}],"output_config":{"effort":"low"}}
-        ]}"#;
-        assert!(!BodyFacts::read(body).fresh_user_turn);
-    }
 
     #[test]
     fn the_last_control_entrys_effort_is_the_effective_one_and_the_top_level_member_is_the_fallback(
@@ -470,10 +398,6 @@ mod tests {
             Some("low"),
             "a level that is no string steps back as well"
         );
-        let system_alone = br#"{"messages":[
-            {"role":"system","content":[{"type":"text","text":"a"}],"output_config":{"effort":"low"}}
-        ]}"#;
-        assert!(!BodyFacts::read(system_alone).fresh_user_turn);
     }
 
     #[test]
@@ -511,9 +435,8 @@ mod tests {
     }
 
     #[test]
-    fn an_unparseable_body_reads_as_not_a_fresh_turn_with_zeroed_units() {
+    fn an_unparseable_body_reads_with_zeroed_units() {
         let facts = BodyFacts::read(b"not json");
-        assert!(!facts.fresh_user_turn);
         assert_eq!(facts.prompt_units, vec![[b'0' as u16; 3]]);
     }
 
@@ -694,6 +617,32 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_id_header_reads_the_clients_uuid_spelling_alone() {
+        const ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let headers = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-claude-code-prompt-id", value.parse().unwrap());
+            headers
+        };
+        let read = |value: &str| header_prompt_id(&headers(value));
+        assert_eq!(read(ID).as_deref(), Some(ID));
+        assert_eq!(
+            ClientHints::read(&headers(ID)).prompt_id.as_deref(),
+            Some(ID)
+        );
+        assert_eq!(read(&ID.to_ascii_uppercase()), None, "an uppercase form");
+        assert_eq!(
+            read(&ID.replace('-', "")),
+            None,
+            "the 32 digits without hyphens"
+        );
+        assert_eq!(read(&format!("{ID};")), None, "a trailing field separator");
+        assert_eq!(read(&format!("{ID}0")), None, "a value past 36 bytes");
+        assert_eq!(header_prompt_id(&HeaderMap::new()), None);
+        assert_eq!(ClientHints::read(&HeaderMap::new()).prompt_id, None);
+    }
+
+    #[test]
     fn a_cache_control_object_outside_the_apis_marker_positions_is_no_marker() {
         let ttl = |body: &str| BodyFacts::read(body.as_bytes()).markers_ttl_ms;
         assert_eq!(
@@ -812,18 +761,13 @@ mod tests {
     }
 
     #[test]
-    fn a_body_cut_mid_pair_still_reads_its_line_its_turn_its_chain_and_its_markers() {
+    fn a_body_cut_mid_pair_still_reads_its_line_its_chain_and_its_markers() {
         // The client sends a string cut between the two halves of a character as a lone surrogate escape, which a
         // strict decoder refuses.
         let body = br#"{"model":"m","system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli; cc_prompt_id=11111111-1111-4111-8111-111111111111;"}],"messages":[{"role":"user","content":[{"type":"text","text":"cut \ud83d","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#;
         assert!(serde_json::from_slice::<Value>(body).is_err());
         let facts = BodyFacts::read(body);
         assert!(facts.carries_line);
-        assert_eq!(
-            facts.prompt_id.as_deref(),
-            Some("11111111-1111-4111-8111-111111111111")
-        );
-        assert!(facts.fresh_user_turn);
         assert!(facts.chains.is_some());
         assert_eq!(facts.markers_ttl_ms, Some(3_600_000));
         assert_eq!(facts.shape.message_count, 1);

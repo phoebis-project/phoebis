@@ -69,8 +69,8 @@ use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
-    client_class, climb, contract_gap, identify, waits_on, PendingReports, RequestIdentity,
-    PENDING_REPORT_WAIT,
+    client_class, climb, contract_gap, identify, restores_prev_req, waits_on, PendingReports,
+    RequestIdentity, PENDING_REPORT_WAIT,
 };
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
@@ -876,7 +876,10 @@ fn restore_with<'a>(
 ) -> Option<Restore<'a>> {
     restore.as_ref().map(|r| Restore {
         prompt_id: r.prompt_id.as_deref(),
-        prev_req: previous.request_id.as_deref(),
+        prev_req: r
+            .prev_req
+            .then_some(previous.request_id.as_deref())
+            .flatten(),
         restore_cch: true,
         skip: skip.iter().copied().collect(),
         system_is_array: r.system_is_array,
@@ -1646,44 +1649,38 @@ impl Relay {
             }),
             _ => None,
         };
-        // The one store read of the request path, before either the prompt id or the previous request id is
-        // read: a miss after a restart or an eviction is filled from tier 2 here, on the blocking pool, so no
-        // worker blocks on SQLite for it. A probe and a token count restore nothing, since the prompt id is
-        // read for an inference alone.
+        // Read once, ahead of the restoration that takes its prompt id from the header, and reused on every
+        // attempt of this request.
+        let hints = ClientHints::read(&parts.headers);
+        // The one store read of the request path, ahead of the entry's write: a miss after a restart or an
+        // eviction is filled from tier 2 here, on the blocking pool, so no worker blocks on SQLite for it, and the
+        // write lands on the restored entry, so the leg's lookup of the previous request id finds it. A probe and
+        // a token count restore nothing here, since the entry is written for an inference alone.
         if let Some(key) = memory_key
             .as_ref()
             .filter(|_| trace.kind == Kind::Inference)
         {
-            let resident = self.memory.restore(key, received_at).await;
-            // The parent's row matters only when the child is new: `prompt_id` consults the parent for an
-            // agent's first request alone, so a resident child never pays a parent read.
-            if !resident {
-                if let Some(parent) = identity.parent_agent_id.as_deref() {
-                    self.memory
-                        .restore(&key.with_agent(parent), received_at)
-                        .await;
-                }
-            }
+            self.memory.restore(key, received_at).await;
         }
+        let prev_req = restores_prev_req(request_class.as_deref(), &parts.headers);
         // Claude Code's own inference requests alone: a probe replays what the client sent, a token count has no
         // line to fill, and a body without the block is relayed as sent and gets no client request id either.
         let restore = match (client_version.as_deref(), identity.session_id.as_deref()) {
             // The version lands in a line this build signs, so one spelled any other way than the client's
             // own restores nothing rather than a version guessed around whatever it carried.
             (Some(version), _) if trace.kind == Kind::Inference && facts.carries_line => {
-                restorable_version(version).map(|version| RestoreContext {
-                    cli_version: version.to_string(),
-                    prompt_units: facts.prompt_units.clone(),
-                    prompt_id: memory_key.as_ref().map(|key| {
-                        self.memory.prompt_id(
-                            key,
-                            identity.parent_agent_id.as_deref(),
-                            facts.fresh_user_turn,
-                            facts.prompt_id.as_deref(),
-                            received_at,
-                        )
-                    }),
-                    system_is_array: facts.system_is_array,
+                restorable_version(version).map(|version| {
+                    if let Some(key) = memory_key.as_ref() {
+                        self.memory
+                            .touch(key, hints.prompt_id.as_deref(), received_at);
+                    }
+                    RestoreContext {
+                        cli_version: version.to_string(),
+                        prompt_units: facts.prompt_units.clone(),
+                        prompt_id: hints.prompt_id.clone(),
+                        prev_req,
+                        system_is_array: facts.system_is_array,
+                    }
                 })
             }
             _ => None,
@@ -1781,8 +1778,7 @@ impl Relay {
             session = ?identity.session_id,
             "relaying a Messages request",
         );
-        // Read once and reused on every attempt of this request: neither fact changes across a failover.
-        let hints = ClientHints::read(&parts.headers);
+        // Read once and reused on every attempt of this request: the lane does not change across a failover.
         let lane = crate::lane::lane_of(&identity.canonical_model, &facts, hints.per_turn_effort);
         let admitted = Admitted {
             auto_mode_server,
@@ -4899,13 +4895,16 @@ impl From<Failure> for LocalRefusal {
 }
 
 /// The restoration facts computed once at admission: the client version the wire already named, the
-/// version-suffix code units, the prompt id this turn carries, and whether `system` is an array. The previous
-/// request id is not here because it is per-account, looked up in the failover loop against the account each
-/// attempt actually tries.
+/// version-suffix code units, the prompt id the client's header names, and whether `system` is an array. The
+/// previous request id is not here because it is per-account, looked up in the failover loop against the account
+/// each attempt actually tries.
 struct RestoreContext {
     cli_version: String,
     prompt_units: Vec<[u16; 3]>,
     prompt_id: Option<String>,
+    /// `cc_prev_req` is filled on this request's class (the conversation classes and the conversation-shaped
+    /// forks), read once at admission.
+    prev_req: bool,
     system_is_array: bool,
 }
 

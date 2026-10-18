@@ -271,6 +271,20 @@ pub(crate) fn contract_gap(
     None
 }
 
+/// Whether the restoration fills `cc_prev_req`: on the conversation classes the client's own builder passes the
+/// previous request id, and on an `auxiliary` request that carries an agent id or a prompt id, the
+/// conversation-shaped forks. Never on a side query, whose native line carries none.
+pub(crate) fn restores_prev_req(request_class: Option<&str>, headers: &HeaderMap) -> bool {
+    match request_class {
+        Some("main" | "subagent" | "workflow" | "compaction") => true,
+        Some("auxiliary") => {
+            header_id(headers, "x-claude-code-agent-id").is_some()
+                || crate::facts::header_prompt_id(headers).is_some()
+        }
+        _ => false,
+    }
+}
+
 /// `claude-code/<entrypoint>` for a `claude-cli/` user agent (the token `entrypoint_of` reads, `cli` when it
 /// reads none), `other` for anything else. The entrypoint is bounded by `entrypoint_of`, so the class is safe
 /// for a log line and a ledger key.
@@ -676,6 +690,47 @@ mod tests {
                 gap(&headers, &whole_body()),
                 Some(ITEM_SESSION_HEADER),
                 "{malformed}"
+            );
+        }
+    }
+
+    // -- restores_prev_req: cc_prev_req by class --
+
+    #[test]
+    fn restores_prev_req_answers_the_table_by_class() {
+        let headers = |agent_id: bool, prompt_id: bool| {
+            let mut headers = HeaderMap::new();
+            if agent_id {
+                headers.insert("x-claude-code-agent-id", "agent-1".parse().unwrap());
+            }
+            if prompt_id {
+                headers.insert(
+                    "x-claude-code-prompt-id",
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".parse().unwrap(),
+                );
+            }
+            headers
+        };
+        // The class, the agent-id header, the prompt-id header, and the answer.
+        let table = [
+            (Some("main"), false, false, true),
+            (Some("subagent"), false, false, true),
+            (Some("workflow"), false, false, true),
+            (Some("compaction"), false, false, true),
+            (Some("auxiliary"), false, false, false),
+            (Some("auxiliary"), true, false, true),
+            (Some("auxiliary"), false, true, true),
+            (Some("side_reply"), true, true, false),
+            (Some("something_new"), true, true, false),
+            (Some("side_reply"), true, false, false),
+            (Some("something_new"), false, true, false),
+            (None, true, true, false),
+        ];
+        for (class, agent_id, prompt_id, restored) in table {
+            assert_eq!(
+                restores_prev_req(class, &headers(agent_id, prompt_id)),
+                restored,
+                "{class:?}, agent id {agent_id}, prompt id {prompt_id}"
             );
         }
     }
