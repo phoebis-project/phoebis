@@ -900,7 +900,8 @@ export interface RequestQuery {
 export interface RequestPage {
   /**
    * The newest write instant among the rows the query's filters admit at the read, `to` included, the `landedAfter` it
-   * passed where none above it has landed, and 0 where neither is set.
+   * passed where none above it has landed, and 0 where neither is set, never past a `to` the query names, since a row
+   * received after `to` lands after it.
    */
   landedThrough: number;
   nextCursor: string | null;

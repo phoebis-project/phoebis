@@ -57,9 +57,9 @@ pub(crate) struct RequestList {
     pub requests: Vec<RequestSummary>,
     /// Set only while a row lies beyond the page. A page of exactly `limit` rows with none beyond answers null.
     pub next_cursor: Option<String>,
-    /// The newest write instant among the rows the filters admit at this read, `to` included, the `landed_after`
-    /// passed where none above it has landed, and 0 where neither is set. Pass it as `landed_after` to read what
-    /// landed since.
+    /// The newest write instant among the rows the filters admit at this read, `to` included, the `landed_after` passed
+    /// where none above it has landed, and 0 where neither is set, never past a `to` the query names, since a row
+    /// received after `to` lands after it. Pass it as `landed_after` to read what landed since.
     pub landed_through: i64,
 }
 

@@ -1097,12 +1097,13 @@ export class MockApi implements Api {
     const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
     // The ledger lists a request once it has written it, so a row whose landing the mock's clock has not reached
     // stays out. The newest stamp is over the rows the query's filters admit, its `to` included, with its
-    // `landedAfter` as the floor, as the route reads it.
+    // `landedAfter` as the floor and capped at its `to`, as the route reads it.
     const now = mockClock.now();
     const written = REQUESTS.filter((r) => landedAt(r) <= now);
     const since = query.landedAfter;
     const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
-    const landedThrough = matched.reduce((newest, r) => Math.max(newest, landedAt(r)), since ?? 0);
+    const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
+    const landedThrough = query.to ? Math.min(newest, Date.parse(query.to)) : newest;
     const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!)) : matched;
     const limit = query.limit ?? 50;
     const page = after.slice(0, limit);

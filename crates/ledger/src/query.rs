@@ -530,7 +530,8 @@ pub struct RequestPage {
     /// The cursor past the page's last row, set only while a row lies beyond it.
     pub next: Option<String>,
     /// The newest `landed_at` among the rows the page's filters admit at this read, `landed_after` itself where none
-    /// above it has landed and 0 where neither is set, read in the page's transaction.
+    /// above it has landed and 0 where neither is set, capped at `to` where the read names one, read in the page's
+    /// transaction.
     pub landed_through: i64,
 }
 
@@ -548,7 +549,8 @@ pub fn list_request_page(
     let tx = conn.unchecked_transaction()?;
     let (rows, next) = list_requests(&tx, filter, live, cursor, limit)?;
     // A row the filters leave out, such as one received after `to` and written before this read, stays above the
-    // watermark, so the next poll's later bound still finds it.
+    // watermark, so the next poll's later bound still finds it. The writer stamps a row from its clock, so a row
+    // received after `to` lands after it: the cap at `to` keeps a later admitted row's stamp from passing it.
     let (mut args, clauses) = filter_clauses(filter, live);
     args.push(Box::new(filter.landed_after.unwrap_or(0)));
     let r#where = if clauses.is_empty() {
@@ -556,7 +558,7 @@ pub fn list_request_page(
     } else {
         format!(" WHERE {}", clauses.join(" AND "))
     };
-    let landed_through = tx.query_row(
+    let landed_through: i64 = tx.query_row(
         &format!(
             "SELECT COALESCE(MAX(landed_at), ?{}) FROM requests{where}",
             args.len()
@@ -564,6 +566,9 @@ pub fn list_request_page(
         params_from_iter(args.iter().map(|a| a.as_ref())),
         |r| r.get(0),
     )?;
+    let landed_through = filter
+        .to
+        .map_or(landed_through, |to| landed_through.min(to));
     Ok(RequestPage {
         rows,
         next,

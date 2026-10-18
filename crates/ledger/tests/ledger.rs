@@ -2135,6 +2135,67 @@ fn a_row_received_after_the_pages_bound_keeps_the_watermark_below_its_stamp_for_
     );
 }
 
+/// The writer stamps each row from its clock, so a row received after a read's `to` lands after it too. Here the row
+/// the read admits, received before `to`, lands after the row it leaves out, which was received after `to`: a
+/// watermark at the admitted row's stamp would pass the other row for good.
+#[tokio::test]
+async fn a_read_bounded_by_to_caps_its_watermark_there_so_a_later_poll_reads_a_row_received_after_it(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let to = NOW + 1_000;
+    for (id, received_at, written_at) in [
+        ("past_the_bound", NOW + 1_500, NOW + 2_000),
+        ("inside", NOW + 500, NOW + 3_000),
+    ] {
+        h.clock.store(written_at, Ordering::SeqCst);
+        h.ledger
+            .record_request(Record::Request {
+                request: RequestRecord {
+                    id: id.into(),
+                    received_at,
+                    ..Default::default()
+                },
+                attempts: Vec::new(),
+                bodies: None,
+            })
+            .await;
+        ledgered(&h, id).await;
+    }
+    let page = |filter: RequestFilter| {
+        h.db.read(move |c| {
+            phoebis_ledger::list_request_page(c, &filter, &LiveKeys::default(), None, 10)
+        })
+    };
+    let ids = |page: &phoebis_ledger::RequestPage| -> Vec<String> {
+        page.rows.iter().map(|(r, _)| r.id.clone()).collect()
+    };
+    let bounded = page(RequestFilter {
+        to: Some(to),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(ids(&bounded), ["inside"]);
+    assert!(
+        bounded.landed_through <= to,
+        "the watermark {} stays at or under the read's to {to}",
+        bounded.landed_through
+    );
+    let next = page(RequestFilter {
+        landed_after: Some(bounded.landed_through),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        ids(&next),
+        ["past_the_bound", "inside"],
+        "the next poll reads the row received after to, and the admitted row again"
+    );
+    up.shutdown().await;
+}
+
 #[test]
 fn the_account_filter_reads_the_serving_attempt_as_the_rollups_file_it() {
     let db = LedgerDb::open_in_memory().unwrap();
