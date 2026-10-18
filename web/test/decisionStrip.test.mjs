@@ -342,13 +342,13 @@ test('a round fired by the stretch groups fired by, over for, over since, stretc
   const round = await recordOf('req_9f2e7c5a-c49/2');
   const at = Date.parse(round.request.at);
   const time = (key) => d.formatFact(round.walk.find((s) => s.step === 'move:shed').facts.find((f) => f.key === key).value, 'time', at);
-  assert.deepEqual(groupsOf(round).find(([label]) => label === 'Windows')[1].slice(4), ['demand 12.86 %/h', 'speed 0.5x', 'slow-down on', 'realized 0.5x', 'ceiling 95%']);
+  assert.deepEqual(groupsOf(round).find(([label]) => label === 'Windows')[1].slice(4), ['demand 12.86 %/h', 'speed 0.5x', 'ramp 100%', 'slow-down on', 'realized 0.5x', 'ceiling 95%']);
   assert.deepEqual(groupsOf(round).find(([label]) => label === 'Round')[1].slice(0, 6), ['trigger 5h', 'excess 2.86 %/h', 'fired by slow-down', `over since ${time('over_since')}`, 'stretch 42 min', 'threshold 30 min']);
   assert.deepEqual(labelsOf(round).map(([label]) => label), ['Windows', 'Round'], 'no fact of the line falls to an unlabeled group');
   // The hold before it read the stretch inside the safety wait, which the round names as the time it has read over.
   const waiting = await recordOf('req_9f2e7c5a-c49/1');
   assert.deepEqual(labelsOf(waiting), [
-    ['Windows', ['projection 5h', 'horizon 5h', 'projection 7d', 'horizon 7d', 'demand', 'speed', 'slow-down', 'realized', 'ceiling']],
+    ['Windows', ['projection 5h', 'horizon 5h', 'projection 7d', 'horizon 7d', 'demand', 'speed', 'ramp', 'slow-down', 'realized', 'ceiling']],
     ['Round', ['over for', 'over since', 'stretch', 'threshold', 'marked']],
   ]);
   assert.deepEqual(groupsOf(waiting)[1][1][0], 'over for 1 min 48 s');
@@ -860,7 +860,7 @@ const INVENTORY = [
 ];
 
 /** The account's slow-down facts the router adds to every shed line, a line a fired rule cut short among them. */
-const SLOW_DOWN_KEYS = new Set(['demand_five_hour', 'factor', 'over_since', 'slow_down', 'speed', 'stretch_ms', 'threshold_ms']);
+const SLOW_DOWN_KEYS = new Set(['demand_five_hour', 'factor', 'over_since', 'ramp', 'slow_down', 'speed', 'stretch_ms', 'threshold_ms']);
 
 /** The labels a fact's rows read: its word, "on" for the account a step acted on, the lane's three parts. */
 const labelsOf = (f) => (f.key === 'account_id' ? ['on'] : f.key === 'lane' ? ['speed', 'thinking', 'effort'] : [d.keyWord(f.key)]);
@@ -928,7 +928,7 @@ test("the pin's three groups and the shed's three groups hold their keys", async
   assert.deepEqual(groupsOf(stationPlan(renewal, 'pin')), [['Lookup', ['found', 'on', 'epoch']], ['Age', ['idle', 'refresh age']], ['Warmth', ['warmth', 'cause', 'marked']]]);
 
   const SHED = [
-    ['Windows', ['projection_five_hour', 'horizon_five_hour', 'projection_seven_day', 'horizon_seven_day', 'projection_seven_day_fable', 'horizon_seven_day_fable', 'demand_five_hour', 'factor', 'slow_down', 'speed', 'ceiling', 'cooldown', 'window_share_fast']],
+    ['Windows', ['projection_five_hour', 'horizon_five_hour', 'projection_seven_day', 'horizon_seven_day', 'projection_seven_day_fable', 'horizon_seven_day_fable', 'demand_five_hour', 'factor', 'ramp', 'slow_down', 'speed', 'ceiling', 'cooldown', 'window_share_fast']],
     [
       'Round',
       [
@@ -990,6 +990,19 @@ test("a held 5-hour window's age and its hold read as durations in the Round gro
   assert.deepEqual(round.rows.map((r) => r.label), ['over since 5h', 'wait 5h', 'age 5h', 'age hold 5h', 'marked']);
   assert.deepEqual(round.rows.slice(1, 4).map((r) => r.chips.map(chipText)), [['wait 5h 15 min'], ['age 5h 10 min'], ['age hold 5h 1 h']]);
   assert.deepEqual(plan.block.groups.map((g) => g.label), ['Windows', 'Round'], 'no fact of the line falls to the unlabeled group');
+});
+
+test('a slowed shed line reads its ramp in the Windows group after the factor it applies to', async () => {
+  // The slow-down facts in the order the router writes them: the demand's factor, the share of it the holds apply and
+  // the speed they realize.
+  const base = await recordOf('req_868264bc-611/1');
+  const slowed = step('move:shed', 'no', [fact('slow_down', 'on'), fact('factor', 0.8), fact('ramp', 1 / 3, 'percent'), fact('speed', 0.93), fact('demand_five_hour', 0.1286, 'percent_per_hour')]);
+  const keyed = { ...base, walk: base.walk.map((s) => (s.step === 'move:shed' ? slowed : s)) };
+  const plan = stationPlan(keyed, 'move:shed');
+  const windows = plan.block.groups.find((g) => g.label === 'Windows');
+  assert.deepEqual(windows.rows.map((r) => r.label), ['demand_five_hour', 'factor', 'ramp', 'slow_down', 'speed'].map(d.keyWord));
+  assert.deepEqual(windows.rows.find((r) => r.label === 'ramp').chips.map(chipText), ['ramp 33%']);
+  assert.deepEqual(plan.block.groups.map((g) => g.label), ['Windows'], 'no fact of the line falls to the unlabeled group');
 });
 
 test("the return rule's popover reads its mode first, since the mode decides which facts the rule read", async () => {

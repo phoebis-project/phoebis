@@ -270,6 +270,9 @@ const POOL_ROWS: PoolSeed[] = [
     loadShedding: true,
     // Its own cap at the balanced preset's, where the sample's captured pool sets one under a quarter.
     shedCap: 0.5,
+    // A quarter-hour burn average, which studio's afternoon span has outlasted by its slowed turn, so that turn's hold
+    // applies the full factor.
+    burnAverageSeconds: 900,
     // The slow-down on at the store's hold, so studio's sessions are held once they would pass the ceiling before the
     // reset. Its own stretch threshold of 30 minutes lets a round move sessions off studio while the store's two and a
     // half hours would still leave them to the slow-down alone.

@@ -311,10 +311,10 @@ test('the step and verdict words', () => {
 test('the walk words name every key the slow-down, the return rule, the pick, the placement and the shed line write', () => {
   const words = {
     age_five_hour: 'age 5h', by_runway: 'by runway', cycle_ms: 'cycle', demand_five_hour: 'demand', dwell_ms: 'dwell', factor: 'speed', fired_by: 'fired by', hold_five_hour: 'age hold 5h', ladder: 'ladder', mode: 'mode',
-    over_ms: 'over for', over_since: 'over since', over_since_five_hour: 'over since 5h', over_since_seven_day: 'over since 7d', over_since_seven_day_fable: 'over since Fable', slow_down: 'slow-down',
+    over_ms: 'over for', over_since: 'over since', over_since_five_hour: 'over since 5h', over_since_seven_day: 'over since 7d', over_since_seven_day_fable: 'over since Fable', ramp: 'ramp', slow_down: 'slow-down',
     slow_down_until: 'slowed until', speed: 'realized', stretch_ms: 'stretch', threshold_ms: 'threshold', wait_five_hour: 'wait 5h', wait_seven_day: 'wait 7d', wait_seven_day_fable: 'wait Fable',
   };
-  assert.equal(Object.keys(words).length, 23);
+  assert.equal(Object.keys(words).length, 24);
   // Several of the words equal the underscores read as spaces, so the table's own entries are what the case reads.
   for (const [key, word] of Object.entries(words)) assert.equal(d.WALK_KEY[key], word, key);
   assert.equal(d.WALK_KEY.wait_ms, 'wait', "the spent rule's wait keeps its word");

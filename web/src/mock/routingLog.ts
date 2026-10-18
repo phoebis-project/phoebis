@@ -408,6 +408,9 @@ function slowFactsOf(source: RecordCandidate | undefined, pool: PoolSeed, at: nu
     fact('stretch_ms', read.stretchMs, 'ms'),
     fact('threshold_ms', pool.slowDownStretchSeconds * 1_000, 'ms'),
     fact('factor', read.factor),
+    // The engine's share of the factor the holds apply: the time since the span's first read under 1 over the pool's
+    // burn average.
+    fact('ramp', rampAt(source.accountId, pool, at), 'percent'),
     fact('speed', read.speed),
     fact('demand_five_hour', source.windows.five_hour?.demand ?? 0, 'percent_per_hour'),
     ...(read.overSince === null ? [] : [fact('over_since', read.overSince, 'time')]),
@@ -417,6 +420,16 @@ function slowFactsOf(source: RecordCandidate | undefined, pool: PoolSeed, at: nu
 /** The account's slow-down read standing at `at`: none on a pool with the switch off or for an account it never slowed. */
 const slowReadAt = (accountId: string, pool: PoolSeed, at: number): SlowRead | null =>
   pool.slowDown ? (SLOW_READS.filter((x) => x.accountId === accountId && x.poolId === pool.id && x.from <= at).pop()?.read ?? null) : null;
+
+/**
+ * The ramp standing at `at`, 0 at a factor of 1 and capped at 1. A read at 1 or the purge ends the span, so the next
+ * read under 1 starts the ramp afresh, as the engine's stamp does.
+ */
+function rampAt(accountId: string, pool: PoolSeed, at: number): number {
+  let since: number | null = null;
+  for (const x of SLOW_READS) if (x.accountId === accountId && x.poolId === pool.id && x.from <= at) since = x.read === null || x.read.factor >= 1 ? null : (since ?? x.from);
+  return since === null ? 0 : round3(Math.min(1, (at - since) / (pool.burnAverageSeconds * 1_000)));
+}
 
 /** Every pool member's standing at the decision's time, eligible or not. */
 function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
@@ -1212,7 +1225,8 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
           boundMs: (slowHold ? pool.slowDownHoldSeconds : pool.retryInPlaceSeconds) * 1_000,
           cohort: spec.hold.cohort,
           cycleMs: slowHold ? (spec.pinPace?.cycleMs ?? null) : null,
-          factor: slowed?.factor ?? null,
+          // The factor the hold was sized from: the read's, pulled toward 1 by the ramp.
+          factor: slowed ? 1 - (1 - slowed.factor) * rampAt(spec.accountId ?? '', pool, spec.at) : null,
           reason: resetHold ? 'reset' : slowHold ? 'slow_down' : 'cap',
           speed: slowed?.speed ?? null,
           stretchMs: slowed?.stretchMs ?? null,
@@ -1585,12 +1599,17 @@ function storySpecs(): Spec[] {
   const studioAt = (when: number, utilization: number) => ({ studio: oauthWindows('studio', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization } : w)) });
   // Nightly's Fable week where the morning's Fable session runs it ahead of the walk back's even climb.
   const nightlyAt = (when: number, utilization: number) => ({ nightly: oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '7d_fable' ? { ...w, utilization } : w)) });
-  // A pin's cycle after one more gap, the time-weighted average over the work pool's burn average.
+  // A pin's pace after one more gap. A gap at or over the work pool's burn average is a pause that folds nothing, and
+  // any other moves the cycle toward the gap by one over the number of gaps folded with it, capped at eight, so the
+  // cycle reads about the mean of the pin's last eight gaps.
   const averageMs = poolById.get('work')!.burnAverageSeconds * 1_000;
-  const foldCycle = (cycleMs: number, gapMs: number) => {
-    const w = Math.exp(-gapMs / averageMs);
-    return Math.round(cycleMs * w + gapMs * (1 - w));
+  const foldCycle = (pace: { cycleMs: number; gaps: number }, gapMs: number) => {
+    if (gapMs >= averageMs) return pace;
+    const gaps = Math.min(pace.gaps + 1, 8);
+    return { cycleMs: Math.round(pace.cycleMs + (gapMs - pace.cycleMs) / gaps), gaps };
   };
+  // Studio's morning pin reads its 24 s cycle at 10:12:36 from two gaps, its turns of 10:11:36, 10:12 and 10:12:36.
+  const morningPace = { cycleMs: 24_000, gaps: 2 };
   return [
     // Two of the round's sessions placed on secondary just before it. Every pin a beat renews or moves is a request's.
     at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
@@ -1743,10 +1762,10 @@ function storySpecs(): Spec[] {
       pin: live('continues_pin', 60_000),
       pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 12, 36) },
     }),
-    at('req_f6a1d3e8-e47', 1, 1, t(10, 38, 20), 'renewed', 'studio', { pin: live('continues_pin', 1_544_000), pinPace: { cycleMs: foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), slowDownUntil: null } }),
+    at('req_f6a1d3e8-e47', 1, 1, t(10, 38, 20), 'renewed', 'studio', { pin: live('continues_pin', 1_544_000), pinPace: { cycleMs: foldCycle(morningPace, t(10, 38, 20) - t(10, 12, 36)).cycleMs, slowDownUntil: null } }),
     at('req_8d4b7f2c-f58', 1, 1, t(10, 40, 36), 'renewed', 'studio', {
       pin: live('continues_pin', 136_000),
-      pinPace: { cycleMs: foldCycle(foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), t(10, 40, 36) - t(10, 38, 20)), slowDownUntil: null },
+      pinPace: { cycleMs: foldCycle(foldCycle(morningPace, t(10, 38, 20) - t(10, 12, 36)), t(10, 40, 36) - t(10, 38, 20)).cycleMs, slowDownUntil: null },
     }),
     // Studio's open span: a session placed at 13:47:24 opens it at its first turn after the placement, under the
     // threshold at 0.73, and the sessions placed after it are the round's other four pins.

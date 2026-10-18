@@ -1339,6 +1339,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       [held.outcome.kind, held.outcome.hold.reason, held.outcome.hold.factor, held.outcome.hold.cycleMs, held.outcome.hold.until, held.pin.slowDownUntil, held.outcome.hold.boundMs],
       ['held', 'slow_down', 0.5, 42_000, until, until, 120_000],
     );
+    // The span that opened at 13:48 has stood past work's burn average by the held turn, so the hold applies the full
+    // factor, where the span's first read applies none of it.
+    const rampOf = (r) => r.walk.find((w) => w.step === 'move:shed')?.facts.find((f) => f.key === 'ramp')?.value;
+    assert.deepEqual([rampOf(held), rampOf(record('req_4f2a8d6e-b7a', 1))], [1, 0], "the slowed card's shed line reads the full ramp and the span's first read none");
     const renewal = record(row.id, 2);
     assert.deepEqual([renewal.outcome.kind, renewal.request.at, renewal.outcome.cohortHold], ['renewed', until, row.held], 'the renewal after the wait carries the hold the row names');
     const summaries = log.filter((x) => x.type === 'decision' && x.requestId === row.id).sort((x, y) => x.seq - y.seq);

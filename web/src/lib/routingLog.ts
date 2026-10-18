@@ -870,6 +870,7 @@ export const WALK_KEY: Record<string, string> = {
   projection_five_hour: 'projection 5h',
   projection_seven_day: 'projection 7d',
   projection_seven_day_fable: 'projection Fable',
+  ramp: 'ramp',
   refresh_age_ms: 'refresh age',
   reserved_five_hour: 'reserved 5h',
   reserved_seven_day: 'reserved 7d',
