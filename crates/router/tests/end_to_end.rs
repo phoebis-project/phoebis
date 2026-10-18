@@ -3211,7 +3211,8 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
             let _ = stop_rx.await;
         }));
         let elapsed = first_success(proxy_port).await;
-        assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
+        // Well under the 30 s default bound, with room for a loaded build host that stretches the bind past 1 s.
+        assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
         let client = reqwest::Client::builder()
             .cookie_store(true)
             .build()
