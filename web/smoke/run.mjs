@@ -8216,6 +8216,59 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
   await page.settle(200);
   page.unmount();
 }
+{
+  // A run still in flight when its dialog closes: its answer lands after the next guardrail's dialog opened, which has
+  // to show none of it, and a run there shows that guardrail's own totals until an input it ran on changes.
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const first = await editGuardrail(page, 'Subagent status summary');
+  rail(first, 'test')?.click();
+  await page.settle(150);
+  const held = deferNextCall('testGuardrail');
+  buttonIn(first, 'Run test')?.click();
+  await page.settle(50);
+  const inFlight = held.calls.length;
+  buttonIn(first, 'Cancel')?.click();
+  await page.settle(200);
+  const dlg = await editGuardrail(page, 'Large auxiliary requests');
+  rail(dlg, 'test')?.click();
+  await page.settle(150);
+  held.release();
+  // The mock answers the released call after its own latency, so the wait outlasts it.
+  await page.settle(700);
+  held.restore();
+  const test = group(dlg, 'Test');
+  const late = { error: test?.querySelector('[role="alert"]')?.textContent?.trim() ?? null, totals: test?.querySelector('.guardrails__totals')?.textContent?.trim() ?? null };
+  const subject = test?.querySelector('select[aria-label="Key"]')?.value;
+  buttonIn(dlg, 'Run test')?.click();
+  await until(page, () => (test?.querySelector('.guardrails__totals') ?? null) !== null);
+  const stored = (await api.listGuardrails()).find((g) => g.id === 'large-auxiliary');
+  const want = (await api.testGuardrail({ conditions: stored.conditions, limit: 200, keyId: 'desktop' })).totals;
+  const own = test?.querySelector('.guardrails__totals')?.textContent?.trim();
+  results.push({
+    name: "/guardrails a run whose dialog closed before its answer shows nothing in the next guardrail's dialog, whose own run shows its totals",
+    ok:
+      inFlight === 1 &&
+      dlg?.querySelector('.dialog__title')?.textContent?.trim() === 'Edit guardrail Large auxiliary requests' &&
+      subject === 'desktop' &&
+      late.totals === null &&
+      late.error === null &&
+      want.sampled > 0 &&
+      own === `${want.matched} matched, ${want.unmatched} unmatched, ${want.indeterminate} indeterminate of ${want.sampled} sampled`,
+    missing: [`${inFlight} calls held`, dlg?.querySelector('.dialog__title')?.textContent ?? 'no dialog', String(subject), JSON.stringify(late), String(own), JSON.stringify(want)],
+  });
+  const sample = [...(test?.querySelectorAll('select') ?? [])].find((s) => [...s.options].map((o) => o.value).join() === '50,200,500');
+  await changeSelect(page, sample, '50');
+  const changed = { rows: test?.querySelectorAll('.guardrails__sample tbody tr').length ?? 0, totals: test?.querySelector('.guardrails__totals')?.textContent?.trim() ?? null };
+  results.push({
+    name: '/guardrails a change of the sample size after a run clears the totals it no longer matches',
+    ok: sample !== undefined && sample.value === '50' && changed.totals === null && changed.rows === 0,
+    missing: [sample ? sample.value : 'no sample select', JSON.stringify(changed)],
+  });
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+}
 
 // The Guardrails group of the pool and key dialogs and the pool card's badge over the story's attachments, every figure
 // read through the mock: the pool all runs the preset's guardrail, and its key desktop adds the enforcing one after it.

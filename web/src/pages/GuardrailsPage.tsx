@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { api, ApiError } from '@/api';
 import type { GuardrailInput } from '@/api/client';
 import type { ApiKey, Condition, Guardrail, GuardrailAttachment, GuardrailMode, GuardrailPreset, GuardrailTestResult, Pool } from '@/api/types';
@@ -365,11 +365,21 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
   const [testing, setTesting] = useState(false);
   const [tested, setTested] = useState<{ result: GuardrailTestResult; side: 'key' | 'pool'; subjectId: string } | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  // A run's answer lands only while this still reads what it read at the start: a reset, a close and a change of the
+  // inputs the run sent move it, so the panel never shows another guardrail's or an earlier form's figures.
+  const runToken = useRef(0);
+  const dropRun = () => {
+    runToken.current += 1;
+    setTesting(false);
+    setTested(null);
+    setTestError(null);
+  };
 
   // Once per opening, in the render that brings it, so a list that lands later does not wipe the edits made meanwhile.
   const [resetFor, setResetFor] = useState<{ existing: Guardrail | null; source: Guardrail | undefined } | null>(null);
   const resetDue = open && (resetFor === null || resetFor.existing !== existing || resetFor.source !== source);
-  if (!open && resetFor !== null) setResetFor(null);
+  const closing = !open && resetFor !== null;
+  if (closing) setResetFor(null);
   if (resetDue) {
     const next = formOf(existing, source);
     setResetFor({ existing, source });
@@ -384,19 +394,20 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
     setSide(next.pools.length > 0 || next.keys.length === 0 ? 'pool' : 'key');
     setSubjectId(next.pools[0] ?? (next.keys.length > 0 ? next.keys[0] : (pools[0]?.id ?? '')));
     setLimit(DEFAULT_SAMPLE);
-    setTesting(false);
-    setTested(null);
-    setTestError(null);
   }
   // A subject picked before the lists landed, or one the side does not hold, falls to the side's first.
   const sideIds = side === 'pool' ? pools.map((p) => p.id) : keys.map((k) => k.id);
-  if (open && !resetDue && !sideIds.includes(subjectId) && sideIds.length > 0) setSubjectId(sideIds[0]);
+  const fallback = open && !resetDue && !sideIds.includes(subjectId) && sideIds.length > 0;
+  if (fallback) setSubjectId(sideIds[0]);
+  // eslint-disable-next-line react-hooks/refs -- the token moves in the render that replaces the inputs, before an answer to the run it drops can land
+  if (closing || resetDue || fallback) dropRun();
 
   const edit = (patch: Partial<GuardrailForm>) => {
     setForm({ ...form, ...patch });
     // The route's words are about the values just changed, so they leave with the edit.
     setError(null);
     setRowRefusal(null);
+    if (patch.conditions !== undefined) dropRun();
   };
 
   const stamp = existing?.preset ?? source?.preset ?? null;
@@ -454,12 +465,16 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
   };
 
   const runTest = async () => {
+    const token = runToken.current;
     setTesting(true);
     setTestError(null);
     try {
       const result = await api.testGuardrail({ conditions: form.conditions, limit, ...(side === 'pool' ? { poolId: subjectId } : { keyId: subjectId }) });
+      // A dropped run leaves the panel and the button to the run started after it.
+      if (token !== runToken.current) return;
       setTested({ result, side, subjectId });
     } catch (e) {
+      if (token !== runToken.current) return;
       setTested(null);
       setTestError(e instanceof Error ? e.message : String(e));
     }
@@ -584,9 +599,17 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
                 setSide(next);
                 const ids = next === 'pool' ? [...form.pools, ...pools.map((p) => p.id)] : [...form.keys, ...keys.map((k) => k.id)];
                 setSubjectId(ids[0] ?? '');
+                dropRun();
               }}
             />
-            <Select aria-label={side === 'pool' ? 'Pool' : 'Key'} value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
+            <Select
+              aria-label={side === 'pool' ? 'Pool' : 'Key'}
+              value={subjectId}
+              onChange={(e) => {
+                setSubjectId(e.target.value);
+                dropRun();
+              }}
+            >
               {(side === 'pool' ? poolOptions : keyOptions).map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
@@ -596,7 +619,13 @@ export function GuardrailDialog({ existing, existingIds, keys, onClose, onSaved,
           </div>
         </Field>
         <Field label="Sample" className="cell--half">
-          <Select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
+          <Select
+            value={limit}
+            onChange={(e) => {
+              setLimit(Number(e.target.value));
+              dropRun();
+            }}
+          >
             {SAMPLE_SIZES.map((n) => (
               <option key={n} value={n}>
                 {n}
