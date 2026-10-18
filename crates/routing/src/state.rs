@@ -2326,8 +2326,8 @@ impl RoutingState {
     /// session runs at, and a hold sized from such a gap would hold the resumed session at the cap while the
     /// water-filling counts it almost unslowed. The arrival still becomes the last dispatch, so the next gap is
     /// measured from it. An arrival at or before the last dispatch folds nothing: a re-selection of the same request
-    /// (after a failover or a refused hold) carries the arrival already folded, whose gap of zero would plant a cycle
-    /// of zero, a request queued behind a later one has no gap to give, and an arrival before a standing deadline,
+    /// (after a failover or a refused hold) carries the arrival already folded, whose gap of zero would drag the cycle
+    /// toward zero, a request queued behind a later one has no gap to give, and an arrival before a standing deadline,
     /// which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts its pace with no gap.
     pub fn fold_pace(&mut self, key: &PinKey, received_at: i64, average_ms: i64) {
         let Some(pace) = self.pin_paces.get_mut(key) else {

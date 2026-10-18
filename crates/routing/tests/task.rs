@@ -9448,7 +9448,7 @@ fn head_of(
 }
 
 /// `a`'s prediction of `window` as the handle answers it, once every report sent before the ask has landed. With no
-/// charge or booking on the account it reads as the stored reading.
+/// charge or booking on the account, and its reset ahead of the clock, it reads as the stored reading.
 async fn predicted_reading(handle: &RouterHandle, window: &str) -> WindowReading {
     handle
         .samples()

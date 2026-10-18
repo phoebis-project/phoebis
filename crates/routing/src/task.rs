@@ -3751,8 +3751,9 @@ impl Task {
                     model: pin.model.clone(),
                 };
                 if let Some(current) = self.state.pin(&key).cloned() {
-                    // A request of the standing row reached its stream's end, so the head of the request that
-                    // carried the landing came before: the backstop for a `Head` the closed mailbox refused.
+                    // A request of the standing row reached its stream's end: a mark is set at a placement and a
+                    // placement takes a new epoch, so a renewal of the same epoch belongs to the marked row, and
+                    // clearing early only shortens a hold. The backstop for a `Head` the closed mailbox refused.
                     if current.epoch == pin.epoch {
                         self.state.clear_head_mark_of(&key);
                     }

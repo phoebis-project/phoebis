@@ -20705,21 +20705,7 @@ fn a_fresh_sessions_prior_reads_each_warm_pins_burn_over_its_accounts_speed() {
 /// the switch off, on which a case builds a pin's cycle: the fold reads no switch, so the cycle builds unheld and no
 /// entry is written. The burn average is `AVERAGE_MS`, which the cases' stamps and speed folds are dated by.
 fn held_pools(hold_seconds: u32) -> (RegistrySnapshot, RegistrySnapshot) {
-    let pool = |on: bool| Pool {
-        members: vec![("a", 0), ("b", 1)],
-        load_shedding: false,
-        shedding: Shedding {
-            burn_average_seconds: (AVERAGE_MS / 1_000) as u64,
-            ..Shedding::default()
-        },
-        slow_down: SlowDown {
-            slow_down: on,
-            slow_down_stretch_seconds: 1800,
-            slow_down_hold_seconds: hold_seconds,
-        },
-        ..Pool::default()
-    };
-    (tiered(pool(false)), tiered(pool(true)))
+    paced_pools(hold_seconds, AVERAGE_MS)
 }
 
 /// `s1` burning 0.15 of `a`'s 5-hour window an hour on `a` at `five_hour` two hours from its reset, and `b` at 0.1: at
@@ -20855,8 +20841,7 @@ fn a_slowed_pins_main_turn_is_held_for_its_cycle_over_the_factor_before_the_rene
     );
 }
 
-/// `held_pools` with the burn average at `average_ms`, so a case's pause is a gap of its own span and not of the
-/// shipped default's.
+/// `held_pools` with the burn average at `average_ms`, so a case's pause is a gap of its own span.
 fn paced_pools(hold_seconds: u32, average_ms: i64) -> (RegistrySnapshot, RegistrySnapshot) {
     let pool = |on: bool| Pool {
         members: vec![("a", 0), ("b", 1)],
@@ -22282,6 +22267,51 @@ fn a_selection_on_an_entry_read_before_its_windows_passed_reset_replaces_it_and_
 }
 
 #[test]
+fn a_read_under_1_that_replaces_a_stamped_stale_entry_takes_a_fresh_stamp_at_its_own_instant() {
+    let (_, on) = held_pools(120);
+    let mut st = s1_on_a(40.0);
+    reading(&mut st, "a", 0.93, 30 * MINUTE, T);
+    let stale = slowed_at(&mut st, T + 30 * MINUTE, T);
+    assert_eq!(
+        (stale.ramp_since, stale.slowed_since),
+        (Some(T), Some(T)),
+        "the old window's entry carries both stamps"
+    );
+    st.take_slow_down_edges(T);
+    // A minute past the reset the new window's first reading lands at half, and five hours of s1's burn, decayed over
+    // the 31 minutes since T, still project it past the ceiling.
+    let at = T + 31 * MINUTE;
+    reading(&mut st, "a", 0.5, 5 * HOUR, at);
+    let d = decide(&mut st, &on, &main_turn(&on, "s1", at), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let entry = st
+        .slow_down_state("p", "a")
+        .cloned()
+        .expect("the turn wrote a's entry");
+    assert!(
+        entry.factor > 0.0 && entry.factor < 1.0,
+        "the projection passes the ceiling from under it: {}",
+        entry.factor
+    );
+    assert_eq!(
+        (entry.read_at, entry.ramp_since, entry.slowed_since),
+        (at, Some(at), Some(at)),
+        "the replacing read stamps the ramp and the span at its own instant, and no stamp of the old window carries over"
+    );
+    let edges = st.take_slow_down_edges(at);
+    assert_eq!(edges.len(), 2, "{edges:?}");
+    assert_eq!(
+        edges[0],
+        slowed_span_ended(30 * MINUTE),
+        "the old window's span ends at its reset"
+    );
+    assert!(
+        matches!(&edges[1], (_, _, SlowDownEdge::Started { factor, .. }) if *factor == entry.factor),
+        "the new window's span opens at the replacing read: {edges:?}"
+    );
+}
+
+#[test]
 fn a_stale_entry_whose_factor_returned_before_the_reset_ends_its_span_at_the_return() {
     let (_, on) = held_pools(120);
     let mut st = s1_on_a(15.0);
@@ -22378,7 +22408,7 @@ fn the_selection_that_opens_a_window_after_an_idle_gap_writes_an_entry_the_next_
             entry.slowed_since
         ),
         (T + 50 * MINUTE, None, 1.0, None, None),
-        "the write replaced the old window's entry, and neither the ramp nor a span starts at a factor of 1"
+        "the write replaced the old window's entry, and a read at a factor of 1 stamps no ramp and no span"
     );
     // The turn's upstream receipt opens the window a moment later, and its head names the reset five hours on.
     reading(&mut st, "a", 0.93, 5 * HOUR, T + 50 * MINUTE + 200);
@@ -25416,7 +25446,8 @@ fn a_failed_over_landing_with_no_row_names_the_account_it_left() {
     assert_eq!(landed(d.result.clone()), ("c".into(), None));
     assert_eq!(
         left_of(&d.result),
-        req.failed_over.as_ref().map(|f| f.from_account_id.as_str())
+        Some("a"),
+        "the landing names a, the account the failover left"
     );
 }
 

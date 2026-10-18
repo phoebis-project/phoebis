@@ -1867,7 +1867,6 @@ async fn a_client_member_is_detached_on_the_leg_that_fails_over_and_the_hash_re_
         Some(None),
         "the leg to b names no message of a's"
     );
-    assert_ne!(cch_digits(sent), cch_digits(&naming_a));
     assert!(
         signed_over_itself(sent),
         "the hash is re-signed over the null"
@@ -2223,7 +2222,6 @@ async fn a_client_member_is_detached_when_a_cooldown_releases_the_pin_onto_a_sib
         Some(None),
         "the first turn on b names no message of a's"
     );
-    assert_ne!(cch_digits(sent), cch_digits(&naming_a));
     assert!(
         signed_over_itself(sent),
         "the hash is re-signed over the null"

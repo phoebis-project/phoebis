@@ -1283,7 +1283,7 @@ fn run(
             }
             // A turn of a held class folds its arrival into the pin's cycle under the live row's key, which a move
             // and a failover's landing write their row under again. A request carrying a hold, whatever held it, is
-            // a second selection whose arrival the first folded, and its gap of zero would plant a cycle of zero.
+            // a second selection whose arrival the first folded, and its gap of zero would drag the cycle toward zero.
             if found == "live"
                 && slowable(
                     request,

@@ -504,8 +504,8 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
 
 /// Sets a client-sent `diagnostics.previous_message_id` that names a message to `null`. A member already `null`, a
 /// `diagnostics` member without the id and an absent member name no message and are left as sent. Walked by the raw
-/// scanner the insert and the strip use, which answers the string value's span alone, so the two left-alone cases
-/// fall out of the one call with no second parse.
+/// scanner the insert and the strip use, which answers the string value's span alone, so each left-alone case falls out
+/// of the one call with no second parse.
 fn detach_diagnostics(body: &mut Vec<u8>) -> bool {
     match phoebis_cch::string_member_span(body, &["diagnostics", "previous_message_id"]) {
         Some((start, end)) => {
