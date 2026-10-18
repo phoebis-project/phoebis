@@ -801,6 +801,8 @@ test("a rewrite hold's verdict chips and Hold row name the request it waits for,
   assert.deepEqual(rows(held), [['Hold', ['on nightly', 'for the rewrite in flight of', 'req_5b2e8d47-c19', 'until 11:03', 'bound 2 min']]]);
   const link = d.outcomeRows(held, NOW)[0].chips.find((c) => c.value === 'req_5b2e8d47-c19');
   assert.ok(link?.href, 'the request it waited for is a link');
+  const unnamed = record({ candidates: [candidate({ accountId: 'nightly', verdict: 'held_on' })], outcome: { accountId: 'nightly', hold: { ...rewriteHold, waitsFor: null }, kind: 'held' } });
+  assert.deepEqual(rows(unnamed), [['Hold', ['on nightly', 'for the rewrite in flight', 'until 11:03', 'bound 2 min']]], 'a hold that names no request reads no dangling of');
 });
 
 test("a renewal after a slow-down hold reads the hold's label and one Hold row per wait with its reason", () => {

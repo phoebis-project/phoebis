@@ -1,15 +1,15 @@
 use phoebis_routing::{
     cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, shed_dwell_ms,
-    slow_down_hold_ms, warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain,
-    AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
-    CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState, Decided, DecisionRecord,
-    EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark, HoldFacts,
-    HoldOutcome, HoldWait, LaneFacts, LongContextRates, MemberSpend,
-    MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates,
-    RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation,
-    RoutingState, SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead,
-    SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
-    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain, AffinityMap,
+    AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts,
+    ClientClass, CohortHold, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
+    FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldWait,
+    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause,
+    OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
+    RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation, RoutingState,
+    SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead, SlowDownState,
+    StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
     MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
@@ -25514,9 +25514,9 @@ fn turn_of(s: &RegistrySnapshot, request_id: &str, now: i64) -> SelectRequest {
     }
 }
 
-/// The rewrite cases' bound on `s`: the pool's hold cap from the instant the move dispatched.
-fn rewrite_bound(s: &RegistrySnapshot, moved_at: i64) -> i64 {
-    moved_at + slow_down_hold_ms(s.pool("p").expect("the case's pool"))
+/// The rewrite cases' bound: the pool's hold cap from the instant the move dispatched.
+fn rewrite_bound(moved_at: i64) -> i64 {
+    moved_at + i64::from(REWRITE_HOLD_SECONDS) * 1_000
 }
 
 #[test]
@@ -25550,7 +25550,7 @@ fn the_moved_pins_next_request_is_held_for_the_rewrite_until_the_cap_from_the_fi
         (
             "rewrite",
             Some("r-1"),
-            Some(rewrite_bound(&s, moved_at)),
+            Some(rewrite_bound(moved_at)),
             None,
             0
         )
@@ -25565,7 +25565,7 @@ fn the_moved_pins_next_request_is_held_for_the_rewrite_until_the_cap_from_the_fi
         (
             "rewrite",
             Some("r-1"),
-            slow_down_hold_ms(s.pool("p").unwrap())
+            i64::from(REWRITE_HOLD_SECONDS) * 1_000
         )
     );
     assert_eq!(
@@ -25661,7 +25661,7 @@ fn a_request_that_already_waited_is_not_held_for_the_rewrite() {
         seq: 1,
         ran_out: false,
         reason: "rewrite",
-        until: Some(rewrite_bound(&s, moved_at)),
+        until: Some(rewrite_bound(moved_at)),
         waits_for: Some("r-1".into()),
     };
     let req = SelectRequest {
@@ -25684,7 +25684,7 @@ fn a_bound_under_a_second_answers_no_hold() {
     let late = turn_of(
         &s,
         "r-2",
-        rewrite_bound(&s, moved_at) - SLOW_DOWN_MIN_HOLD_MS + 1,
+        rewrite_bound(moved_at) - SLOW_DOWN_MIN_HOLD_MS + 1,
     );
     let (result, _) = select(&mut st, &s, &late, &mut rng());
     assert_eq!(picked(&result), "b");
@@ -25764,12 +25764,7 @@ fn a_non_portable_request_of_the_moved_pin_is_held_for_the_rewrite() {
             hold.waits_for.as_deref(),
             hold.until
         ),
-        (
-            "b",
-            "rewrite",
-            Some("r-1"),
-            Some(rewrite_bound(&s, moved_at))
-        )
+        ("b", "rewrite", Some("r-1"), Some(rewrite_bound(moved_at)))
     );
     assert!(
         !steps(&d.record).iter().any(|(step, _)| *step == "bound"),

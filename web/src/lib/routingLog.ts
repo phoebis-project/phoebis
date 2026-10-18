@@ -1134,10 +1134,12 @@ function shareChips(shares: Record<string, unknown>): Chip[] {
 const resetWords = (hold: NonNullable<RecordOutcome['hold']>, now: number) => (hold.until === null ? 'for the reset' : `for the reset at ${formatFact(hold.until, 'time', now)}`);
 /** `for the slow-down until 18:20`, the pin's deadline, or the slow-down alone where the hold carried none. */
 const slowDownWords = (hold: NonNullable<RecordOutcome['hold']>, now: number) => (hold.until === null ? 'for the slow-down' : `for the slow-down until ${formatFact(hold.until, 'time', now)}`);
-/** `for the rewrite in flight of {request} until 18:20`: the first request's head the hold waited for, linked. */
+/**
+ * `for the rewrite in flight of {request} until 18:20`: the first request's head the hold waited for, linked, and the
+ * words without `of` on a hold that names no request.
+ */
 const rewriteWords = (hold: NonNullable<RecordOutcome['hold']>, now: number): Chip[] => [
-  plain('for the rewrite in flight of'),
-  ...(hold.waitsFor === null ? [] : [requestChip(hold.waitsFor)]),
+  ...(hold.waitsFor === null ? [plain('for the rewrite in flight')] : [plain('for the rewrite in flight of'), requestChip(hold.waitsFor)]),
   ...(hold.until === null ? [] : [plain(`until ${formatFact(hold.until, 'time', now)}`)]),
 ];
 

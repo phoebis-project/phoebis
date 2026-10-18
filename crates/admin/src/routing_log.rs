@@ -249,7 +249,7 @@ pub(crate) struct SummaryHold {
     pub threshold_ms: Option<i64>,
     /// The pin's cycle the hold was sized from. Set under `slow_down`, null otherwise.
     pub cycle_ms: Option<i64>,
-    /// The request whose head the hold waited for. Set under `rewrite`, null otherwise.
+    /// The request whose head the hold waited for. Set under `rewrite`, absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waits_for: Option<String>,
 }

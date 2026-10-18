@@ -678,6 +678,8 @@ test('a candidate decodes its fit figures and an outcome its reservation and its
   assert.deepEqual([outcome.hold, outcome.markCleared, outcome.reservation], [null, null, null], "the fixture's placement held nothing, cleared no mark and booked nothing");
   const held = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, hold: { account_id: 'business', bound_ms: 60_000, cohort: null, reason: 'reset', until: reset }, kind: 'held' } }).outcome;
   assert.deepEqual(held.hold, { accountId: 'business', boundMs: 60_000, cohort: null, cycleMs: null, factor: null, reason: 'reset', speed: null, stretchMs: null, thresholdMs: null, until: new Date(reset).toISOString(), waitsFor: null });
+  const rewrite = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, hold: { account_id: 'business', bound_ms: 120_000, cohort: null, reason: 'rewrite', until: reset, waits_for: 'r1' }, kind: 'held' } }).outcome;
+  assert.deepEqual([rewrite.hold.reason, rewrite.hold.waitsFor, rewrite.hold.until], ['rewrite', 'r1', new Date(reset).toISOString()], 'a rewrite hold names the request it waits for');
   const booked = d.decodeDecisionRecord({
     ...body,
     outcome: {

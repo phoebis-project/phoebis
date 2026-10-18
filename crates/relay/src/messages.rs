@@ -1883,8 +1883,9 @@ impl Relay {
                         continue;
                     }
                     // A moved pin's request waits for the head of the request that carried the move, inside the
-                    // relay, which owns both streams: the waiter wakes at the commit or when the first request ends
-                    // without one, and never polls the routing. The hold is its own stage, as the slow-down's is.
+                    // relay, which owns both streams: the waiter wakes at that request's final answer, past any retry
+                    // in place or replay, or when it ends without one, and never polls the routing. The hold is its
+                    // own stage, as the slow-down's is.
                     if hold.reason == "rewrite" {
                         let started = tokio::time::Instant::now();
                         // No entry means the request it waits for ended before this selection, so there is no head
@@ -2651,7 +2652,14 @@ impl Relay {
                     }
                     return Leg::FailOver { auth_marked };
                 }
-                Next::Respond(response) => return Leg::Respond(response),
+                // The leg answers the client with this pass, so no later head comes on it. A pass the leg retries in
+                // place, replays or strips signals nothing, since the next pass answers for the leg.
+                Next::Respond(response) => {
+                    if let Some(leg_head) = leg_head.as_mut() {
+                        leg_head.arrived((self.clock)());
+                    }
+                    return Leg::Respond(response);
+                }
                 // The same account and the same credential once the throttle has passed.
                 Next::RetryInPlace(delay) => {
                     if until_cancelled(tokio::time::sleep(delay), cancel)
@@ -2842,8 +2850,11 @@ impl Relay {
         }
         // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
         let arrived = (self.clock)();
-        if let Some(head) = ctx.head.as_mut() {
-            head.arrived(arrived);
+        // A stream that commits on `message_start` is the leg's final answer: the upstream writes the cache from here.
+        if let (Some(leg_head), Some(Commit::MessageStart(_))) =
+            (ctx.head.as_mut(), held.as_ref().map(|h| &h.commit))
+        {
+            leg_head.arrived(arrived);
         }
         if !ctx.can_strip && head.status == 400 && latches(ctx.trace) {
             // This leg cannot retry a strip, so the 400 is forwarded as it came; the account is still latched
@@ -3846,8 +3857,8 @@ impl Relay {
             }
             let slice = HOLD_TICK.min(Duration::from_millis((end - now) as u64));
             let slept = match head.as_deref_mut() {
-                // Any change wakes the waiter: the value moves to `true` at a leg's answer and back to `false` only at
-                // a failover after one, and a dropped sender means the request ended.
+                // Any change wakes the waiter: the value moves to `true` at a leg's final answer alone, and a dropped
+                // sender means the request ended.
                 Some(head) => tokio::select! {
                     slept = until_cancelled(tokio::time::sleep(slice), cancel) => slept,
                     _ = head.changed() => return Waited::Head,
@@ -4478,9 +4489,10 @@ fn ending(guard: &mut Option<EndGuard>, cause: &'static str) {
     }
 }
 
-/// Every live inference request and probe by request id, `false` until a leg's answer is known and `true` from the
-/// leg's first commit or its guard's drop, then `false` again at a failover before the next selection, so a waiter
-/// held for a later attempt's mark waits for that leg's head. The admission registers the entry before the first
+/// Every live inference request and probe by request id, `false` until a leg's answer is final and `true` from then
+/// (a `message_start` commit, or the pass that answers the client) or from the leg's guard's drop, while a leg that
+/// fails over leaves it `false` for the next leg, so a waiter held for a later attempt's mark waits for that leg's
+/// head. The admission registers the entry before the first
 /// selection is enqueued, so a request a mark names always has one while it lives, and the `HeadEntry` the request's
 /// scope owns removes it at every end of the request. A waiter that finds no entry or `true` goes out at once and
 /// creates nothing. Nothing here outlives its request.
@@ -4529,11 +4541,13 @@ impl Drop for HeadEntry {
     }
 }
 
-/// One per leg of a turn or a probe, shared by every pass of the leg. Reports `Head` once: at the pre-commit hold's
-/// end or at a head the relay holds nothing of, setting the request's `Heads` entry `true` first, and from its `Drop`
-/// where the leg ended before either (a pre-head transport error, a cancel, any early return), so the routing mark
-/// clears on every end of the leg. A leg that hands the request to another leg sets the entry `false` again, so a
-/// waiter held for the next landing's mark waits for that leg's head.
+/// One per leg of a turn or a probe, shared by every pass of the leg. Reports `Head` once, at the leg's final answer: a
+/// `message_start` commit, or the pass whose answer goes to the client (the hold's other ends, a JSON answer, a head
+/// outside 200 to 299), setting the request's `Heads` entry `true` first. A head the leg retries in place, replays or
+/// strips answers nothing, since the next pass answers for the leg. Its `Drop` reports where the leg ended before
+/// either (a pre-head transport error, a cancel, any early return, a failover), so the routing mark clears on every end
+/// of the leg. A leg that hands the request to another leg leaves the entry `false`, so a waiter held for the next
+/// landing's mark waits for that leg's head.
 struct HeadGuard {
     bodies: TaskTracker,
     clock: Clock,
@@ -4546,9 +4560,9 @@ struct HeadGuard {
 }
 
 impl HeadGuard {
-    /// The leg's answer is known at `at`: the head came, or the pre-commit hold ended without one, and no later head
-    /// comes on this leg. The waiters wake first and the routing clears the mark second, so a woken request that
-    /// selects again finds the mark cleared or carries its hold past a standing one.
+    /// The leg's answer is final at `at`, and no later head comes on this leg. The waiters wake first and the routing
+    /// clears the mark second, so a woken request that selects again finds the mark cleared or carries its hold past a
+    /// standing one.
     fn arrived(&mut self, at: i64) {
         if self.sent {
             return;
@@ -4558,8 +4572,8 @@ impl HeadGuard {
         self.report(at);
     }
 
-    /// The leg hands the request to another leg: the entry reads `false` until that leg's answer is known, and the
-    /// drop reports this leg's end without reading `true` again.
+    /// The leg hands the request to another leg: the entry reads `false` until that leg's answer is final, and the
+    /// drop reports this leg's end without reading `true`.
     fn goes_on(&mut self) {
         self.goes_on = true;
         if let Some(sender) = self

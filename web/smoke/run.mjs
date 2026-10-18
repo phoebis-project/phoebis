@@ -12636,11 +12636,16 @@ m.unmount();
         id: 'req_5d6f1b3a-e27',
         seq: 1,
         terminus: ['held_rewrite', 'Held for the rewrite in flight', 'held'],
-        // The moved session's next request waits for the head of the request that carried the move, which its lead names
-        // and its Hold row links with the hold's bound.
-        own: (card) =>
-          sentenceOf(card) === 'Held on [nightly] for the rewrite in flight of req_5b2e8d47-c19 until 11:03' &&
-          JSON.stringify(outcomeOf(card).Hold) === JSON.stringify(['on nightly', 'for the rewrite in flight of', 'req_5b2e8d47-c19', 'until 11:03', 'bound 2 min']),
+        // The moved session's next request waits for the head of the request that carried the move, which its lead and
+        // its Hold row link, the row with the hold's bound.
+        own: (card) => {
+          const lead = [...(card?.querySelectorAll('.decision-card__sentence a') ?? [])].find((a) => a.textContent === 'req_5b2e8d47-c19');
+          return (
+            sentenceOf(card) === 'Held on [nightly] for the rewrite in flight of [req_5b2e8d47-c19] until 11:03' &&
+            lead?.getAttribute('href') === '/requests/req_5b2e8d47-c19' &&
+            JSON.stringify(outcomeOf(card).Hold) === JSON.stringify(['on nightly', 'for the rewrite in flight of', 'req_5b2e8d47-c19', 'until 11:03', 'bound 2 min'])
+          );
+        },
         what: 'request held for the rewrite in flight',
       },
       {

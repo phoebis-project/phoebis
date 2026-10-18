@@ -2207,18 +2207,15 @@ async fn the_bound_ends_the_wait_with_ran_out_and_a_later_head_holds_nothing_mor
     wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
     tokio::time::sleep(Duration::from_millis(207)).await;
     let turn = sent(&h, request_for(KEY, MODEL, "s1"));
-    let hold = next_held(&mut events)
-        .await
-        .outcome
-        .hold
-        .expect("a held outcome");
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.clone().expect("a held outcome");
     assert_eq!(hold.reason, "rewrite");
     tokio::time::sleep(Duration::from_secs(2)).await;
     still_held(&up, &turn, 2);
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
     let turn = answered(turn).await;
     assert_eq!(turn.status(), 200);
-    let held = outcome(&turn).held.expect("the outcome names the wait");
+    let waited = outcome(&turn).held.expect("the outcome names the wait");
     let waits = waits_of(&turn);
     assert_eq!(waits.len(), 1);
     assert_eq!(waits[0].0, "rewrite");
@@ -2226,8 +2223,13 @@ async fn the_bound_ends_the_wait_with_ran_out_and_a_later_head_holds_nothing_mor
         (2_000..=2_000 + TICK.as_millis() as u64).contains(&waits[0].1),
         "the wait ran to the bound: {waits:?}"
     );
-    let value = serde_json::to_value(&held).unwrap();
+    let value = serde_json::to_value(&waited).unwrap();
     assert_eq!(value["waits"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", true)),
+        "the bound ended the wait"
+    );
     drain(turn).await;
     up.release();
     drain(answered(fork).await).await;
@@ -2257,11 +2259,8 @@ async fn the_first_requests_end_without_a_head_releases_the_waiter_at_once() {
     moved_to(&mut events, "b").await;
     wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
     let turn = sent(&h, request_for(KEY, MODEL, "s1"));
-    let hold = next_held(&mut events)
-        .await
-        .outcome
-        .hold
-        .expect("a held outcome");
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.clone().expect("a held outcome");
     assert_eq!(hold.reason, "rewrite");
     tokio::time::sleep(Duration::from_millis(500)).await;
     still_held(&up, &turn, 2);
@@ -2289,6 +2288,11 @@ async fn the_first_requests_end_without_a_head_releases_the_waiter_at_once() {
     let completion: serde_json::Value =
         serde_json::to_value(outcome(&turn).held.expect("the wait")).unwrap();
     assert_eq!(completion["waits"][0]["reason"], "rewrite");
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", false)),
+        "the fork's end ended the wait inside its bound"
+    );
     drain(turn).await;
     let third = answered(sent(&h, request_for(KEY, MODEL, "s1"))).await;
     assert!(outcome(&third).held.is_none(), "the end cleared the mark");
@@ -2399,6 +2403,93 @@ async fn a_retry_in_place_after_the_wait_dials_with_no_second_wait() {
     up.shutdown().await;
 }
 
+/// The decision of `request_id` that its wait led to, the first after its held one, which carries the wait in its
+/// holds.
+async fn after_the_wait(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    request_id: &str,
+) -> DecisionRecord {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the decision after the wait arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision {
+            summary, record, ..
+        } = event
+        {
+            if record.request.request_id == request_id && summary.kind != "held" {
+                return *record;
+            }
+        }
+    }
+}
+
+/// Whether the last wait the decision carries ran out, with its reason.
+fn last_wait(record: &DecisionRecord) -> Option<(&'static str, bool)> {
+    record
+        .request
+        .holds
+        .last()
+        .map(|hold| (hold.reason, hold.ran_out))
+}
+
+#[tokio::test]
+async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_head() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    // The fork's first pass on b reads a throttle it waits out on b, and its retry's head commits at the release.
+    up.push_credential_rule(B, "/v1/messages", json_429_retry_after("1"));
+    up.push_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    // The throttle cools b on the relay's clock until its retry is due and a margin past it, so the turn comes after
+    // that, under a cap long enough to hold it there.
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.slow_down.slow_down_hold_seconds = 10;
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    let fork_id = moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 3).then_some(())).await;
+    h.clock.store(NOW + 22_500, Ordering::SeqCst);
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.expect("a held outcome");
+    assert_eq!(
+        (hold.reason, hold.waits_for.as_deref(), hold.until),
+        ("rewrite", Some(fork_id.as_str()), Some(NOW + 30_000)),
+        "the throttle the fork retried in place answered nothing for its leg"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    still_held(&up, &turn, 3);
+    up.release();
+    let released = tokio::time::Instant::now();
+    let turn = answered(turn).await;
+    assert!(
+        released.elapsed() <= TICK,
+        "the retry's commit releases the turn"
+    );
+    assert_eq!(turn.status(), 200);
+    assert_eq!(posts(&up), 4);
+    assert_eq!(
+        waits_of(&turn)
+            .iter()
+            .map(|(reason, _)| reason.as_str())
+            .collect::<Vec<_>>(),
+        ["rewrite"]
+    );
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", false)),
+        "the retry's head ended the wait inside its bound"
+    );
+    drain(turn).await;
+    drain(answered(fork).await).await;
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_forks_commit_alone_releases_the_waiter_and_an_error_event_releases_it_too() {
     // The fork's commit, with the clock standing under the bound.
@@ -2485,25 +2576,32 @@ async fn the_forks_commit_alone_releases_the_waiter_and_an_error_event_releases_
         })
         .await;
     let turn = sent(&h, request_for(KEY, MODEL, "s1"));
-    let hold = next_held(&mut events)
-        .await
-        .outcome
-        .hold
-        .expect("a held outcome");
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.clone().expect("a held outcome");
     assert_eq!(hold.waits_for.as_deref(), Some(fork_id.as_str()));
     tokio::time::sleep(Duration::from_millis(500)).await;
     still_held(&up, &turn, 2);
     up.release();
     let released = tokio::time::Instant::now();
     let turn = answered(turn).await;
+    // The error event fails the fork over, so its leg on b answers nothing and the turn waits for the fork's next
+    // leg, which c answers at once.
+    assert!(
+        released.elapsed() <= TICK,
+        "the turn goes out within a tick of the error event"
+    );
     let fork = answered(fork).await;
     let waits = waits_of(&turn);
     assert_eq!(waits[0].0, "rewrite");
     assert!(
         (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
-        "the error event released the turn: {waits:?}"
+        "the wait ran to the error event: {waits:?}"
     );
-    assert!(released.elapsed() <= Duration::from_secs(1));
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", false)),
+        "the fork's answer ended the wait inside its bound"
+    );
     assert_eq!(
         (
             turn.status().as_u16(),
@@ -2590,7 +2688,7 @@ async fn a_cancelled_first_request_frees_the_waiter_at_once() {
     moved_to(&mut events, "b").await;
     wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
     let turn = sent(&h, request_for(KEY, MODEL, "s1"));
-    next_held(&mut events).await;
+    let held = next_held(&mut events).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     still_held(&up, &turn, 2);
     fork.abort();
@@ -2604,6 +2702,11 @@ async fn a_cancelled_first_request_frees_the_waiter_at_once() {
     assert!(
         (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
         "the wait ran to the fork's cancel, under the bound: {waits:?}"
+    );
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", false)),
+        "the cancel ended the wait inside its bound"
     );
     drain(turn).await;
     let third = answered(sent(&h, request_for(KEY, MODEL, "s1"))).await;
