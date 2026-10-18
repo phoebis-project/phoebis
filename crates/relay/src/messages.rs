@@ -2057,6 +2057,12 @@ impl Relay {
                     // wait, and so does the completion when no attempt follows.
                     hold.held_ms = started.elapsed().as_millis() as u64;
                     hold.ran_out = !freed;
+                    // The admission dispatches the request, so the selection that follows moves the pin's last
+                    // dispatch here and the slot wait never joins the pin's next gap. A wait that ran out leaves the
+                    // account and names no end.
+                    if freed {
+                        hold.until = Some((self.clock)());
+                    }
                     holds.push(hold);
                     trace.waited(&holds);
                     held_for.push(account_id.clone());

@@ -1155,6 +1155,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 None,
                 hour_ago + 40 * 60_000,
                 j!({
+                    "early_ms": null,
                     "projection_error": 0.04,
                     "setting": ["shed_cap", "window_ceiling"],
                     "walls": 1,

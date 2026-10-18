@@ -86,11 +86,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (54, V54),
     (55, V55),
     (56, V56),
+    (57, V57),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 56;
+pub const SCHEMA_VERSION: u32 = 57;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -811,3 +812,7 @@ UPDATE pools SET return_to_plan_dwell_seconds = shed_dwell_seconds;
 // key, so the table is not rebuilt, and a row from before reads `''`, the base regime, until its next request stamps
 // it.
 const V56: &str = "ALTER TABLE pins ADD COLUMN entrypoint TEXT NOT NULL DEFAULT '';";
+
+// Why the pin's stamp was written, beside its source and instant: a round's move or the failover's word. Nullable with
+// no backfill, since a stamped row from before reads as shed, the one word its readers had.
+const V57: &str = "ALTER TABLE pins ADD COLUMN shed_reason TEXT;";

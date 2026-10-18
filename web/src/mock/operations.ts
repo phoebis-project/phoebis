@@ -169,6 +169,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     lastInputTokens: pinned ? lastInputRoll : null,
     lastRefreshAt: pinned ? lastRefreshRoll : null,
     shedFrom: null,
+    shedReason: null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
     agents: spec.agents,
     companion: spec.companion,
@@ -426,6 +427,7 @@ for (const pin of SLOWED_PINS) {
     runwayMs: studioRunwayMs,
     sessionId: pin.sessionId,
     shedFrom: null,
+    shedReason: null,
     speed: accountById.get('studio')?.slowDown?.factor ?? null,
   });
 }
@@ -468,6 +470,7 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
     requests: holderRows.length,
     sessionId: SESSION_IDS[0],
     shedFrom: null,
+    shedReason: null,
   });
 }
 

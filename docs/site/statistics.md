@@ -585,9 +585,12 @@ source, the prediction's among them, so a wall the router predicted counts befor
 ledger folds the four routing conditions from its events once an hour and at start into one table, which the gauge and
 `GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds none of its events. The
 subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls, names their
-windows and the settings `shed_cap` and `window_ceiling`, and gives the projection error: one less the projection of the
-newest shedding round on the wall's window within that window's length before the wall, null with none. The item opens
-the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
+windows and the settings `shed_cap` and `window_ceiling`, and names one figure by the trigger of the newest shedding
+round on the wall's window within that window's length before the wall: after a projection round the projection error,
+one less the round's projection, after a slow-down round the time the wall arrived before the reset (0 at or after it),
+and neither with no round. The ledger also keeps each account's longest early wall of the hour under a slow-down round,
+so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on the account's spent
+windows since the condition began.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour. It is folded as `wall_reached` is. The subject is the destination account, and

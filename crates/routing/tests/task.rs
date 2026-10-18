@@ -7291,6 +7291,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         cache_ttl_ms: 300_000,
         shed_from: None,
         shed_at: None,
+        shed_reason: None,
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
@@ -7442,7 +7443,7 @@ fn no_round(events: &[phoebis_routing::RouterEvent]) -> bool {
 async fn past_the_wait(handle: &RouterHandle, store: &Store, account: &str, now: i64) {
     let dwell = shed_dwell_ms(&store.pool("p").unwrap().expect("the pool"));
     handle
-        .stamp_projection_over("p", account, FIVE_HOUR, now - dwell)
+        .stamp_projection_over("p", account, FIVE_HOUR, now - dwell, None)
         .await;
 }
 

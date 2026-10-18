@@ -901,6 +901,7 @@ enum Command {
         account_id: String,
         window: String,
         at: i64,
+        reset: Option<i64>,
         reply: oneshot::Sender<()>,
     },
     Resolve {
@@ -1499,21 +1500,23 @@ impl RouterHandle {
         }
     }
 
-    /// Stamps `window` of the projection test on the account as over the ceiling since `at`, as
-    /// `RoutingState::stamp_projection_over` does, answering once the task has the stamp, so a selection sent after it
-    /// reads it.
+    /// Stamps `window` of the projection test on the account as over the ceiling since `at` under the reading's
+    /// `reset`, as `RoutingState::stamp_projection_over` does, answering once the task has the stamp, so a selection
+    /// sent after it reads it.
     pub async fn stamp_projection_over(
         &self,
         pool_id: &str,
         account_id: &str,
         window: &str,
         at: i64,
+        reset: Option<i64>,
     ) {
         self.ask(|reply| Command::StampProjectionOver {
             pool_id: pool_id.to_string(),
             account_id: account_id.to_string(),
             window: window.to_string(),
             at,
+            reset,
             reply,
         })
         .await
@@ -3149,10 +3152,11 @@ impl Task {
                 account_id,
                 window,
                 at,
+                reset,
                 reply,
             } => {
                 self.state
-                    .stamp_projection_over(&pool_id, &account_id, &window, at);
+                    .stamp_projection_over(&pool_id, &account_id, &window, at, reset);
                 let _ = reply.send(());
             }
             Command::Resolve {
@@ -5099,6 +5103,7 @@ mod tests {
             cache_ttl_ms: 300_000,
             shed_from: None,
             shed_at: None,
+            shed_reason: None,
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),

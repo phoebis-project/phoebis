@@ -1677,6 +1677,10 @@ export interface Session {
   /** The account a shed round marked this pin's session to leave, kept off until the session moves; null off a
    *  pin never marked, or with no pin. */
   shedFrom: string | null;
+  /** Why the pin was stamped from `shedFrom`: `round` for a shedding round's move, the failover's word (`cooldown`,
+   *  `fast_lane`, `mark`) for its landing. Null with no stamp and on a pin stamped before it carried one, which reads
+   *  as shed. */
+  shedReason: string | null;
   /** The pin's account's factor from the slow-down entry in force, null on a row with no pin and where none is in force. */
   speed: number | null;
 }

@@ -852,6 +852,7 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
         "one row per subject, dated by its oldest qualifying event: {rows:?}"
     );
     let unread_wall = serde_json::json!({
+        "early_ms": null,
         "projection_error": null,
         "setting": wall_settings,
         "walls": 1,
@@ -882,6 +883,7 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
             drift.clone(),
             serde_json::json!({ "accounts": ["a"], "rounds": 1, "setting": ceiling }),
             serde_json::json!({
+                "early_ms": null,
                 "projection_error": 1.0 - 0.97,
                 "setting": wall_settings,
                 "walls": 1,
@@ -989,6 +991,112 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
             }])
         ),
         "a week that charged under the band's floor drifts as one over its ceiling does: {drift:?}"
+    );
+}
+
+#[test]
+fn a_wall_after_a_slow_down_round_reads_how_early_it_came_and_the_account_rollup_keeps_the_hours_longest(
+) {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    let t = 1_000 * HOUR;
+    let round = |at: i64, account: &str, trigger: &str, projection: f64| EventRecord {
+        at,
+        kind: "shedding_round".into(),
+        account_id: Some(account.into()),
+        pool_id: Some("p".into()),
+        detail: Some(
+            serde_json::json!({
+                "window": "five_hour",
+                "projection": projection,
+                "trigger": trigger,
+                "outcome": "marked 1",
+                "reason": null,
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    };
+    let spent = |at: i64, account: &str, reset: i64| EventRecord {
+        at,
+        kind: "window_spent".into(),
+        account_id: Some(account.into()),
+        detail: Some(
+            serde_json::json!({ "window": "five_hour", "source": "poll", "reset": reset })
+                .to_string(),
+        ),
+        ..Default::default()
+    };
+    let events = [
+        // The stretch fired a round on `a`, whose window was spent twice in the hour after it: 30 and then 20 minutes
+        // before the reset.
+        round(t, "a", "slow_down", 1.3),
+        spent(t + 10 * MINUTE, "a", t + 40 * MINUTE),
+        spent(t + 20 * MINUTE, "a", t + 40 * MINUTE),
+        // The projection fired `b`'s round, so its wall reads the error.
+        round(t, "b", "projection", 0.97),
+        spent(t + 10 * MINUTE, "b", t + 40 * MINUTE),
+        // `c`'s wall came after the reset the window_spent event names, and `d`'s at it.
+        round(t, "c", "slow_down", 1.3),
+        spent(t + 10 * MINUTE, "c", t + 5 * MINUTE),
+        round(t, "d", "slow_down", 1.3),
+        spent(t + 10 * MINUTE, "d", t + 10 * MINUTE),
+    ];
+    let db = LedgerDb::open_in_memory().unwrap();
+    for event in &events {
+        db.insert_event(event).unwrap();
+    }
+    fold_events(&db, &events);
+    let tables = phoebis_ledger::test_tables::subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_routing_conditions(&tx, &tables, t + 2 * HOUR)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap();
+    let figures = |account: &str| {
+        let wall = rows
+            .iter()
+            .find(|r| r.kind == "wall_reached" && r.subject_id == account)
+            .unwrap_or_else(|| panic!("no wall on {account}: {rows:?}"));
+        (
+            wall.detail["early_ms"].clone(),
+            wall.detail["projection_error"].clone(),
+        )
+    };
+    assert_eq!(
+        figures("a"),
+        (serde_json::json!(20 * MINUTE), serde_json::Value::Null),
+        "the newest wall came 20 minutes before its reset, and a stretch round's projection measures nothing there"
+    );
+    assert_eq!(
+        figures("b"),
+        (serde_json::Value::Null, serde_json::json!(1.0 - 0.97)),
+        "a projection round keeps the error"
+    );
+    assert_eq!(
+        (figures("c"), figures("d")),
+        (
+            (serde_json::json!(0), serde_json::Value::Null),
+            (serde_json::json!(0), serde_json::Value::Null)
+        ),
+        "a wall at or after the reset came early by nothing"
+    );
+    let rollups = db
+        .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
+        .unwrap();
+    assert_eq!(
+        rollups
+            .iter()
+            .map(|r| (r.account_id.as_str(), r.wall_early_ms))
+            .collect::<Vec<_>>(),
+        [("a", (30 * MINUTE) as u64)],
+        "the account rollup keeps the hour's longest early wall under a stretch round, and a wall that came early by \
+         nothing adds no hour"
     );
 }
 

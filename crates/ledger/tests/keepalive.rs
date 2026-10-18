@@ -479,9 +479,10 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         // the version-33 shape before the drops below, rebuilt since a primary-key column cannot be dropped in place.
         // Migrations 35 and 38 create the conditions' and the reconciliations' tables, so both leave before the replay
         // creates them again, the second before migration 20 creates a table of its name. Migration 39's index leaves
-        // before its column, which SQLite refuses to drop while indexed.
+        // before its column, which SQLite refuses to drop while indexed, and its wall column leaves with them.
         let mut sql = format!(
             "DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
+             ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms; \
              DROP TABLE routing_conditions; DROP TABLE window_reconciliations; {VERSION_33_ROLLUPS} "
         );
         sql.push_str("ALTER TABLE attempts DROP COLUMN written_at; ALTER TABLE requests DROP COLUMN diagnostics_source; ALTER TABLE requests DROP COLUMN stream_end_at; ALTER TABLE rollups_hourly DROP COLUMN probes_held; ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; ALTER TABLE bodies DROP COLUMN request_len_seen; ALTER TABLE bodies DROP COLUMN response_len_seen; ALTER TABLE account_rollups_hourly DROP COLUMN rewrite_tokens; ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; ");
@@ -633,10 +634,11 @@ async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_
         .unwrap();
         // The file as version 36 left it: the one count, holding what a credit booked before the split.
         // Migration 38 creates the reconciliations' table, so it leaves before the replay creates it again, and
-        // migration 39's index and column leave the same way, the index first.
+        // migration 39's index and two columns leave the same way, the index first.
         db.write(|c| {
             c.execute_batch(
                 "DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
+                 ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms; \
                  DROP TABLE window_reconciliations; \
                  ALTER TABLE rollups_hourly DROP COLUMN kept_warm_1h_tokens; \
                  ALTER TABLE rollups_hourly RENAME COLUMN kept_warm_5m_tokens TO kept_warm_tokens; \

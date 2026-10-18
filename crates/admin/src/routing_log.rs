@@ -331,7 +331,8 @@ pub(crate) struct DecisionRecord {
     /// `static_hash`), `attempted` (the accounts already tried), `holds` (each `account_id`, `cohort`, `held_ms`,
     /// `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran out with no slot freed), `reason`
     /// (`cap` for a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait before its
-    /// head), `until` (the instant the wait ends: a reset's, or the pin's slow-down deadline, null under `cap`)),
+    /// head), `until` (the instant the wait ends: a reset's, the pin's slow-down deadline, or under `cap` the admission
+    /// once a slot freed, null where the wait ran out)),
     /// `registry_revision`, `body_tokens` (the relay's estimate of the body's prompt tokens, which a fresh session's
     /// rewrite reads, null on a refusal).
     ///
@@ -343,7 +344,8 @@ pub(crate) struct DecisionRecord {
     pub request: Value,
     /// The pin as the selection found it: `found` (`live`, `expired_idle`, `left_pool` or `none`), `account_id`,
     /// `epoch`, `incarnation`, `created_at`, `last_used_at`, `last_refresh_at`, `idle_ms`, `refresh_age_ms`,
-    /// `lane`, `shed` (`from`, `at`), `marked`, `warmth` (`refresh`, `cold` or `untouched`), `warmth_cause`,
+    /// `lane`, `shed` (`from`, `at`, `reason`: `round` for a shedding round's move, the failover's word `cooldown`,
+    /// `fast_lane` or `mark` for its landing), `marked`, `warmth` (`refresh`, `cold` or `untouched`), `warmth_cause`,
     /// `released` (the reasons a pin was let go), `marked_at`, `marked_on` and `marked_window` (the shedding mark the
     /// row carries: when it was made, the account and the window whose trigger made it, null without one), `cycle_ms`
     /// (the pin's cycle, the time-weighted average of the gaps between a dispatch and the next arrival, null before its

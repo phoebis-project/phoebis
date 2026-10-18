@@ -488,22 +488,25 @@ round's window. A weekly window, and the 5-hour window of a pool whose `slow_dow
 projection on it reads over `window_ceiling` at the window's horizon (see **The projection**, above) at a pinned
 selection and still reads over at a pinned selection a wait later, a quarter of the time from the first reading over to
 the window's horizon and at most `shed_dwell_seconds`, since one large turn's charge moves the prediction before the
-burn average has absorbed it. The wait holds the round back and nothing else: the request is served as before, a mark
-already standing moves at its pin's next request, and a window inside its wait yields to the next in the order. The
-5-hour window of a pool whose `slow_down` is on crosses when the stretch the slow-down reads has stood over
-`slow_down_stretch_seconds` for its safety wait, and the round's horizon moves earlier by the threshold (see
-[Slow-down](#slow-down), below). No 5-hour round fires while the window is younger than twice `burn_average_seconds` (an
-hour at the default), whatever fired the trigger, because each session's burn average still carries the previous
-window's last half hour over the reset and the projection would apply that rate to a horizon of up to five hours. While
-the hold runs, the routing log's record of the selection reads the shed rule `no` with the window's age
-(`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a weekly window past its
-wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take no hold, since the
-same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's horizon lies five
-hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing new sessions
-there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at most. The
-excess is the burn that, removed now, lands the fired window's projection on the ceiling at its horizon, the demand's
-projection at the moved horizon under the slow-down. The round's target is the lesser of the excess and `shed_cap`
-(default 0.5) of the burn of the round's pins on that window, so the excess sets the amount and the cap bounds it.
+burn average has absorbed it. The wait's stamp, the first reading over, belongs to the window whose reset it was set
+under, so a reading whose reset lies an hour or more from that one, earlier or later, opens a new window whose wait
+starts at that reading, while a smaller move is the upstream's drift inside one window. The wait holds the round back
+and nothing else: the request is served as before, a mark already standing moves at its pin's next request, and a window
+inside its wait yields to the next in the order. The 5-hour window of a pool whose `slow_down` is on crosses when the
+stretch the slow-down reads has stood over `slow_down_stretch_seconds` for its safety wait, and the round's horizon
+moves earlier by the threshold (see [Slow-down](#slow-down), below). No 5-hour round fires while the window is younger
+than twice `burn_average_seconds` (an hour at the default), whatever fired the trigger, because each session's burn
+average still carries the previous window's last half hour over the reset and the projection would apply that rate to a
+horizon of up to five hours. While the hold runs, the routing log's record of the selection reads the shed rule `no`
+with the window's age (`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a
+weekly window past its wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take
+no hold, since the same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's
+horizon lies five hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops
+placing new sessions there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one
+round at most. The excess is the burn that, removed now, lands the fired window's projection on the ceiling at its
+horizon, the demand's projection at the moved horizon under the slow-down. The round's target is the lesser of the
+excess and `shed_cap` (default 0.5) of the burn of the round's pins on that window, so the excess sets the amount and
+the cap bounds it.
 
 With `load_shedding` off no round runs and nothing is marked, and a mark already standing is released at the session's
 next request, which renews the pin in place. The destination gate, the reservations and `window_ceiling` on every move

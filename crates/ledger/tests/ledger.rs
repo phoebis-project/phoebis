@@ -2936,10 +2936,12 @@ const VERSION_34_TABLES: &str = "DROP TABLE routing_conditions;";
 /// `RECREATE_DROPPED_TABLE` where a rebuild recreates that one.
 const VERSION_37_TABLES: &str = "DROP TABLE window_reconciliations;";
 
-/// The landing stamp's index and column migration 39 adds, dropped over a file the current schema built so a replay
-/// from an earlier version adds them again. The index goes first, since SQLite refuses to drop an indexed column.
+/// The landing stamp's index and column and the account rollup's wall column migration 39 adds, dropped over a file the
+/// current schema built so a replay from an earlier version adds them again. The index goes first, since SQLite refuses
+/// to drop an indexed column.
 const VERSION_38_COLUMNS: &str =
-    "DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at;";
+    "DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
+     ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms;";
 
 /// The table migration 23 drops, recreated so a forward replay from version 20 or 21 can drop it again.
 const RECREATE_DROPPED_TABLE: &str = "CREATE TABLE window_reconciliations (account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL, computed_at INTEGER NOT NULL, PRIMARY KEY (account_id, window, window_end)); -- rollback";
@@ -3569,6 +3571,47 @@ async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_
         slow_down_columns(&phoebis_ledger::LedgerDb::open_in_memory().unwrap()),
         2,
         "a fresh file carries them"
+    );
+}
+
+#[tokio::test]
+async fn a_ledger_below_the_walls_time_column_gains_it_at_zero_on_every_account_hour() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let created = phoebis_ledger::EventRecord {
+        at: 3_600_000,
+        kind: "pin_created".into(),
+        account_id: Some("a".into()),
+        ..Default::default()
+    };
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.write(|c| {
+            let tx = c.transaction()?;
+            phoebis_ledger::fold_event(&tx, &created)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        db.write(|c| {
+            c.execute_batch(VERSION_38_COLUMNS)?;
+            c.execute_batch("UPDATE meta SET value = '38' WHERE key = 'schema_version';")?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 39);
+    let rollups = db
+        .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
+        .unwrap();
+    assert_eq!(
+        rollups
+            .iter()
+            .map(|r| (r.account_id.as_str(), r.pins_created, r.wall_early_ms))
+            .collect::<Vec<_>>(),
+        [("a", 1, 0)],
+        "an hour from before the column keeps its counts and reads no early wall"
     );
 }
 

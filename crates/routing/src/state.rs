@@ -29,6 +29,7 @@ pub const BUCKET_TTL_MS: i64 = 600_000;
 /// Bucket windows an account holds at most, the oldest reading evicted at insert.
 pub const MAX_BUCKETS_PER_ACCOUNT: usize = 64;
 pub const WEEK_MS: i64 = 7 * 24 * 3_600_000;
+pub(crate) const HOUR_MS: i64 = 3_600_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinRef {
@@ -1136,8 +1137,9 @@ pub struct RoutingState {
     /// of a pin after a restart reads none.
     pin_paces: HashMap<PinKey, PinPace>,
     /// When each window of the projection test first read over the ceiling at a pinned selection, keyed by pool id,
-    /// account id and window. Memory only: a restart starts from none.
-    projection_over: HashMap<(String, String, String), i64>,
+    /// account id and window. Memory only: a restart starts from none. The stamp and the reading's reset it was set
+    /// under, `None` where the reading named none.
+    projection_over: HashMap<(String, String, String), (i64, Option<i64>)>,
     /// The ledger's tables, which this crate cannot name, handed in by the task; unit tables until then, so a
     /// burn read through them is a token count.
     rates: BurnRates,
@@ -1873,9 +1875,9 @@ impl RoutingState {
     /// passed 5-hour reset: the reset less the window's length while the reset lies after `now`, the passed reset
     /// itself for a 5-hour reading at or before `now` (the window opened there with the account's next request, and the
     /// next reading names the new reset), a passed weekly reset rolled forward by whole weeks as `predicted` rolls it,
-    /// less `WEEK_MS`, and `None` for a reading that names no reset or for no reading at all. The stamp's start and the
-    /// hold on the 5-hour round read it. The start lies at or after `now` for a reset more than a window's length
-    /// ahead, which the hold reads as no age.
+    /// less `WEEK_MS`, and `None` for a reading that names no reset or for no reading at all. The hold on the 5-hour
+    /// round reads it. The start lies at or after `now` for a reset more than a window's length ahead, which the hold
+    /// reads as no age.
     pub fn window_started(&self, account_id: &str, window: &str, now: i64) -> Option<i64> {
         let reset = self.samples.get(account_id)?.reading(window)?.reset?;
         Some(if window.starts_with(SEVEN_DAY) {
@@ -2633,19 +2635,22 @@ impl RoutingState {
                 account_id.to_string(),
                 window.to_string(),
             ))
-            .copied()
+            .map(|(since, _)| *since)
     }
 
-    /// Sets the stamp at the first reading over the ceiling, clears it at a reading at or under, and replaces a stamp
-    /// older than the window's start (`window_start`: the window's reset less its length where the reading names a
-    /// reset, or the reset a 5-hour reading has passed with no sample since).
+    /// Sets the stamp at the first reading over the ceiling under the reading's `reset`, clears it at a reading at or
+    /// under, and restarts it at `now` under the new reset where the reset differs from the stamp's by `HOUR_MS` or
+    /// more in either direction, or where a 5-hour reading names none and the stamp's reset has passed. It leaves the
+    /// stamp alone otherwise: a smaller move keeps the stamp and its reset, a reading that names none beside a stamp
+    /// that names none keeps it, and a stamp that names none adopts the reading's reset, since a first reset is no
+    /// move.
     pub fn note_projection(
         &mut self,
         pool_id: &str,
         account_id: &str,
         window: &str,
         over: bool,
-        window_start: Option<i64>,
+        reset: Option<i64>,
         now: i64,
     ) {
         let key = (
@@ -2657,17 +2662,28 @@ impl RoutingState {
             self.projection_over.remove(&key);
             return;
         }
-        let stamp = self.projection_over.entry(key).or_insert(now);
-        // A stamp belongs to one window: a quiet account's stamp from before the reset would fire the new window's
-        // first reading over the ceiling at once.
-        if window_start.is_some_and(|start| *stamp < start) {
-            *stamp = now;
+        let (since, stamped) = self.projection_over.entry(key).or_insert((now, reset));
+        // A stamp belongs to the window whose reset it was set under: a quiet account's stamp from before the reset
+        // would fire the new window's first reading over the ceiling at once. The upstream's reset drifts by minutes
+        // inside one window, so only an hour's move opens a new one.
+        let restart = match (*stamped, reset) {
+            (Some(stamped), Some(reset)) => (reset - stamped).abs() >= HOUR_MS,
+            // A 5-hour window past its reset names none until a sample follows, and the window the stamp was set under
+            // ended there.
+            (Some(stamped), None) => window == FIVE_HOUR && stamped <= now,
+            (None, _) => false,
+        };
+        if restart {
+            *since = now;
+            *stamped = reset;
+        } else if stamped.is_none() {
+            *stamped = reset;
         }
     }
 
-    /// Stamps `window` on the account as over the ceiling since `at`, so a test reaches a window past its wait without
-    /// a selection a wait before its instant. No production path stamps but the note, so it is compiled under `test`
-    /// and the `debug-hooks` feature alone.
+    /// Stamps `window` on the account as over the ceiling since `at` under the reading's `reset`, so a test reaches a
+    /// window past its wait without a selection a wait before its instant. No production path stamps but the note, so
+    /// it is compiled under `test` and the `debug-hooks` feature alone.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn stamp_projection_over(
         &mut self,
@@ -2675,6 +2691,7 @@ impl RoutingState {
         account_id: &str,
         window: &str,
         at: i64,
+        reset: Option<i64>,
     ) {
         self.projection_over.insert(
             (
@@ -2682,7 +2699,7 @@ impl RoutingState {
                 account_id.to_string(),
                 window.to_string(),
             ),
-            at,
+            (at, reset),
         );
     }
 
@@ -3188,6 +3205,7 @@ mod tests {
             cache_ttl_ms: 300_000,
             shed_from: None,
             shed_at: None,
+            shed_reason: None,
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
@@ -3772,7 +3790,6 @@ mod tests {
     }
 
     const CLOSE: f64 = 1e-9;
-    const HOUR_MS: i64 = 3_600_000;
 
     fn read(state: &mut RoutingState, window: &str, utilization: f64, reset: Option<i64>, at: i64) {
         state.record_sample(

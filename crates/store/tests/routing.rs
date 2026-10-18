@@ -31,6 +31,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         cache_ttl_ms: 300_000,
         shed_from: None,
         shed_at: None,
+        shed_reason: None,
         static_hash: None,
         tail_hash: None,
         lane: lane_key(model, "standard", "none", "-"),
@@ -166,6 +167,7 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
         cache_ttl_ms: 3_600_000,
         shed_from: Some("c".into()),
         shed_at: Some(4),
+        shed_reason: None,
         static_hash: Some("static-hash".into()),
         tail_hash: Some("tail-hash".into()),
         ..pin("k", "s", "claude-sonnet-5", "a")
@@ -361,7 +363,7 @@ fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
     let before = pin("k", "before", "claude-opus-5-5", "a");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V56} UPDATE meta SET value = '55' WHERE key = 'schema_version';"
+        "{UNDO_V57} {UNDO_V56} UPDATE meta SET value = '55' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -386,7 +388,7 @@ fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 56);
+    assert_eq!(migrated.schema_version().unwrap(), 57);
     let pins = migrated.load_routing().unwrap().pins;
     assert_eq!(
         pins.iter().find(|p| p.session_id == "before"),
@@ -399,6 +401,103 @@ fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
             .map(|p| p.entrypoint.as_str()),
         Some(""),
         "a pin the step reaches reads no entrypoint until its next request stamps one"
+    );
+}
+
+#[test]
+fn a_pins_shed_reason_survives_a_reopen_and_a_stamped_row_from_before_reads_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let landed = PinRow {
+        shed_from: Some("b".into()),
+        shed_at: Some(4),
+        shed_reason: Some("cooldown".into()),
+        ..pin("k", "s", "claude-opus-5-5", "a")
+    };
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        store.upsert_pin(&landed).unwrap();
+    }
+    let reasons = || {
+        Store::open(&path, &storage_key)
+            .unwrap()
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| (p.session_id, p.shed_reason))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        reasons(),
+        [("s".to_string(), Some("cooldown".to_string()))],
+        "a failover's landing reads its word back after a reopen"
+    );
+    Store::open(&path, &storage_key)
+        .unwrap()
+        .upsert_pin(&PinRow {
+            shed_at: Some(5),
+            shed_reason: Some("round".into()),
+            ..landed.clone()
+        })
+        .unwrap();
+    assert_eq!(
+        reasons(),
+        [("s".to_string(), Some("round".to_string()))],
+        "a round's move stamps its own word over it"
+    );
+    // A registry stamped at the version before the column, holding a stamped pin that version wrote.
+    let before = PinRow {
+        shed_from: Some("b".into()),
+        shed_at: Some(4),
+        ..pin("k", "before", "claude-opus-5-5", "a")
+    };
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V57} UPDATE meta SET value = '56' WHERE key = 'schema_version';"
+    ))
+    .unwrap();
+    conn.execute(
+        "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, \
+         key_generation, incarnation, last_refresh_at, lane, shed_from, shed_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        rusqlite::params![
+            before.key_id,
+            before.session_id,
+            before.agent_id,
+            before.model,
+            before.account_id,
+            before.epoch as i64,
+            before.created_at,
+            before.last_used_at,
+            before.key_generation,
+            before.incarnation as i64,
+            before.last_refresh_at,
+            before.lane,
+            before.shed_from,
+            before.shed_at
+        ],
+    )
+    .unwrap();
+    drop(conn);
+    let migrated =
+        Store::open(&path, &storage_key).expect("the migration completes and the store opens");
+    assert_eq!(migrated.schema_version().unwrap(), 57);
+    let pins = migrated.load_routing().unwrap().pins;
+    assert_eq!(
+        pins.iter().find(|p| p.session_id == "before"),
+        Some(&before),
+        "the stamped row from before the column reads no reason, which its readers take as shed, and every field it \
+         was written with"
+    );
+    assert_eq!(
+        pins.iter()
+            .find(|p| p.session_id == "s")
+            .map(|p| p.shed_reason.clone()),
+        Some(None),
+        "a pin the step reaches reads no reason until its next stamp writes one"
     );
 }
 
@@ -935,6 +1034,9 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
+// The reverse of the registry's version 57: the pins lose `shed_reason`. One line with the marker last. The
+// trailing `\n` ends the marker's comment.
+const UNDO_V57: &str = "ALTER TABLE pins DROP COLUMN shed_reason; -- rollback\n";
 // The reverse of the registry's version 56: the pins lose `entrypoint`. One line with the marker last. The trailing
 // `\n` ends the marker's comment.
 const UNDO_V56: &str = "ALTER TABLE pins DROP COLUMN entrypoint; -- rollback\n";
@@ -1006,7 +1108,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     let before = affinity_row("claude-sonnet-5", "hash-1", "a");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
+        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -1032,7 +1134,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 56);
+    assert_eq!(migrated.schema_version().unwrap(), 57);
     assert_eq!(
         migrated.load_routing().unwrap().affinity,
         vec![AffinityRow {

@@ -3012,6 +3012,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                 cache_ttl_ms: 300_000,
                 shed_from: None,
                 shed_at: None,
+                shed_reason: None,
                 static_hash: None,
                 tail_hash: None,
                 lane: String::new(),

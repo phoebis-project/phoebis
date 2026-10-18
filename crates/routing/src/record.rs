@@ -190,6 +190,9 @@ pub struct PinFacts {
 pub struct PinShed {
     pub from: String,
     pub at: i64,
+    /// Why the stamp was written: `round` for a shedding round's move, the failover's reason word (`cooldown`,
+    /// `fast_lane`, `mark`) for a failover's landing, and `round` for a row stamped before the pin carried a reason.
+    pub reason: String,
 }
 
 /// The values that entered the decision, each named by the `PoolRow` field it is read from, so a renamed setting

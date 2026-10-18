@@ -317,7 +317,9 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 ///
 /// Version 39: a request row carries the instant the ledger wrote it, strictly increasing across the writer's rows,
 /// indexed so a list read filters on it, and a poll that passes back the newest stamp of its last answer reads exactly
-/// the rows written since. No backfill: a row from before reads NULL, which no such filter answers.
+/// the rows written since. No backfill: a row from before reads NULL, which no such filter answers. The same step gives
+/// each account hour the longest time a wall on the account arrived before its window's reset under a stretch round,
+/// so the figure outlives the trailing day the `wall_reached` condition covers. An hour from before reads 0.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -985,6 +987,7 @@ ALTER TABLE rollups_hourly ADD COLUMN kept_warm_1h_tokens INTEGER NOT NULL DEFAU
     (
         39,
         "ALTER TABLE requests ADD COLUMN landed_at INTEGER;
-CREATE INDEX requests_landed_at ON requests(landed_at);",
+CREATE INDEX requests_landed_at ON requests(landed_at);
+ALTER TABLE account_rollups_hourly ADD COLUMN wall_early_ms INTEGER NOT NULL DEFAULT 0;",
     ),
 ];

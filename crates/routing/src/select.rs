@@ -147,6 +147,9 @@ pub struct FailedOver {
     pub cause: Option<MoveCause>,
 }
 
+/// The pin row's `shed_reason` for a shedding round's move, the word a stamp from before the row carried one reads as.
+const SHED_ROUND: &str = "round";
+
 /// The cache lane key, `<model>|<speed>|<thinking>|<effort>`: the one spelling the relay composes and every pin,
 /// affinity entry and request compares, so no reader spells it twice.
 pub fn lane_key(model: &str, speed: &str, thinking: &str, effort: &str) -> String {
@@ -198,7 +201,8 @@ pub struct HoldFacts {
     /// before its head.
     pub reason: &'static str,
     /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
-    /// account's cooldown, under `slow_down` the pin's deadline. `None` under `cap`.
+    /// account's cooldown, under `slow_down` the pin's deadline. Under `cap` the admission, which the relay fills once
+    /// a slot freed, and `None` on the hold the selection answers and where the wait ran out.
     pub until: Option<i64>,
 }
 
@@ -1228,6 +1232,17 @@ fn run(
             agent_id: request.agent_id.clone(),
             model: request.canonical_model.clone(),
         };
+        // A slot wait ends at the admission, the request's dispatch, which the relay names as the cap hold's end, so
+        // the wait never lands in the pin's next gap.
+        if let Some(until) = request
+            .holds
+            .iter()
+            .filter(|hold| hold.reason == "cap")
+            .filter_map(|hold| hold.until)
+            .max()
+        {
+            state.pace_held_until(&key, until);
+        }
         if let Some(mut current) = state.pin(&key).cloned() {
             let serves = request
                 .candidates
@@ -2047,7 +2062,8 @@ fn run(
             chosen,
             shed_from
                 .clone()
-                .or_else(|| failed_over.map(|f| f.from_account_id.clone())),
+                .map(|from| (from, SHED_ROUND.to_string()))
+                .or_else(|| failed_over.map(|f| (f.from_account_id.clone(), f.reason.to_string()))),
             moving.as_ref().or(failed_over.map(|f| &f.row)),
         );
         let lane = row.lane.clone();
@@ -2110,16 +2126,16 @@ fn run(
     )
 }
 
-/// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `moving` is the
-/// row a move takes off its source or a failover took off its account, whose burn averages and last prompt the new row
-/// carries, so the destination's projection counts the pin from the moment it lands and a later move prices its
-/// rewrite from a figure.
+/// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `shed` is the source
+/// and the word a shed move or a failover's landing stamps. `moving` is the row a move takes off its source or a
+/// failover took off its account, whose burn averages and last prompt the new row carries, so the destination's
+/// projection counts the pin from the moment it lands and a later move prices its rewrite from a figure.
 fn fresh_pin(
     request: &SelectRequest,
     session: &str,
     epoch: u64,
     chosen: &Candidate,
-    shed_from: Option<String>,
+    shed: Option<(String, String)>,
     moving: Option<&PinRow>,
 ) -> PinRow {
     // The rates are typed tokens per second and carry no unit, so the copy needs no re-pricing.
@@ -2162,9 +2178,11 @@ fn fresh_pin(
         last_refresh_at: request.now,
         cache_ttl_ms: 300_000,
         // A shed move and a failover's landing remember the source for the dwell, so no round sends the session
-        // straight back. Every other move clears both.
-        shed_at: shed_from.is_some().then_some(request.now),
-        shed_from,
+        // straight back, and the word the status page and the record name the stamp by. Every other move clears all
+        // three.
+        shed_at: shed.is_some().then_some(request.now),
+        shed_reason: shed.as_ref().map(|(_, reason)| reason.clone()),
+        shed_from: shed.map(|(from, _)| from),
         static_hash: None,
         tail_hash: None,
         lane: request.lane.clone(),
@@ -3459,12 +3477,17 @@ fn move_of<'a>(
         else {
             continue;
         };
+        // The reading's reset as every reader of a plan window takes it: a passed weekly reset rolled forward, and a
+        // 5-hour window past its reset naming none until the next sample.
+        let reset = state
+            .predicted(source, window, now)
+            .and_then(|reading| reading.reset);
         state.note_projection(
             &pool.id,
             source,
             window,
             projection.at_horizon > ceiling(pool, window),
-            state.window_started(source, window, now),
+            reset,
             now,
         );
     }
@@ -3917,7 +3940,8 @@ fn water_fill(
 }
 
 /// A rule whose reason held but which found no sibling to move the pin to, with the candidates the end exclusion
-/// dropped. The fit table follows when the gate read any candidate, so the record says why none passed.
+/// dropped where it dropped any: the drain's gate reads no candidate inside the wind-down, so its line names no list.
+/// The fit table follows when the gate read any candidate, so the record says why none passed.
 fn no_destination(
     rec: &mut Recorder,
     rule: usize,
@@ -3926,7 +3950,9 @@ fn no_destination(
     pace_facts: &[Fact],
 ) {
     facts.push(Fact::bool("no_destination", true));
-    facts.push(Fact::list("ending", gate.ending));
+    if !gate.ending.is_empty() {
+        facts.push(Fact::list("ending", gate.ending));
+    }
     rule_line(rec, rule, "no", facts, pace_facts);
     if !gate.step.facts.is_empty() {
         rec.walk.push(gate.step);
@@ -4966,9 +4992,9 @@ fn account_refusal(
 }
 
 /// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
-/// post-partition selection set: under the cap, a fit for the request (the moving `pin`'s figures, or the fresh
-/// prior with none) as the `no_fit` partition reads it, and not winding down. Answers the first gate that blocks it:
-/// `at_cap`, `no_fit` or `winding_down`.
+/// post-partition selection set: under the cap, and a fit for the request (the moving `pin`'s figures, or the fresh
+/// prior with none) as the `no_fit` partition reads it, whose first arm reads a winding-down account as `ending`.
+/// Answers the first gate that blocks it: `at_cap` or `no_fit`.
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -4995,11 +5021,6 @@ fn blocked(
         != "fits"
     {
         Some("no_fit")
-    } else if snapshot
-        .term(account_id)
-        .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
-    {
-        Some("winding_down")
     } else {
         None
     }
@@ -5857,9 +5878,17 @@ fn pin_facts(
         idle_ms: row.map(|p| now - p.last_used_at),
         refresh_age_ms: row.map(|p| now - p.last_refresh_at),
         lane: row.map(|p| p.lane.clone()),
-        shed: row
-            .and_then(|p| p.shed_from.clone().zip(p.shed_at))
-            .map(|(from, at)| PinShed { from, at }),
+        shed: row.and_then(|p| {
+            let (from, at) = p.shed_from.clone().zip(p.shed_at)?;
+            Some(PinShed {
+                from,
+                at,
+                reason: p
+                    .shed_reason
+                    .clone()
+                    .unwrap_or_else(|| SHED_ROUND.to_string()),
+            })
+        }),
         marked,
         warmth: None,
         warmth_cause: None,

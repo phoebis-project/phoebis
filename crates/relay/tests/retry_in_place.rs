@@ -1111,6 +1111,24 @@ async fn next_hold(events: &mut broadcast::Receiver<RouterEvent>) -> HoldOutcome
     }
 }
 
+/// The next decision that placed or renewed a request rather than holding it, its record whole.
+async fn next_selected(events: &mut broadcast::Receiver<RouterEvent>) -> Box<DecisionRecord> {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the decision arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision {
+            summary, record, ..
+        } = event
+        {
+            if summary.kind != "held" {
+                return record;
+            }
+        }
+    }
+}
+
 /// The waits a request's outcome names, each with its reason, as the completion writes them.
 fn waits_of(resp: &axum::http::Response<axum::body::Body>) -> Vec<(String, u64)> {
     let held = outcome(resp)
@@ -1269,6 +1287,119 @@ async fn a_slow_down_hold_is_cut_at_the_request_deadline_and_a_slot_wait_after_i
     );
     drop(open);
     up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_slot_that_frees_inside_the_bound_dispatches_the_pin_at_the_admission_and_its_next_gap_holds_no_wait(
+) {
+    // The path of the case above, a's slow-down hold, a cools and the selection after it waits for b's one slot, with
+    // the slot freed inside the bound.
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", json_200());
+    up.add_credential_rule(B, "/v1/messages", held_stream(100));
+    let h = harness_with_router_config(
+        &up,
+        &[oauth("a", A, 1), oauth("b", B, 0)],
+        PoolSpec {
+            failover: Failover {
+                in_flight_cap: 1,
+                retry_in_place_seconds: 2,
+                ..Failover::default()
+            },
+            ..PoolSpec::default()
+        },
+        RouterConfig {
+            share: tenth_an_hour(),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    on_tier(&h, &["a", "b"]).await;
+    let open = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&open).account_id, "b");
+    cycle_then_slow(&h).await;
+    five_hour_at(&h, "a", 0.9, NOW + 10_000 + 3_600_000, NOW + 10_000).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let app = h.app.clone();
+    let waiting =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    let hold = next_hold(&mut events).await;
+    assert_eq!((hold.account_id.as_str(), hold.reason), ("a", "slow_down"));
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    h.router
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: NOW + 3_600_000,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
+    h.clock.store(NOW + 22_000, Ordering::SeqCst);
+    let hold = next_hold(&mut events).await;
+    assert_eq!((hold.account_id.as_str(), hold.reason), ("b", "cap"));
+    tokio::time::resume();
+    // b's slot frees three seconds after the slow-down hold's end on the relay's clock.
+    h.clock.store(NOW + 25_000, Ordering::SeqCst);
+    up.release();
+    drain(open).await;
+    let admitted = next_selected(&mut events).await;
+    assert_eq!(
+        admitted
+            .request
+            .holds
+            .iter()
+            .map(|hold| (hold.reason, hold.ran_out, hold.until.is_some()))
+            .collect::<Vec<_>>(),
+        [("slow_down", false, true), ("cap", false, true)]
+    );
+    assert_eq!(
+        admitted.request.holds[1].until,
+        Some(NOW + 25_000),
+        "the cap hold ends at the admission"
+    );
+    let resp = tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .expect("the slot frees inside the bound")
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b")
+    );
+    drain(resp).await;
+    // The pin's next turn ten seconds after the admission: its cycle of ten seconds folds a gap of ten.
+    h.clock.store(NOW + 35_000, Ordering::SeqCst);
+    let next = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(next.status(), 200);
+    let renewed = next_selected(&mut events).await;
+    assert_eq!(
+        renewed.pin.as_ref().and_then(|pin| pin.cycle_ms),
+        Some(10_000),
+        "the slot wait joins no gap of the pin"
+    );
+    drain(next).await;
     up.shutdown().await;
 }
 

@@ -1343,6 +1343,7 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 cache_ttl_ms: 300_000,
                 shed_from: None,
                 shed_at: None,
+                shed_reason: None,
                 static_hash: None,
                 tail_hash: None,
                 lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
@@ -1437,6 +1438,7 @@ async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
             cache_ttl_ms: 300_000,
             shed_from: None,
             shed_at: None,
+            shed_reason: None,
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
@@ -3948,6 +3950,25 @@ async fn routed(parts: &common::Full, cookie: &str) {
 /// One selection through the harness's router as the relay asks for it, at `at`: no session, so no pin and no pin
 /// event beside the decision.
 async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, at: i64) {
+    let answer = parts
+        .router
+        .select(select_request(parts, request_id, seq, attempt, at))
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, phoebis_routing::SelectResult::Selected(_)),
+        "the pool's member answers a selection"
+    );
+}
+
+/// The selection `decide` asks the harness's router for.
+fn select_request(
+    parts: &common::Full,
+    request_id: &str,
+    seq: u32,
+    attempt: u32,
+    at: i64,
+) -> phoebis_routing::SelectRequest {
     let snapshot = parts.router.snapshot();
     let key = snapshot
         .key("desktop")
@@ -3960,50 +3981,42 @@ async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, 
         "claude-sonnet-5",
     )
     .expect("the pool allows the model");
-    let answer = parts
-        .router
-        .select(phoebis_routing::SelectRequest {
-            request_id: request_id.into(),
-            attempt,
-            seq,
-            key_id: "desktop".into(),
-            key_generation: common::generation(&parts.store, "desktop"),
-            agent_id: "main".into(),
-            session_id: None,
-            canonical_model: "claude-sonnet-5".into(),
-            folded_model: "claude-sonnet-5".into(),
-            candidates,
-            portable: true,
-            attempted: Vec::new(),
-            now: at,
-            received_at: at,
-            fallback_ms: 60_000,
-            revision: snapshot.revision,
-            probe: false,
-            count: false,
-            request_class: None,
-            context_compacted: false,
-            static_hash: None,
-            boundaries: std::sync::Arc::from([]),
-            client: phoebis_routing::ClientClass::ClaudeCode,
-            entrypoint: None,
-            static_boundaries: std::sync::Arc::from([]),
-            marker: false,
-            parent_agent_id: None,
-            failed_over: None,
-            holds: Vec::new(),
-            dialed: false,
-            held_out: false,
-            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
-            fast: false,
-            body_tokens: 0,
-        })
-        .await
-        .unwrap();
-    assert!(
-        matches!(answer.result, phoebis_routing::SelectResult::Selected(_)),
-        "the pool's member answers a selection"
-    );
+    phoebis_routing::SelectRequest {
+        request_id: request_id.into(),
+        attempt,
+        seq,
+        key_id: "desktop".into(),
+        key_generation: common::generation(&parts.store, "desktop"),
+        agent_id: "main".into(),
+        session_id: None,
+        canonical_model: "claude-sonnet-5".into(),
+        folded_model: "claude-sonnet-5".into(),
+        candidates,
+        portable: true,
+        attempted: Vec::new(),
+        now: at,
+        received_at: at,
+        fallback_ms: 60_000,
+        revision: snapshot.revision,
+        probe: false,
+        count: false,
+        request_class: None,
+        context_compacted: false,
+        static_hash: None,
+        boundaries: std::sync::Arc::from([]),
+        client: phoebis_routing::ClientClass::ClaudeCode,
+        entrypoint: None,
+        static_boundaries: std::sync::Arc::from([]),
+        marker: false,
+        parent_agent_id: None,
+        failed_over: None,
+        holds: Vec::new(),
+        dialed: false,
+        held_out: false,
+        lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+        fast: false,
+        body_tokens: 0,
+    }
 }
 
 fn routing_event(at: i64, kind: &str) -> Record {
@@ -4363,6 +4376,87 @@ async fn a_decision_seq_that_is_no_sequence_number_answers_400() {
             "{path}"
         );
     }
+}
+
+#[tokio::test]
+async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped() {
+    // The router loads the pins at spawn, so the pool, the key and the pin are written through one harness and the
+    // store is handed to the one under test.
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    routed(&seed, &seeding).await;
+    let now = common::NOW;
+    seed.store
+        .upsert_pin(&phoebis_store::PinRow {
+            key_id: "desktop".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            account_id: "direct".into(),
+            epoch: 1,
+            created_at: now - 60_000,
+            last_used_at: now - 5,
+            key_generation: common::generation(&seed.store, "desktop"),
+            incarnation: 1,
+            burn: phoebis_store::PinBurn::default(),
+            burn_at: None,
+            burn_banded: phoebis_store::PinBurn::default(),
+            burn_fast: phoebis_store::PinBurn::default(),
+            last_input_tokens: 0,
+            last_refresh_at: now - 5,
+            cache_ttl_ms: 300_000,
+            shed_from: Some("business".into()),
+            shed_at: Some(now - 60_000),
+            shed_reason: Some("cooldown".into()),
+            static_hash: None,
+            tail_hash: None,
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            entrypoint: String::new(),
+            marked_at: None,
+            marked_on: None,
+            marked_window: None,
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_id"] == "s1")
+        .unwrap_or_else(|| panic!("no row for s1: {sessions}"))
+        .clone();
+    assert_eq!(
+        (&row["shed_from"], &row["shed_reason"]),
+        (
+            &serde_json::json!("business"),
+            &serde_json::json!("cooldown")
+        ),
+        "the row names the stamp's word beside the account the pin left"
+    );
+    let answer = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            session_id: Some("s1".into()),
+            marker: true,
+            ..select_request(&parts, "r1", 1, 1, now)
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, phoebis_routing::SelectResult::Selected(_)),
+        "the pin renews"
+    );
+    let record = wait_json(&parts.app, "/admin/requests/r1/decisions/1", &cookie, |v| {
+        !v["pin"].is_null()
+    })
+    .await;
+    assert_eq!(
+        record["pin"]["shed"],
+        serde_json::json!({ "from": "business", "at": now - 60_000, "reason": "cooldown" }),
+        "the record's pin block carries the word on the wire"
+    );
 }
 
 #[tokio::test]

@@ -540,6 +540,18 @@ test('a session decodes its speed and its cycle, and a row without them reads nu
   assert.deepEqual(read(bare), [null, null], 'a row without the members reads null');
 });
 
+test('a session decodes the word its pin was stamped by, and a row without one reads null', () => {
+  const row = fixture('sessions').sessions[0];
+  const read = (wire) => {
+    const s = d.decodeSession(wire);
+    return [s.shedFrom, s.shedReason];
+  };
+  assert.deepEqual(read(row), [row.shed_from, row.shed_reason], 'as the route answers it');
+  assert.deepEqual(read({ ...row, shed_from: 'business', shed_reason: 'cooldown' }), ['business', 'cooldown'], 'a landing after a failover');
+  const { shed_reason: _r, ...bare } = row;
+  assert.equal(d.decodeSession(bare).shedReason, null, 'a row without the member reads null');
+});
+
 test('a session decodes its runway and whether it is bounded', () => {
   const row = fixture('sessions').sessions[0];
   const read = (wire) => {
