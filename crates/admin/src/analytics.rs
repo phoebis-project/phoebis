@@ -964,8 +964,8 @@ pub(crate) async fn burn(
                 seven_day_equivalent: p.seven_day_equivalent,
                 model_week_equivalent: p.model_week_equivalent,
                 estimated: p.estimated,
-                // The equivalents' latches, never the shares' `five_hour_unpriced` and `seven_day_unpriced`, which
-                // latch only where the read prices shares.
+                // The equivalents' latches, never the shares' `five_hour_unpriced`, `seven_day_unpriced` and
+                // `model_week_unpriced`, which latch only where the read prices shares.
                 five_hour_unpriced: p.five_hour_equivalent_unpriced,
                 seven_day_unpriced: p.seven_day_equivalent_unpriced,
                 model_week_unpriced: p.model_week_equivalent_unpriced,

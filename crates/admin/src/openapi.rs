@@ -626,8 +626,8 @@ pub(crate) struct BreakdownRow {
     /// Whether a plan-funded row of the group priced at its model tier's latest weight, for a model the cost model
     /// does not weight.
     pub estimated: bool,
-    /// Whether a plan-funded probe row of the group did, its own counts or its wasted counts, so a probe figure is
-    /// marked apart from the request rows'. `estimated` covers the probe rows too.
+    /// Whether a plan-funded probe row of the group was priced through the fallback, its own counts or its wasted
+    /// counts, so a probe figure is marked apart from the request rows'. `estimated` covers the probe rows too.
     pub probe_estimated: bool,
 }
 

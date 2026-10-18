@@ -357,12 +357,13 @@ cooldown already held the recipe. `probes_held` counts a probe the router refuse
 ledger caught up and sent again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
-`skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the
-pool's [idle-age counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and
-retained bytes, each beside its cap, and `expired_between_turns_24h`, the requests of the last 24 hours that missed the
-cache because their entry expired between two turns, the misses probing exists to prevent. Its `bus_gaps` counts the
-times the engine found it had missed bus events. Each gap discarded every observation still open, so those agents wait
-for their next request while an armed recipe keeps its schedule.
+`plan_ok`, `skipped`, where `plan_ok` counts the answered probes inside `ok` a subscription window paid for), and per
+pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the pool's [idle-age
+counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and retained bytes,
+each beside its cap, and `expired_between_turns_24h`, the requests of the last 24 hours that missed the cache because
+their entry expired between two turns, the misses probing exists to prevent. Its `bus_gaps` counts the times the engine
+found it had missed bus events. Each gap discarded every observation still open, so those agents wait for their next
+request while an armed recipe keeps its schedule.
 
 Prometheus carries `phoebis_keepalive_agents`, the agents holding a recipe by the mod's lifecycle word,
 `phoebis_keepalive_probes_total` by pool and outcome (`landed`, `cold`, `failed` or `held`), and
