@@ -1360,8 +1360,7 @@ async fn a_slot_that_frees_inside_the_bound_dispatches_the_pin_at_the_admission_
         .await
         .unwrap();
     assert_eq!(outcome(&open).account_id, "b");
-    cycle_then_slow(&h).await;
-    five_hour_at(&h, "a", 0.9, NOW + 10_000 + 3_600_000, NOW + 10_000).await;
+    slow_then_cycle(&h, 0.9, NOW + 10_000 + 3_600_000).await;
     let mut events = h.router.subscribe_events();
     tokio::time::pause();
     let app = h.app.clone();
