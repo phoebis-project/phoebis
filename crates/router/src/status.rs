@@ -541,7 +541,7 @@ fn pins_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: &
                 ));
             }
         }
-        // A stamp written before the row named its reason was a round's, the one word its readers had.
+        // A stamp written before the row named its reason reads as a round's, the one word its readers had.
         let stamped = row["shed_from"].as_str().map(|from| {
             let origin = match row["shed_reason"].as_str() {
                 None | Some("round") => "shed from",

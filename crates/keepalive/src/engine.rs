@@ -589,7 +589,7 @@ pub(crate) struct Agent {
     pub migrations: u64,
     pub usage: ProbeUsage,
     /// Every probe since the last real request with the entry it wrote, settled as wasted when the recipe stops, and
-    /// the newest of them the coverage the next request reads.
+    /// the newest covered one, else the newest, the coverage the next request reads.
     pub unanswered: Vec<UnansweredProbe>,
     /// The probes a superseding real request took over from `unanswered`, with the keys they were paid under: the
     /// request moves the agent's model, account, pool and key generation before its completion decides them. A
@@ -1046,8 +1046,9 @@ pub(crate) enum Unanswered {
     /// A labeled stop settles them and the kept ones under its label; a stop with no label drops them and leaves
     /// the kept ones for whatever decides them.
     Settle,
-    /// A real request supersedes the recipe and keeps them until its completion decides them, or the idle limit
-    /// keeps them pending under its label until their entry lapses or a turn reads them.
+    /// A real request supersedes the recipe and keeps them until its completion decides them, a failed one handing
+    /// them back pending for the next turn, or the idle limit keeps them pending under its label until their entry
+    /// lapses or a turn reads them.
     Keep,
     /// A bus gap or a failed request ends the observation without deciding the probes sent while it was open: they
     /// wait where they are, with the recipe's speed, for the next request.
@@ -1438,8 +1439,8 @@ impl Inner {
         let mut settled: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in self.sessions.iter_mut() {
             for (agent_id, agent) in session.agents.iter_mut() {
-                // An open turn's completion decides the probes, as `lapse` waits for it. A turn that ends with no
-                // answer or at a bus gap decides nothing and leaves them here.
+                // An open turn's completion decides the probes, as `lapse` waits for it. A turn that fails, past a head
+                // or not, or ends at a bus gap decides nothing and leaves them here.
                 let turn_open = agent
                     .current
                     .as_ref()

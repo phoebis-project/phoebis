@@ -964,16 +964,9 @@ impl Store {
             check_schema(&conn)?;
             Ok(conn)
         };
-        let conn = match open() {
-            Ok(conn) => conn,
-            Err(error) => {
-                // Removed while this open still holds it, so no other process has taken the file it removes.
-                if lock_missing {
-                    let _ = std::fs::remove_file(&lock_file);
-                }
-                return Err(error);
-            }
-        };
+        // A refused open keeps the lock file it created: a start that opened it meanwhile locks that file, and an
+        // unlinked one would let a later start create and lock a second file at the path.
+        let conn = open()?;
         Ok(RecoveryStore {
             conn,
             created_lock: lock_missing.then_some(lock_file),

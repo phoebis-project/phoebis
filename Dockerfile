@@ -2,6 +2,7 @@
 
 # The builder cooks the dependency tree with cargo-chef so BoringSSL and the crates stay a cached layer until
 # Cargo.lock or a manifest changes; the runtime is distroless, so the health check is the binary's own subcommand.
+
 FROM node:26-trixie-slim AS node
 
 FROM rust:1.96.1-trixie AS chef

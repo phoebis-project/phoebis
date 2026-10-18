@@ -54,9 +54,9 @@ interface CostTile {
  * The day's cost tile under a position. Native stacks the plan rows' 20x 5-hour equivalent, the window a day's figure
  * leads with, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in each
  * unit. A day whose 5-hour window a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash
- * too, and a zero reads as no plan rows only where neither window is flagged. The dollar positions read their dollars.
- * The shares are one account's, and the tile sums every account, so it reads a dash, its note saying why and its spark
- * kept so the tile never waits on a placeholder.
+ * too while no request was billed, and a zero reads as no plan rows only where neither window is flagged. The dollar
+ * positions read their dollars. The shares are one account's, and the tile sums every account, so it reads a dash, its
+ * note saying why and its spark kept so the tile never waits on a placeholder.
  */
 function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };

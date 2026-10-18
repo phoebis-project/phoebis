@@ -1055,7 +1055,7 @@ test('a sum of groups leaves out a shared probe window a group with answered pro
   for (const [what, over] of [
     ['no probe', { probes: none }],
     ['probes that never ran', { probes: { ...none, held: 1, skipped: 2 } }],
-    ['billed traffic alone', { cacheEquivalent: {}, costEquivalent: {}, planOutputTokens: 0, planRequests: 0 }],
+    ['billed traffic alone', { cacheEquivalent: {}, costEquivalent: {}, planOutputTokens: 0, planRequests: 0, probes: { ...base.probes, ok: 3, planOk: 0 } }],
   ]) {
     assert.deepEqual(d.sumGroups([priced, probed({ probeEquivalent: {}, ...over })]).probeEquivalent, priced.probeEquivalent, what);
   }

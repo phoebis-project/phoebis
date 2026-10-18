@@ -1225,7 +1225,7 @@ async fn pairing_callback(
     tag = "Pairing",
     params(("id" = String, Path, description = "The pairing session's id")),
     responses(
-        (status = 200, description = "The account and the confirmed status.", body = Confirmed),
+        (status = 200, description = "The account, the confirmed status, and `first_poll_in_flight`, true when the confirm started the account's first usage poll.", body = Confirmed),
         (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`\n- `account not found`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
         (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session has no exchanged credential`\n- `the account was disconnected while pairing`\n- `the credential changed while pairing, so start the pairing again`\n- `this slot is already paired to a different upstream account`\n- `that upstream account is already paired to another slot`\n- `an account with this id exists`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
         (status = 500, response = StorageFailure),
@@ -2136,8 +2136,8 @@ pub(crate) struct AccountWindow {
     pub id: String,
     pub utilization: Option<f64>,
     pub resets_at: Option<i64>,
-    /// The instant of the reading: the router's held sample's, or the ledger row's own, the bucket's 300-second floor
-    /// only for a row from before the samples carried one.
+    /// The instant of the reading: the router's reported sample's, or the ledger row's own, the bucket's 300-second
+    /// floor only for a row from before the samples carried one.
     pub observed_at: i64,
     /// The router's projection of the window at its horizon, null on an api_key account, a window the router holds no
     /// reading of and an account in no pool.

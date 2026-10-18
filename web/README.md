@@ -33,7 +33,7 @@ The other scripts:
 - `npm test` builds the test bundle and runs the unit tests under `test/`.
 
 Node 26 or later, and npm 9 or newer (`.nvmrc` and the `engines` field say so). The dependency list is React 18,
-react-router-dom 7, and Recharts; styling is plain CSS with custom properties.
+react-router-dom 7, and Recharts. The styling is plain CSS with custom properties.
 
 ## Where the mock's data comes from
 

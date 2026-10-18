@@ -57,8 +57,9 @@ pub(crate) struct RequestList {
     pub requests: Vec<RequestSummary>,
     /// Set only while a row lies beyond the page. A page of exactly `limit` rows with none beyond answers null.
     pub next_cursor: Option<String>,
-    /// The newest write instant the ledger holds at this read, 0 on an empty ledger. Pass it as `landed_after` to
-    /// read what landed since.
+    /// The newest write instant among the rows the filters admit at this read, `to` included, the `landed_after`
+    /// passed where none above it has landed, and 0 where neither is set. Pass it as `landed_after` to read what
+    /// landed since.
     pub landed_through: i64,
 }
 
@@ -353,8 +354,9 @@ pub(crate) struct Event {
     /// - `refresh_uncertain`: an OAuth token refresh that may or may not have rotated the token, with its `error`
     ///   and `cause` as on a failed one.
     /// - `registry_changed`: an operator's edit to the registry, with its `kind`, `target` and `diff`: the row's
-    ///   snapshot for a creation, the `{field: {from, to}}` pairs of the changed fields for an update, `{}` for a
-    ///   deletion or a revocation, and the member list for `pool_members_set`. An account update's pairs carry
+    ///   snapshot for a creation, the `{field: {from, to}}` pairs of the changed fields for an account, a key or a pool
+    ///   update, the guardrail's snapshot with its `pools` and `keys` lists for a guardrail update, `{}` for a deletion
+    ///   or a revocation, and the member list for `pool_members_set`. An account update's pairs carry
     ///   `"secret_replaced": true` beside them where the edit staged a secret, whose value the diff never holds, and
     ///   `key_rotated` carries the new secret's `prefix` and `previous_secret_until`, the instant the retired secret
     ///   stops being accepted.

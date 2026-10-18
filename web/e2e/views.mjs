@@ -1656,7 +1656,8 @@ async function utilizationCeiling(theme) {
 /**
  * Every pool card's member Pins cells sum to its Active pins tile. The route counts both under the pool's keys, the
  * pool's whole and each member's on its own account, so a column that drifts from the tile is a read gone wrong. The
- * router's seed leaves a pin under its pool's member, so there a card whose members sum to 0 compares nothing.
+ * router's seed leaves a pin under its pool's member, so in the router pass a card whose members sum to 0 compares
+ * nothing.
  */
 async function poolMemberPins(theme) {
   const say = (what) => failures.push(`${theme} /pools member pins: ${what}`);
@@ -5039,8 +5040,9 @@ async function refreshControlWidth(theme) {
  * arrives at the top takes. In the mock pass the story's late request, among the rows a page of 50 shows, lands a few
  * seconds after the load: the page reads its list without it, turns auto reload to 5 s and reads the first poll's
  * answer, where the row lands below the first and every cell of it reads the fill a top row's cells read under the same
- * tint, in the box of the untinted row above it. The mock's story alone lands a request after the load, so the router
- * pass records the measure as skipped. The interval returns to Off and the bare log loads again.
+ * tint, apart from the fill of an untinted row of its own stripe and in the box of the untinted row above it. The
+ * mock's story alone lands a request after the load, so the router pass records the measure as skipped. The interval
+ * returns to Off and the bare log loads again.
  */
 async function lateRowTint(theme) {
   if (!mock) {
@@ -5067,6 +5069,8 @@ async function lateRowTint(theme) {
   const at = landed.length === 1 ? polled.indexOf(landed[0]) : -1;
   const late = at > 0 ? await rowCells(rows.nth(at)) : null;
   const above = at > 0 ? await rowCells(rows.nth(at - 1)) : null;
+  // Two rows away, so it reads the stripe the late row reads at rest: a fill that matches it is no tint.
+  const sameStripe = at > 0 ? await rowCells(rows.nth(at >= 2 ? at - 2 : at + 2)) : null;
   // The top row as a new arrival draws it, under the class the poll sets on a row it brings.
   await rows.first().evaluate((tr) => tr.classList.add('is-new'));
   const fresh = await rowCells(rows.first());
@@ -5074,13 +5078,13 @@ async function lateRowTint(theme) {
   const tinted = await page.locator('.requests__table > tbody > tr.is-new').count();
   await choose('Off');
   await atRest();
-  measurements.push(`${theme} /requests late row tint ${JSON.stringify({ above, at, fresh, landed, late, listed: listed.length, tinted })}`);
+  measurements.push(`${theme} /requests late row tint ${JSON.stringify({ above, at, fresh, landed, late, listed: listed.length, sameStripe, tinted })}`);
   if (landed.length !== 1) say(`landing reads ${landed.length} new rows on the first poll, not the story's late request alone`);
   else if (at <= 0) say(`${landed[0]} lands at row ${at + 1}, not below the first`);
   else {
     failures.push(...compare(late, fresh, ['backgrounds'], `${theme} /requests: the late row's cells against a new row's`));
     failures.push(...compare(late, above, ['border', 'height', 'padding'], `${theme} /requests: the late row against the row above it`));
-    if (late !== null && above !== null && String(late.backgrounds) === String(above.backgrounds)) say(`reads the fill of the untinted row above it, ${above.backgrounds[0]}`);
+    if (late !== null && sameStripe !== null && String(late.backgrounds) === String(sameStripe.backgrounds)) say(`reads the fill of an untinted row of its own stripe, ${sameStripe.backgrounds[0]}`);
     if (tinted !== 1) say(`leaves ${tinted} rows tinted, not itself alone`);
   }
   await loadAtOrigin('/requests', '.requests__table');
@@ -5088,14 +5092,14 @@ async function lateRowTint(theme) {
 }
 
 /**
- * The fresh tint on a log: a row an auto reload poll brings draws every cell in --accent-soft, read over the surface
- * as the cell draws it, a tone more than `TONE_STEP` apart from the row's resting fill, in the row's own box. In the
- * mock pass the story lands one row on each log a few seconds after the load: the request log's late request among the
- * rows a page of 50 shows, and the routing log's late event above the rows the log shows. The page reads its list,
- * turns auto reload to 5 s through the interval menu, steps the clock past the landing and the first poll, and reads
- * the first fresh row that is not the selected one, since a selected row draws the same token. The router pass's seed
- * lands no row after the load, so it records the measure as skipped. The interval returns to Off and the bare log loads
- * again.
+ * The fresh tint on a log: a row an auto reload poll brings draws every cell in --accent-soft, read over the surface as
+ * the cell draws it, a tone more than `TONE_STEP` apart from the row's resting fill, in the row's own box. In the mock
+ * pass the story lands one row on each log a few seconds after the load: the request log's late request among the rows
+ * a page of 50 shows, and the routing log's late event above the rows the log shows. The page reads its list, turns
+ * auto reload to 5 s through the interval menu, steps the clock past the landing and the first poll, and reads the
+ * first fresh row that is not the selected one, since a selected row draws the same token, with the story's one row the
+ * only one in the tint. The router pass's seed lands no row after the load, so it records the measure as skipped. The
+ * interval returns to Off and the bare log loads again.
  */
 async function freshRowTint(theme, path) {
   if (!mock) {
@@ -5154,6 +5158,7 @@ async function freshRowTint(theme, path) {
   measurements.push(`${theme} ${path} fresh row tint ${JSON.stringify({ apart, cells: drawn.length, drawn: drawn[0] ?? null, landed, rest: rest?.backgrounds[0] ?? null, restBox: box(rest), row, tinted: tinted?.backgrounds[0] ?? null, tintedBox: box(tinted), token, tones })}`);
   if (!found) say('never arrives: no row reads is-new after the first poll');
   else {
+    if (landed !== 1) say(`leaves ${landed} rows tinted after the first poll, not the one row the story lands`);
     const off = drawn.flatMap((rgb, i) => (rgb.every((c, k) => Math.abs(c - token[k]) <= 0.5) ? [] : [`cell ${i + 1} draws ${JSON.stringify(rgb)}`]));
     if (off.length > 0) say(`draws its cells off --accent-soft (${JSON.stringify(token)} over the surface): ${off.join(', ')}`);
     if (apart === null || apart <= TONE_STEP) say(`stands ${apart} from its resting fill ${rest?.backgrounds[0]}, within ${TONE_STEP} on every channel`);
@@ -6218,13 +6223,14 @@ async function wideBodyDialog(theme) {
 }
 
 /**
- * The wide view's width floor holds a line whose tabs draw it wider than its character count. The mock's story
- * captures the page an edge answers an upstream 502 with, indented with tabs, so the measure lists the laptop key's
- * requests answered 502 and opens each one's Response wide until the widest row it draws holds a tab, then reads the
- * block of rows at least as wide as that row's text. The rows are placed absolutely, so the block's width is what keeps
- * the scroll area once that row leaves the window. A row's text is read through a range, since a row's box takes the
- * block's width at the least. The floor is a whole pixel count, so a shortfall under one pixel is its rounding. The mock
- * pass's alone, on a load of its own, since the edge's page is the mock story's.
+ * The wide view's width floor holds a line whose tabs draw it wider than its character count. The mock's story captures
+ * the page an edge answers an upstream 502 with, indented with tabs, so the measure lists the laptop key's requests
+ * answered 502 and opens each one's Response wide until the widest row it draws holds a tab, then reads the block of
+ * rows at least as wide as that row's text, once that text runs wider than the scroll box, where a block of no floor
+ * would read the box's width and pass alike. The rows are placed absolutely, so the block's width is what keeps the
+ * scroll area once that row leaves the window. A row's text is read through a range, since a row's box takes the
+ * block's width at the least. The floor is a whole pixel count, so a shortfall under one pixel is its rounding. The
+ * mock pass's alone, on a load of its own, since the edge's page is the mock story's.
  */
 async function bodyWidthFloor(theme) {
   const say = (what) => failures.push(`${theme} /requests body width floor: ${what}`);
@@ -6244,13 +6250,14 @@ async function bodyWidthFloor(theme) {
     page.evaluate(() => {
       const block = document.querySelector('dialog[open].dialog--wide .body-block__pre .body-rows');
       if (!block) return null;
+      const box = block.closest('.body-block__pre')?.clientWidth ?? 0;
       const drawn = [...block.querySelectorAll('.body-row')].map((row) => {
         const range = document.createRange();
         range.selectNodeContents(row);
         return { chars: row.textContent?.length ?? 0, tabs: row.textContent?.includes('\t') ?? false, width: range.getBoundingClientRect().width };
       });
       const widest = drawn.reduce((most, row) => (row.width > most.width ? row : most), { chars: 0, tabs: false, width: 0 });
-      return { drawn: drawn.length, floor: Math.round(block.getBoundingClientRect().width * 10) / 10, row: { chars: widest.chars, tabs: widest.tabs, width: Math.round(widest.width * 10) / 10 } };
+      return { box, drawn: drawn.length, floor: Math.round(block.getBoundingClientRect().width * 10) / 10, row: { chars: widest.chars, tabs: widest.tabs, width: Math.round(widest.width * 10) / 10 } };
     });
   let read = null;
   let request = null;
@@ -6280,6 +6287,7 @@ async function bodyWidthFloor(theme) {
   }
   measurements.push(`${theme} /requests body width floor ${JSON.stringify({ request, ...read })}`);
   if (read === null) say(`no request ${address} lists draws a Response whose widest row holds a tab`);
+  else if (read.row.width <= read.box) say(`the widest row of ${read.row.width}px fits the ${read.box}px scroll box, so the floor reads nothing`);
   else if (read.floor + 1 <= read.row.width) say(`the block of rows is ${read.floor}px wide under a drawn row of ${read.row.width}px`);
 }
 

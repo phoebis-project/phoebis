@@ -441,6 +441,29 @@ mod tests {
     }
 
     #[test]
+    fn a_discard_entered_on_a_read_that_ends_a_line_reads_the_next_read_as_that_ending_left_it() {
+        // The third 8-byte read crosses the limit and ends on the line's own ending, so the discard's state comes
+        // from that byte alone: after an LF the next read opens on an empty line, after a CR on the LF that
+        // completes it.
+        let line = format!("data: {}", "x".repeat(17));
+        let cases = [
+            ("lf", format!("{line}\n\n"), 25),
+            ("cr", format!("{line}\r\n\r\n"), 27),
+        ];
+        for (name, event, size) in cases {
+            assert_eq!(event.len(), size, "{name}");
+            let stream = format!("{event}data: a\n\n");
+            let mut p = SseParser::skipping(16);
+            assert_eq!(
+                yielded(&mut p, &reads(stream.as_bytes(), &[])),
+                ["a"],
+                "{name}"
+            );
+            assert_eq!(p.skipped(), (1, size), "{name}");
+        }
+    }
+
+    #[test]
     fn a_crlf_cut_inside_a_discarded_event_ends_no_event() {
         // The CR closes the fourth read and its LF opens the fifth: read as an empty line, that LF would end the
         // event early and yield its tail as an event of its own.

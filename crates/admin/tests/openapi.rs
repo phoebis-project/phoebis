@@ -886,6 +886,23 @@ async fn every_fixture_validates_against_the_answer_schema_its_table_row_names()
             continue;
         };
         let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let route = file["route"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{stem}.json names no route"));
+        let (method, at) = route.split_once(' ').unwrap();
+        let at = at.split('?').next().unwrap();
+        // A literal segment wins over a parameter, as the router matches, so `/guardrails/presets` reads its own
+        // operation rather than the one at `/guardrails/{id}`.
+        let served = operations(&document)
+            .into_iter()
+            .filter(|(pattern, m, _)| m.eq_ignore_ascii_case(method) && matches(pattern, at))
+            .min_by_key(|(pattern, _, _)| pattern.chars().filter(|c| *c == '{').count())
+            .map(|(_, _, operation)| operation["operationId"].clone());
+        assert_eq!(
+            served,
+            Some(Value::from(operation_id)),
+            "{stem}.json: its row names the operation that serves its route, {route}"
+        );
         if let Some(error) = schema_error(&document, operation_id, status, &file["body"]) {
             panic!("{stem}.json does not fit {operation_id} {status} {error}");
         }
@@ -900,7 +917,9 @@ async fn every_fixture_validates_against_the_answer_schema_its_table_row_names()
     )
     .unwrap();
     let mut renamed = file["body"].clone();
-    let rule = renamed["rules"][1].as_object_mut().unwrap();
+    let rule = renamed["rules"][1]
+        .as_object_mut()
+        .expect("key_models.json carries a second rule");
     let pattern = rule.remove("pattern").unwrap();
     rule.insert("glob".to_string(), pattern);
     let error = schema_error(&document, "key_models", 200, &renamed)

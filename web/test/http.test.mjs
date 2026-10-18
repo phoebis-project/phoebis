@@ -152,6 +152,14 @@ test('listRequests asks for the held requests alone when the query says so', asy
   assert.ok(!String(calls[1].url).includes('held'), 'no held filter, no parameter');
 });
 
+test('listRequests passes the stamp a poll read last as landed_after', async () => {
+  const calls = stub(() => answer(200, { landed_through: 0, next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ landedAfter: 1_700_000_000_123 });
+  assert.equal(new URL(calls[0].url, 'http://x').searchParams.get('landed_after'), '1700000000123');
+  await new HttpApi().listRequests({});
+  assert.ok(!String(calls[1].url).includes('landed_after'), 'no stamp, no parameter');
+});
+
 test('listRequests passes the speeds as one comma list', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ speeds: ['fast', 'standard'] });

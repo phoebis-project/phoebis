@@ -137,14 +137,15 @@ not list draws muted.
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, "Overage active" while requests bill as extra
 usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last 10 across every pool", with
 "All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB, Tokens and Cost, the status
-badge reading `×{n}` for a request of several attempts. Cost reads a subscription request's dollar equivalent over
-`equivalent` under All in dollars and Dollar equivalent, a dash under Billed dollars and its account's shares under
-Window shares, and a billed request's dollars under every position but Dollar equivalent, where it reads a dash, as the
-Requests view's column does, and under Native a subscription request's 20x 5-hour equivalent alone, with the other
-windows, the dollar equivalent and the price list and cost model in force on hover. The column header's hover names what
-each kind of request reads under the position. Where the table runs wider than its card it scrolls inside it. "Sessions"
-("Sticky pins and cache-warming agents", with "Open") reads the active pins as `active pins across {n} accounts` and the
-agents as Agents, Busy, Idle and Parked. What each figure means is on [Statistics](statistics.md).
+badge reading `×{n}` for a request of several attempts. Cost reads as the Requests view's column does: under All in
+dollars and Dollar equivalent a subscription request's dollar equivalent over `equivalent`, under Billed dollars a dash
+and under Window shares its account's shares, and a billed request's dollars under each of the four but Dollar
+equivalent, where it reads a dash. Under Native a subscription request reads its 20x 5-hour equivalent alone, with the
+other windows, the dollar equivalent and the price list and cost model in force on hover, and a billed request its
+dollars. The column header's hover names what each kind of request reads under the position. Where the table runs wider
+than its card it scrolls inside it. "Sessions" ("Sticky pins and cache-warming agents", with "Open") reads the active
+pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle and Parked. What each figure means is on
+[Statistics](statistics.md).
 
 ## Quota
 
@@ -452,22 +453,22 @@ it is saved. The card's Warnings fact counts them. The ten checks, by code:
 | `spent_moves_off` | `migrate_when_spent` is off | "With spent moves off a session stays on a spent account until the upstream refuses it, so the destination gate never runs for that move." |
 | `warm_never` | `warm_sessions` is `never` | "With warm sessions never a round stops after the cold sessions, so the excess is covered only while cold sessions carry it." |
 
-Keys holds "Create key" and the pool's keys as Key, Prefix and Status with a menu of "Move to…" and "Revoke". "Move to…"
-opens `Move key {name}` ("A key reaches only its own pool's members, so moving it ends its current session pins.") with
-the destination Pool, and "Revoke" asks `Revoke {name}`:
-`Requests with {name} are rejected immediately. The key stays in this pool and its history stays in the ledger.` A key
-created from here opens "Key created", the dialog the Keys section describes. Guardrails lists the pool's guardrails in
-the order they run, each with its name, its mode as a badge (enforce in the warning tone, observe muted), `off` on a
-disabled one, move up, move down and remove, then "Attach guardrail" over the guardrails of the registry not yet
-attached, the hint "Top to bottom. A pool's guardrails run before a key's own." and the link "Manage guardrails" to the
-[Guardrails](#guardrails) view. On create the group reads "Guardrails can be attached once the pool is saved." and no
-control. Keepalive holds the switch "Keep prompt caches warm", the three ceilings and the return rate: a ceiling left
-off reads the break-even it resolves to, `Break-even: {range}`, one switched on past the break-even reads `Capped at the
-break-even, {range}`, the idle window reads its cost as a share of one re-write, `Costs {pct} of one re-write`, and
-while the field reads 0 or more than the break-even, the window in effect, `capped at the break-even, {time}`, with `at
-the saved {time}` for an unsaved edit. Return rate by idle age lists the pool's ten buckets with the windows that
-returned out of those that reached it and a bar of the rate, or "No idle windows recorded yet". The ceilings are
-explained under [The four fields](keepalive.md#the-four-fields) and the buckets under [The return rate by idle
+Keys holds "Create key" and the pool's keys as Key, Prefix and Status with a menu of "Move to…" and "Revoke". "Move
+to…" opens `Move key {name}` ("A key reaches only its own pool's members, so moving it ends its current session
+pins.") with the destination Pool, and "Revoke" asks `Revoke {name}`: `Requests with {name} are rejected immediately.
+The key stays in this pool and its history stays in the ledger.` A key created from here opens "Key created", the dialog
+the Keys section describes. Guardrails lists the pool's guardrails in the order they run, each with its name, its mode
+as a badge (enforce in the warning tone, observe muted), `off` on a disabled one, move up, move down and remove, then
+"Attach guardrail" over the guardrails of the registry not yet attached, the hint "Top to bottom. A pool's guardrails
+run before a key's own." and the link "Manage guardrails" to the [Guardrails](#guardrails) view. On create the group
+reads "Guardrails can be attached once the pool is saved." and no control. Keepalive holds the switch "Keep prompt
+caches warm", the three ceilings and the return rate: a ceiling left off reads the break-even it resolves to,
+`Break-even: {range}`, one switched on past the break-even reads `Capped at the break-even, {range}`, the idle window
+reads its cost as a share of one re-write, `Costs {pct} of one re-write`, and while the field reads 0 or more than the
+break-even, the window in effect, `capped at the break-even, {time}`, with `at the saved {time}` for an unsaved edit.
+Return rate by idle age lists the pool's ten buckets with the windows that returned out of those that reached it and a
+bar of the rate, or "No idle windows recorded yet". The ceilings are explained under [The four
+fields](keepalive.md#the-four-fields) and the buckets under [The return rate by idle
 age](keepalive.md#the-return-rate-by-idle-age).
 
 ## Keys
@@ -483,17 +484,18 @@ at 5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active,
 follow, and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's
 figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the
 subscription traffic's 20x 7-day equivalent over the billed traffic's dollars, and a bar's figure and a cost line read a
-key's equivalent beside its billed dollars, a side with no traffic left out and the subscription side a dash with the
-Dashboard's hover where a request priced nothing on the 7-day window, and under Window shares a dash, since a key spans
-its pool's accounts. The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends
-in its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or `bodies not captured`, with
-"inherited" where the key follows its pool and "keepalive off" for a key opted out of cache warming.
-Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules".
-Expiry reads the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions
-still on the previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with
-this key are rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and
-detaches its request history from the key name. This cannot be undone."). Before the first key the table reads "No keys
-yet" with "Create key". What a key's settings mean is on [Keys](routing.md#keys).
+key's equivalent beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the cost
+line each reading the subscription side as a dash with the Dashboard's hover where a request priced nothing on the 7-day
+window, and under Window shares a dash, since a key spans its pool's accounts. The columns are Name, Prefix, Pool,
+Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the capture setting,
+`bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and "keepalive off"
+for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they
+replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never". Status carries the key's state with
+`used {ago}` and, after a rotation, `{n} sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate
+{name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately. Its history stays in the ledger.")
+and Delete (`Delete {name}`: "Removes the key and detaches its request history from the key name. This cannot be
+undone."). Before the first key the table reads "No keys yet" with "Create key". What a key's settings mean is on
+[Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as
@@ -675,13 +677,13 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   the request carries a match ([Guardrails](guardrails.md)).
 - Phases: a waterfall over Received, Selected, Written, Head, First content, Stream end and Finished, a phase the
   ledger holds no instant for reading "not measured".
-- Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain",
-  Server tool calls and Estimated cost in the top bar's unit: a subscription request's 20x equivalents under Native or
-  its account's window shares under Window shares, one chip per window with the dollar equivalent after them, its dollar
+- Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain", Server
+  tool calls and Estimated cost in the top bar's unit: a subscription request's 20x equivalents under Native or its
+  account's window shares under Window shares, one chip per window with the dollar equivalent after them, its dollar
   equivalent with `equivalent` under All in dollars and Dollar equivalent and a dash under Billed dollars, and a billed
-  request's dollars, or a dash under Dollar equivalent. Its hover names why a dash stands, as the Cost cell's hover
-  does, the serving account's tier (`Account tier {tier}`) and the price list and cost model in force when the request
-  arrived (`Priced at the API prices of {date} and the cost model of {date}`).
+  request's dollars, or a dash under Dollar equivalent. Its hover names why a dollar figure or a dash stands, as the
+  Cost cell's hover does, the serving account's tier (`Account tier {tier}`) and the price list and cost model in force
+  when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`).
 - Request: Session, Agent, Client with the request class badge, User agent (such as
   `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row per attempt with the upstream's
   request id and, on the answer that served, its message id.
@@ -1028,14 +1030,15 @@ the request's drawer. By names what decided the row in one chip: the rule that f
 placed it (`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold
 waited (`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold, what
 exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for
-a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a slow-down's start and end). Fact gives
-the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`, `until`, a held request's
-`until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x` and an end's
-`slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by
-`least bad` or `rewrite only` where the destination did not fit, or a renewal's window utilization, such as `5h 96%`,
-where that window's projection reached the ceiling. A verdict reads in one color across the rows, the card and the
-strip: good when it served the request, warning when it changed its course, critical for a refusal or an exhaustion, and
-neutral for none and no. Every account, key, pool, model, session and request a row names is a link.
+a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a slow-down's start and end, `5h cleared`
+for a window read under its limit again, with the whole `5h cleared to 40% under its reset` on hover). Fact gives the
+value that made it so as a muted label with its value, `gap`, `idle`, `prefix`, `until`, a held request's `until 18:20`
+and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x` and an end's `slowest 0.35x`, a move's
+`runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite
+only` where the destination did not fit, or a renewal's window utilization, such as `5h 96%`, where that window's
+projection reached the ceiling. A verdict reads in one color across the rows, the card and the strip: good when it
+served the request, warning when it changed its course, critical for a refusal or an exhaustion, and neutral for none
+and no. Every account, key, pool, model, session and request a row names is a link.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
@@ -1141,7 +1144,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |
-| registry changed | An operator changed a pool, a key or an account: a creation records the row's snapshot, an update each changed field with its value before and after, and a deletion or a revocation nothing more. |
+| registry changed | An operator changed an account, a guardrail, a key or a pool: a creation records the row's snapshot, an account's, a key's or a pool's update each changed field with its value before and after (a list, such as a pool's guardrails, as its items joined by commas, or `none` when empty), a guardrail's update its snapshot with the pools and keys it is attached to, a deletion or a revocation nothing more, a change of a pool's members the new member list, and a key's rotation the new secret's prefix with the instant the retired secret stops being accepted. |
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |

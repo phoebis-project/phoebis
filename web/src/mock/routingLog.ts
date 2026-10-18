@@ -143,10 +143,10 @@ interface ShedRound {
 
 /**
  * The settings a pool's edit at its `updatedAt` moved, each at its value before the edit, which the edit's registry
- * change carries as each pair's old value. The story's other rows read neither, so no row before the edit contradicts
- * them.
+ * change carries as each pair's old value, and the instant the settings before it took force. The story's other rows
+ * read neither, so no row before the edit contradicts them.
  */
-const BEFORE_EDIT: Record<string, Partial<RecordSettings>> = { all: { minSharedPrefixTokens: 10_000, slowDownHoldSeconds: 60 } };
+const BEFORE_EDIT: Record<string, Partial<RecordSettings>> = { all: { minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 } };
 
 /**
  * The pool's settings as the record decided at `at` names them, by the pool fields they are read from: a
@@ -2257,7 +2257,7 @@ function buildEvents(): RoutingEvent[] {
       kind: 'registry_changed',
     },
     // The ci key's revocation, after the last request it reached selection with.
-    { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, keyId: 'ci', kind: 'registry_changed' },
+    { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, kind: 'registry_changed' },
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },
     { accountId: null, at: iso(t(6, 12, 40)), detail: { affinity_entries_loaded: 34, down_since: t(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, kind: 'router_started' },
     // Once each outside the hour.

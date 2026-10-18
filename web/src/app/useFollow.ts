@@ -108,7 +108,8 @@ export function useFollow<R>(input: {
         },
         (err: unknown) => {
           if (!armed.alive) return;
-          failures.failing = true;
+          // A failure under an address the reader has left since leaves the new address's streak to its own polls.
+          if (latest.current.address === polled) failures.failing = true;
           if (err instanceof ApiError && err.path !== null) failures.paths.add(err.path);
         },
       );

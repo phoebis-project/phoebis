@@ -36,7 +36,7 @@ const FOLLOW_UPS: [&str; 3] = [
 /// key "the storage key matches the registry, nothing to recover", the corrupt canary over rows the key still opens,
 /// the discard summary (one line per count), the prompt, the generated key file's path, the preparation's failure,
 /// the discard's failure, and the three follow-up steps. A run that exits 1 or 2 removes the key file it wrote, with
-/// the directories it created for it, and the lock file it created, in one line naming them.
+/// the directories it created for it, in one line naming them, and keeps the lock file its open created.
 pub fn run(
     config_path: &Path,
     args: &RecoverKeyArgs,
@@ -118,17 +118,14 @@ fn recover(
     if matches!(outcome, Ok(0)) {
         return outcome;
     }
-    let key = written
-        .as_ref()
-        .map(|written| (written.key_file.as_path(), written.dirs.as_slice()));
-    let lock = store.created_lock();
-    if key.is_none() && lock.is_none() {
+    let Some(written) = written.as_ref() else {
         return outcome;
-    }
-    // Removed while the lock is held, so no other run reads a key this one leaves unused. The lock file goes last and
-    // the run exits right after, since a start may take a new lock the moment it is gone. A start after a declined or
-    // failed run then reports the missing key file it found rather than a key the registry refuses.
-    let removed = remove_created(key, lock);
+    };
+    // Removed while the lock is held, so no other run reads a key this one leaves unused. A start after a declined or
+    // failed run then reports the missing key file it found rather than a key the registry refuses. The lock file
+    // stays: a start that opened it before the exit locks that file, and an unlinked one would let a later start
+    // create and lock a second file at the path, so both would pass the lock.
+    let removed = remove_created(&written.key_file, &written.dirs);
     match outcome {
         Ok(code) => {
             let _ = say(out, &removed);
@@ -330,37 +327,26 @@ fn hand_over(path: &Path, (uid, gid): (u32, u32)) -> Result<(), String> {
         .map_err(|error| format!("handing {} to the owner: {error}", path.display()))
 }
 
-/// Removes the key file `write_key` wrote with the directories it created, then the lock file the open created, and
-/// answers the one line naming what went, followed by a line for each that stayed. The directories of a key file
-/// that stays are not empty, so they are left untried.
-fn remove_created(key: Option<(&Path, &[PathBuf])>, lock: Option<&Path>) -> String {
+/// Removes the key file `write_key` wrote with the directories it created, and answers the one line naming what went,
+/// followed by a line for each that stayed. The directories of a key file that stays are not empty, so they are left
+/// untried.
+fn remove_created(path: &Path, dirs: &[PathBuf]) -> String {
     let mut removed = Vec::new();
     let mut stayed = Vec::new();
-    if let Some((path, dirs)) = key {
-        match std::fs::remove_file(path) {
-            Ok(()) => {
-                removed.push(format!("the key file {}", path.display()));
-                if let Err((dir, error)) = remove_dirs(dirs) {
-                    stayed.push(format!(
-                        "the directory this run created at {} was not removed: {error}",
-                        dir.display()
-                    ));
-                }
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            removed.push(format!("the key file {}", path.display()));
+            if let Err((dir, error)) = remove_dirs(dirs) {
+                stayed.push(format!(
+                    "the directory this run created at {} was not removed: {error}",
+                    dir.display()
+                ));
             }
-            Err(error) => stayed.push(format!(
-                "the storage key this run created at {} was not removed: {error}",
-                path.display()
-            )),
         }
-    }
-    if let Some(lock) = lock {
-        match std::fs::remove_file(lock) {
-            Ok(()) => removed.push(format!("the lock file {}", lock.display())),
-            Err(error) => stayed.push(format!(
-                "the lock file this run created at {} was not removed: {error}",
-                lock.display()
-            )),
-        }
+        Err(error) => stayed.push(format!(
+            "the storage key this run created at {} was not removed: {error}",
+            path.display()
+        )),
     }
     let mut lines = Vec::new();
     if !removed.is_empty() {
@@ -397,4 +383,61 @@ fn summary(discards: &str, marks: &str, counts: &SealedCounts) -> String {
 
 fn say(out: &mut dyn Write, text: &str) -> Result<(), String> {
     writeln!(out, "{text}").map_err(|error| format!("writing the summary: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    /// The key file and its directory, created at `0700` under `parent`.
+    fn created_under(parent: &Path) -> (PathBuf, PathBuf) {
+        let keys = parent.join("keys");
+        std::fs::create_dir(&keys).unwrap();
+        let key_file = keys.join("storage.key");
+        std::fs::write(&key_file, "").unwrap();
+        (keys, key_file)
+    }
+
+    // A read-only directory refuses an unlink inside it off root, which drives the lines a run reaches only when a
+    // removal fails.
+    #[test]
+    fn a_removal_that_fails_names_the_key_file_or_the_directory_that_stayed_with_its_error() {
+        let denied = std::io::Error::from_raw_os_error(libc::EACCES);
+        let dir = tempfile::tempdir().unwrap();
+
+        let (keys, key_file) = created_under(dir.path());
+        std::fs::set_permissions(&keys, Permissions::from_mode(0o500)).unwrap();
+        let key_stayed = remove_created(&key_file, std::slice::from_ref(&keys));
+        // Restored before the assertions so the temporary directory can be cleaned up on either outcome.
+        std::fs::set_permissions(&keys, Permissions::from_mode(0o700)).unwrap();
+
+        let parent = dir.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        let (inner, inner_key) = created_under(&parent);
+        std::fs::set_permissions(&parent, Permissions::from_mode(0o500)).unwrap();
+        let dir_stayed = remove_created(&inner_key, std::slice::from_ref(&inner));
+        std::fs::set_permissions(&parent, Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(
+            key_stayed,
+            format!(
+                "the storage key this run created at {} was not removed: {denied}",
+                key_file.display()
+            )
+        );
+        assert!(key_file.exists() && keys.exists());
+        assert_eq!(
+            dir_stayed,
+            format!(
+                "removed the key file {} this run created\nthe directory this run created at {} was not \
+                 removed: {denied}",
+                inner_key.display(),
+                inner.display()
+            )
+        );
+        assert!(!inner_key.exists() && inner.exists());
+    }
 }

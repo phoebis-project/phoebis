@@ -12,7 +12,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const d = await import('./dist/api.js');
-const { act, createElement: h, createRoot, fakeClock, installClock, useFollow, useRangeTakenAt, useState } = await import('./dist/ui.js');
+const { act, api, createElement: h, createRoot, fakeClock, installClock, setHooks, useFollow, useRangeTakenAt, useState } = await import('./dist/ui.js');
 
 const at = (s) => new Date(Date.UTC(2026, 8, 16, 14, 0, s)).toISOString();
 const byId = (r) => r.id;
@@ -369,6 +369,43 @@ test('turning auto reload off clears the fresh tint, since no poll follows to ta
   assert.deepEqual([[...f.last().fresh], f.last().rows[0].id], [[], 'row_000'], 'the rows stay and the tint goes');
   act(() => clock.tick(10_000));
   assert.deepEqual(f.polls(), [ORIGIN + 5_000], 'off reads nothing');
+});
+
+test('an interval change resets the failing streak before the read it runs at once, so that read toasts again', async () => {
+  const clock = frozen();
+  const toasts = [];
+  setHooks({ onFailure: (failure) => toasts.push(failure.path), onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
+  const wire = globalThis.fetch;
+  let down = false;
+  globalThis.fetch = async () => {
+    if (down) throw new Error('connection refused');
+    return { headers: { get: () => null }, ok: true, status: 200, text: async () => JSON.stringify({ landed_through: 0, next_cursor: null, requests: [] }) };
+  };
+  try {
+    let reads = 0;
+    // Through the shell's own transport, so a read the streak keeps quiet reports nothing to the hooks.
+    const read = (cursor) => {
+      reads += 1;
+      return api.listRequests({ cursor }).then((page) => ({ nextCursor: page.nextCursor, rows: [] }));
+    };
+    const f = follow({ read });
+    act(() => clock.tick(5_000));
+    await settled();
+    down = true;
+    act(() => clock.tick(5_000));
+    await settled();
+    act(() => clock.tick(5_000));
+    await settled();
+    assert.deepEqual([reads, toasts.length], [3, 1], 'the streak toasts once and the poll after it runs quiet');
+    // Ten seconds after the last answer, so the new interval's effect reads at once.
+    f.render({ intervalMs: 10_000 });
+    assert.equal(reads, 4, 'the interval change reads at once');
+    await settled();
+    assert.equal(toasts.length, 2, 'the reset ran first, so the read at once toasts');
+  } finally {
+    globalThis.fetch = wire;
+    setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
+  }
 });
 
 test("under a watermark the first poll reads at the list's stamp and the next at the poll's, and a late row lands in place under the fresh tint", async () => {

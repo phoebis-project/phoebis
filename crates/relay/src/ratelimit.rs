@@ -717,6 +717,25 @@ mod tests {
         assert!(head_sample(&h, AccountKind::Oauth, "claude-opus-5", 0).is_none());
     }
 
+    // The HTTP parser strips the spaces around a value before either reader sees it, so a list built here is the one
+    // way to reach the trim.
+    #[test]
+    fn parse_list_trims_each_value_and_reads_a_name_in_any_case() {
+        let parsed = UnifiedHeaders::parse_list(&[
+            (
+                "Anthropic-Ratelimit-Unified-Overage-In-Use".to_string(),
+                " TRUE ".to_string(),
+            ),
+            (
+                "ANTHROPIC-RATELIMIT-UNIFIED-STATUS".to_string(),
+                " allowed ".to_string(),
+            ),
+        ])
+        .expect("a mixed-case unified name opens the read");
+        assert_eq!(parsed.overage_in_use, Some(true));
+        assert_eq!(parsed.status.as_deref(), Some("allowed"));
+    }
+
     #[test]
     fn a_remaining_past_its_limit_clamps_the_utilization_rather_than_reading_negative() {
         let h = head(

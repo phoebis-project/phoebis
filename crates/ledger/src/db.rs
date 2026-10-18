@@ -199,9 +199,10 @@ impl LedgerDb {
                 "injected ledger read failure",
             )));
         }
-        // A read never opens a transaction, so a closure that panics mid-row leaves the connection exactly as
-        // consistent as it was before the call; recovering the guard here, rather than propagating the
-        // poisoning, keeps one panicked read from turning every later read into a `ReadCancelled`.
+        // A read opens no transaction but a read one, such as `list_request_page`'s, which rolls back as it drops
+        // while the panic unwinds, so a closure that panics mid-row leaves the connection as consistent as it was
+        // before the call. Recovering the guard here, rather than propagating the poisoning, keeps one panicked read
+        // from turning every later read into a `ReadCancelled`.
         match &self.reader {
             Some(reader) => f(&reader.lock().unwrap_or_else(PoisonError::into_inner)),
             None => f(&self.writer.lock().unwrap_or_else(PoisonError::into_inner)),

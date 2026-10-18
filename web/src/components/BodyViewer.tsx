@@ -20,17 +20,28 @@ const spanOf = (top: number, height: number): Span => ({
   last: Math.ceil((top + height) / ROW_PX) + WINDOW_ROWS,
 });
 
-/** A tab or a code point from U+1100 up, the only characters that may draw other than one column. */
-const NOT_NARROW = /[\t\u{1100}-\u{10ffff}]/u;
-/** The East Asian wide and fullwidth ranges, each code point two columns. */
+/** Anything but printable ASCII, a tab included: the lines whose columns the estimate counts by grapheme. */
+const NOT_PLAIN = /[^\x20-\x7e]/;
+/** The East Asian wide and fullwidth ranges the estimate counts as two columns. */
 const WIDE =
   /[\u{1100}-\u{115f}\u{2e80}-\u{303e}\u{3041}-\u{33ff}\u{3400}-\u{4dbf}\u{4e00}-\u{9fff}\u{a000}-\u{a4cf}\u{a960}-\u{a97f}\u{ac00}-\u{d7a3}\u{f900}-\u{faff}\u{fe10}-\u{fe19}\u{fe30}-\u{fe6f}\u{ff00}-\u{ff60}\u{ffe0}-\u{ffe6}\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{2fffd}\u{30000}-\u{3fffd}]/u;
 
-/** A line's columns as a terminal counts them: a tab to the next 8-column stop, a wide code point 2, any other 1. */
+/**
+ * `Intl.Segmenter` where the runtime has one, typed here since the console's TypeScript lib is ES2020's, which predates
+ * it.
+ */
+const Segmenter = (Intl as unknown as { Segmenter?: new (locales: undefined, options: { granularity: 'grapheme' }) => { segment: (text: string) => Iterable<{ segment: string }> } }).Segmenter;
+const GRAPHEMES = Segmenter === undefined ? null : new Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * A line's columns as the estimate counts them: a tab to the next 8-column stop, a grapheme holding a `WIDE` code
+ * point 2, any other grapheme 1, so a letter and its combining marks take one column. Without a segmenter each code
+ * unit counts 1.
+ */
 function columnsOf(line: string): number {
-  if (!NOT_NARROW.test(line)) return line.length;
+  if (GRAPHEMES === null || !NOT_PLAIN.test(line)) return line.length;
   let columns = 0;
-  for (const ch of line) columns = ch === '\t' ? columns + 8 - (columns % 8) : columns + (WIDE.test(ch) ? 2 : 1);
+  for (const { segment } of GRAPHEMES.segment(line)) columns = segment === '\t' ? columns + 8 - (columns % 8) : columns + (WIDE.test(segment) ? 2 : 1);
   return columns;
 }
 
@@ -102,8 +113,8 @@ export function BodyViewer({ highlight, lines }: { highlight: boolean; lines: re
   }, [read]);
   // Absolutely placed rows widen the scroll area only while drawn, so the block's floor is the width the widest line
   // draws in the pre's font, read off a hidden copy of it once per text, and a reader scrolled sideways keeps the place
-  // when that line leaves the window. A character count would miss a tab's stop and a wide character's second column,
-  // so the copy holds the line of the most columns.
+  // when that line leaves the window. A character count would miss a tab's stop, a wide character's second column and
+  // the combining marks that take none, so the copy holds the line of the most columns.
   const widest = useMemo(() => widestLine(lines), [lines]);
   const probe = useRef<HTMLDivElement>(null);
   const [floor, setFloor] = useState(0);

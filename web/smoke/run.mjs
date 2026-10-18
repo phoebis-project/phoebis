@@ -2689,6 +2689,32 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
       ok: pairedHeld && JSON.stringify(heldReads) === JSON.stringify([1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]) && heldAfter.hint && !heldAfter.windows,
       missing: [`paired ${pairedHeld}`, `reads per 2 s ${JSON.stringify(heldReads)}`, `after ${JSON.stringify(heldAfter)}`],
     });
+
+    // An existing slot paired through its own Pair button reads the hint as a new account does. The slot goes back as
+    // the story holds it, since the checks after this block read it unpaired with no window.
+    const spare = (await api.listAccounts()).find((a) => a.id === 'spare');
+    await first.navigate('/accounts/spare');
+    await first.settle(300);
+    [...(first.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pair')?.click();
+    await first.settle(500);
+    const slot = openDialogs(first).pop() ?? null;
+    const slotState = new URLSearchParams((slot?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+    await type(slot?.querySelector('input[placeholder^="http://localhost"]'), `http://localhost:54545/callback?code=abc123&state=${slotState}`);
+    buttonIn(slot, 'Submit')?.click();
+    const slotSubmitted = await until(first, () => buttonIn(slot, 'Confirm')?.disabled === false);
+    buttonIn(slot, 'Confirm')?.click();
+    const slotLanded = await until(first, () => openDialogs(first).length === 0 && first.location().pathname === '/accounts/spare');
+    await first.settle(300);
+    const slotConfirm = usage();
+    tick(2_000);
+    await first.settle(300);
+    const slotRead = usage();
+    results.push({
+      name: "/accounts a Pair of an existing slot reads the first reading hint until the re-read 2 s on lands the slot's windows",
+      ok: slotSubmitted && slotLanded && slotConfirm.hint && !slotConfirm.windows && slotRead.windows && !slotRead.hint,
+      missing: [`Confirm enabled ${slotSubmitted}, landed ${slotLanded}`, `at the confirm ${JSON.stringify(slotConfirm)}`, `2 s on ${JSON.stringify(slotRead)}`],
+    });
+    api.putAccount(spare);
     first.unmount();
     for (const id of ['fresh-desk', 'fresh-shelf', 'fresh-attic']) {
       await api.deleteAccount(id).catch((e) => {
@@ -14266,8 +14292,8 @@ m.unmount();
       page.unmount();
     }
     {
-      // The kind's pick above is the account edit, so the pool edit's detail is read on its own: a row per changed field
-      // with its value before and after, and the reading of the decisions before it.
+      // The kind's pick above is the account edit, so the pool edit's detail is read on its own: a row per changed
+      // field with its value before and after, and the reading of the decisions before it.
       const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 7 * DAY), kinds: ['registry_changed'], limit: 25, to: iso(CLOCK_ORIGIN + 7 * DAY) })).rows;
       const e = listed.find((r) => r.detail.kind === 'pool_updated');
       const at = e === undefined ? CLOCK_ORIGIN : Date.parse(e.at);

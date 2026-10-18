@@ -2476,6 +2476,7 @@ async fn a_superseded_verdicts_refused_write_leaves_the_newer_funding_mark_unack
         store.clone(),
         clock(&now),
         RouterConfig {
+            funding_retry: Duration::from_secs(120),
             hold_first_purge: true,
             ..RouterConfig::default()
         },
@@ -2503,7 +2504,7 @@ async fn a_superseded_verdicts_refused_write_leaves_the_newer_funding_mark_unack
         .await;
     assert_eq!(
         handle.funding_retries().await.unwrap(),
-        vec![("a".to_string(), 302_000)],
+        vec![("a".to_string(), 2_000 + 120_000)],
         "the verdict under the new key stamped the retry again"
     );
     first.release();
@@ -2517,7 +2518,7 @@ async fn a_superseded_verdicts_refused_write_leaves_the_newer_funding_mark_unack
     handle.reload().await.unwrap();
     assert_eq!(
         handle.funding_retries().await.unwrap(),
-        vec![("a".to_string(), 302_000)],
+        vec![("a".to_string(), 2_000 + 120_000)],
         "the refused write's acknowledgment names the superseded stamp, so the load before the newer commit drops \
          nothing"
     );
@@ -2526,7 +2527,7 @@ async fn a_superseded_verdicts_refused_write_leaves_the_newer_funding_mark_unack
     assert_eq!(
         placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
         None,
-        "the five-minute wait from the newer mark holds"
+        "the two-minute wait from the newer mark holds"
     );
     // The operator's Clear: the newer write's acknowledgment credited the retry, so a load at a later revision
     // drops it.
@@ -6260,13 +6261,20 @@ async fn pinned_under(rates: &BurnRates) -> (RouterHandle, PinRef) {
     (handle, pin)
 }
 
-/// Session "s1"'s pin and its fast usage as the task holds them after the last fold.
-async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
-    let pins = handle.pins().await.unwrap();
-    let pin = pins
+/// Session "s1"'s pin as the task holds it after the last fold.
+async fn s1_pin(handle: &RouterHandle) -> PinRow {
+    handle
+        .pins()
+        .await
+        .unwrap()
         .into_iter()
         .find(|p| p.session_id == "s1")
-        .expect("the session holds a pin");
+        .expect("the session holds a pin")
+}
+
+/// Session "s1"'s pin and its fast usage as the task holds them after the last fold.
+async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
+    let pin = s1_pin(handle).await;
     let fast = handle
         .fast_burns()
         .await
@@ -6280,8 +6288,9 @@ async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
 /// One second of session "s1"'s dollar burn as the readers price it: the pin's row at the set its last prompt
 /// selects plus its fast usage through the fast table.
 async fn dollar_burn(handle: &RouterHandle, rates: &BurnRates) -> f64 {
-    let (pin, _) = pin_and_fast_usage(handle).await;
-    rates.price_pin(BurnUnit::Usd, &pin).unwrap()
+    rates
+        .price_pin(BurnUnit::Usd, &s1_pin(handle).await)
+        .unwrap()
 }
 
 /// `tokens` folded at `now` onto an average last folded at `at`, over the pool's 600 s burn average, as

@@ -344,7 +344,8 @@ mod tests {
         let held = held_from(plain(&[&big]), Inspect::new(None), Duration::from_secs(1)).await;
         assert!(matches!(held.commit, Commit::Overflow));
         assert!(held.bytes.len() > HOLD_BUFFER);
-        // 16 KiB on the wire that decode to far more than the inspection bound: the decoded copy overflows first.
+        // Under the hold's buffer on the wire and far past the inspection bound decoded: the decoded copy overflows
+        // first.
         let text = format!("event: weird\ndata: {}\n", "y".repeat(4 * INSPECT_BUFFER));
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
         encoder.write_all(text.as_bytes()).unwrap();

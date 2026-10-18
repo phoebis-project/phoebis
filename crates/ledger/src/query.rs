@@ -294,15 +294,10 @@ fn pattern_any(
     clauses.push(format!("({})", parts.join(" OR ")));
 }
 
-/// The request log's key filter reads the selectors the analytics do, against the row's `(key_id,
-/// key_generation)`; `live` says which generation a bare id names.
-pub fn list_requests(
-    conn: &Connection,
-    filter: &RequestFilter,
-    live: &LiveKeys,
-    cursor: Option<&str>,
-    limit: usize,
-) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
+/// The `WHERE` clauses `filter` sets on the requests table with the values they bind, numbered in the order bound.
+/// The key filter reads the selectors the analytics do, against the row's `(key_id, key_generation)`, and `live` says
+/// which generation a bare id names.
+fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql>>, Vec<String>) {
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
     if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
@@ -460,6 +455,18 @@ pub fn list_requests(
         args.push(Box::new(to));
         clauses.push(format!("received_at <= ?{}", args.len()));
     }
+    (args, clauses)
+}
+
+/// The request log's page under `filter`, newest first, from `cursor` on.
+pub fn list_requests(
+    conn: &Connection,
+    filter: &RequestFilter,
+    live: &LiveKeys,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
+    let (mut args, mut clauses) = filter_clauses(filter, live);
     if let Some(cursor) = cursor {
         let (at, id) = cursor
             .split_once(':')
@@ -522,13 +529,14 @@ pub struct RequestPage {
     pub rows: Vec<RequestWithAttempts>,
     /// The cursor past the page's last row, set only while a row lies beyond it.
     pub next: Option<String>,
-    /// The newest `landed_at` the ledger holds at this read, 0 on an empty ledger, read in the page's transaction.
+    /// The newest `landed_at` among the rows the page's filters admit at this read, `landed_after` itself where none
+    /// above it has landed and 0 where neither is set, read in the page's transaction.
     pub landed_through: i64,
 }
 
-/// `list_requests` with the newest write instant the ledger holds. Both reads share one transaction, so every row
-/// written after this read carries a stamp above `landed_through`, and a poll that passes it back as `landed_after`
-/// misses no row.
+/// `list_requests` with the newest write instant among the rows its filters admit. Both reads share one transaction,
+/// so every row written after this read carries a stamp above `landed_through`, and a poll that passes it back as
+/// `landed_after` misses no row.
 pub fn list_request_page(
     conn: &Connection,
     filter: &RequestFilter,
@@ -539,9 +547,21 @@ pub fn list_request_page(
     // A read hands a shared connection, which only the unchecked form opens a transaction on.
     let tx = conn.unchecked_transaction()?;
     let (rows, next) = list_requests(&tx, filter, live, cursor, limit)?;
+    // A row the filters leave out, such as one received after `to` and written before this read, stays above the
+    // watermark, so the next poll's later bound still finds it.
+    let (mut args, clauses) = filter_clauses(filter, live);
+    args.push(Box::new(filter.landed_after.unwrap_or(0)));
+    let r#where = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
     let landed_through = tx.query_row(
-        "SELECT COALESCE(MAX(landed_at), 0) FROM requests",
-        [],
+        &format!(
+            "SELECT COALESCE(MAX(landed_at), ?{}) FROM requests{where}",
+            args.len()
+        ),
+        params_from_iter(args.iter().map(|a| a.as_ref())),
         |r| r.get(0),
     )?;
     Ok(RequestPage {

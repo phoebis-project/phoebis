@@ -150,6 +150,8 @@ const EVENTS = [
   ['registry changed, a replaced secret alone', event('registry_changed', { diff: { secret_replaced: true }, kind: 'account_updated', target: 'annex' }, { accountId: null, actor: 'admin' }), 'account edited', ['secret replaced']],
   ['registry changed, an end', event('registry_changed', { diff: { subscription_ends_at: { from: null, to: ms(18, 0) } }, kind: 'account_updated', target: 'secondary' }, { accountId: null, actor: 'admin' }), 'account edited', ['field subscription ends at', 'to 18:00']],
   ['registry changed, a key expiry', event('registry_changed', { diff: { expires_at: { from: null, to: MIDNIGHT + 9 * 24 * HOUR } }, kind: 'key_updated', target: 'ci' }, { accountId: null, actor: 'admin' }), 'key edited', ['field expires at', 'to Sep 26 00:00']],
+  ['registry changed, a list', event('registry_changed', { diff: { guardrails: { from: [], to: ['no-secrets', 'size-cap'] } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['field guardrails', 'to no-secrets, size-cap']],
+  ['registry changed, a list emptied', event('registry_changed', { diff: { guardrails: { from: ['no-secrets'], to: [] } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['field guardrails', 'to none']],
   ['refresh succeeded', event('refresh_succeeded', { access_expires_at: ms(20, 52), refresh_expires_at: null, until: ms(20, 52) }), 'refreshed', ['until 20:52']],
   ['refresh failed', event('refresh_failed', { cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }), 'refresh failed', ['cause invalid_grant']],
   ['refresh uncertain', event('refresh_uncertain', { cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }), 'refresh uncertain', ['cause refresh_response_lost']],
@@ -1226,6 +1228,8 @@ test("an account edit's drawer reads each pair and the replaced secret beside th
   assert.deepEqual(end.slice(2), [['cancelled', ['from off', 'to on']], ['subscription ends at', ['from none', 'to 18:00']], ['Actor', ['admin']]]);
   const pool = pairs({ window_ceiling: { from: 0.95, to: 0.75 } }, 'pool_updated', 'all');
   assert.deepEqual(pool.slice(-1), [['Reading it', ['decisions before 09:08 carry window ceiling 95%']]], 'a pool edit keeps its reading');
+  const listed = pairs({ guardrails: { from: [], to: ['no-secrets', 'size-cap'] } }, 'pool_updated', 'all');
+  assert.deepEqual(listed[2], ['guardrails', ['from none', 'to no-secrets, size-cap']], 'a list reads its items where the count stood');
 });
 
 test('a registry change reads the renamed pool settings by their new word, marks the removed ones and reads each fraction as a percent', () => {

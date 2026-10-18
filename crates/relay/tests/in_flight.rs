@@ -1304,7 +1304,8 @@ fn no_completion_queued(sub: &mut phoebis_bus::Subscriber, request_id: &str) -> 
         .any(|e| matches!(e, Event::RequestComplete(c) if c.request_id == request_id))
 }
 
-/// The completions for `request_id` among `events`.
+/// Every completion for `request_id` among `events`, the batch `drain_until_complete` read up to the first one, so a
+/// second completion that arrived in the same batch is counted where `completion_of` would stop at the first.
 fn completions_in(events: Vec<Event>, request_id: &str) -> Vec<phoebis_bus::RequestComplete> {
     events
         .into_iter()
@@ -1343,6 +1344,8 @@ async fn a_client_that_leaves_before_the_head_lands_a_client_gone_completion() {
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
     wait_for(Duration::from_secs(5), || (posts(&up) == 1).then_some(())).await;
     let request_id = observed_id(&mut sub).await;
+    // Off the instant the request arrived at, so the completion's `finished_at` reads the clock at the drop.
+    h.clock.store(NOW + 2_500, Ordering::SeqCst);
     request.abort();
     assert!(request.await.unwrap_err().is_cancelled());
     let complete = completion_of(&mut sub, &request_id).await;
@@ -1362,6 +1365,15 @@ async fn a_client_that_leaves_before_the_head_lands_a_client_gone_completion() {
             Some("a")
         ),
         "the dropped handler completes the attempt it was on with nothing answered"
+    );
+    assert_eq!(
+        (
+            complete.usage.is_none(),
+            complete.finished_at,
+            complete.held.as_deref()
+        ),
+        (true, NOW + 2_500, None),
+        "no usage, the clock at the drop, and the trace's holds, of which this request took none"
     );
     stays_for(HELD_FOR, || no_completion_queued(&mut sub, &request_id)).await;
     up.shutdown().await;

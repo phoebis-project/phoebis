@@ -2086,6 +2086,56 @@ fn a_list_from_a_stamp_answers_the_rows_written_after_it_and_the_newest_stamp() 
 }
 
 #[test]
+fn a_row_received_after_the_pages_bound_keeps_the_watermark_below_its_stamp_for_the_next_poll() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let page = |filter: &RequestFilter| {
+        db.read_blocking(|c| {
+            phoebis_ledger::list_request_page(c, filter, &LiveKeys::default(), None, 10)
+        })
+        .unwrap()
+    };
+    let ids = |page: &phoebis_ledger::RequestPage| -> Vec<String> {
+        page.rows.iter().map(|(r, _)| r.id.clone()).collect()
+    };
+    // Received after the page's `to` and written before its read, so its stamp is the ledger's newest.
+    for (id, received_at) in [("inside", 1_000), ("past_the_bound", 5_000)] {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at,
+                ..Default::default()
+            },
+            &[],
+            None,
+        )
+        .unwrap();
+    }
+    let bounded = page(&RequestFilter {
+        to: Some(3_000),
+        ..Default::default()
+    });
+    assert!(landed_at(&db, "past_the_bound").unwrap() > landed_at(&db, "inside").unwrap());
+    assert_eq!(
+        (ids(&bounded), bounded.landed_through),
+        (
+            vec!["inside".to_string()],
+            landed_at(&db, "inside").unwrap()
+        ),
+        "the row the page left out moves no watermark"
+    );
+    let next = page(&RequestFilter {
+        landed_after: Some(bounded.landed_through),
+        to: Some(6_000),
+        ..Default::default()
+    });
+    assert_eq!(
+        ids(&next),
+        ["past_the_bound"],
+        "the next poll's bound reaches the row"
+    );
+}
+
+#[test]
 fn the_account_filter_reads_the_serving_attempt_as_the_rollups_file_it() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_trail(&db, "r1", 3, &[("a", 200, Some("messages_changed"))]);

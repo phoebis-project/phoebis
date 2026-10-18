@@ -174,12 +174,6 @@ function costRowValue(unit: CostUnit) {
         </b>
       );
     case 'equivalent_dollars':
-      return (
-        <b>
-          {mark}
-          {fmtUsd(unit.usd)} <span className="muted">equivalent</span>
-        </b>
-      );
     case 'unpriced':
       return (
         <b>

@@ -392,7 +392,9 @@ const FIXTURE_SEED: u64 = 0x0123_4567_89ab_cdef;
 #[tokio::test]
 async fn every_route_is_captured_and_holds_its_shape() {
     let parts = common::admin_parts_full().await;
-    // Ahead of the login, since the login mints the session id `session.json` reads.
+    // Ahead of the login, since the login mints the session id `session.json` reads. The seeded source is
+    // process-wide, so the repeat holds while this case is the binary's one minting test: a second one running beside
+    // it would draw from the same generator and move every id after its first mint.
     phoebis_oauth::random::seed(FIXTURE_SEED);
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;

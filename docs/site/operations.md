@@ -158,28 +158,28 @@ service layout, as root:
    bundles, API-key secrets and keepalive recipe bodies, then `and marks the accounts:` over the counts of OAuth
    accounts disconnected, API-key accounts unpaired and open refresh attempts failed.
 5. Answer the prompt `type yes to discard them: `. Any other answer prints `the registry was not changed` and exits 2,
-   and a declined run discards nothing, writes no key file and removes the registry's lock file where this run
-   created it, naming the file in its removal line, `removed the lock file {path} this run created`. `--yes` skips the
+   and a declined run discards nothing, writes no key file and keeps the registry's lock file. `--yes` skips the
    question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with `the storage
-key matches the registry, nothing to recover` when the key file still opens the registry's canary (or, without one,
-any of its sealed rows), with `the storage key opens {readable_rows} sealed {rows} but not the corrupt canary, so
-nothing was discarded: restore the canary from a backup` (`{rows}` reading `row` or `rows`) when the canary alone does
-not open, since the canary is then the corrupt part and a backup restores it, and with `no registry at {path}, nothing
-to recover` when the registry does not exist. Before it discards anything it tries every sealed row, never a sample.
-Each refusal exits 1. Past them it prepares the registry's schema, running every migration above the stored version,
-and a preparation that fails prints `the registry's schema could not be prepared for the recovery, so nothing was
-discarded: {error}` and exits 1. A run that stops before the preparation leaves the registry at the schema version it
-found, and one whose preparation fails leaves it at the step it reached, since each migration step commits alone. A
-run that exits 1 or 2 removes the key file it wrote, with any directory it created for it, and the registry's lock
-file where this run created it, and past the registry's open the removal line names them, `removed the key file {path}
-and the lock file {path} this run created`, naming the one it created where it created one, with a line after it for
-each it could not remove. Then it runs the sequence under [What it runs](#what-it-runs) as one transaction, seals a new
-canary under the new key in that same transaction, prints the counts again under `discarded what the old key sealed:`
-and `and marked the accounts:`, then `sealed a new canary under the key at {path}`, then `start the service, then:`
-over the three steps that remain, and exits 0 once the accounts are marked, keeping the key file and the lock file for
-the service's next start. It prints counts and paths, never a key. Then start the service, and:
+key matches the registry, nothing to recover` when the key file still opens the registry's canary (or, without one, any
+of its sealed rows), with `the storage key opens {readable_rows} sealed {rows} but not the corrupt canary, so nothing
+was discarded: restore the canary from a backup` (`{rows}` reading `row` or `rows`) when the canary alone does not open,
+since the canary is then the corrupt part and a backup restores it, and with `no registry at {path}, nothing to recover`
+when the registry does not exist. Before it discards anything it tries every sealed row, never a sample. Each refusal
+exits 1. Past them it prepares the registry's schema, running every migration above the stored version, and a
+preparation that fails prints `the registry's schema could not be prepared for the recovery, so nothing was discarded:
+{error}` and exits 1. A run that stops before the preparation leaves the registry at the schema version it found, and
+one whose preparation fails leaves it at the step it reached, since each migration step commits alone. A run that exits
+1 or 2 removes the key file it wrote, with any directory it created for it, and names it in the line `removed the key
+file {path} this run created`, with a line after it for each it could not remove. Every run keeps the registry's lock
+file, a refused open included, since a start that opened the file while the run held it goes on to lock that same file,
+and a file created again in its place would let a later start lock a second one beside it. Then it runs the sequence
+under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
+prints the counts again under `discarded what the old key sealed:` and `and marked the accounts:`, then `sealed a new
+canary under the key at {path}`, then `start the service, then:` over the three steps that remain, and exits 0 once the
+accounts are marked, keeping the key file and the lock file for the service's next start. It prints counts and paths,
+never a key. Then start the service, and:
 
 - Re-enter every API-key secret in the console.
 - Pair every OAuth account again in the console.
@@ -300,13 +300,14 @@ A read that fails prints one line in its section, such as `pools: the admin list
 or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is down, the
 screen is the header with the binary's version and `proxy down: proxy does not answer on {addr}: {error}`, the
 listeners, and one such line per read. A label column is as wide as its widest label where the line has the room. A
-member's reset or cooldown word and a shedding pin's age keep their width ahead of the labels, so a long account label
-is cut before them, and once it reaches its floor of 12 columns the label a shedding pin moves from is cut too. A cut
-label ends in `…`, and `--json` carries every label and id whole. A table line past 80 columns is cut and ends in `…`,
-and a line of text past 80 columns wraps. The pins and the accounts in no pool print 20 lines each and then `and {n}
-more`, and `--all` prints every one. `--json` prints the same reads as one object for a script: `health` (`ready`,
-`addr` and `reason`, or `null` when no probe ran), the five answers verbatim (`null` for a read that failed) and
-`errors`, each failed read's reason under its name. Neither output carries the admin secret.
+member's reset or cooldown word and the age on a `shed from` or `failed over from` line keep their width ahead of the
+labels, so a long account label is cut before them, and once it reaches its floor of 12 columns the account after `shed
+from` or `failed over from` is cut too. A cut label ends in `…`, and `--json` carries every label and id whole. A
+table line past 80 columns is cut and ends in `…`, and a line of text past 80 columns wraps. The pins and the accounts
+in no pool print 20 lines each and then `and {n} more`, and `--all` prints every one. `--json` prints the same reads as
+one object for a script: `health` (`ready`, `addr` and `reason`, or `null` when no probe ran), the five answers verbatim
+(`null` for a read that failed) and `errors`, each failed read's reason under its name. Neither output carries the admin
+secret.
 
 With `--url` and `--secret-env` both given, as for a router on another machine, the file is not read and `status` has
 no proxy listener to probe: it prints `proxy: not probed, no configuration file names the listener` under the listeners

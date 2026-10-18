@@ -767,7 +767,8 @@ impl Trace {
 struct CompletionGuard {
     /// `Trace::detached`: the guard sits in the trace's slot, so a clone holding that slot would keep itself alive.
     trace: Trace,
-    /// The leg the handler is on, updated at each `Responding`: `(attempt, account_id)`.
+    /// The last leg a `Responding` named, `(attempt, account_id)`, and `(0, None)` before the first. A client that
+    /// leaves between legs or during the `selected` fact's await is completed on it.
     leg: (u8, Option<String>),
     armed: bool,
 }

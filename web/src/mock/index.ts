@@ -56,11 +56,12 @@ const FIRST_READING = ACCOUNTS.find((a) => a.id === 'primary')?.windows ?? [];
 // The routes' own wording, so a page draws the text the router would have sent.
 const ACCOUNT_TAKEN = 'an account with this id exists';
 const KEY_TAKEN = 'a key with this id exists';
+const PAIRING_NOT_FOUND = 'pairing session not found';
 const POOL_TAKEN = 'a pool with this id exists';
 
 /** Strictly later than the stamp it replaces, as the route's fence stamps, so a save inside one millisecond still
  * moves it and an edit read before it cannot pass. */
-const stamped = (previous: string) => iso(Math.max(Date.now(), Date.parse(previous) + 1));
+const stamped = (previous: string) => iso(Math.max(mockClock.now(), Date.parse(previous) + 1));
 
 /** One past the row's, as every store write of the account row moves the counter, so an edit read before it cannot
  * pass. */
@@ -663,15 +664,16 @@ export class MockApi implements Api {
     const pairing = this.pairings.get(pairingId);
     // Deleted either way: the router fails the session on a refused confirm.
     this.pairings.delete(pairingId);
-    if (pairing?.label !== undefined) {
+    if (pairing === undefined) throw new ApiError(404, PAIRING_NOT_FOUND, null);
+    if (pairing.label !== undefined) {
       // The backstop for a create that landed between the start and the confirm.
       if (this.accounts.some((a) => a.id === pairing.accountId)) throw new ApiError(409, ACCOUNT_TAKEN, null);
       const row = this.newAccountRow({ id: pairing.accountId, kind: 'oauth', label: pairing.label, secret: null }, 'ready', 'operator+new@example.com');
       // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
       this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) } }];
     }
-    if (pairing !== undefined) this.firstPolls.set(pairing.accountId, mockClock.now());
-    return latency({ accountId: pairing?.accountId ?? '', firstPollInFlight: true, status: 'confirmed' }, 250);
+    this.firstPolls.set(pairing.accountId, mockClock.now());
+    return latency({ accountId: pairing.accountId, firstPollInFlight: true, status: 'confirmed' }, 250);
   }
 
   async createAccount(input: AccountInput): Promise<Account> {

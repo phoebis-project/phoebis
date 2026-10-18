@@ -105,7 +105,7 @@ own warmth check applies for a client that sends none.
 
 The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it, and it goes to the probe
 whose entry that request read, a probe that rewrote the entry included, the newest probe that covered the entry taking
-it over a later one that covered nothing. An auxiliary or a foreign request may still read a warm cache, but it never
+it over a later one that did not cover it. An auxiliary or a foreign request may still read a warm cache, but it never
 resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no evidence about the cache, so
 a retry inside the probe's entry earns the credit the failed turn could not, its gap measured from the last turn that
 answered.
@@ -362,7 +362,7 @@ cooldown already held the recipe. `probes_held` counts a probe the router refuse
 ledger caught up and sent again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
-`plan_ok`, `skipped`, where `plan_ok` counts the answered probes inside `ok` a subscription window paid for), and per
+`plan_ok`, `skipped`, where `plan_ok` counts the answered probes a subscription window paid for, inside `ok`), and per
 pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the pool's [idle-age
 counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and retained bytes,
 each beside its cap, and `expired_between_turns_24h`, the requests of the last 24 hours that missed the cache because

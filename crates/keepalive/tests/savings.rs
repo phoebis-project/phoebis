@@ -2109,7 +2109,11 @@ async fn a_request_whose_replay_answers_a_401_is_credited_as_a_plain_success() {
         chunk.attempt = 2;
     }
     r.engine.observe(start);
-    r.engine.observe(completed(&r, "replayed", 2_000));
+    let mut done = completed(&r, "replayed", 2_000);
+    if let phoebis_bus::Event::RequestComplete(complete) = &mut done {
+        complete.attempt = 2;
+    }
+    r.engine.observe(done);
     let (_, agents) = r.engine.persist_rows();
     let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
     let rows = final_rollups(&r).await;
@@ -2284,11 +2288,11 @@ async fn a_request_past_the_first_entry_and_inside_the_second_that_reads_nothing
     );
 }
 
-/// A later probe that covered nothing never shadows an older covered one whose entry still lives. The first probe reads
-/// the entry back 270 s in and keeps it to 570 s, the second reads a hundred tokens of the prefix 540 s in and covers
-/// nothing, and a request 550 s in that reads the cache is credited on the first probe's coverage.
+/// A later probe that did not cover the entry never shadows an older covered one whose entry still lives. The first
+/// probe reads the entry back 270 s in and keeps it to 570 s, the second reads a hundred tokens of the prefix 540 s in
+/// and falls short of it, and a request 550 s in that reads the cache is credited on the first probe's coverage.
 #[tokio::test]
-async fn a_later_probe_that_covered_nothing_leaves_the_credit_to_the_older_covered_probe() {
+async fn a_later_probe_that_did_not_cover_the_entry_leaves_the_credit_to_the_older_covered_probe() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -2305,7 +2309,7 @@ async fn a_later_probe_that_covered_nothing_leaves_the_credit_to_the_older_cover
     assert_eq!(
         (status.probes, status.unanswered, status.reason),
         (2, 2, Reason::PartialCacheCoverage),
-        "the second probe covered nothing 540 s in: {status:?}"
+        "the second probe fell short of the entry 540 s in: {status:?}"
     );
     r.advance_attended(10_000);
     open_request(&r, "second", 2_000, 0);

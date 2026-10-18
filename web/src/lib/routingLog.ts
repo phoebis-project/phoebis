@@ -432,8 +432,10 @@ const registryBy = (kind: string) => {
 /** The registry fields that hold an instant: a key's expiry and an account's subscription end. */
 const TIME_FIELDS = new Set(['expires_at', 'subscription_ends_at']);
 
-const fieldValue = (field: string, value: unknown, now: number) => {
+const fieldValue = (field: string, value: unknown, now: number): string => {
   if (value === null || value === undefined) return 'none';
+  // A list, such as the guardrails a pool or a key runs, reads as the console's lists do elsewhere.
+  if (Array.isArray(value)) return value.length === 0 ? 'none' : value.map((item) => fieldValue(field, item, now)).join(', ');
   if (typeof value === 'boolean') return value ? 'on' : 'off';
   if (typeof value === 'number' && SHARE_FIELDS.has(field)) return fmtPct(value);
   if (typeof value === 'number' && TIME_FIELDS.has(field)) return formatFact(value, 'time', now);
@@ -1810,7 +1812,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const subject = kind.slice(0, kind.indexOf('_'));
       add('Change', plain(registryBy(kind)), target === null ? null : subject === 'pool' || subject === 'key' || subject === 'account' ? { entity: { id: target, kind: subject }, value: target } : plain(target));
       const { entries: diff, secret } = registryDiff(d.diff);
-      const primitive = (v: unknown) => v === null || ['boolean', 'number', 'string'].includes(typeof v);
+      const primitive = (v: unknown): boolean => v === null || ['boolean', 'number', 'string'].includes(typeof v) || (Array.isArray(v) && v.every(primitive));
       if (diff.every(([, change]) => isChange(change) && primitive(rec(change).from) && primitive(rec(change).to))) {
         for (const [field, change] of diff) add(fieldLabel(field), plain(fieldValue(field, rec(change).from, now), 'from'), plain(fieldValue(field, rec(change).to, now), 'to'));
       } else {

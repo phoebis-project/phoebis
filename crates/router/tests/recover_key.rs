@@ -508,7 +508,7 @@ fn a_preparation_that_fails_says_nothing_was_discarded_and_leaves_the_sealed_row
 }
 
 #[test]
-fn a_registry_from_a_newer_build_is_refused_at_the_open_before_the_key_file_and_leaves_no_lock() {
+fn a_registry_from_a_newer_build_is_refused_at_the_open_before_the_key_file_and_keeps_the_lock() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path());
     let lock = dir.path().join("lock");
@@ -531,8 +531,8 @@ fn a_registry_from_a_newer_build_is_refused_at_the_open_before_the_key_file_and_
     assert_no_key(&out, &[OLD_KEY]);
     assert!(!key_file(dir.path()).exists(), "{}", printed(&out));
     assert!(
-        !lock.exists(),
-        "the refused open removes the lock file it created: {}",
+        lock.exists(),
+        "the refused open keeps the lock file it created: {}",
         printed(&out)
     );
     set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION);
@@ -586,7 +586,7 @@ fn the_prompt_takes_yes_alone_and_anything_else_exits_2_with_the_registry_unchan
 }
 
 #[test]
-fn a_declined_run_on_a_registry_without_a_key_file_writes_no_key_and_removes_the_lock_it_created() {
+fn a_declined_run_on_a_registry_without_a_key_file_writes_no_key_and_keeps_the_lock_it_created() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path());
     let lock = dir.path().join("lock");
@@ -599,18 +599,78 @@ fn a_declined_run_on_a_registry_without_a_key_file_writes_no_key_and_removes_the
     let mut expected = summary_before();
     // A piped answer is not echoed, so the line shares the prompt's line.
     expected.push("type yes to discard them: the registry was not changed".to_owned());
-    expected.push(format!(
-        "removed the lock file {} this run created",
-        lock.display()
-    ));
     assert_eq!(stdout_lines(&out), expected, "{}", printed(&out));
     assert!(!key_file(dir.path()).exists(), "{}", printed(&out));
-    assert!(!lock.exists(), "{}", printed(&out));
+    assert!(lock.exists(), "{}", printed(&out));
     assert_no_key(&out, &[OLD_KEY]);
     // The key the run generated stayed in memory, so its hex is unknown here: stdout is pinned whole above, and
     // stderr carries nothing.
     assert!(out.stderr.is_empty(), "{}", printed(&out));
     assert_untouched(&registry(dir.path()), &old);
+}
+
+#[test]
+fn a_start_that_opened_the_lock_file_before_a_declined_run_exited_still_shuts_out_the_next_start() {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let lock = dir.path().join("lock");
+    let old = key(OLD_KEY);
+    seed(&registry(dir.path()), &old);
+    // A registry restored onto a new host comes without the lock file the service's own open leaves beside it.
+    std::fs::remove_file(&lock).unwrap();
+    let mut child = phoebis()
+        .arg("recover-key")
+        .arg("--config")
+        .arg(&config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut shown = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while !String::from_utf8_lossy(&shown).contains("type yes to discard them: ") {
+        let read = stdout.read(&mut chunk).unwrap();
+        assert!(
+            read > 0,
+            "the run ended before its prompt: {}",
+            String::from_utf8_lossy(&shown)
+        );
+        shown.extend_from_slice(&chunk[..read]);
+    }
+    // A start that opened the lock file while the run held it, and takes the lock once the run has exited.
+    let first = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(b"no\n").unwrap();
+    drop(stdin);
+    stdout.read_to_end(&mut shown).unwrap();
+    assert_eq!(
+        child.wait().unwrap().code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&shown)
+    );
+    assert_eq!(
+        unsafe { libc::flock(first.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "the first start takes the lock the run released"
+    );
+    assert!(
+        matches!(
+            Store::open(&registry(dir.path()), &old),
+            Err(StoreError::Locked)
+        ),
+        "a second start opens the file the first one holds and is refused"
+    );
+    assert!(lock.exists(), "{}", String::from_utf8_lossy(&shown));
 }
 
 #[test]
@@ -650,7 +710,7 @@ fn a_run_under_yes_writes_the_key_file_after_the_summary_and_keeps_it_with_the_l
 }
 
 #[test]
-fn a_discard_that_does_not_land_removes_the_key_file_its_directory_and_the_lock_this_run_created() {
+fn a_discard_that_does_not_land_removes_the_key_file_and_its_directory_and_keeps_the_lock() {
     let dir = tempfile::tempdir().unwrap();
     let keys = dir.path().join("keys");
     let generated = keys.join("storage.key");
@@ -682,16 +742,15 @@ fn a_discard_that_does_not_land_removes_the_key_file_its_directory_and_the_lock_
     assert_eq!(
         lines[expected.len() + 1],
         format!(
-            "removed the key file {} and the lock file {} this run created",
-            generated.display(),
-            lock.display()
+            "removed the key file {} this run created",
+            generated.display()
         ),
         "{}",
         printed(&out)
     );
     assert!(!generated.exists(), "{}", printed(&out));
     assert!(!keys.exists(), "{}", printed(&out));
-    assert!(!lock.exists(), "{}", printed(&out));
+    assert!(lock.exists(), "{}", printed(&out));
     assert_no_key(&out, &[OLD_KEY]);
     // The key file the run wrote is gone, so its hex is unknown here: stdout is pinned above up to the error, and
     // stderr carries nothing.

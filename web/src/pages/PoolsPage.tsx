@@ -23,7 +23,7 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, SHARE_NOTE, UNPRICED_TITLE, moveLabel, nativeFiguresOf } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, SHARE_NOTE, UNPRICED_TITLE, equivalentOrDash, moveLabel, nativeFiguresOf } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtEquivalent, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shareLabel, shortModel, withEstimate } from '@/lib/format';
@@ -610,7 +610,10 @@ function PoolCost({ pool, accountById }: { accountById: Map<string, Account>; po
   if (unit !== 'native') return <dd className="num">{fmtUsd(dollarsUnder(unit, day))}</dd>;
   const sides = nativeSidesOf(day);
   if (sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
-  const reading = [...(sides.equivalent === undefined ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fmtEquivalent('five_hour', day.equivalent.fiveHour)}`]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
+  // The 5-hour figure reads its own window's flag, as a tile does, so a window a plan row priced nothing on reads the
+  // dash rather than a partial sum.
+  const fiveHour = equivalentOrDash('five_hour', day.equivalent.unpriced.fiveHour ? null : day.equivalent.fiveHour);
+  const reading = [...(sides.equivalent === undefined ? [] : [`${fmtEquivalent('seven_day', day.equivalent.sevenDay)}, ${fiveHour}`]), ...(sides.billed === undefined ? [] : [`${fmtUsd(sides.billed)} billed`])];
   const native = nativeFiguresOf('seven_day', sides, day.estimated);
   return (
     <dd className="num" title={native.unpriced ? UNPRICED_TITLE : withEstimate(reading.join(', '), native.marked)}>

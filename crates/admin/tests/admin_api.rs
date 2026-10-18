@@ -1493,6 +1493,21 @@ async fn a_refresh_and_the_list_read_after_it_carry_its_reading_at_its_own_insta
     assert_eq!(drawn(business), reading, "{business}");
 
     common::free_the_writer(&h).await;
+    // The writer frees on the held request batch, which may land ahead of the refresh's quota row.
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h
+        .db
+        .quota_samples("business", bucket, bucket + 300)
+        .await
+        .unwrap()
+        .is_empty()
+    {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the freed writer never landed the refresh's row"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(
         drawn(&account),

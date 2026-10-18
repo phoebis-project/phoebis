@@ -424,9 +424,9 @@ impl Default for BurnRates {
 }
 
 impl BurnRates {
-    /// One second of the pin's burn in `unit`, the fast usage the row's own `burn_fast`. Under `Usd` the row's plain
-    /// copy at the set the pin's last prompt selects plus the fast usage through the fast table. On a row with fast
-    /// cells that table carries them whatever the prompt, so a prompt that crosses the threshold reprices the
+    /// One second of the pin's burn in `unit`, with the fast usage read from the row's own `burn_fast`. Under `Usd` the
+    /// row's plain copy at the set the pin's last prompt selects plus the fast usage through the fast table. On a row
+    /// with fast cells that table carries them whatever the prompt, so a prompt that crosses the threshold reprices the
     /// ordinary usage alone, and on a row without them it carries the row's own sets, so the fast usage reprices with
     /// the row, as the ledger prices a fast answer there. Under `WindowShare` the banded copy alone, through the table
     /// of the pin's regime: fast usage draws usage credits, never the plan's window. `None` where a type the pin burns

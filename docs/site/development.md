@@ -62,8 +62,8 @@ npm run e2e:reference
 `npm run build` is `tsc --noEmit && vite build`. `node scripts/check-build.mjs` reads the built files and fails when the
 build emitted one chunk, the entry passes 500 kB, or the entry or a chunk it loads carries Recharts code, so the chart
 pages stay chunks of their own and the first paint loads none of them, and it holds the API reference page's entry to
-the same Recharts rule and to loading neither entry from the other, and the console's entry and the chunks it loads
-to no Vue code, a marker check that also fails when no chunk the reference loads carries the marker. `npm run lint` is
+the same Recharts rule and to loading neither entry from the other, and the console's entry and the chunks it loads to
+no Vue code, a marker check that also fails when no chunk the reference loads carries the marker. `npm run lint` is
 `eslint . --max-warnings 0`. `npm test` builds the test bundle and runs `node --test test/*.test.mjs`. `npm run smoke`
 builds the smoke bundle and runs `smoke/run.mjs` under jsdom with `TZ=UTC`. The last two lines are the browser pass
 against the mock and the reference smoke, both in the next section. The workflow writes the screenshots under the

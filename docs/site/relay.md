@@ -463,7 +463,7 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 | Wait | Bound | Why |
 | --- | --- | --- |
 | The upstream connect and TLS handshake | 10 seconds | A first handshake on a cold host runs well under it, and a stalled one costs at most twice it before the `502` |
-| The upstream response head | 600 seconds | The relay's own ceiling on a silent upstream, above any client's wait: Claude Code gives the head 180 seconds plus 1 second per 32 KiB of body under its own 600-second cap, so the client leaves no later than this guard |
+| The upstream response head | 600 seconds | The relay's own ceiling on a silent upstream, above the client's wait with the client's default timeouts: Claude Code gives the head 180 seconds plus 1 second per 32 KiB of body under its own 600-second cap, so the client leaves no later than this guard |
 | The gap between two stream events | 600 seconds | The same ceiling: Claude Code aborts a stream after 180 seconds without a byte while its watchdog is on, so the client leaves no later than this guard |
 | The pre-commit hold | 30 seconds and 64 KiB | The client is waiting, and a longer hold buys no better verdict |
 | A retry in place | The pool's `retry_in_place_seconds`, 0 to 300, default 60 | The operator's bound on waiting out a throttle on the same account |

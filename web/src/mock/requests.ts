@@ -328,7 +328,7 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
 const SERVED_FACTOR = 0.8;
 
 /** When nightly's spend cap was raised, the instant the story fixes for the start of its overage. */
-const NIGHTLY_CAP_RAISED = clock(11, 30, 12);
+export const NIGHTLY_CAP_RAISED = clock(11, 30, 12);
 
 /**
  * The order the engine takes a token count's members in: the best tier first, then under Pace the highest score off

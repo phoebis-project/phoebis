@@ -608,7 +608,7 @@ Defaults whole.
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
 | `retention_days` | `365` | 0 for forever, else a number of days, which covers the requests with their attempts, the kept-warm marks, the events, the decisions, the quota and extra-usage samples, and the registry's settled refresh attempts and change log |
-| `rollup_retention_days` | `365` | 0 for forever, else a number of days of at least `retention_days`, which covers the hourly rollups and the account rollups |
+| `rollup_retention_days` | `365` | covers the hourly rollups and the account rollups: 0 for forever, else a number of days of at least `retention_days` |
 | `subscription_costs_path` | `./subscription_costs.yaml` | a path, and a missing file is fine |
 
 Refused with:

@@ -1882,42 +1882,48 @@ async fn shared_sums(
 }
 
 /// A plan row the cost model cannot weigh adds nothing to either shared window and flags both, so the dashboard, a
-/// pool's traffic and the keys' and pools' totals read "nothing priced" apart from "no plan rows".
+/// pool's traffic and the keys' and pools' totals read "nothing priced" apart from "no plan rows". A model in no tier
+/// and a tier that weighs no model each meet the sums on a ledger of their own.
 #[tokio::test]
 async fn the_shared_sums_flag_a_window_a_plan_row_priced_nothing_on_and_keep_their_figures() {
-    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
-    plant_share(
-        &db,
-        ShareRow {
-            id: "r-priced",
-            model: "claude-sonnet-5-5",
-            ..ShareRow::default()
-        },
-    );
     let costs = test_costs();
-    let priced = shared_sums(&db, &costs).await;
-    for (what, sum) in &priced {
-        assert!(
-            sum.five_hour > 0.0 && !sum.unpriced.five_hour && !sum.unpriced.seven_day,
-            "{what} prices its one plan row: {sum:?}"
+    for (model, why) in [
+        ("claude-unlisted-1", "a model with no tier"),
+        ("claude-mystery-2", "a tier with no weighted model"),
+    ] {
+        let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+        plant_share(
+            &db,
+            ShareRow {
+                id: "r-priced",
+                model: "claude-sonnet-5-5",
+                ..ShareRow::default()
+            },
         );
-    }
-    plant_share(
-        &db,
-        ShareRow {
-            id: "r-unweighted",
-            model: "claude-mystery-2",
-            ..ShareRow::default()
-        },
-    );
-    for ((what, before), (_, after)) in priced.iter().zip(shared_sums(&db, &costs).await) {
-        assert!(
-            after.unpriced.five_hour
-                && after.unpriced.seven_day
-                && after.five_hour == before.five_hour
-                && after.seven_day == before.seven_day,
-            "{what} flags both windows and keeps the priced row's figure: {after:?} vs {before:?}"
+        let priced = shared_sums(&db, &costs).await;
+        for (what, sum) in &priced {
+            assert!(
+                sum.five_hour > 0.0 && !sum.unpriced.five_hour && !sum.unpriced.seven_day,
+                "{what} prices its one plan row: {sum:?}"
+            );
+        }
+        plant_share(
+            &db,
+            ShareRow {
+                id: "r-unpriced",
+                model,
+                ..ShareRow::default()
+            },
         );
+        for ((what, before), (_, after)) in priced.iter().zip(shared_sums(&db, &costs).await) {
+            assert!(
+                after.unpriced.five_hour
+                    && after.unpriced.seven_day
+                    && after.five_hour == before.five_hour
+                    && after.seven_day == before.seven_day,
+                "{what} flags both windows under {why} and keeps the priced row's figure: {after:?} vs {before:?}"
+            );
+        }
     }
 }
 

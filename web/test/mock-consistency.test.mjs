@@ -787,7 +787,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const raise = nightly.find((e) => e.kind === 'fast_credits_changed' && e.detail.blocked_before === 'org_spend_cap_reached' && e.detail.blocked_after === null);
     const started = nightly.find((e) => e.kind === 'overage_started');
     assert.ok(raise !== undefined && started !== undefined, 'the log holds the raise and the overage start');
-    const [from, until] = [Date.parse(raise.at), Date.parse(started.at)];
+    // The instant the records' order reads, which the log's raise has to name too.
+    const [from, until] = [s.lib.NIGHTLY_CAP_RAISED, Date.parse(started.at)];
+    assert.equal(Date.parse(raise.at), from, "the log's raise sits at the instant the story fixes");
     assert.ok(from < until, `the raise at ${raise.at} precedes the overage start at ${started.at}`);
     const between = s.requests.flatMap((r) => r.attempts.filter((a) => Date.parse(a.startedAt) >= from && Date.parse(a.startedAt) < until).map((a) => `${r.id} (${r.kind}) on ${a.accountId} at ${a.startedAt}`));
     assert.deepEqual(between, []);
@@ -959,6 +961,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     };
     for (const e of changes) {
       if (e.detail.kind === 'key_revoked') assert.deepEqual(e.detail.diff, {}, `${e.id}: a revocation stores no diff`);
+      // The ledger's mirror names a pool on a pool's change alone and a key on none.
+      assert.equal(e.keyId ?? null, null, `${e.id}: a registry row carries no key id`);
       if (e.detail.kind === 'pool_updated') {
         const pairs = pairsOf(e, POOL_DIFF_MEMBERS);
         assert.ok(!('secret_replaced' in e.detail.diff), `${e.id}: a pool holds no secret`);
@@ -980,6 +984,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           assert.deepEqual([...new Set(before.map((r) => r.settings[setting]))], [change.from], `${e.id}: ${field} on the records before the edit`);
           assert.deepEqual([...new Set(after.map((r) => r.settings[setting]))], [change.to], `${e.id}: ${field} on the records after it`);
         }
+        // The instant the settings took force moves with them.
+        assert.ok(before.every((r) => Date.parse(r.settings.poolUpdatedAt) < Date.parse(e.at)), `${e.id}: the records before the edit read an earlier stamp`);
+        assert.ok(after.every((r) => Date.parse(r.settings.poolUpdatedAt) === Date.parse(e.at)), `${e.id}: the records after it read the edit's stamp`);
       }
       if (e.detail.kind === 'account_updated') {
         const pairs = pairsOf(e, ACCOUNT_DIFF_MEMBERS);
