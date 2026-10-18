@@ -357,6 +357,7 @@ pub fn complete(
         ttfc_ms: None,
         error_code: None,
         client_drift: drift.map(String::from),
+        client_contract: None,
         client_version: version.map(String::from),
         response_bytes: None,
         response_chunks: None,

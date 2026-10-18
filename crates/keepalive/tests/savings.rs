@@ -31,7 +31,7 @@ async fn rollups(r: &Rig, want: impl Fn(&[RollupRow]) -> bool) -> Vec<RollupRow>
 
 fn probe_rows(rows: &[RollupRow]) -> RollupRow {
     let mut sum = RollupRow::key(
-        0, "", 0, "", "", "", "probe", "", "", "", "", "", "", "", "",
+        0, "", 0, "", "", "", "probe", "", "", "", "", "", "", "", "", "",
     );
     for row in rows.iter().filter(|r| r.kind == "probe") {
         sum.add(row);
@@ -48,6 +48,7 @@ fn inference_rows(rows: &[RollupRow]) -> RollupRow {
         "",
         "",
         "inference",
+        "",
         "",
         "",
         "",
@@ -1002,7 +1003,7 @@ async fn a_cache_read_on_another_model_settles_the_probes_kept_on_the_first_as_a
 /// The probe rows of one speed, summed.
 fn probe_rows_at(rows: &[RollupRow], fast: bool) -> RollupRow {
     let mut sum = RollupRow::key(
-        0, "", 0, "", "", "", "probe", "", "", "", "", "", "", "", "",
+        0, "", 0, "", "", "", "probe", "", "", "", "", "", "", "", "", "",
     );
     for row in rows
         .iter()
@@ -2236,6 +2237,7 @@ async fn a_fast_probe_keeps_a_fast_request_warm_and_a_switch_of_speed_earns_noth
         "",
         "",
         "",
+        "",
     );
     for row in rows
         .iter()
@@ -2744,6 +2746,7 @@ async fn a_credit_keys_its_requests_tier_and_band_and_reaches_the_saving_shares(
         kind: &credit.kind,
         tier: Some(&credit.tier),
         entrypoint: None,
+        classifier: false,
         at: credit.hour * 1_000,
         band_at: None,
     };

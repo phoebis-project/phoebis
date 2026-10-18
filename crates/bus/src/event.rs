@@ -462,6 +462,8 @@ pub struct RequestComplete {
     pub ttfc_ms: Option<i64>,
     pub error_code: Option<String>,
     pub client_drift: Option<String>,
+    /// The item a `client_contract` refusal named, `None` for every other request.
+    pub client_contract: Option<String>,
     pub client_version: Option<String>,
     pub response_bytes: Option<u64>,
     /// How many `ResponseChunk` events the relay published for this request; `None` for a local answer with

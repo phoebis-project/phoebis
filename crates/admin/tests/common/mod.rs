@@ -1314,6 +1314,7 @@ pub fn priced_row(
             kind: "inference",
             tier: None,
             entrypoint: None,
+            classifier: false,
             at: hour,
             band_at: None,
         },

@@ -696,6 +696,7 @@ impl Trace {
             ttfc_ms,
             error_code,
             client_drift: outcome.client_drift.clone(),
+            client_contract: None,
             client_version: outcome.client_version.clone(),
             response_bytes,
             response_chunks,

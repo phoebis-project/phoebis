@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use phoebis_bus::Classifier;
 use phoebis_routing::{window_for, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
@@ -281,11 +282,13 @@ fn predicted(
         kind: String,
         tier: Option<String>,
         client: Option<String>,
+        classifier: Option<String>,
     }
     let mut stmt = conn.prepare(
         "SELECT r.canonical_model, a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, \
          a.cache_write_1h_tokens, a.output_tokens, COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed, \
-         r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client \
+         r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client, \
+         r.classifier \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE a.account_id = ?1 AND a.started_at > ?2 - ?4 AND a.started_at <= ?3 \
          AND completed > ?2 AND completed <= ?3",
@@ -311,15 +314,19 @@ fn predicted(
             kind: r.get(11)?,
             tier: r.get(12)?,
             client: r.get(13)?,
+            classifier: r.get(14)?,
         })
     })?;
     let (mut share, mut requests, mut estimated) = (0.0, 0u32, 0u32);
     for attempt in attempts {
         let a = attempt?;
         let funding = funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref());
-        // API-key, fast and overage answers draw no plan window, so they are no part of the rise either.
+        let classifier = a.classifier.as_deref() == Some(Classifier::Client.as_str());
+        // API-key, fast and overage answers draw no plan window, so they are no part of the rise either. A classifier
+        // call draws no plan window either.
         if funding != Funding::Plan
             || (window == SEVEN_DAY_FABLE && window_for(&a.model) != SEVEN_DAY_FABLE)
+            || classifier
         {
             continue;
         }
@@ -348,6 +355,7 @@ fn predicted(
                 band,
                 kind: &a.kind,
                 tier: a.tier.as_deref(),
+                classifier,
             },
             true,
         );

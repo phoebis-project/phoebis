@@ -1895,6 +1895,10 @@ fn note_unweighted(
     request: &RequestRecord,
     attempts: &[AttemptRecord],
 ) {
+    // A classifier call prices at no share, so its model's weight is never read.
+    if request.classifier.is_some() {
+        return;
+    }
     let plan_funded = attempts.iter().any(|a| {
         a.has_usage()
             && funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()) == Funding::Plan

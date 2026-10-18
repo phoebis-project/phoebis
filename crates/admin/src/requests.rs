@@ -846,6 +846,7 @@ pub(crate) async fn list(
         cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
         efforts: list_param(&q, "efforts"),
         request_classes: list_param(&q, "request_classes"),
+        classifiers: Vec::new(),
         guardrails: list_param(&q, "guardrails"),
     };
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())

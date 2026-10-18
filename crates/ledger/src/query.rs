@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+use phoebis_bus::Classifier;
 use phoebis_routing::{
     window_for, MemberSpend, PinUsage, FIVE_HOUR, REFRESHING_CLASSES, SEVEN_DAY,
 };
@@ -18,8 +19,8 @@ use crate::db::{
 };
 use crate::histogram::Histogram;
 use crate::plan::{
-    entrypoint_of_client, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
-    PlanTables, WindowShares,
+    entrypoint_of_client, free_equivalent, free_shares, funding_of, price_equivalent, price_shares,
+    CostRevisions, Funding, PlanTables, WindowShares,
 };
 use crate::price::{price_row, Priced, RowKey};
 use crate::pricing::{effective_instant, prompt_tokens, Band, PriceRevisions, Speed};
@@ -146,6 +147,8 @@ pub struct RequestFilter {
     /// Keep the requests whose class, folded as the rollups fold it (`-` for none, `other` outside the
     /// identifier charset or past the bound), is in the list.
     pub request_classes: Vec<String>,
+    /// Keep the requests whose classifier standing, `client` or `-` for none, is in the list.
+    pub classifiers: Vec<String>,
     /// Keep the requests a listed guardrail matched, `-` the requests no guardrail matched.
     pub guardrails: Vec<String>,
 }
@@ -386,6 +389,13 @@ pub fn list_requests(
         clauses.push(format!(
             "{} IN ({marks})",
             class_fold_sql("requests.request_class")
+        ));
+    }
+    if !filter.classifiers.is_empty() {
+        let marks = bind_all(&filter.classifiers, &mut args);
+        clauses.push(format!(
+            "{} IN ({marks})",
+            class_fold_sql("requests.classifier")
         ));
     }
     if filter.held {
@@ -1770,6 +1780,7 @@ impl RollupFilter {
 pub const GROUP_BYS: &[&str] = &[
     "account",
     "all",
+    "classifier",
     "client",
     "effort",
     "key",
@@ -1875,6 +1886,7 @@ pub fn group_of(
         "account" => row.account_id.clone(),
         "model" => row.canonical_model.clone(),
         "kind" => row.kind.clone(),
+        "classifier" => row.classifier.clone(),
         "client" => row.client.clone(),
         "effort" => row.effort.clone(),
         "request_class" => row.request_class.clone(),
@@ -1955,6 +1967,7 @@ fn row_key(row: &RollupRow) -> RowKey<'_> {
         kind: row.kind.as_str(),
         tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
         entrypoint: entrypoint_of_client(&row.client),
+        classifier: row.classifier == Classifier::Client.as_str(),
         at: row.hour * 1_000,
         band_at: None,
     }
@@ -2147,9 +2160,13 @@ impl ShareSums {
     /// and the probe cost when the row is a probe's, each window priced at the row's own hour under `tier` and the
     /// regime the row's `client` names, so a group that mixes clients prices each row under its own.
     fn add(&mut self, row: &RollupRow, tier: &str, tables: &PlanTables, counted: bool) {
+        let free = row.classifier == Classifier::Client.as_str();
         self.add_priced(row, counted, None, |usage| {
             let at = row.hour * 1_000;
             let entrypoint = entrypoint_of_client(&row.client);
+            if free {
+                return free_shares(tables, entrypoint, tier, &row.canonical_model, at);
+            }
             price_shares(
                 tables,
                 entrypoint,
@@ -2172,9 +2189,13 @@ impl ShareSums {
         counted: bool,
         whole: Option<WindowShares>,
     ) {
+        let free = row.classifier == Classifier::Client.as_str();
         self.add_priced(row, counted, whole, |usage| {
             let at = row.hour * 1_000;
             let entrypoint = entrypoint_of_client(&row.client);
+            if free {
+                return free_equivalent(costs, entrypoint, &row.canonical_model, at);
+            }
             price_equivalent(costs, entrypoint, &row.canonical_model, usage, at, at).shares
         });
     }
@@ -2384,8 +2405,11 @@ struct SplitSum {
 }
 
 impl SplitSum {
+    /// `free` for a classifier call's row, whose every part reads zero with no pricing call, so a model the cost
+    /// model cannot price marks nothing unpriced for a charge of nothing.
     fn add(
         &mut self,
+        free: bool,
         costs: &PlanTables,
         entrypoint: Option<&str>,
         canonical_model: &str,
@@ -2393,6 +2417,9 @@ impl SplitSum {
         at: i64,
     ) {
         let week = |usage: PinUsage| {
+            if free {
+                return Some(0.0);
+            }
             costs.equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at)
         };
         let parts = [
@@ -2468,6 +2495,7 @@ impl PlanSums {
         self.estimated |= priced.estimated;
         if counted {
             self.split.add(
+                row.classifier == Classifier::Client.as_str(),
                 costs,
                 entrypoint_of_client(&row.client),
                 &row.canonical_model,
@@ -2526,8 +2554,12 @@ impl GroupSums {
     ) {
         let key = group_of(row, group_by, live, agent_groups);
         let entry = self.0.entry(key.clone()).or_insert_with(|| GroupSum {
-            sum: RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", "", "", ""),
-            probes: RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", "", "", ""),
+            sum: RollupRow::key(
+                0, &key, 0, "", "", "", "", "", "", "", "", "", "", "", "", "",
+            ),
+            probes: RollupRow::key(
+                0, &key, 0, "", "", "", "", "", "", "", "", "", "", "", "", "",
+            ),
             dollars: GroupDollars::default(),
             saw_non_probe: false,
             shares: None,
@@ -3098,8 +3130,8 @@ pub struct Totals {
 
 /// The price columns and the hour a SQL sum groups by beside its own column, and the sums it answers in the order
 /// `price_group` reads them, spelled once for both totals. The client is a price column, since its entrypoint names
-/// the regime a group's equivalent prices under.
-const PRICE_GROUP_COLUMNS: &str = "canonical_model, speed, band, funding, client, hour";
+/// the regime a group's equivalent prices under, and so is the classifier, whose call prices at no share.
+const PRICE_GROUP_COLUMNS: &str = "canonical_model, speed, band, funding, client, classifier, hour";
 const PRICE_GROUP_SUMS: &str = "SUM(requests), SUM(input_tokens), SUM(cache_read_tokens), \
      SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens)";
 
@@ -3119,13 +3151,14 @@ fn price_group(
     let band: String = r.get(offset + 2)?;
     let funding: String = r.get(offset + 3)?;
     let client: String = r.get(offset + 4)?;
-    let hour: i64 = r.get(offset + 5)?;
+    let classifier: String = r.get(offset + 5)?;
+    let hour: i64 = r.get(offset + 6)?;
     let usage = PinUsage {
-        input: count(7)?,
-        cache_read: count(8)?,
-        write_5m: count(9)?,
-        write_1h: count(10)?,
-        output: count(11)?,
+        input: count(8)?,
+        cache_read: count(9)?,
+        write_5m: count(10)?,
+        write_1h: count(11)?,
+        output: count(12)?,
     };
     let key = RowKey {
         model: &model,
@@ -3135,6 +3168,7 @@ fn price_group(
         kind: "inference",
         tier: None,
         entrypoint: entrypoint_of_client(&client),
+        classifier: classifier == Classifier::Client.as_str(),
         at: hour * 1_000,
         band_at: None,
     };
@@ -3146,7 +3180,7 @@ fn price_group(
     }
     Ok(Totals {
         cost_usd: usd,
-        requests: count(6)?,
+        requests: count(7)?,
         tokens: tokens_of(usage),
         billed_usd: if key.funding == Funding::Plan {
             0.0
@@ -3821,6 +3855,9 @@ pub(crate) struct UsageRow<'a> {
     /// The account tier the row recorded at its landing, `None` for `UNATTRIBUTED` and a session attempt without
     /// one: the tier its shares read.
     pub(crate) tier: Option<&'a str>,
+    /// The row is the client's own classifier call, which prices at no plan share: a rollup row's key word, a session
+    /// attempt's request's standing.
+    pub(crate) classifier: bool,
 }
 
 /// One row's figure added to a window of a burn point: `None` latches the window, whichever row came first, so a
@@ -3878,6 +3915,7 @@ pub(crate) fn price_usage(
         kind: row.kind,
         tier,
         entrypoint: entrypoint_of_client(row.client),
+        classifier: row.classifier,
         at: row.received_at,
         band_at: Some(row.at),
     };
@@ -4089,6 +4127,7 @@ fn price_burn_row(
             band: Band::of_rollup(&row.band),
             kind: &row.kind,
             tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
+            classifier: row.classifier == Classifier::Client.as_str(),
         },
         shares,
     );
@@ -4387,6 +4426,8 @@ struct SessionAttempt {
     tier: Option<String>,
     /// `requests.client`, `None` on a row from before the column existed.
     client: Option<String>,
+    /// `requests.classifier`, `None` for a request the marker did not hold and on a row from before the column.
+    classifier: Option<String>,
 }
 
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
@@ -4402,7 +4443,8 @@ fn session_attempts_statement(
         "SELECT r.session_id, a.account_id, a.started_at, \
          COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
-         a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client \
+         a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client, \
+         r.classifier \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
          AND r.received_at >= ? AND r.received_at < ?"
@@ -4449,6 +4491,7 @@ fn read_session_attempts(
             kind: row.get(14)?,
             tier: row.get(15)?,
             client: row.get(16)?,
+            classifier: row.get(17)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -4538,6 +4581,7 @@ pub fn session_burn_series(
                 band,
                 kind: &a.kind,
                 tier: a.tier.as_deref(),
+                classifier: a.classifier.as_deref() == Some(Classifier::Client.as_str()),
             },
             shares,
         );
@@ -4635,7 +4679,7 @@ mod tests {
         let model = "claude-sonnet-5-5";
         let mut row = RollupRow::key(
             HOUR, "k", 0, "p", "a", model, "probe", "-", "-", "-", "-", "standard", "plan",
-            "standard", "-",
+            "standard", "-", "-",
         );
         row.requests = 1;
         row.input_tokens = 1_000;
@@ -4695,6 +4739,7 @@ mod tests {
             "standard",
             "plan",
             "standard",
+            "-",
             "-",
         );
         row.requests = 1;
@@ -4830,6 +4875,7 @@ mod tests {
             "standard",
             "plan",
             "standard",
+            "-",
             "-",
         );
         row.requests = 1;

@@ -1422,6 +1422,63 @@ pub fn price_equivalent(
     })
 }
 
+/// The windows a plan row's shares would key, each at zero: what a free call reads. Built from the tier's capacity
+/// alone, with no weight lookup and no pricing call, so a classifier call on a model the weight table lacks reads
+/// the same zero maps as one on a weighted model.
+pub fn free_shares(
+    tables: &PlanTables,
+    entrypoint: Option<&str>,
+    tier: &str,
+    canonical_model: &str,
+    at: i64,
+) -> WindowShares {
+    zero_windows(
+        tables.revisions.in_force(at),
+        entrypoint,
+        tier,
+        canonical_model,
+    )
+}
+
+/// `free_shares` under the anchor tier (`unit.defined_by.tier`): the windows `price_equivalent` names, each at zero.
+pub fn free_equivalent(
+    tables: &PlanTables,
+    entrypoint: Option<&str>,
+    canonical_model: &str,
+    at: i64,
+) -> WindowShares {
+    let costs = tables.revisions.in_force(at);
+    zero_windows(
+        costs,
+        entrypoint,
+        &costs.unit.defined_by.tier,
+        canonical_model,
+    )
+}
+
+/// `Some(0.0)` on each window `priced_windows` walks for the model that `tier` holds a capacity on under the regime
+/// `entrypoint` names. A window the tier does not size is left out rather than nulled, since a null marks a reader's
+/// figure unpriced for a charge of nothing.
+fn zero_windows(
+    costs: &SubscriptionCosts,
+    entrypoint: Option<&str>,
+    tier: &str,
+    canonical_model: &str,
+) -> WindowShares {
+    let week = window_for(canonical_model);
+    [FIVE_HOUR, SEVEN_DAY]
+        .into_iter()
+        .chain((week != SEVEN_DAY).then_some(week))
+        .filter(|window| {
+            costs
+                .priced_window(window)
+                .and_then(|(priced, _)| costs.capacity_of(entrypoint, tier)?.on(priced))
+                .is_some()
+        })
+        .map(|window| (window, Some(0.0)))
+        .collect()
+}
+
 /// `Some(token)` for the relay's `claude-code/<token>` label, `None` for `other`, `sdk/<lang>` and the rollups' `-`,
 /// so a ledger row prices under the regime its own `client` column names, history included.
 pub fn entrypoint_of_client(client: &str) -> Option<&str> {

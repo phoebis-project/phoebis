@@ -63,6 +63,7 @@ fn complete(id: &str, outcome: Outcome, drift: Option<&str>, at: i64) -> Event {
         ttfc_ms: None,
         error_code: None,
         client_drift: drift.map(String::from),
+        client_contract: None,
         client_version: drift.map(|_| "2.1.274".to_string()),
         response_bytes: None,
         response_chunks: None,

@@ -197,6 +197,9 @@ pub struct RollupRow {
     pub band: String,
     /// The serving attempt's account tier, `UNATTRIBUTED` for none. A dimension, so it sits in the key.
     pub tier: String,
+    /// `client` for the client's own classifier call, `-` otherwise and on a row from before the step. A dimension,
+    /// so it sits in the key.
+    pub classifier: String,
     pub requests: u64,
     pub succeeded: u64,
     pub rate_limited: u64,
@@ -248,7 +251,7 @@ pub struct RollupRow {
 }
 
 impl RollupRow {
-    /// Fifteen key parts: `band` and `tier` after `funding`.
+    /// Sixteen key parts: `band`, `tier` and `classifier` after `funding`.
     #[allow(clippy::too_many_arguments)]
     pub fn key(
         hour: i64,
@@ -266,6 +269,7 @@ impl RollupRow {
         funding: &str,
         band: &str,
         tier: &str,
+        classifier: &str,
     ) -> RollupRow {
         RollupRow {
             hour,
@@ -283,6 +287,7 @@ impl RollupRow {
             funding: funding.into(),
             band: band.into(),
             tier: tier.into(),
+            classifier: classifier.into(),
             requests: 0,
             succeeded: 0,
             rate_limited: 0,
@@ -590,6 +595,10 @@ pub fn deltas_of(
         PLAN_FUNDING,
         STANDARD_BAND,
         last.and_then(|a| a.tier.as_deref()).unwrap_or(UNATTRIBUTED),
+        &request
+            .classifier
+            .as_deref()
+            .map_or_else(|| NO_CLASS.into(), fold_identifier),
     );
     let mut deltas: Vec<RollupRow> = Vec::new();
     let mut delta_for = |band: &str, speed: &str, funding: &str| -> usize {
@@ -875,6 +884,7 @@ pub(crate) fn empty_row(delta: &RollupRow) -> RollupRow {
         &delta.funding,
         &delta.band,
         &delta.tier,
+        &delta.classifier,
     )
 }
 
@@ -986,6 +996,7 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         },
         delta.band.map_or(STANDARD_BAND, Band::as_str),
         delta.tier.as_deref().unwrap_or(UNATTRIBUTED),
+        NO_CLASS,
     );
     let mut row = read_rollup(tx, &key)?.unwrap_or(key);
     row.kept_warm_requests += delta.kept_warm_requests;
@@ -1713,7 +1724,7 @@ fn take_segments(
     Ok(segments)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
@@ -1722,8 +1733,8 @@ pub(crate) fn read_rollup(
 ) -> Result<Option<RollupRow>, LedgerError> {
     Ok(conn
         .query_row(
-            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15"),
-            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier],
+            &format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15 AND classifier = ?16"),
+            params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier, key.classifier],
             row_to_rollup,
         )
         .optional()?)
@@ -1731,8 +1742,8 @@ pub(crate) fn read_rollup(
 
 pub(crate) fn delete_rollup(conn: &Connection, key: &RollupRow) -> Result<(), LedgerError> {
     conn.execute(
-        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15",
-        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier],
+        "DELETE FROM rollups_hourly WHERE hour = ?1 AND key_id = ?2 AND pool_id = ?3 AND account_id = ?4 AND canonical_model = ?5 AND kind = ?6 AND user_agent = ?7 AND key_generation = ?8 AND effort = ?9 AND client = ?10 AND request_class = ?11 AND speed = ?12 AND funding = ?13 AND band = ?14 AND tier = ?15 AND classifier = ?16",
+        params![key.hour, key.key_id, key.pool_id, key.account_id, key.canonical_model, key.kind, key.user_agent, key.key_generation, key.effort, key.client, key.request_class, key.speed, key.funding, key.band, key.tier, key.classifier],
     )?;
     Ok(())
 }
@@ -1741,7 +1752,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57)"),
         params![
             r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.band, r.tier,
             r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
@@ -1753,7 +1764,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
             r.wasted_cache_write_1h_tokens as i64, r.wasted_output_tokens as i64,
             r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
             r.incomplete as i64, r.probes_held as i64, r.slow_down_held_ms as i64, r.slow_down_held as i64,
-            r.kept_warm_1h_tokens as i64,
+            r.kept_warm_1h_tokens as i64, r.classifier,
         ],
     )?;
     Ok(())
@@ -1830,6 +1841,7 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         slow_down_held_ms: u(53)?,
         slow_down_held: u(54)?,
         kept_warm_1h_tokens: u(55)?,
+        classifier: r.get(offset + 56)?,
     })
 }
 
@@ -1914,7 +1926,7 @@ fn select_statement(from_hour: i64, to_hour: i64, select: &RollupSelect) -> (Str
     }
     (
         format!(
-            "SELECT {COLUMNS} FROM rollups_hourly WHERE {} ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier",
+            "SELECT {COLUMNS} FROM rollups_hourly WHERE {} ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier",
             clauses.join(" AND ")
         ),
         binds,
@@ -1996,7 +2008,7 @@ pub fn read_rollups_for_key(
     from_hour: i64,
     to_hour: i64,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE {KEY_RANGE_PREDICATE} ORDER BY hour, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, classifier"))?;
     let rows = stmt.query_map(
         params![key_id, key_generation, from_hour, to_hour],
         row_to_rollup,
@@ -2153,7 +2165,7 @@ mod tests {
     ];
 
     /// The rollup table at the newest version: no dollar column, the five wasted counts, the kept-warm tokens per TTL,
-    /// and the band and the tier as the last two of fifteen key parts.
+    /// and the band, the tier and the classifier as the last three of sixteen key parts.
     fn assert_rollups_carry_counts_and_no_dollars(conn: &Connection) {
         let (_, _, rollups) = shape(conn);
         for dropped in DROPPED_ROLLUP_COLUMNS {
@@ -2173,6 +2185,10 @@ mod tests {
                 && rollups.iter().any(|c| c == "kept_warm_1h_tokens")
                 && !rollups.iter().any(|c| c == "kept_warm_tokens"),
             "migration 37 split the kept-warm count by TTL: {rollups:?}"
+        );
+        assert!(
+            rollups.iter().any(|c| c == "classifier"),
+            "migration 40 added the classifier: {rollups:?}"
         );
         let mut stmt = conn
             .prepare(
@@ -2201,9 +2217,10 @@ mod tests {
                 "speed",
                 "funding",
                 "band",
-                "tier"
+                "tier",
+                "classifier"
             ],
-            "the band and the tier key the row after the funding"
+            "the band, the tier and the classifier key the row after the funding"
         );
     }
 
@@ -2354,7 +2371,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 40);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2418,7 +2435,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 40);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2514,7 +2531,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 40);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -3549,6 +3566,7 @@ mod tests {
             kind: row.kind.as_str(),
             tier: None,
             entrypoint: crate::plan::entrypoint_of_client(&row.client),
+            classifier: false,
             at: row.hour * 1_000,
             band_at: None,
         };
@@ -3629,6 +3647,7 @@ mod tests {
                     kind: d.kind.as_str(),
                     tier: None,
                     entrypoint: crate::plan::entrypoint_of_client(&d.client),
+                    classifier: false,
                     at: d.hour * 1_000,
                     band_at: None,
                 };
@@ -3809,6 +3828,7 @@ mod tests {
             "plan",
             "long",
             "-",
+            "-",
         );
         assert!(zeros.holds_nothing());
         let with = |set: fn(&mut RollupRow)| {
@@ -3853,6 +3873,7 @@ mod tests {
             "overage",
             "long",
             "default_claude_max_20x",
+            "-",
         );
         r.requests = 10;
         r.succeeded = 11;
@@ -4105,7 +4126,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 40);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

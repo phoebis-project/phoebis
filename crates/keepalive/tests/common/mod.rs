@@ -695,6 +695,7 @@ impl Rig {
             ttfc_ms: None,
             error_code: None,
             client_drift: None,
+            client_contract: None,
             client_version: None,
             response_bytes: None,
             response_chunks: None,
