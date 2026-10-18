@@ -925,7 +925,6 @@ impl HoldGate {
 /// proof, since the key is the one thing being replaced.
 pub struct RecoveryStore {
     conn: Connection,
-    created_lock: Option<PathBuf>,
     _lock: lock::ProcessLock,
 }
 
@@ -942,16 +941,12 @@ pub enum KeyMatch {
 }
 
 impl Store {
-    /// Takes the data directory's lock, then opens the registry file that is already there. A missing file is
-    /// refused rather than created, since a recovery has nothing to discard in it and SQLite would create it at the
-    /// umask's mode.
+    /// Takes the data directory's lock, then opens the registry file that is already there. A missing file is refused
+    /// rather than created, since a recovery has nothing to discard in it and SQLite would create it at the umask's
+    /// mode. A recovery run with `--owner` creates the lock file and hands it to that user before it calls this, and
+    /// without `--owner` this open creates the file where it is missing, as every open does.
     pub fn open_for_recovery(db_path: &Path) -> Result<RecoveryStore, StoreError> {
         let data_dir = permissions::data_dir_of(db_path);
-        let lock_file = lock::path(data_dir);
-        let lock_missing = matches!(
-            std::fs::symlink_metadata(&lock_file),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound
-        );
         let process_lock = lock::acquire(data_dir)?;
         let open = || -> Result<Connection, StoreError> {
             let conn = Connection::open_with_flags(
@@ -969,19 +964,12 @@ impl Store {
         let conn = open()?;
         Ok(RecoveryStore {
             conn,
-            created_lock: lock_missing.then_some(lock_file),
             _lock: process_lock,
         })
     }
 }
 
 impl RecoveryStore {
-    /// The lock file this open created, absent from a data directory no router has opened, such as a registry restored
-    /// onto a new host. A recovery run as root hands it to the service's user, whose next start opens it.
-    pub fn created_lock(&self) -> Option<&Path> {
-        self.created_lock.as_deref()
-    }
-
     /// How `key` meets the registry. A canary that does not open proves nothing about the rows a discard would
     /// erase, so every sealed row is tried before the answer licenses one, never a sample: a canary that fails while
     /// rows open is corrupt. Without a canary the same scan proves the key, and a registry holding nothing sealed
