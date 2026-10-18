@@ -2249,10 +2249,20 @@ impl Relay {
                     incarnation_of: &no_incarnation,
                 })
             };
+            // The first request a session sends to an account other than the one its previous request landed on
+            // names a message only the account it left can find. A probe replays its recipe's member, which from a
+            // chain's second probe on names a message older than the upstream keeps, and the keepalive reads the
+            // cache tokens rather than the reason, so no probe names one. Read from the selection, so the relay keeps
+            // no memory of the session's last account, and whatever the pool's switch reads, since the client's
+            // member is the one that misses.
+            let detach = selection.left.is_some() || admitted.trace.kind == Kind::Probe;
             let named: Option<Option<String>> = (admitted.diagnostics
                 && !skip.contains(&Injected::Diagnostics)
                 && !admitted.client_diagnostics)
                 .then(|| {
+                    if detach {
+                        return None;
+                    }
                     own_root
                         .and_then(predecessor_under)
                         .or_else(|| {
@@ -2281,8 +2291,16 @@ impl Relay {
                         SafeguardsEdit::Drop
                     },
                     sign_placeholder: self.sign_cch_placeholder,
+                    detach_diagnostics: detach,
                 },
             )?;
+            if edits.diagnostics_detached {
+                tracing::debug!(
+                    account = %account.id,
+                    re_signed = edits.cch_restamped,
+                    "set the client's previous message id to null"
+                );
+            }
             if !claims_its_ttl(&edits) {
                 ttl = None;
             }

@@ -10477,3 +10477,67 @@ async fn a_rekeyed_pin_keeps_its_pace_under_the_new_key() {
     );
     assert!(state.pin_pace(&pin.key()).is_none());
 }
+
+#[tokio::test]
+async fn a_fail_over_whose_landing_was_held_names_the_account_left_on_the_next_request() {
+    let store = shedding_store(&["a", "b"]);
+    with_tier(&store, "a");
+    with_tier(&store, "b");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    handle.report(windows("a", 0.3, 0.1, AT)).await;
+    handle.report(windows("b", 0.3, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    handle
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: AT + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin_of(&handle).await),
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
+    let cap = phoebis_store::Failover::default().in_flight_cap;
+    let busy: Vec<_> = (0..cap)
+        .map(|_| handle.in_flight().dispatched("b", AT))
+        .collect();
+    let held = handle
+        .select(SelectRequest {
+            attempted: vec!["a".into()],
+            ..request(&handle, Some("s1"), AT)
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(&held.result, SelectResult::Held { account_id, .. } if account_id == "b"),
+        "the failover's landing waits for b's slot: {:?}",
+        held.result
+    );
+    drop(held);
+    drop(busy);
+    let next = handle
+        .select(request(&handle, Some("s1"), AT + 1_000))
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = &next.result else {
+        panic!("{:?}", next.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.left.as_deref()),
+        ("b", Some("a")),
+        "the session's next request lands the carried failover and names the account it left"
+    );
+}

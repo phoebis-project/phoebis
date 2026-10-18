@@ -458,6 +458,11 @@ pub struct Selection {
     /// pool than the request was admitted under, which the relay refuses rather than dispatch under one pool's
     /// policy on another's member.
     pub pool_id: String,
+    /// The account the session's previous request landed on, where this selection lands elsewhere: the pin row
+    /// step 1 read, live, idle past the TTL or left behind by its pool, else the landing a failover carried to this
+    /// request. `None` on a renewal, a count's bound and a placement the routing holds no previous landing for.
+    /// The relay names no previous message on a request that carries it, since the account cannot find one.
+    pub left: Option<String>,
 }
 
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
@@ -1221,6 +1226,7 @@ fn run(
     // non-portable request keeps a pin whose account left the pool: the fence below answers for that account,
     // because no other account holds the state the request refers to.
     let mut pin = None;
+    let mut previous_account: Option<String> = None;
     if let Some(session) = session {
         let key = PinKey {
             key_id: request.key_id.clone(),
@@ -1229,6 +1235,9 @@ fn run(
             model: request.canonical_model.clone(),
         };
         if let Some(mut current) = state.pin(&key).cloned() {
+            // Whatever `found` names the row, it says where the session's previous request landed, which the
+            // placement compares against.
+            previous_account = Some(current.account_id.clone());
             let serves = request
                 .candidates
                 .iter()
@@ -2105,6 +2114,14 @@ fn run(
                 cohort_hold,
             },
             pool_id: pool.id.clone(),
+            left: previous_account
+                .or_else(|| {
+                    request
+                        .failed_over
+                        .as_ref()
+                        .map(|f| f.from_account_id.clone())
+                })
+                .filter(|account| account != &chosen.account_id),
         }),
         writes,
     )
@@ -4901,6 +4918,7 @@ fn renew(
             ..SelectionTrace::default()
         },
         pool_id: pool.id.clone(),
+        left: None,
     }
 }
 

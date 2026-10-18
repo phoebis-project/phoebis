@@ -25241,3 +25241,214 @@ fn a_live_reservation_is_not_divided_by_the_speed_under_a_constant_band() {
         "as the demand reads it"
     );
 }
+
+/// The account a landed selection names as the one the session left.
+fn left_of(result: &SelectResult) -> Option<&str> {
+    match result {
+        SelectResult::Selected(sel) => sel.left.as_deref(),
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_shed_moves_selection_names_the_account_it_left() {
+    let s = tiered(shedding_pool(Shedding {
+        warm_sessions: WarmSessions::Always,
+        ..Shedding::default()
+    }));
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, true, T),
+        burning("s0", "a", 1.0, true, T),
+    ]);
+    over_a_fitting_b(&mut st, T - 5_500);
+    past_the_wait(&mut st, &s, "p", "a", T - 5_000);
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T - 5_000), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a's round marks s1 and it moves"
+    );
+    assert_eq!(left_of(&d.result), Some("a"));
+    assert_eq!(
+        left_of(&d.result),
+        d.record.outcome.from_account_id.as_deref(),
+        "the account left is the move's source"
+    );
+}
+
+#[test]
+fn a_pin_released_for_a_cooldown_names_the_account_it_left() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    over_a_fitting_b(&mut st, T - 500);
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-sonnet-5",
+        T + 10 * MINUTE,
+        "retry_after",
+        "rate_limit",
+    ));
+    let req = auxiliary(&s, "s1", T);
+    assert!(release_reasons(&st, &s, &pinned(&st, "s1"), &req).contains(&"cooldown"));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let (result, _) = select(&mut st, &s, &req, &mut rng());
+    assert_eq!(picked(&result), "b");
+    assert_eq!(left_of(&result), Some("a"));
+}
+
+#[test]
+fn a_pin_released_at_its_budget_names_the_account_it_left() {
+    let (s, mut st) = pinned_to_a_budgeted_member();
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 10_000,
+            spent_usd: 5.0,
+            observed_at: 2_000,
+        }],
+    );
+    let at_budget = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    assert!(release_reasons(&st, &s, &pinned(&st, "s1"), &at_budget).contains(&"budget"));
+    let (result, _) = select(&mut st, &s, &at_budget, &mut rng());
+    assert_eq!(picked(&result), "b");
+    assert_eq!(left_of(&result), Some("a"));
+}
+
+#[test]
+fn a_pin_released_past_its_saved_end_names_the_account_it_left() {
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            failover: Failover {
+                wind_down_minutes: 0,
+                ..Failover::default()
+            },
+            affinity: 86_400,
+            ..Pool::default()
+        },
+        vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(1_000 + 6 * HOUR),
+            tier: None,
+        }],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let first = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000);
+    assert_eq!(picked(&select(&mut st, &s, &first, &mut rng()).0), "a");
+    let after_end = request(
+        &s,
+        Some("s1"),
+        "claude-sonnet-5",
+        true,
+        &[],
+        2_000 + 6 * HOUR,
+    );
+    assert!(
+        release_reasons(&st, &s, &pinned(&st, "s1"), &after_end).contains(&"subscription_ended")
+    );
+    let (result, _) = select(&mut st, &s, &after_end, &mut rng());
+    assert_eq!(picked(&result), "b");
+    assert_eq!(left_of(&result), Some("a"));
+}
+
+#[test]
+fn a_request_that_attempted_its_pinned_account_names_it_as_left() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let first = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000);
+    select(&mut st, &s, &first, &mut rng());
+    assert_eq!(pinned(&st, "s1").account_id, "a");
+    let passed_over = request(&s, Some("s1"), "claude-sonnet-5", true, &["a"], 2_000);
+    let (result, _) = select(&mut st, &s, &passed_over, &mut rng());
+    assert_eq!(picked(&result), "b");
+    assert_eq!(left_of(&result), Some("a"));
+}
+
+#[test]
+fn a_failed_over_landing_with_no_row_names_the_account_it_left() {
+    let mut st = priced(vec![gated_pin("w", "a", 1_000.0)]);
+    gated_siblings(&mut st, 0.94, 0.5);
+    let s = tiered(gate_pool());
+    let req = failing_over(&s, "a", "cooldown", gated_pin("s1", "a", 1_000.0), None, T);
+    assert!(
+        st.pin(&pin_key("s1")).is_none(),
+        "the failover took the row"
+    );
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("c".into(), None));
+    assert_eq!(
+        left_of(&d.result),
+        req.failed_over.as_ref().map(|f| f.from_account_id.as_str())
+    );
+}
+
+#[test]
+fn a_row_idle_past_the_ttl_re_placed_elsewhere_names_the_account_it_left() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let first = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    assert_eq!(picked(&select(&mut st, &s, &first, &mut rng()).0), "a");
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        T + 3 * HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
+    let idle = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 2 * HOUR);
+    let d = decide(&mut st, &s, &idle, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle"),
+        "the row idle past the TTL still stands at step 1"
+    );
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(left_of(&d.result), Some("a"));
+}
+
+#[test]
+fn a_renewal_and_a_placement_with_no_row_name_no_account_left() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (placed, _) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        (picked(&placed), left_of(&placed)),
+        ("a", None),
+        "a session with no row and no landing left no account"
+    );
+    let (renewed, _) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &mut rng(),
+    );
+    let SelectResult::Selected(ref sel) = renewed else {
+        panic!("expected a selection, got {renewed:?}")
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(left_of(&renewed), None, "a renewal stays on its account");
+}
