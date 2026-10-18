@@ -178,8 +178,9 @@ on, a match is refused before any account is selected.
 
 A block is a refusal the operator asked for, so the Dashboard's "Error rate, 24h" tile leaves the blocked requests out
 of its rate and `Most common` skips the code, while "Requests, 24h" keeps counting them, since the router received them.
-The Analytics view's "Errors by code" card and its Traffic table keep the `guardrail_blocked` rows as inventories of
-what the router answered, beside the Guardrails card that counts the same requests by guardrail.
+The Analytics view follows the same rule: Traffic's `{pct} errors` figure, its table's "Error rate" column and its
+"Errors by code" card leave the blocked requests out. The `{n} requests` count, the table's "Requests" and "Rejected"
+columns and the Guardrails card keep counting them.
 
 ## Testing a guardrail
 

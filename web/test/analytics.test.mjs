@@ -1005,3 +1005,13 @@ test('ratioOff marks a ratio outside the band after a rise of five percent', () 
   assert.equal(d.ratioOff({ observedRise: 0.3, ratio: 1.1 }), false);
   assert.deepEqual([0.8, 1.25].map((ratio) => d.ratioOff({ observedRise: 0.3, ratio })), [false, false], 'the edges sit inside the band');
 });
+
+test('the error rate leaves the requests a guardrail blocked out of both sides, as the Dashboard tile does', () => {
+  const day = { errors: { guardrail_blocked: 684, upstream_unreachable: 13 }, requests: 26_112, succeeded: 25_407 };
+  assert.equal(d.blockedOf(day), 684);
+  assert.equal(d.errorRateOf(day), (26_112 - 684 - 25_407) / (26_112 - 684), 'the other failures over the other requests');
+  assert.equal(d.errorRateOf({ errors: {}, requests: 10, succeeded: 9 }), 0.1, 'without a block the rate is the plain one');
+  assert.equal(d.errorRateOf({ errors: { guardrail_blocked: 5 }, requests: 5, succeeded: 0 }), 0, 'blocks alone rate no request');
+  assert.equal(d.errorRateOf({ errors: {}, requests: 0, succeeded: 0 }), 0, 'no request rates zero');
+  assert.equal(d.blockedOf({ errors: Object.create({ guardrail_blocked: 5 }) }), 0, 'an inherited count is no count');
+});

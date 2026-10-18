@@ -14227,9 +14227,31 @@ m.unmount();
   window.HTMLElement.prototype.getBoundingClientRect = measure;
 }
 
+{
+  // The route's answer with three requests a guardrail blocked in its first group: the Traffic line counts them, and
+  // its rate and the Errors by code card leave them out, so the rate reads as it did without them.
+  const blocksCheck = '/analytics the Traffic line counts the requests a guardrail blocked, and its rate and the Errors by code card leave them out';
+  const lineOf = (page) => /([\d,]+) requests, ([\d.]+)% errors/.exec(page.text());
+  const plain = await mount('/analytics');
+  const before = lineOf(plain);
+  plain.unmount();
+  const breakdownOf = api.getAnalyticsBreakdown;
+  api.getAnalyticsBreakdown = async (...args) => (await breakdownOf.apply(api, args)).map((g, i) => (i === 0 ? { ...g, errors: { ...g.errors, guardrail_blocked: 3 }, rejected: g.rejected + 3, requests: g.requests + 3 } : g));
+  const blocked = await mount('/analytics');
+  const after = lineOf(blocked);
+  const text = blocked.text();
+  results.push({
+    name: blocksCheck,
+    ok: before !== null && after !== null && Number(after[1].replace(/,/g, '')) === Number(before[1].replace(/,/g, '')) + 3 && after[2] === before[2] && !text.includes('guardrail_blocked') && text.includes('api_error'),
+    missing: [`before ${before?.[0] ?? 'no line'}`, `after ${after?.[0] ?? 'no line'}`, text.includes('guardrail_blocked') ? 'guardrail_blocked listed' : 'guardrail_blocked absent', text.includes('api_error') ? 'api_error listed' : 'api_error absent'],
+  });
+  delete api.getAnalyticsBreakdown;
+  blocked.unmount();
+}
+
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'desktop', 'laptop', 'in range']);
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'the guardrail blocks left out', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'desktop', 'laptop', 'in range']);
 await tab(m, 'Latency');
 expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
 await tab(m, 'Cache');

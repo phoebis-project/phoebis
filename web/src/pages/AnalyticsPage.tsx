@@ -19,7 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, ratioOff, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, GUARDRAIL_BLOCKED, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, ratioOff, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -87,7 +87,6 @@ const shareOrDash = (share: number | null | undefined) => (share === null || sha
 const inputOf = (g: AnalyticsGroup) => g.tokens.uncachedInput + g.tokens.cacheRead + g.tokens.cacheWrite5m + g.tokens.cacheWrite1h;
 const hitRatioOf = (g: AnalyticsGroup) => (g.cacheHits + g.cacheMisses + g.uncached ? g.cacheHits / (g.cacheHits + g.cacheMisses + g.uncached) : null);
 const cachedShareOf = (g: AnalyticsGroup) => (inputOf(g) ? g.tokens.cacheRead / inputOf(g) : null);
-const errorRateOf = (g: AnalyticsGroup) => (g.requests ? (g.requests - g.succeeded) / g.requests : 0);
 const probesOf = (g: AnalyticsGroup) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
 const usdOrDash = (v: number | null) => (v === null ? '-' : fmtUsd(v));
 /**
@@ -648,7 +647,7 @@ export function AnalyticsPage() {
               </BarChart>
             </ChartCard>
 
-            <Card title="Errors by code" subtitle="Non-200 responses in range">
+            <Card title="Errors by code" subtitle="Non-200 responses in range, the guardrail blocks left out">
               {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
             </Card>
 
@@ -1482,6 +1481,7 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
 
 function ErrorBars({ errors, color }: { color: string; errors: Record<string, number> }) {
   const rows = Object.entries(errors)
+    .filter(([label]) => label !== GUARDRAIL_BLOCKED)
     .map(([label, count]) => ({ count, label }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   return <CountBars color={color} empty="No errors in range." rows={rows} />;
