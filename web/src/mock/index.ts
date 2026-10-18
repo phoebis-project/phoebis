@@ -18,7 +18,7 @@ import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
@@ -236,6 +236,23 @@ const heldWriter = (): boolean => {
     return false;
   }
 };
+
+/**
+ * Set to add the one plan request on a model the cost model lists in no tier: the dashboard's day and the analytics'
+ * folds read it beside the story, so the figures it moves read a window priced nothing, while without the switch the
+ * served story's figures stay as they are.
+ */
+export const UNPRICED_STORY_KEY = 'phoebis.mockUnpriced';
+const unpricedStory = (): boolean => {
+  try {
+    return localStorage.getItem(UNPRICED_STORY_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+/** The rollups the analytics routes fold: none for a fresh installation, the unpriced request's beside the story's
+ *  under its switch. */
+const ledgerRollups = () => (emptyStore() ? [] : unpricedStory() ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS);
 
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
@@ -583,8 +600,8 @@ export class MockApi implements Api {
       lastUsedAt: null,
       notes: input.notes,
       bodyCaptureHours: input.bodyCaptureHours,
-      usage7d: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0, tokens: 0 },
-      lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0 },
+      usage7d: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 0, tokens: 0 },
+      lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 0 },
     };
     this.keys = [key, ...this.keys];
     return latency({ key, secret }, 300);
@@ -669,11 +686,11 @@ export class MockApi implements Api {
   }
 
   getAnalyticsBreakdown(query: AnalyticsQuery) {
-    return latency(breakdownOf(emptyStore() ? [] : ALL_ROLLUPS, query));
+    return latency(breakdownOf(ledgerRollups(), query));
   }
 
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>) {
-    return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy, filters));
+    return latency(burnOf(ledgerRollups(), range, groupBy, filters));
   }
 
   getAnalyticsReconciliations(filters?: Pick<AnalyticsQuery, 'accountIds'>) {
@@ -685,7 +702,7 @@ export class MockApi implements Api {
   }
 
   getAnalyticsSeries(query: AnalyticsQuery) {
-    return latency(seriesOf(emptyStore() ? [] : ALL_ROLLUPS, query));
+    return latency(seriesOf(ledgerRollups(), query));
   }
 
   /** The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them. */
@@ -745,7 +762,7 @@ export class MockApi implements Api {
   getOverview() {
     const empty = emptyStore();
     // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
-    const last24h = empty ? [] : DAY_ROWS;
+    const last24h = empty ? [] : unpricedStory() ? [...DAY_ROWS, UNPRICED_REQUEST] : DAY_ROWS;
     const hourlyMap = new Map<string, Overview['hourly'][number]>();
     for (let i = 23; i >= 0; i -= 1) {
       const startMs = Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000;

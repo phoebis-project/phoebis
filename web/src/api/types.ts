@@ -345,6 +345,11 @@ export interface PoolCacheTtl {
 export interface SharedEquivalent {
   fiveHour: number;
   sevenDay: number;
+  /**
+   * Per window, whether a plan row with tokens priced nothing on it (a model with no tier, or a tier with no weighted
+   * model): the sum then holds the other rows alone, and a zero with the flag unset is a sum with no plan row.
+   */
+  unpriced: { fiveHour: boolean; sevenDay: boolean };
 }
 
 export interface TrafficBucket {
@@ -1409,8 +1414,11 @@ export interface AnalyticsGroup {
   fromRequests?: true;
   histograms: LatencyHistograms;
   incomplete: number;
-  /** The kept-warm requests and the tokens they read warm, booked per TTL. */
-  keptWarm: { requests: number; tokens1h: number; tokens5m: number } | null;
+  /**
+   * The kept-warm requests and the tokens they read warm, booked per TTL, each with its plan-funded part: the credits
+   * whose request a plan account served.
+   */
+  keptWarm: { planRequests: number; planTokens1h: number; planTokens5m: number; requests: number; tokens1h: number; tokens5m: number } | null;
   key: string;
   /**
    * An earlier holder's creation in Unix milliseconds under the key grouping, 0 for one with no creation time. Null
@@ -1430,9 +1438,14 @@ export interface AnalyticsGroup {
   probeCostUsd: number;
   /** The plan-funded probes' 20x window equivalents by window key, `cost` and `wasted` apart, and empty without one. */
   probeEquivalent: Record<string, { cost: number; wasted: number }>;
-  probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };
+  /** True when a plan probe row priced through the model tier's fallback weight, which `estimated` covers too. */
+  probeEstimated: boolean;
+  /** `planOk` is the part of `ok` a plan account served. */
+  probes: { failed: number; held: number; migrated: number; ok: number; planOk: number; skipped: number };
   /** `wasted` is null while the group's probe dollars are zero, and the map is null whole on a fold, which prices no probe share. */
   probeShares: Record<string, { cost: number; wasted: number | null }> | null;
+  /** Keyed as `unpriced`, for the plan probe rows, whose windows `probeEquivalent` leaves out the same way. */
+  probeUnpriced: Record<string, boolean>;
   rateLimited: number;
   rejected: number;
   requests: number;
@@ -1449,6 +1462,12 @@ export interface AnalyticsGroup {
    * thinking share and the rest. */
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; plainOutput?: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
+  /**
+   * Per window key, both shared windows always and the model week where the group's rows name one, whether a plan row
+   * with tokens priced nothing on it (a model with no tier, or a tier with no weighted model). Such a window is absent
+   * from `costEquivalent` and `cacheEquivalent`, and one absent with the flag unset is a window no plan row reached.
+   */
+  unpriced: Record<string, boolean>;
   wastedProbeReasons: Record<WastedProbeReason, number>;
   wastedProbeUsd: number;
   wastedProbes: number;
@@ -1520,6 +1539,9 @@ export interface BurnPoint {
    *  them) or one holding a row the cost model cannot price, and wherever the group holds more than one account's rows
    *  (every grouping but the account one, unless the Accounts filter names exactly one account). */
   fiveHourShare: number | null;
+  /** Whether the bucket holds a plan row with tokens the cost model could not price on the 5-hour window, so a null
+   *  `fiveHourEquivalent` with the flag unset is an idle bucket. The shares carry no flag of their own. */
+  fiveHourUnpriced: boolean;
   group: string;
   /** The same plan rows as a 20x equivalent of the model's own week, null where no row of the bucket is on a model
    *  with a week of its own. */
@@ -1527,10 +1549,14 @@ export interface BurnPoint {
   /** The same spend as a fraction of the account's model week, null where `fiveHourShare` is and where no row of the
    *  bucket is on a model with a week of its own. */
   modelWeekShare: number | null;
+  /** `fiveHourUnpriced` on the model week. */
+  modelWeekUnpriced: boolean;
   /** The same plan rows as a 20x 7-day equivalent, unbanded. */
   sevenDayEquivalent: number | null;
   /** The same spend as a fraction of the account's 7-day window, unbanded. */
   sevenDayShare: number | null;
+  /** `fiveHourUnpriced` on the 7-day window. */
+  sevenDayUnpriced: boolean;
   /** Every token of the bucket, all five types: zero for a bucket with no traffic the ledger can attribute. */
   tokens: number;
   /** Uncached input tokens. */

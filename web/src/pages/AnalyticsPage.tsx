@@ -19,7 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, ratioOff, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, ratioOff, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -896,7 +896,7 @@ export function AnalyticsPage() {
       )}
 
       {tab === 'cost' && (
-        <Section id="cost" shown={shown} title="Cost" meta={costLoading || costError !== null ? undefined : costHead.meta} metaTitle={costHead.estimated ? ESTIMATED_TITLE : undefined}>
+        <Section id="cost" shown={shown} title="Cost" meta={costLoading || costError !== null ? undefined : costHead.meta} metaTitle={costHead.unpriced ? UNPRICED_TITLE : costHead.estimated ? ESTIMATED_TITLE : undefined}>
           <div className="tiles-row">
             {unit === 'share' ? (
               <>
@@ -906,7 +906,7 @@ export function AnalyticsPage() {
               </>
             ) : (
               <>
-                <Tile label={costHead.tile?.label ?? ''} value={costLoading ? null : figuresValue(costHead.tile?.figures ?? [])} note={costHead.tile?.note} title={costHead.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
+                <Tile label={costHead.tile?.label ?? ''} value={costLoading ? null : figuresValue(costHead.tile?.figures ?? [])} note={costHead.tile?.note} title={costHead.unpriced ? UNPRICED_TITLE : costHead.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
                 {unit === 'native' ? (
                   <>
                     <Tile label="Cost per request" value={costLoading ? null : figuresValue(nativeRatios.perRequest.figures)} note={nativeRatios.perRequest.note} title={nativeRatios.perRequest.estimated ? ESTIMATED_TITLE : undefined} error={costError} />
@@ -1175,7 +1175,7 @@ function shareTilesOf(groupBy: GroupBy, namedAccount: string | null, group: Anal
  * probes' dollars off the billed read, told apart by the counts of their probes that reached the upstream, since a
  * held or skipped probe costs nothing. `undefined` leaves out a side with no such probe, null reads a dash where the
  * plan probes priced nothing on the window, and a group with no such probe on either side reads its zero in each unit,
- * as an empty range does, with no mark, since no figure of it is an estimate.
+ * as an empty range does, with no mark, since no figure of it is an estimate. The plan side's mark is `probeMarked`'s.
  */
 function probeSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'cost' | 'wasted'): { billed: number | undefined; equivalent: number | null | undefined; estimated: boolean } {
   const billedProbes = billed ? upstreamProbes(billed) : 0;
@@ -1183,7 +1183,7 @@ function probeSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | und
   const priced = own(whole.probeEquivalent, 'seven_day') ? whole.probeEquivalent.seven_day[read] : null;
   const dollars = billed ? (read === 'cost' ? billed.probeCostUsd : billed.wastedProbeUsd) : 0;
   if (planProbes <= 0 && billedProbes <= 0) return { billed: dollars, equivalent: priced ?? 0, estimated: false };
-  return { billed: billedProbes > 0 ? dollars : undefined, equivalent: planProbes > 0 ? priced : undefined, estimated: whole.estimated && planProbes > 0 && priced !== null };
+  return { billed: billedProbes > 0 ? dollars : undefined, equivalent: planProbes > 0 ? priced : undefined, estimated: probeMarked(whole, planProbes, priced) };
 }
 const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>): CostFigure[] => [
   ...(sides.equivalent === undefined ? [] : [{ text: equivalentOrDash('seven_day', sides.equivalent, sides.estimated), word: 'subscription' }]),
@@ -1216,14 +1216,14 @@ function savingSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | un
 }
 
 /**
- * A group's saving share less its probe share on one window: zero on a side with no credit or no probe that reached
- * the upstream behind it, and on a model week the side's rows ran off, and null on a shared window the side's rows
- * priced nothing on.
+ * A group's saving share less its probe share on one window: zero on a side with no plan-funded credit or answered
+ * probe behind it, its credits or probes all billed, which carry no share, and on a model week the side's rows ran
+ * off, and null on a shared window the side's plan rows priced nothing on.
  */
 function shareNetOf(g: AnalyticsGroup, key: string): number | null {
   const at = <T,>(map: Record<string, T> | null, held: boolean, read: (v: T) => number) => (!held ? 0 : map !== null && own(map, key) ? read(map[key]) : key === 'five_hour' || key === 'seven_day' ? null : 0);
-  const saving = at(g.savingShares, g.keptWarm !== null && keptWarmTokens(g.keptWarm) > 0, (v) => v);
-  const cost = at(g.probeShares, upstreamProbes(g) > 0, (v) => v.cost);
+  const saving = at(g.savingShares, savingRequired(g), (v) => v);
+  const cost = at(g.probeShares, probesRequired(g), (v) => v.cost);
   return saving === null || cost === null ? null : netSaving(saving, cost);
 }
 
@@ -1950,15 +1950,16 @@ function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
 
 const MAX_STACKED_GROUPS = 7;
 
-type Stack = { data: Record<string, number | null>[]; estimated: Map<number, Set<string>>; keys: string[]; labels: Map<string, string> };
+type Stack = { data: Record<string, number | null>[]; estimated: Map<number, Set<string>>; keys: string[]; labels: Map<string, string>; unpriced: { buckets: number; groups: number } };
 /**
  * The groups stacked by one figure per bucket: the seven with the largest total in range and the rest as Other, and
  * per bucket the stacks an estimated group's figure fed. A null figure is one the route priced nothing on: it leaves
  * its stack's bucket a gap, a dash in the tooltip, since a partial sum would read as the whole. `drawn` keeps only the
  * groups whose figure is above zero somewhere in range or unpriced somewhere, for a side that holds some of the page's
- * groups, so a group priced nothing throughout stays listed with its gaps.
+ * groups, so a group priced nothing throughout stays listed with its gaps. `unpriced` counts the drawn groups that
+ * `flagged` reads unpriced in a bucket, a group folded into Other among them, and the buckets holding one.
  */
-function stackOf(points: AnalyticsPoint[], groupBy: GroupBy, value: (g: AnalyticsGroup) => number | null, drawn = false): Stack {
+function stackOf(points: AnalyticsPoint[], groupBy: GroupBy, value: (g: AnalyticsGroup) => number | null, drawn = false, flagged: (g: AnalyticsGroup) => boolean = () => false): Stack {
   const totals = new Map<string, number>();
   const unpriced = new Set<string>();
   const labels = new Map<string, string>();
@@ -1976,6 +1977,14 @@ function stackOf(points: AnalyticsPoint[], groupBy: GroupBy, value: (g: Analytic
     .map(([k]) => k);
   const top = ranked.slice(0, MAX_STACKED_GROUPS);
   const keys = ranked.length > MAX_STACKED_GROUPS ? [...top, 'Other'] : top;
+  const listed = new Set(ranked);
+  const unpricedGroups = new Set<string>();
+  let unpricedBuckets = 0;
+  for (const p of points) {
+    const hit = p.groups.filter((g) => listed.has(g.key) && flagged(g));
+    for (const g of hit) unpricedGroups.add(g.key);
+    if (hit.length > 0) unpricedBuckets += 1;
+  }
   const estimated = new Map<number, Set<string>>();
   const data = points.map((p) => {
     const at = Date.parse(p.at);
@@ -1993,7 +2002,7 @@ function stackOf(points: AnalyticsPoint[], groupBy: GroupBy, value: (g: Analytic
     estimated.set(at, marked);
     return row;
   });
-  return { data, estimated, keys, labels };
+  return { data, estimated, keys, labels, unpriced: { buckets: unpricedBuckets, groups: unpricedGroups.size } };
 }
 /** A plan bucket the route priced nothing on reads null, and one without chargeable plan usage zero. */
 const sevenDayEquivalentOf = (g: AnalyticsGroup) => (own(g.costEquivalent, 'seven_day') ? g.costEquivalent.seven_day : planRowsRequired(g) ? null : 0);
@@ -2006,7 +2015,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
   const ink = useChartInk();
   const lines = useMemo(() => shareLines(points, groupBy), [points, groupBy]);
   // Native stacks the plan rows' equivalent and draws the billed rows' dollars on a card of their own.
-  const stack = useMemo(() => (unit === 'native' ? stackOf(points, groupBy, sevenDayEquivalentOf, true) : stackOf(points, groupBy, (g) => g.costUsd)), [points, groupBy, unit]);
+  const stack = useMemo(() => (unit === 'native' ? stackOf(points, groupBy, sevenDayEquivalentOf, true, (g) => g.unpriced.seven_day === true) : stackOf(points, groupBy, (g) => g.costUsd)), [points, groupBy, unit]);
   const billed = useMemo(() => (unit === 'native' ? stackOf(points, groupBy, (g) => g.billedUsd, true) : null), [points, groupBy, unit]);
   const { keys, labels, data } = stack;
   const color = (k: string) => (k === 'Other' ? ink.muted : groupSlot(k));
@@ -2030,10 +2039,28 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
     // A range with no plan row leaves the equivalent card out while the billed card draws, as the tiles leave out a
     // side with no rows. With neither side the card stays, so an empty range still reads as one.
     const planDrawn = loading || error !== null || keys.length > 0 || !billedDrawn;
+    const subtitle = '20x 7-day equivalent per bucket, stacked, the subscription requests';
+    const note = unpricedNote(stack.unpriced.groups, stack.unpriced.buckets);
     return (
       <>
         {planDrawn && (
-          <ChartCard title={title} subtitle="20x 7-day equivalent per bucket, stacked, the subscription requests" loading={loading} error={error} legend={keys.map((k) => ({ color: color(k), label: label(k), title: marked(k) ? ESTIMATED_TITLE : undefined }))}>
+          <ChartCard
+            title={title}
+            subtitle={
+              note === null ? (
+                subtitle
+              ) : (
+                <>
+                  {subtitle}
+                  <br />
+                  <span className="unpriced-note">{note}</span>
+                </>
+              )
+            }
+            loading={loading}
+            error={error}
+            legend={keys.map((k) => ({ color: color(k), label: label(k), title: marked(k) ? ESTIMATED_TITLE : undefined }))}
+          >
             <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid vertical={false} stroke={ink.grid} />
               <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
@@ -2273,8 +2300,10 @@ const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size,
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws no point';
 // "Model tier", since the tier unknown entries beside it name the account tier.
 const ESTIMATED_HINT = 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier';
-// The route answers no model week alike for a bucket off every such model and for one it could not price.
+// The shares carry no flag, so a bucket off every such model and one the table could not price both answer no week.
 const WEEK_MEAN_HINT = 'The mean per hour of the buckets that answered a model week';
+// The equivalents carry the route's flag, so a bucket off every such model reads zero and an unpriced one stays a gap.
+const WEEK_IDLE_HINT = 'The mean per hour of the buckets, reading one that ran on no model with a week of its own as zero and leaving out one the cost model could not price';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
 
@@ -2458,7 +2487,7 @@ function BurnCharts({
           color: colorOf(l),
           label: nameOf(l),
           shape: 'line' as const,
-          title: withEstimate(w === PLAN_WINDOWS[2] ? WEEK_MEAN_HINT : w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', marked) || undefined,
+          title: withEstimate(w === PLAN_WINDOWS[2] ? (figure === 'equivalent' ? WEEK_IDLE_HINT : WEEK_MEAN_HINT) : w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', marked) || undefined,
           value: figureOf(w, w.perHour(l), marked, 'short'),
         };
       }),

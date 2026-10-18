@@ -1,4 +1,4 @@
-import { planRowsRequired, probesRequired, savingRequired } from '@/lib/analytics';
+import { savingRequired } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
@@ -38,7 +38,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   failovers: 0,
   histograms: { durationMs: emptyHistogram(), outputTps: emptyHistogram(), ttfbMs: emptyHistogram(), ttftMs: emptyHistogram() },
   incomplete: 0,
-  keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
+  keptWarm: { planRequests: 0, planTokens1h: 0, planTokens5m: 0, requests: 0, tokens1h: 0, tokens5m: 0 },
   key,
   keyCreatedAt: null,
   keyId: null,
@@ -48,8 +48,10 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   planRequests: null,
   probeCostUsd: 0,
   probeEquivalent: {},
-  probes: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
+  probeEstimated: false,
+  probes: { failed: 0, held: 0, migrated: 0, ok: 0, planOk: 0, skipped: 0 },
   probeShares: null,
+  probeUnpriced: { five_hour: false, seven_day: false },
   rateLimited: 0,
   rejected: 0,
   requests: 0,
@@ -59,6 +61,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   succeeded: 0,
   tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 },
   uncached: 0,
+  unpriced: { five_hour: false, seven_day: false },
   wastedProbeReasons: emptyWastedProbeReasons(),
   wastedProbeUsd: 0,
   wastedProbes: 0,
@@ -249,7 +252,8 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     g.costUsd += r.costUsd;
     // The billed side is the funding filter's complement of the plan. The route counts the plan rows under every
     // grouping, so the fold does too, and a group whose plan rows priced no window then reads it unpriced rather than
-    // as a group with no plan row. A shared window the cost model could not price on a row leaves the group below.
+    // as a group with no plan row. A window the cost model could not price on a row is flagged here and leaves the
+    // group below.
     if (onSide(r, 'plan')) {
       g.planRequests = (g.planRequests ?? 0) + 1;
       g.planOutputTokens = (g.planOutputTokens ?? 0) + r.usage.output;
@@ -257,6 +261,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
       g.billedUsd += r.costUsd;
     }
     for (const [window, equivalent] of Object.entries(r.costEquivalent ?? {})) if (equivalent !== null) g.costEquivalent[window] = (g.costEquivalent[window] ?? 0) + equivalent;
+    flagUnpriced(g.unpriced, r);
     if (r.estimated) g.estimated = true;
     // The ledger classifies by tokens: a read is a hit, a write without a read is a miss, neither is uncached.
     // The diagnosed reason is a breakdown of its own and decides nothing here.
@@ -272,7 +277,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     const pick = (read: (r: RequestLog) => number | null) => list.map(read).filter((v): v is number => v !== null);
     g.histograms = { durationMs: histogramOf(pick((r) => r.durationMs)), outputTps: histogramOf(pick(outputTps)), ttfbMs: histogramOf(pick((r) => r.ttfbMs)), ttftMs: histogramOf(pick((r) => r.ttftMs)) };
     for (const m of METRICS) g.percentiles[m] = quartet(g.histograms[m]);
-    latchShared(g.costEquivalent, list, rowCarriesShared, (r) => r.costEquivalent);
+    latchUnpriced(g.costEquivalent, g.unpriced);
     // Shares of one account's windows add, and a group of any other dimension spans accounts, whose windows do not.
     if (by === 'account') foldShares(g, list);
   }
@@ -327,24 +332,46 @@ const SHARED_WINDOWS = ['five_hour', 'seven_day'];
  */
 const rowCarriesShared = (r: RequestLog): boolean => onSide(r, 'plan') && r.costEquivalent !== null && tokensOf(r) > 0;
 /**
- * The one rule a sum of request rows and a sum of groups read a shared window by: a part `obliged` to carry it that
- * lacks it, or carries it null, leaves it out of `sum`, as the ledger leaves a window out once it cannot price a plan
- * row there, so no partial sum reads as the whole.
+ * A request row's windows into its group's `unpriced` map, as the route flags a group's: a row that must carry both
+ * shared windows flags one it lacks or carries null, and a model week it carries null, and every window it names stays
+ * a key, unflagged where the row priced it.
  */
-function latchShared<P>(sum: Record<string, unknown>, parts: P[], obliged: (part: P) => boolean, windowsOf: (part: P) => Record<string, unknown> | null) {
+function flagUnpriced(into: Record<string, boolean>, r: RequestLog) {
+  if (!rowCarriesShared(r)) return;
+  const windows = r.costEquivalent ?? {};
+  for (const window of new Set([...SHARED_WINDOWS, ...Object.keys(windows)])) into[window] = (own(into, window) && into[window]) || !own(windows, window) || windows[window] === null;
+}
+/**
+ * The rule a sum reads a window by where its parts carry the route's flags: a window flagged unpriced leaves `sum`, as
+ * the ledger leaves a window out once it cannot price a plan row there, so no partial sum reads as the whole. A window a
+ * part lacks with its flag unset is one none of its plan rows reached, its rows there all billed or with no token, so
+ * the sum keeps the other parts' figure.
+ */
+function latchUnpriced(sum: Record<string, unknown>, unpriced: Record<string, boolean>) {
+  for (const [window, flagged] of Object.entries(unpriced)) if (flagged) delete sum[window];
+}
+/**
+ * The rule for the saving equivalents, which carry no flag of their own: a part `obliged` to carry a shared window that
+ * lacks it leaves it out of `sum`, since a plan credit's saving on a window it could not be priced on is absent alike.
+ */
+function latchShared<P>(sum: Record<string, unknown>, parts: P[], obliged: (part: P) => boolean, windowsOf: (part: P) => Record<string, unknown>) {
   for (const part of parts) {
     if (!obliged(part)) continue;
     const windows = windowsOf(part);
-    for (const window of SHARED_WINDOWS) if (windows === null || !own(windows, window) || windows[window] === null) delete sum[window];
+    for (const window of SHARED_WINDOWS) if (!own(windows, window)) delete sum[window];
   }
+}
+/** Each window flagged in either map, flagged in `into`. */
+function orFlags(into: Record<string, boolean>, from: Record<string, boolean>) {
+  for (const [window, flagged] of Object.entries(from)) into[window] = (own(into, window) && into[window]) || flagged;
 }
 
 /**
  * Several groups of one point summed into one, for the charts and tiles that draw totals. A figure one group
- * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole: a shared window a
- * group with plan rows lacks leaves the equivalents, and one a group with plan probes lacks the probe equivalents, as
- * each leaves the one account's shares. The plan counts are the exception: a group that carries none is skipped, and
- * the groups that carry them still total.
+ * cannot supply leaves the sum unknown, so a total never passes a partial sum off as the whole: a window a group flags
+ * unpriced leaves the equivalents, one its probe map flags the probe equivalents, and a shared window a group with plan
+ * credits lacks the saving equivalents. The sum carries every flag a group carries. The plan counts are the exception:
+ * a group that carries none is skipped, and the groups that carry them still total.
  */
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
@@ -359,19 +386,34 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     const split = out.equivalentSplit;
     out.equivalentSplit = split === null || g.equivalentSplit === null ? null : { cacheRead: split.cacheRead + g.equivalentSplit.cacheRead, cacheWrite: split.cacheWrite + g.equivalentSplit.cacheWrite, input: split.input + g.equivalentSplit.input, output: split.output + g.equivalentSplit.output };
     if (g.estimated) out.estimated = true;
+    if (g.probeEstimated) out.probeEstimated = true;
+    orFlags(out.unpriced, g.unpriced);
+    orFlags(out.probeUnpriced, g.probeUnpriced);
     out.planRequests = plusKnown(out.planRequests, g.planRequests);
     out.planOutputTokens = plusKnown(out.planOutputTokens, g.planOutputTokens);
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
-    out.keptWarm = out.keptWarm && g.keptWarm ? { requests: out.keptWarm.requests + g.keptWarm.requests, tokens1h: out.keptWarm.tokens1h + g.keptWarm.tokens1h, tokens5m: out.keptWarm.tokens5m + g.keptWarm.tokens5m } : null;
-    for (const k of ['failed', 'held', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];
+    const kept = out.keptWarm;
+    out.keptWarm =
+      kept && g.keptWarm
+        ? {
+            planRequests: kept.planRequests + g.keptWarm.planRequests,
+            planTokens1h: kept.planTokens1h + g.keptWarm.planTokens1h,
+            planTokens5m: kept.planTokens5m + g.keptWarm.planTokens5m,
+            requests: kept.requests + g.keptWarm.requests,
+            tokens1h: kept.tokens1h + g.keptWarm.tokens1h,
+            tokens5m: kept.tokens5m + g.keptWarm.tokens5m,
+          }
+        : null;
+    for (const k of ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];
     for (const reason of WASTED_PROBE_REASONS) out.wastedProbeReasons[reason] += g.wastedProbeReasons[reason];
   }
-  latchShared(out.costEquivalent, groups, planRowsRequired, (g) => g.costEquivalent);
-  latchShared(out.cacheEquivalent, groups, planRowsRequired, (g) => g.cacheEquivalent);
-  latchShared(out.probeEquivalent, groups, probesRequired, (g) => g.probeEquivalent);
+  // The cache halves are the plan rows' as the equivalents are, so the one flag map latches both.
+  latchUnpriced(out.costEquivalent, out.unpriced);
+  latchUnpriced(out.cacheEquivalent, out.unpriced);
+  latchUnpriced(out.probeEquivalent, out.probeUnpriced);
   latchShared(out.savingEquivalent, groups, savingRequired, (g) => g.savingEquivalent);
   for (const m of METRICS) {
     out.histograms[m] = mergeHistograms(groups.map((g) => g.histograms[m]));

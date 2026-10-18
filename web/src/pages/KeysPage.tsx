@@ -12,7 +12,7 @@ import { figuresValue, Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
-import { nativeFiguresOf, SHARE_NOTE, type DollarPosition } from '@/lib/analytics';
+import { nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE, type DollarPosition } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
@@ -59,19 +59,27 @@ export interface FundedSum {
 /** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
 /**
- * A sum's two sides on the 7-day window, each undefined where it has no rows, so a sum of one funding shows one figure
- * and no "0%" side.
+ * A sum's two sides on the 7-day window, the window its figure leads with, each undefined where it has no rows, so a
+ * sum of one funding shows one figure and no "0%" side. The subscription side reads the window's flag: a window a plan
+ * row priced nothing on is a side with rows whatever the sum, and a zero reads as no plan rows only where it is unset.
  */
-export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | undefined } => ({ billed: s.billedUsd > 0 ? s.billedUsd : undefined, equivalent: s.equivalent.sevenDay > 0 ? s.equivalent.sevenDay : undefined });
+export const nativeSidesOf = (s: FundedSum): { billed: number | undefined; equivalent: number | undefined; unpriced: boolean } => ({
+  billed: s.billedUsd > 0 ? s.billedUsd : undefined,
+  equivalent: s.equivalent.sevenDay > 0 || s.equivalent.unpriced.sevenDay ? s.equivalent.sevenDay : undefined,
+  unpriced: s.equivalent.unpriced.sevenDay,
+});
+/** The title of a sum's native figure: the unpriced window's, else the estimate's where the equivalent is marked. */
+const nativeTitleOf = (f: { marked: boolean; unpriced: boolean }): string | undefined => (f.unpriced ? UNPRICED_TITLE : f.marked ? ESTIMATED_TITLE : undefined);
 /**
- * A tile over a sum under a position. Native stacks the two sides with their words, and an empty sum reads its zero in
- * each unit rather than nothing. The shares are one account's, and these tiles sum every account, so they read a dash.
+ * A tile over a sum under a position. Native stacks the two sides with their words, the subscription side a dash under
+ * `UNPRICED_TITLE` where the window is flagged, and an empty sum reads its zero in each unit rather than nothing. The
+ * shares are one account's, and these tiles sum every account, so they read a dash.
  */
 export function sumTileOf(unit: UnitPosition, s: FundedSum): { title?: string; value: ReactNode } {
   if (unit === 'share') return { title: SHARE_NOTE, value: '-' };
   if (unit !== 'native') return { value: fmtUsd(dollarsUnder(unit, s)) };
-  const { figures, marked } = nativeFiguresOf('seven_day', nativeSidesOf(s), s.estimated);
-  return { title: marked ? ESTIMATED_TITLE : undefined, value: figuresValue(figures) };
+  const native = nativeFiguresOf('seven_day', nativeSidesOf(s), s.estimated);
+  return { title: nativeTitleOf(native), value: figuresValue(native.figures) };
 }
 /**
  * A key's figure as a label or a line reads it: native's two sides on one line, a side with no rows left out and a
@@ -83,8 +91,8 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string): { text: s
   if (unit !== 'native') return { text: fmtUsd(dollarsUnder(unit, s)) };
   const sides = nativeSidesOf(s);
   if (sides.equivalent === undefined && sides.billed === undefined) return { text: '-', title: empty };
-  const { figures, marked } = nativeFiguresOf('seven_day', sides, s.estimated);
-  return { text: figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: marked ? ESTIMATED_TITLE : undefined };
+  const native = nativeFiguresOf('seven_day', sides, s.estimated);
+  return { text: native.figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: nativeTitleOf(native) };
 }
 
 /** A key row's 7-day figure under its tokens. */
@@ -219,7 +227,12 @@ export function KeysPage() {
         lifetime: {
           billedUsd: keys.data.reduce((s, k) => s + k.lifetime.billedUsd, 0),
           cost: keys.data.reduce((s, k) => s + k.lifetime.cost, 0),
-          equivalent: { fiveHour: keys.data.reduce((s, k) => s + k.lifetime.equivalent.fiveHour, 0), sevenDay: keys.data.reduce((s, k) => s + k.lifetime.equivalent.sevenDay, 0) },
+          // A key's flag holds in the total, since that key's sum holds its priced rows alone.
+          equivalent: {
+            fiveHour: keys.data.reduce((s, k) => s + k.lifetime.equivalent.fiveHour, 0),
+            sevenDay: keys.data.reduce((s, k) => s + k.lifetime.equivalent.sevenDay, 0),
+            unpriced: { fiveHour: keys.data.some((k) => k.lifetime.equivalent.unpriced.fiveHour), sevenDay: keys.data.some((k) => k.lifetime.equivalent.unpriced.sevenDay) },
+          },
           estimated: keys.data.some((k) => k.lifetime.estimated),
         },
       }

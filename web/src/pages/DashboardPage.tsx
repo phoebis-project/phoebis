@@ -13,7 +13,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/compone
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
-import { equivalentOrDash, nativeFiguresOf, SHARE_NOTE } from '@/lib/analytics';
+import { equivalentOrDash, nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE } from '@/lib/analytics';
 import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
@@ -53,23 +53,26 @@ interface CostTile {
 /**
  * The day's cost tile under a position. Native stacks the plan rows' 20x 5-hour equivalent, the window a day's figure
  * leads with, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in each
- * unit. The dollar positions read their dollars. The shares are one account's, and the tile sums every account, so it
- * reads a dash, its note saying why and its spark kept so the tile never waits on a placeholder.
+ * unit. A day whose 5-hour window a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash
+ * too, and a zero reads as no plan rows only where neither window is flagged. The dollar positions read their dollars.
+ * The shares are one account's, and the tile sums every account, so it reads a dash, its note saying why and its spark
+ * kept so the tile never waits on a placeholder.
  */
 function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
   if (unit === 'usd') return { note: `${fmtUsd(o.billed24h / 24)} per hour`, spark: o.hourly.map((h) => h.billed), value: fmtUsd(o.billed24h) };
   if (unit === 'equivalent') return { note: 'at the API price list, the subscription requests', spark: o.hourly.map((h) => h.cost - h.billed), value: fmtUsd(o.cost24h - o.billed24h) };
   if (unit === 'share') return { note: 'shares do not add across accounts', spark: o.hourly.map((h) => h.cost), title: SHARE_NOTE, value: '-' };
-  const plan = o.equivalent24h.fiveHour > 0 || o.equivalent24h.sevenDay > 0;
+  const day = o.equivalent24h;
+  const plan = day.fiveHour > 0 || day.sevenDay > 0 || day.unpriced.fiveHour || day.unpriced.sevenDay;
   const billed = o.billed24h > 0;
-  const { figures, marked } = nativeFiguresOf('five_hour', { billed: billed ? o.billed24h : undefined, equivalent: plan ? o.equivalent24h.fiveHour : undefined }, o.estimated24h);
+  const { figures, marked, unpriced } = nativeFiguresOf('five_hour', { billed: billed ? o.billed24h : undefined, equivalent: plan ? day.fiveHour : undefined, unpriced: day.unpriced.fiveHour }, o.estimated24h);
   return {
-    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('five_hour', o.equivalent24h.fiveHour / 24, marked)} per hour`,
+    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('five_hour', unpriced ? null : day.fiveHour / 24, marked)} per hour`,
     // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
     // window an hour would flatten the day.
     spark: plan || !billed ? o.hourly.map((h) => h.equivalent.fiveHour * 100) : o.hourly.map((h) => h.billed),
-    title: marked ? ESTIMATED_TITLE : undefined,
+    title: unpriced ? UNPRICED_TITLE : marked ? ESTIMATED_TITLE : undefined,
     value: figuresValue(figures),
   };
 }

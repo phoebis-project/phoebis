@@ -96,31 +96,64 @@ test("an account's windows read the router's lead over pace, null while the util
   assert.equal(unread.windows[0].lead, null, 'a window without a utilization reads no lead');
 });
 
-test("a group decodes the kept-warm tokens per TTL and the saving's three members, and a sum adds them", () => {
+test("a group decodes the kept-warm tokens per TTL with their plan-funded parts and the saving's three members, and a sum adds them", () => {
   const row = fixture('analytics_breakdown').rows[0];
-  assert.deepEqual(Object.keys(row.kept_warm).sort(), ['requests', 'tokens_1h', 'tokens_5m'], 'the capture answers the two counts and no sum');
+  assert.deepEqual(Object.keys(row.kept_warm).sort(), ['plan_requests', 'plan_tokens_1h', 'plan_tokens_5m', 'requests', 'tokens_1h', 'tokens_5m'], 'the capture answers the two counts and their plan-funded parts and no sum');
   // The capture reads zeros and empty maps, as a missing field decodes, so nonzero copies prove the wire names.
-  const wire = { ...row, kept_warm: { requests: 2, tokens_1h: 700, tokens_5m: 300 }, saving_equivalent: { five_hour: 0.02, seven_day: 0.004 }, saving_shares: { five_hour: 0.01 }, saving_usd: 0.5 };
+  const wire = { ...row, kept_warm: { plan_requests: 1, plan_tokens_1h: 600, plan_tokens_5m: 100, requests: 2, tokens_1h: 700, tokens_5m: 300 }, saving_equivalent: { five_hour: 0.02, seven_day: 0.004 }, saving_shares: { five_hour: 0.01 }, saving_usd: 0.5 };
   const group = d.decodeAnalyticsGroup(wire);
-  assert.deepEqual(group.keptWarm, { requests: 2, tokens1h: 700, tokens5m: 300 });
+  assert.deepEqual(group.keptWarm, { planRequests: 1, planTokens1h: 600, planTokens5m: 100, requests: 2, tokens1h: 700, tokens5m: 300 });
   assert.deepEqual([group.savingUsd, group.savingShares, group.savingEquivalent], [0.5, { five_hour: 0.01 }, { five_hour: 0.02, seven_day: 0.004 }]);
   assert.equal(d.decodeAnalyticsGroup({ ...wire, saving_shares: null }).savingShares, null, 'a group that holds no one account answers no share');
   assert.equal(d.keptWarmTokens(group.keptWarm), 1_000, 'the charts and the by-pool table print the two counts summed');
   const sum = d.sumGroups([group, d.decodeAnalyticsGroup({ ...wire, saving_equivalent: { five_hour: 0.25, seven_day: 0.125 }, saving_usd: 0.25 })]);
-  assert.deepEqual(sum.keptWarm, { requests: 4, tokens1h: 1_400, tokens5m: 600 }, 'each count sums apart');
+  assert.deepEqual(sum.keptWarm, { planRequests: 2, planTokens1h: 1_200, planTokens5m: 200, requests: 4, tokens1h: 1_400, tokens5m: 600 }, 'each count sums apart');
   assert.equal(sum.savingUsd, 0.75, 'the dollars sum');
   assert.equal(sum.savingShares, null, 'a sum of groups carries no share of one account');
   assert.ok(Math.abs(sum.savingEquivalent.five_hour - 0.27) < 1e-12 && Math.abs(sum.savingEquivalent.seven_day - 0.129) < 1e-12, 'the equivalent adds by window');
 });
 
-test('a sum of groups latches the saving equivalent on the groups that carry a credit, so a probed group with none drops no window', () => {
+test('a group decodes its unpriced windows, its probe windows, the probe estimate and the plan-funded answered probes, and a sum carries each', () => {
+  const row = fixture('analytics_breakdown').rows[0];
+  assert.deepEqual([row.unpriced, row.probe_unpriced, row.probe_estimated], [{ five_hour: false, seven_day: false }, { five_hour: false, seven_day: false }, false], 'the capture keys both shared windows of each map and prices no probe through the fallback');
+  assert.deepEqual(Object.keys(row.probes).sort(), ['failed', 'held', 'migrated', 'ok', 'plan_ok', 'skipped'], 'the capture answers the plan-funded part beside the five outcomes');
+  const captured = d.decodeAnalyticsGroup(row);
+  assert.deepEqual([captured.unpriced, captured.probeUnpriced, captured.probeEstimated, captured.probes.planOk], [{ five_hour: false, seven_day: false }, { five_hour: false, seven_day: false }, false, 0]);
+  assert.deepEqual(Object.keys(captured.probes).sort(), ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'], 'the probes decode to the five outcomes and the plan-funded part');
+  // The capture reads false and zero, as a missing field decodes, so true and nonzero copies prove the wire names.
+  const wire = { ...row, probe_estimated: true, probe_unpriced: { five_hour: true, seven_day: false }, probes: { ...row.probes, ok: 3, plan_ok: 2 }, unpriced: { five_hour: false, seven_day: true, seven_day_fable: true } };
+  const group = d.decodeAnalyticsGroup(wire);
+  assert.deepEqual(group.unpriced, { five_hour: false, seven_day: true, seven_day_fable: true }, 'the map keeps the model week where the group named one');
+  assert.deepEqual([group.probeUnpriced, group.probeEstimated, group.probes.planOk, group.probes.ok], [{ five_hour: true, seven_day: false }, true, 2, 3]);
+  const sum = d.sumGroups([captured, group, d.decodeAnalyticsGroup({ ...wire, probe_estimated: false, probe_unpriced: { five_hour: false, seven_day: true }, unpriced: { five_hour: true, seven_day: false } })]);
+  assert.deepEqual([sum.unpriced, sum.probeUnpriced, sum.probeEstimated, sum.probes.planOk], [{ five_hour: true, seven_day: true, seven_day_fable: true }, { five_hour: true, seven_day: true }, true, 4], 'a window any group reads unpriced reads unpriced in the sum, and the plan-funded probes add');
+});
+
+test('the shared sums decode their unpriced windows on the dashboard, a key, a pool and a traffic bucket', () => {
+  const dashboard = fixture('dashboard');
+  const key = fixture('keys').keys[0];
+  const pool = fixture('pools').pools[0];
+  for (const [what, wire] of [['the day', dashboard.equivalent_24h], ['an hour', dashboard.hourly[0].equivalent], ["a key's lifetime", key.lifetime.equivalent], ["a key's week", key.usage_7d.equivalent], ["a pool's day", pool.equivalent_24h], ['a traffic bucket', pool.traffic_24h[0].equivalent]]) {
+    assert.deepEqual(wire.unpriced, { five_hour: false, seven_day: false }, `the capture flags ${what} on both windows`);
+  }
+  const flagged = { five_hour: true, seven_day: false };
+  const day = d.decodeDashboard({ ...dashboard, equivalent_24h: { ...dashboard.equivalent_24h, unpriced: flagged }, hourly: dashboard.hourly.map((h, i) => (i === 0 ? { ...h, equivalent: { ...h.equivalent, unpriced: flagged } } : h)) });
+  assert.deepEqual([day.equivalent24h.unpriced, day.hourly[0].equivalent.unpriced, day.hourly[1].equivalent.unpriced], [{ fiveHour: true, sevenDay: false }, { fiveHour: true, sevenDay: false }, { fiveHour: false, sevenDay: false }]);
+  assert.equal(day.equivalent24h.fiveHour, dashboard.equivalent_24h.five_hour, 'the flag leaves the sum as the route answered it');
+  const k = d.decodeKey({ ...key, lifetime: { ...key.lifetime, equivalent: { ...key.lifetime.equivalent, unpriced: { five_hour: false, seven_day: true } } }, usage_7d: { ...key.usage_7d, equivalent: { ...key.usage_7d.equivalent, unpriced: flagged } } });
+  assert.deepEqual([k.lifetime.equivalent.unpriced, k.usage7d.equivalent.unpriced], [{ fiveHour: false, sevenDay: true }, { fiveHour: true, sevenDay: false }]);
+  const p = d.decodePool({ ...pool, equivalent_24h: { ...pool.equivalent_24h, unpriced: { five_hour: true, seven_day: true } }, traffic_24h: pool.traffic_24h.map((b, i) => (i === 0 ? { ...b, equivalent: { ...b.equivalent, unpriced: flagged } } : b)) });
+  assert.deepEqual([p.equivalent24h.unpriced, p.traffic24h[0].equivalent.unpriced], [{ fiveHour: true, sevenDay: true }, { fiveHour: true, sevenDay: false }]);
+});
+
+test('a sum of groups latches the saving equivalent on the groups whose credits a plan funded, so a probed group with none drops no window', () => {
   const row = fixture('analytics_breakdown').rows[0];
   const plan = { plan_output_tokens: 100, plan_requests: 3 };
-  const credited = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { requests: 2, tokens_1h: 700, tokens_5m: 300 }, probes: { ...row.probes, ok: 2 }, saving_equivalent: { five_hour: 0.25, seven_day: 0.125 } });
-  const probed = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { requests: 0, tokens_1h: 0, tokens_5m: 0 }, probes: { ...row.probes, ok: 3 }, saving_equivalent: {} });
+  const credited = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { plan_requests: 2, plan_tokens_1h: 700, plan_tokens_5m: 300, requests: 2, tokens_1h: 700, tokens_5m: 300 }, probes: { ...row.probes, ok: 2, plan_ok: 2 }, saving_equivalent: { five_hour: 0.25, seven_day: 0.125 } });
+  const probed = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { plan_requests: 0, plan_tokens_1h: 0, plan_tokens_5m: 0, requests: 0, tokens_1h: 0, tokens_5m: 0 }, probes: { ...row.probes, ok: 3, plan_ok: 3 }, saving_equivalent: {} });
   assert.deepEqual(d.sumGroups([credited, probed]).savingEquivalent, { five_hour: 0.25, seven_day: 0.125 }, 'a probed group with no credit adds nothing and drops nothing');
-  const partial = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { requests: 1, tokens_1h: 0, tokens_5m: 400 }, saving_equivalent: { five_hour: 0.5 } });
-  assert.deepEqual(d.sumGroups([credited, partial]).savingEquivalent, { five_hour: 0.75 }, 'a credited group that priced no 7-day saving leaves the window out');
+  const partial = d.decodeAnalyticsGroup({ ...row, ...plan, kept_warm: { plan_requests: 1, plan_tokens_1h: 0, plan_tokens_5m: 400, requests: 1, tokens_1h: 0, tokens_5m: 400 }, saving_equivalent: { five_hour: 0.5 } });
+  assert.deepEqual(d.sumGroups([credited, partial]).savingEquivalent, { five_hour: 0.75 }, 'a group with a plan credit that priced no 7-day saving leaves the window out');
 });
 
 test('an account decodes its quarantine flag and the router\'s overage evidence', () => {
@@ -293,7 +326,7 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.equal(k.lifetime.requests, fixture('keys').keys[0].lifetime.requests);
   assert.equal(k.usage7d.tokens > 0, true);
   const wire = fixture('keys').keys[0];
-  const read = (u) => ({ billedUsd: u.billed_usd, equivalent: { fiveHour: u.equivalent.five_hour, sevenDay: u.equivalent.seven_day }, estimated: u.estimated });
+  const read = (u) => ({ billedUsd: u.billed_usd, equivalent: { fiveHour: u.equivalent.five_hour, sevenDay: u.equivalent.seven_day, unpriced: { fiveHour: u.equivalent.unpriced.five_hour, sevenDay: u.equivalent.unpriced.seven_day } }, estimated: u.estimated });
   for (const [name, decoded, sent] of [['usage7d', k.usage7d, wire.usage_7d], ['lifetime', k.lifetime, wire.lifetime]]) {
     assert.deepEqual({ billedUsd: decoded.billedUsd, equivalent: decoded.equivalent, estimated: decoded.estimated }, read(sent), `the ${name} reads its billed dollars, its 20x equivalents and its estimated flag`);
   }
@@ -400,13 +433,14 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.traffic24h.length, 25);
   assert.ok(isIso(p.traffic24h[0].at));
   const wire = fixture('pools').pools[0];
-  assert.deepEqual([p.billed24h, p.equivalent24h, p.estimated24h], [wire.billed_24h, { fiveHour: wire.equivalent_24h.five_hour, sevenDay: wire.equivalent_24h.seven_day }, wire.estimated_24h], "the day's billed dollars, 20x equivalents and estimated flag");
+  const shared = (e) => ({ fiveHour: e.five_hour, sevenDay: e.seven_day, unpriced: { fiveHour: e.unpriced.five_hour, sevenDay: e.unpriced.seven_day } });
+  assert.deepEqual([p.billed24h, p.equivalent24h, p.estimated24h], [wire.billed_24h, shared(wire.equivalent_24h), wire.estimated_24h], "the day's billed dollars, 20x equivalents and estimated flag");
   assert.ok(p.equivalent24h.fiveHour > 0, 'the captured pool served plan traffic');
   const busy = wire.traffic_24h.findIndex((b) => b.requests > 0);
   const bucket = wire.traffic_24h[busy];
   assert.deepEqual(
     [p.traffic24h[busy].billedUsd, p.traffic24h[busy].equivalent, p.traffic24h[busy].estimated],
-    [bucket.billed_usd, { fiveHour: bucket.equivalent.five_hour, sevenDay: bucket.equivalent.seven_day }, bucket.estimated],
+    [bucket.billed_usd, shared(bucket.equivalent), bucket.estimated],
     "a bucket's billed dollars, 20x equivalents and estimated flag",
   );
   const marked = d.decodePool({ ...wire, estimated_24h: true, traffic_24h: [{ ...bucket, estimated: true }] });
@@ -1036,7 +1070,7 @@ test("a request's 20x equivalents decode keyed by window and null when billed, a
 });
 
 test('an answer from before the 20x equivalents reads them empty, zero, null or false, and a cost model without its model tiers reads the problem', () => {
-  const zero = { fiveHour: 0, sevenDay: 0 };
+  const zero = { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } };
   const group = d.decodeAnalyticsGroup({});
   assert.deepEqual(
     [group.billed, group.billedUsd, group.cacheEquivalent, group.costEquivalent, group.equivalentSplit, group.estimated, group.probeEquivalent],
@@ -1283,11 +1317,14 @@ test('the burn series decodes each point with its instant, both token sides, and
     estimated: wire.estimated,
     fiveHourEquivalent: wire.five_hour_equivalent,
     fiveHourShare: wire.five_hour_share,
+    fiveHourUnpriced: false,
     group: 'business',
     modelWeekEquivalent: wire.model_week_equivalent,
     modelWeekShare: wire.model_week_share,
+    modelWeekUnpriced: false,
     sevenDayEquivalent: wire.seven_day_equivalent,
     sevenDayShare: wire.seven_day_share,
+    sevenDayUnpriced: false,
     tokens: wire.tokens,
     uncachedTokens: wire.uncached_tokens,
     unit: 'window_share',
@@ -1308,6 +1345,10 @@ test('the burn series decodes each point with its instant, both token sides, and
   assert.deepEqual([keyed.fiveHourShare, keyed.sevenDayShare, keyed.unit], [null, null, null]);
   assert.deepEqual([keyed.fiveHourEquivalent, keyed.sevenDayEquivalent], [wire.five_hour_equivalent, wire.seven_day_equivalent]);
   assert.equal(d.decodeBurnPoint({ ...wire, estimated: true }).estimated, true, 'a fallback-priced bucket reads estimated');
+  assert.ok(body.points.every((p) => [p.five_hour_unpriced, p.seven_day_unpriced, p.model_week_unpriced].every((f) => f === false)), 'every captured point carries the three flags, none of them set');
+  // The capture reads false, as a missing field decodes, so a copy that sets each flag proves the wire names.
+  const unpriced = d.decodeBurnPoint({ ...wire, five_hour_equivalent: null, five_hour_unpriced: true, model_week_unpriced: true, seven_day_equivalent: null, seven_day_unpriced: true });
+  assert.deepEqual([unpriced.fiveHourUnpriced, unpriced.sevenDayUnpriced, unpriced.modelWeekUnpriced, unpriced.fiveHourEquivalent], [true, true, true, null], 'a bucket holding a plan row the cost model could not price reads each window flagged');
   const { tokens: _, ...untold } = wire;
   assert.equal(d.decodeBurn({ bucket_seconds: 3_600, points: [untold] }).points[0].tokens, 0, 'a point without the count decodes it as zero');
   assert.equal(d.decodeBurn({ bucket_seconds: 21_600, points: [] }).bucketSeconds, 21_600);
@@ -1749,18 +1790,24 @@ test('a sum of groups adds the 20x equivalents per window, the billed side and t
   assert.deepEqual([d.sumGroups([uncounted]).planRequests, d.sumGroups([uncounted]).planOutputTokens], [null, null], 'and null when every group reads null');
 });
 
-test('a sum of groups leaves out a shared window a group with plan rows lacks, so no partial sum reads as the whole', () => {
-  // The ledger leaves a window out of a group's equivalents when it cannot price one of the group's plan rows there.
+test('a sum of groups leaves out a shared window a group reads unpriced, so no partial sum reads as the whole, and keeps one a group lacks unflagged', () => {
+  // The ledger leaves a window out of a group's equivalents when it cannot price one of the group's plan rows there,
+  // and flags it so.
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const [first, second] = fixture('analytics_breakdown').rows;
   const priced = d.decodeAnalyticsGroup(first);
   const lacking = { ...second, cache_equivalent: { five_hour: second.cache_equivalent.five_hour }, cost_equivalent: { five_hour: second.cost_equivalent.five_hour } };
-  const unpriced = d.decodeAnalyticsGroup(lacking);
+  const unpriced = d.decodeAnalyticsGroup({ ...lacking, unpriced: { five_hour: false, seven_day: true } });
   assert.ok(priced.planRequests > 0 && unpriced.planRequests > 0 && unpriced.planOutputTokens > 0, 'both captured groups hold plan rows with tokens');
   const summed = d.sumGroups([priced, unpriced]);
-  assert.deepEqual([own(summed.costEquivalent, 'seven_day'), own(summed.cacheEquivalent, 'seven_day')], [false, false], 'the 7-day window one plan group lacks stays out of the sum');
+  assert.deepEqual([own(summed.costEquivalent, 'seven_day'), own(summed.cacheEquivalent, 'seven_day')], [false, false], 'the 7-day window one group reads unpriced stays out of the sum');
   assert.equal(summed.costEquivalent.five_hour, priced.costEquivalent.five_hour + unpriced.costEquivalent.five_hour, 'a window both carry still sums');
   assert.equal(d.sidesOf(summed, 'seven_day').equivalent, null, 'and the plan side reads it unpriced');
+  assert.deepEqual(summed.unpriced, { five_hour: false, seven_day: true }, 'the sum carries the flag');
+  // The same group with the flag unset lacks the window for a reason that leaves the sum whole: its rows were all
+  // billed, or its plan rows wrote no output token.
+  const unflagged = d.sumGroups([priced, d.decodeAnalyticsGroup(lacking)]);
+  assert.deepEqual([unflagged.costEquivalent.seven_day, unflagged.cacheEquivalent.seven_day], [priced.costEquivalent.seven_day, priced.cacheEquivalent.seven_day], 'a window a group lacks with its flag unset stays in the sum');
   // A group with no plan row carries no window, nor does one whose plan rows wrote no token, which the ledger prices
   // nothing on, so the sum keeps the other group's windows whole.
   for (const [what, over] of [['no plan row', { plan_output_tokens: 0, plan_requests: 0 }], ['plan rows with no token', { plan_output_tokens: 0 }]]) {
@@ -1777,14 +1824,20 @@ test('a session fold leaves out a shared window one of its plan rows lacks and, 
   assert.equal(own(folded.costEquivalent, 'seven_day'), false, 'the window one plan row could not be priced on leaves the group');
   assert.equal(folded.costEquivalent.five_hour, 2 * plan.costEquivalent.five_hour, 'a window both rows carry still sums');
   assert.deepEqual([folded.planRequests, d.sidesOf(folded, 'seven_day').equivalent], [2, null], 'and the group reads it unpriced');
+  assert.deepEqual(folded.unpriced, { five_hour: false, seven_day: true }, "the group flags the window off the row's null, as the route flags it");
   // A model of no known tier prices neither shared window: the group still counts its plan rows, so it reads the
   // window unpriced rather than as a group with no plan row.
   const [unknown] = d.foldGroups([plan, { ...plan, costEquivalent: { five_hour: null, seven_day: null }, id: 'r-unknown' }], 'key');
-  assert.deepEqual([unknown.costEquivalent, d.sidesOf(unknown, 'seven_day').equivalent, d.costHeadOf('native', unknown).meta], [{}, null, '- in range']);
+  assert.deepEqual([unknown.costEquivalent, d.sidesOf(unknown, 'seven_day').equivalent, d.costHeadOf('native', unknown).meta, unknown.unpriced], [{}, null, '- in range', { five_hour: true, seven_day: true }]);
   // A billed row carries no plan window to lack, and a plan row with no token prices nothing, so neither leaves the fold.
   const billed = { ...plan, attempts: [{ ...attempt, accountKind: 'api_key' }], costEquivalent: null, id: 'r-billed' };
   const tokenless = { ...plan, costEquivalent: { five_hour: null, seven_day: null }, id: 'r-tokenless', usage: { ...plan.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 } };
-  for (const [what, row] of [['a billed row', billed], ['a plan row with no token', tokenless]]) assert.deepEqual(d.foldGroups([plan, row], 'key')[0].costEquivalent, plan.costEquivalent, what);
+  for (const [what, row] of [['a billed row', billed], ['a plan row with no token', tokenless]]) {
+    const [group] = d.foldGroups([plan, row], 'key');
+    assert.deepEqual([group.costEquivalent, group.unpriced], [plan.costEquivalent, { five_hour: false, seven_day: false }], what);
+  }
+  // A fold of request rows measures no probe, so it flags no probe window and marks no probe estimate.
+  assert.deepEqual([unknown.probeUnpriced, unknown.probeEstimated], [{ five_hour: false, seven_day: false }, false]);
 });
 
 test('a recipe evicted at the byte cap or lapsed past its entry keeps that cause, and the wasted probes their labels', () => {
@@ -1963,7 +2016,7 @@ test('the dashboard reads the live pin count the route answers beside the rollup
 test('the dashboard reads its billed dollars, its 20x equivalents and its estimated flag for the day and per hour', () => {
   const wire = fixture('dashboard');
   const o = d.decodeDashboard(wire);
-  const shared = (e) => ({ fiveHour: e.five_hour, sevenDay: e.seven_day });
+  const shared = (e) => ({ fiveHour: e.five_hour, sevenDay: e.seven_day, unpriced: { fiveHour: e.unpriced.five_hour, sevenDay: e.unpriced.seven_day } });
   assert.deepEqual([o.billed24h, o.equivalent24h, o.estimated24h], [wire.billed_24h, shared(wire.equivalent_24h), wire.estimated_24h]);
   assert.ok(o.billed24h > 0 && o.equivalent24h.fiveHour > 0, 'the captured day spent on both sides');
   const busy = wire.hourly.findIndex((h) => h.requests > 0);

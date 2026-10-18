@@ -414,6 +414,63 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(sum(points, (pt) => sum(pt.groups, (g) => g.requests)), sum(day, requestsOf));
   });
 
+  test(`the mock flags a window where a plan row with tokens priced nothing on it, so the story reads no flag, and its unpriced request flags the day under its switch, at ${at}`, async () => {
+    const s = await story;
+    const range = { from: iso(s.now - DAY), to: iso(s.now) };
+    const both = { five_hour: false, seven_day: false };
+    const shared = { fiveHour: false, sevenDay: false };
+    // The rule over the rows the folds read: a plan row with tokens whose equivalent on the window is null.
+    const unpricedRows = s.allRollups.filter((r) => r.funding === 'plan' && tokensOf(r) > 0 && Object.values(r.equivalents).some((v) => v === null));
+    assert.deepEqual(unpricedRows.map((r) => r.model), [], 'every model the story draws sits in a tier with a weighted model');
+    const plain = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' });
+    for (const g of plain) {
+      assert.deepEqual([g.unpriced?.five_hour, g.unpriced?.seven_day, g.probeUnpriced?.five_hour, g.probeUnpriced?.seven_day], [false, false, false, false], `${g.key} reads no flag`);
+      for (const [w, flag] of Object.entries(g.unpriced ?? {})) assert.equal(flag, false, `${g.key}'s ${w}`);
+    }
+    const plainBurn = await s.api.getAnalyticsBurn(range, 'key');
+    assert.ok(plainBurn.points.every((p) => !p.fiveHourUnpriced && !p.sevenDayUnpriced && !p.modelWeekUnpriced), 'no burn point reads a flag');
+    assert.deepEqual([s.overview.equivalent24h.unpriced, ...s.overview.hourly.map((h) => h.equivalent.unpriced)].filter((u) => u.fiveHour || u.sevenDay), [], 'the dashboard reads no flag');
+    for (const k of s.keys) assert.deepEqual([k.lifetime.equivalent.unpriced, k.usage7d.equivalent.unpriced], [shared, shared], `${k.id} reads no flag`);
+    for (const p of s.pools) assert.deepEqual([p.equivalent24h.unpriced, ...p.traffic24h.map((b) => b.equivalent.unpriced)].filter((u) => u.fiveHour || u.sevenDay), [], `${p.id} reads no flag`);
+    // The story's Sonnet 4.6 account has no weight of its own and prices through its model tier's fallback.
+    const secondary = (await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' })).find((g) => g.key === 'secondary');
+    assert.ok(secondary && secondary.estimated && secondary.costEquivalent.seven_day > 0, 'the Sonnet 4.6 account prices an estimate');
+    assert.deepEqual(secondary.unpriced, both, 'and is never unpriced');
+    // The switch lends the story one plan request on a model the cost model lists in no tier, in a row of its own.
+    globalThis.localStorage = { getItem: (key) => (key === 'phoebis.mockUnpriced' ? '1' : null) };
+    let switched;
+    try {
+      switched = {
+        accounts: await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' }),
+        all: await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'all' }),
+        burn: await s.api.getAnalyticsBurn(range, 'model'),
+        models: await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' }),
+        overview: await s.api.getOverview(),
+        series: await s.api.getAnalyticsSeries({ ...range, groupBy: 'model' }),
+      };
+    } finally {
+      delete globalThis.localStorage;
+    }
+    const added = switched.models.filter((g) => !plain.some((p) => p.key === g.key));
+    assert.equal(added.length, 1, 'the switch adds one model group');
+    const [unlisted] = added;
+    assert.equal(s.lib.modelTierOf(s.settings.subscriptionCosts, unlisted.key), null, `${unlisted.key} sits in no tier`);
+    assert.deepEqual([unlisted.unpriced, unlisted.costEquivalent, unlisted.planRequests, unlisted.estimated], [{ five_hour: true, seven_day: true }, {}, 1, false], 'its group flags both shared windows, which it leaves out');
+    for (const g of switched.models.filter((x) => x.key !== unlisted.key)) assert.deepEqual(g.unpriced, plain.find((p) => p.key === g.key).unpriced, `${g.key} keeps its flags`);
+    const [whole] = switched.all;
+    assert.deepEqual([whole.unpriced, Object.keys(whole.costEquivalent).filter((w) => w === 'five_hour' || w === 'seven_day')], [{ ...whole.unpriced, five_hour: true, seven_day: true }, []], "the whole range's group flags both windows and leaves them out, so no partial sum reads as the whole");
+    assert.deepEqual(switched.accounts.find((g) => g.key === 'secondary').unpriced, both, 'the Sonnet 4.6 account stays priced beside it');
+    const bucket = switched.series.find((p) => p.groups.some((g) => g.key === unlisted.key));
+    assert.deepEqual(bucket?.groups.filter((g) => g.unpriced.seven_day).map((g) => g.key), [unlisted.key], 'one bucket holds it, its group the one flagged');
+    const flaggedPoints = switched.burn.points.filter((p) => p.fiveHourUnpriced || p.sevenDayUnpriced);
+    assert.deepEqual(flaggedPoints.map((p) => [p.group, p.fiveHourEquivalent, p.sevenDayEquivalent, p.fiveHourUnpriced, p.sevenDayUnpriced, p.modelWeekUnpriced]), [[unlisted.key, null, null, true, true, false]], 'its burn bucket flags both shared windows over null equivalents');
+    // The shared sums keep every priced row's figure and flag the windows the request priced nothing on.
+    assert.deepEqual([switched.overview.equivalent24h.unpriced, switched.overview.equivalent24h.fiveHour, switched.overview.equivalent24h.sevenDay], [{ fiveHour: true, sevenDay: true }, s.overview.equivalent24h.fiveHour, s.overview.equivalent24h.sevenDay]);
+    assert.equal(switched.overview.hourly.filter((h) => h.equivalent.unpriced.fiveHour).length, 1, 'one hour holds it');
+    // The switch reads per answer, so the story answers whole again once it is off.
+    assert.deepEqual((await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' })).map((g) => g.key), plain.map((g) => g.key));
+  });
+
   test(`the live desktop key starts on the hour its earlier holder ended, inside the last day, at ${at}`, async () => {
     const s = await story;
     const desktop = s.keys.find((k) => k.id === 'desktop');

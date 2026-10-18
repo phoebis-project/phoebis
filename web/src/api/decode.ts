@@ -38,7 +38,9 @@ const costSplit = (v: unknown): CostSplit => {
   const c = rec(v);
   return { cacheRead: num(c.cache_read), cacheWrite: num(c.cache_write), input: num(c.input), output: num(c.output) };
 };
-const sharedEquivalent = (v: unknown): SharedEquivalent => ({ fiveHour: num(rec(v).five_hour), sevenDay: num(rec(v).seven_day) });
+const sharedEquivalent = (v: unknown): SharedEquivalent => ({ fiveHour: num(rec(v).five_hour), sevenDay: num(rec(v).seven_day), unpriced: { fiveHour: bool(rec(rec(v).unpriced).five_hour), sevenDay: bool(rec(rec(v).unpriced).seven_day) } });
+/** A map the route keys by window id whose values are flags, with every entry that is not a boolean dropped. */
+const flagMap = (v: unknown): Record<string, boolean> => Object.fromEntries(Object.entries(rec(v)).filter((e): e is [string, boolean] => typeof e[1] === 'boolean'));
 
 /** The wire carries Unix milliseconds; every page formats ISO strings. */
 export const iso = (ms: number): string => new Date(ms).toISOString();
@@ -738,7 +740,10 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     errors: counts(g.errors), estimated: bool(g.estimated), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete),
-    keptWarm: { requests: num(rec(g.kept_warm).requests), tokens1h: num(rec(g.kept_warm).tokens_1h), tokens5m: num(rec(g.kept_warm).tokens_5m) },
+    keptWarm: {
+      planRequests: num(rec(g.kept_warm).plan_requests), planTokens1h: num(rec(g.kept_warm).plan_tokens_1h), planTokens5m: num(rec(g.kept_warm).plan_tokens_5m),
+      requests: num(rec(g.kept_warm).requests), tokens1h: num(rec(g.kept_warm).tokens_1h), tokens5m: num(rec(g.kept_warm).tokens_5m),
+    },
     key: str(g.key), keyCreatedAt, keyId,
     // The route's label of an earlier holder is fixed to one zone, so the console builds it in the viewer's zone from the
     // holder's members, and keeps the wire's label where the route alone knows it (a live key's id, the reserved id's
@@ -749,13 +754,16 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     planRequests: numOrNull(g.plan_requests),
     probeCostUsd: num(g.probe_cost_usd),
     probeEquivalent: equivalentMap(g.probe_equivalent, (e) => ({ cost: num(e.cost), wasted: num(e.wasted) })),
-    probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
+    probeEstimated: bool(g.probe_estimated),
+    probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), planOk: num(rec(g.probes).plan_ok), skipped: num(rec(g.probes).skipped) },
     probeShares: shareMap(g.probe_shares, (e) => ({ cost: num(e.cost), wasted: numOrNull(e.wasted) })),
+    probeUnpriced: flagMap(g.probe_unpriced),
     rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),
     savingEquivalent: numberMap(g.saving_equivalent),
     savingShares: g.saving_shares === null || g.saving_shares === undefined ? null : numberMap(g.saving_shares),
     savingUsd: num(g.saving_usd),
     succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
+    unpriced: flagMap(g.unpriced),
     wastedProbeReasons: record(WASTED_PROBE_REASONS, g.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(g.wasted_probe_usd), wastedProbes: num(g.wasted_probes),
   };
 }
@@ -769,11 +777,14 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
     estimated: bool(p.estimated),
     fiveHourEquivalent: numOrNull(p.five_hour_equivalent),
     fiveHourShare: numOrNull(p.five_hour_share),
+    fiveHourUnpriced: bool(p.five_hour_unpriced),
     group: str(p.group),
     modelWeekEquivalent: numOrNull(p.model_week_equivalent),
     modelWeekShare: numOrNull(p.model_week_share),
+    modelWeekUnpriced: bool(p.model_week_unpriced),
     sevenDayEquivalent: numOrNull(p.seven_day_equivalent),
     sevenDayShare: numOrNull(p.seven_day_share),
+    sevenDayUnpriced: bool(p.seven_day_unpriced),
     tokens: num(p.tokens),
     uncachedTokens: num(p.uncached_tokens),
     unit: burnUnit(p.unit),

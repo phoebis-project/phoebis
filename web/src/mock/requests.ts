@@ -2282,21 +2282,28 @@ const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
 const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
 /** Rollups' billed dollars, their plan rows' 20x equivalents on the two shared windows and whether a plan row priced
- *  at the fallback weight, as the keys route sums a key's rows. A window a row could not price adds nothing. */
+ *  at the fallback weight, as the keys route sums a key's rows. A window a row could not price adds nothing and is
+ *  flagged: an hour's equivalent is null where a request with tokens priced nothing on it. */
 const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'equivalent' | 'estimated'> => {
   const plan = rows.filter((r) => r.funding === 'plan');
   return {
     billedUsd: sumOf(rows.filter((r) => r.funding !== 'plan'), (r) => r.costUsd),
-    equivalent: { fiveHour: sumOf(plan, (r) => r.equivalents.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.equivalents.seven_day ?? 0) },
+    equivalent: {
+      fiveHour: sumOf(plan, (r) => r.equivalents.five_hour ?? 0),
+      sevenDay: sumOf(plan, (r) => r.equivalents.seven_day ?? 0),
+      unpriced: { fiveHour: plan.some((r) => r.equivalents.five_hour === null), sevenDay: plan.some((r) => r.equivalents.seven_day === null) },
+    },
     estimated: plan.some((r) => r.estimated),
   };
 };
-/** The same over request rows, as the pools and dashboard routes sum theirs. */
+/** The same over request rows, as the pools and dashboard routes sum theirs: a request carries a null window whatever
+ *  its tokens, so only one with tokens flags it. */
 export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedUsd' | 'equivalent' | 'estimated'> => {
   const plan = rows.filter((r) => r.costEquivalent !== null);
+  const flagged = (window: 'five_hour' | 'seven_day') => plan.some((r) => tokensTotal(r.usage) > 0 && r.costEquivalent?.[window] === null);
   return {
     billedUsd: sumOf(rows.filter((r) => r.costEquivalent === null), (r) => r.costUsd),
-    equivalent: { fiveHour: sumOf(plan, (r) => r.costEquivalent?.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.costEquivalent?.seven_day ?? 0) },
+    equivalent: { fiveHour: sumOf(plan, (r) => r.costEquivalent?.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.costEquivalent?.seven_day ?? 0), unpriced: { fiveHour: flagged('five_hour'), sevenDay: flagged('seven_day') } },
     estimated: plan.some((r) => r.estimated),
   };
 };
@@ -2329,7 +2336,11 @@ function deriveFigures() {
       lifetime: {
         billedUsd: Math.max(k.lifetime.billedUsd, life.billedUsd),
         cost: Math.max(k.lifetime.cost, sumOf(mine, (r) => r.costUsd)),
-        equivalent: { fiveHour: Math.max(k.lifetime.equivalent.fiveHour, life.equivalent.fiveHour), sevenDay: Math.max(k.lifetime.equivalent.sevenDay, life.equivalent.sevenDay) },
+        equivalent: {
+          fiveHour: Math.max(k.lifetime.equivalent.fiveHour, life.equivalent.fiveHour),
+          sevenDay: Math.max(k.lifetime.equivalent.sevenDay, life.equivalent.sevenDay),
+          unpriced: { fiveHour: k.lifetime.equivalent.unpriced.fiveHour || life.equivalent.unpriced.fiveHour, sevenDay: k.lifetime.equivalent.unpriced.sevenDay || life.equivalent.unpriced.sevenDay },
+        },
         estimated: k.lifetime.estimated || life.estimated,
         requests: Math.max(k.lifetime.requests, sumOf(mine, requestsIn)),
       },
@@ -2356,6 +2367,24 @@ function deriveFigures() {
 }
 
 deriveFigures();
+
+/** The session of the request below, one of its own. */
+const UNPRICED_SESSION_ID = '0f7c3a92-5e18-4d6b-b2a4-9c8e1d7f3a60';
+/**
+ * One plan request on a model the cost model lists in no tier, so it prices no window, kept out of the story the
+ * views draw: the mock's unpriced switch adds it to the dashboard's day and to the rollups the analytics fold, where
+ * the flags derive from it by the rows' own rule. It copies primary's answer of the story hour on desktop, in a
+ * session and a rollup row of its own, and is built after every seeded draw, so it moves none.
+ */
+export const UNPRICED_REQUEST: RequestLog = (() => {
+  const template = requestById.get('req_f8085653-422');
+  if (template === undefined) throw new Error('the story lacks the request the unpriced one copies');
+  const model = 'claude-unlisted-1';
+  const usage: Usage = { ...template.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 18_400, input: 2_600, output: 940 };
+  const row: RequestLog = { ...template, canonicalModel: model, costUsd: costOf(model, usage, false, template.at), id: 'req_0d6b3f82-c47', model, sessionId: UNPRICED_SESSION_ID, usage };
+  return { ...row, ...costFiguresOf(row) };
+})();
+export const UNPRICED_ROLLUPS: HourlyRollup[] = rollups([UNPRICED_REQUEST]);
 
 /** The ledger's id of each window the quota samples carry, which the Accounts cards key an hour's samples by. */
 const LEDGER_WINDOW: Partial<Record<string, string>> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };

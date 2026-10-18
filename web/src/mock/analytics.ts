@@ -198,11 +198,19 @@ function windowSums(counted: HourlyRollup[], probeRows: HourlyRollup[], own: (r:
     for (const [window, figure] of Object.entries(own(r))) add(probe, window, figure);
   }
   const priced = (map: Map<string, WindowSum>) => [...map.entries()].filter(([, s]) => !s.unpriced);
+  // Each shared window flagged where a sum the window leaves out did. The route keys a model week a row named too,
+  // which no reader of the flags reads, and the mock's shape check holds each map to the captured fixture's keys.
+  const unpricedOf = (...maps: Map<string, WindowSum>[]) => {
+    const flagged = (window: string) => maps.some((map) => map.get(window)?.unpriced === true);
+    return { five_hour: flagged('five_hour'), seven_day: flagged('seven_day') };
+  };
   return {
     cache: Object.fromEntries(priced(read).flatMap(([window, r]) => { const w = write.get(window); return w === undefined || w.unpriced ? [] : [[window, { read: r.sum, write: w.sum }]]; })) as Record<string, { read: number; write: number }>,
     cost: Object.fromEntries(priced(cost).map(([window, s]) => [window, s.sum])) as Record<string, number>,
     probe: Object.fromEntries(priced(probe).map(([window, s]) => [window, s.sum])) as Record<string, number>,
+    probeUnpriced: unpricedOf(probe),
     ratio: probeUsd > 0 ? wastedUsd / probeUsd : null,
+    unpriced: unpricedOf(cost, read, write),
   };
 }
 
@@ -257,9 +265,14 @@ const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
 /**
  * The group's 20x window equivalents over its plan-funded rows, summed as the shares are but under no account tier,
  * so they add across accounts and read under every grouping, with the 7-day equivalent split by token kind at each
- * row's hour and the wasted probes' equivalent at the probe share's ratio.
+ * row's hour and the wasted probes' equivalent at the probe share's ratio. A window a plan row with tokens priced
+ * nothing on (a model with no tier, or a tier with no weighted model) is flagged in `unpriced`, or in `probeUnpriced`
+ * for a probe row, as the route flags it, and `probeEstimated` marks a plan probe row priced through the fallback.
  */
-function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]): Pick<AnalyticsGroup, 'cacheEquivalent' | 'costEquivalent' | 'equivalentSplit' | 'estimated' | 'probeEquivalent' | 'savingEquivalent'> {
+function equivalentsOfGroup(
+  counted: HourlyRollup[],
+  probeRows: HourlyRollup[],
+): Pick<AnalyticsGroup, 'cacheEquivalent' | 'costEquivalent' | 'equivalentSplit' | 'estimated' | 'probeEquivalent' | 'probeEstimated' | 'probeUnpriced' | 'savingEquivalent' | 'unpriced'> {
   const s = windowSums(counted, probeRows, (r) => r.equivalents, equivalentsOf);
   const split: CostSplit = { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 };
   for (const r of planRows(counted)) {
@@ -272,7 +285,10 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
     equivalentSplit: split,
     estimated: [...planRows(counted), ...planRows(probeRows)].some((r) => r.estimated),
     probeEquivalent: Object.fromEntries(Object.entries(s.probe).map(([window, cost]) => [window, { cost, wasted: s.ratio === null ? 0 : cost * s.ratio }])),
+    probeEstimated: planRows(probeRows).some((r) => r.estimated),
+    probeUnpriced: s.probeUnpriced,
     savingEquivalent: savingOf(counted, (r) => equivalentsOf(r, keptUsageOf(r))),
+    unpriced: s.unpriced,
   };
 }
 
@@ -346,7 +362,15 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     failovers,
     histograms,
     incomplete,
-    keptWarm: { requests: sum(counted, (r) => r.keptWarm.requests), tokens1h: sum(counted, (r) => r.keptWarm.tokens1h), tokens5m: sum(counted, (r) => r.keptWarm.tokens5m) },
+    // A row's funding is its credited request's, so the plan-funded credits are the plan rows' own.
+    keptWarm: {
+      planRequests: sum(countedPlan, (r) => r.keptWarm.requests),
+      planTokens1h: sum(countedPlan, (r) => r.keptWarm.tokens1h),
+      planTokens5m: sum(countedPlan, (r) => r.keptWarm.tokens5m),
+      requests: sum(counted, (r) => r.keptWarm.requests),
+      tokens1h: sum(counted, (r) => r.keptWarm.tokens1h),
+      tokens5m: sum(counted, (r) => r.keptWarm.tokens5m),
+    },
     key,
     keyCreatedAt: null,
     keyId: null,
@@ -355,7 +379,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     planOutputTokens: sum(countedPlan, (r) => r.tokens.output),
     planRequests: sum(countedPlan, (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone),
     probeCostUsd: sum(probeRows, (r) => r.probeCostUsd),
-    probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
+    probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), planOk: sum(planRows(probeRows), (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
     probeShares: shares.probeShares,
     rateLimited,
     rejected: 0,
@@ -570,17 +594,22 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
       const account = accountOf(group);
       const kind = account === null ? undefined : kinds.get(account);
       const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
+      // Every row the lists hold carried tokens, so a null among a window's equivalents is a row priced nothing there.
+      const unpriced = (list: (number | null)[]) => list.some((v) => v === null);
       return {
         at: iso(at),
         cachedTokens: Math.round(s.cached),
         estimated: s.estimated,
         fiveHourEquivalent: bucketShare(s.fiveHourEquivalent),
         fiveHourShare: share(s.fiveHour),
+        fiveHourUnpriced: unpriced(s.fiveHourEquivalent),
         group,
         modelWeekEquivalent: bucketShare(s.weekEquivalent),
         modelWeekShare: share(s.week),
+        modelWeekUnpriced: unpriced(s.weekEquivalent),
         sevenDayEquivalent: bucketShare(s.sevenDayEquivalent),
         sevenDayShare: share(s.sevenDay),
+        sevenDayUnpriced: unpriced(s.sevenDayEquivalent),
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit: kind === undefined ? null : kind === 'oauth' ? 'window_share' : 'usd',

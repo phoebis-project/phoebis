@@ -387,14 +387,14 @@ test('the plan cards read the 20x equivalents under any grouping, and the model 
   const { lines, rows } = d.foldBurn([p(0, 'desktop', { modelWeekEquivalent: 0.008 }), p(1, 'desktop'), p(0, 'laptop')], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
   const [desktop, laptop] = ['desktop', 'laptop'].map((k) => lines.findIndex((l) => l.key === k));
   assert.deepEqual(rows.map((r) => [r.fiveHour[desktop], r.sevenDay[desktop]]), [[0.02, 0.004], [0.02, 0.004]], 'the equivalents per hour, which no account tier reads');
-  // The route answers null alike for a bucket off every model with a week and for one it could not price there, so
-  // the fold keeps the gap and the figure is the mean of the buckets that answered one.
-  assert.deepEqual(rows.map((r) => r.week[desktop]), [0.008, null], 'a bucket that answered no model week stays a gap');
-  assert.ok(Math.abs(lines[desktop].weekPerHour - 0.008) < 1e-12);
+  // The route flags a bucket it could not price on the week, so a null with the flag unset is a bucket off every model
+  // with a week of its own, which spent none of it.
+  assert.deepEqual(rows.map((r) => r.week[desktop]), [0.008, 0], 'a bucket that ran on no model with a week of its own reads zero once the line priced the week');
+  assert.ok(Math.abs(lines[desktop].weekPerHour - 0.004) < 1e-12);
   assert.deepEqual([rows.map((r) => r.week[laptop]), lines[laptop].weekPerHour], [[null, null], null], 'a line that never ran on such a model has no week to chart');
   assert.deepEqual([rows[1].fiveHour[laptop], lines[laptop].unpriced], [0, { fiveHour: false, sevenDay: false }], 'an idle bucket reads zero on a window the line priced');
-  const unpriced = d.foldBurn([p(0, 'desktop', { fiveHourEquivalent: null, sevenDayEquivalent: null })], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
-  assert.deepEqual(unpriced.lines[0].unpriced, { fiveHour: true, sevenDay: true }, 'traffic on a model of no known model tier prices no equivalent and lists as model unlisted');
+  const unpriced = d.foldBurn([p(0, 'desktop', { fiveHourEquivalent: null, fiveHourUnpriced: true, sevenDayEquivalent: null, sevenDayUnpriced: true })], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
+  assert.deepEqual(unpriced.lines[0].unpriced, { fiveHour: true, sevenDay: true }, 'traffic on a model of no known model tier prices no equivalent, flagged, and lists as model unlisted');
   const shares = d.foldBurn([p(0, 'desktop')], 'key', 3_600, NONE);
   assert.deepEqual([shares.rows[0].fiveHour[0], shares.rows[0].sevenDay[0]], [null, null], 'the share figure reads the shares, which a grouping of several accounts never answers');
 });
@@ -416,11 +416,11 @@ test('under the request class grouping a filter naming one account sizes both cl
   assert.deepEqual(fold(NONE), [['conversation', 'unknown'], ['overhead', 'unknown']], 'an account whose tier the cost model does not size reads tier unknown on both');
 });
 
-test("the model week's rows say which slots the route answered, so a gap marks no estimate", () => {
+test("the model week's rows say which slots the route answered, so a zero the fold filled in or a gap marks no estimate", () => {
   const p = (at, over) => point(at * HOUR, 'desktop', { estimated: true, fiveHourEquivalent: 0.02, modelWeekEquivalent: null, sevenDayEquivalent: 0.004, tokens: 100, uncachedTokens: 100, ...over });
-  const { lines, rows } = d.foldBurn([p(0, { modelWeekEquivalent: 0.008 }), p(1)], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
-  assert.deepEqual(rows.map((r) => [r.week[0], r.weekAnswered[0], r.estimated[0]]), [[0.008, true, true], [null, false, true]], 'the second bucket answered no model week, so it stays a gap, unanswered');
-  assert.ok(Math.abs(lines[0].weekPerHour - 0.008) < 1e-12, 'and the figure per hour is the answered bucket\'s alone, never halved by the gap');
+  const { lines, rows } = d.foldBurn([p(0, { modelWeekEquivalent: 0.008 }), p(1), p(2, { modelWeekUnpriced: true })], 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure: 'equivalent' });
+  assert.deepEqual(rows.map((r) => [r.week[0], r.weekAnswered[0], r.estimated[0]]), [[0.008, true, true], [0, false, true], [null, false, true]], "the second bucket ran on no model with a week of its own, so its zero is the fold's, and the third stays a gap, unanswered");
+  assert.ok(Math.abs(lines[0].weekPerHour - 0.004) < 1e-12, 'and the figure per hour counts the idle bucket and never the gap');
 });
 
 test('the key grouping names an earlier holder of a key id as the breakdown does', () => {
@@ -650,34 +650,34 @@ test("one named account's whole is unavailable where a group with plan usage ans
 
 test("the named account's whole leaves out a probe window that a group with probes priced none on", () => {
   const base = accountGroup();
-  const probed = (probeShares, ok) => accountGroup({ probeShares, probes: { ...base.probes, failed: 0, held: 0, ok, skipped: 0 } });
+  const probed = (probeShares, ok) => accountGroup({ probeShares, probes: { ...base.probes, failed: 0, held: 0, ok, planOk: ok, skipped: 0 } });
   const whole = d.oneAccountGroupOf(base, [probed({ five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } }, 2), probed({ five_hour: { cost: 0.5, wasted: 0 } }, 3)]);
   assert.deepEqual(whole.probeShares, { five_hour: { cost: 0.75, wasted: 0.125 } }, 'the second group ran probes and priced no 7-day share, so a 7-day whole would be a part');
   const idle = d.oneAccountGroupOf(base, [probed({ five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } }, 2), probed({}, 0)]);
   assert.deepEqual(idle.probeShares, { five_hour: { cost: 0.25, wasted: 0.125 }, seven_day: { cost: 0.125, wasted: 0 } }, 'a group without probes adds none and lacks none');
 });
 
-test("the named account's saving latches on the groups that carry a credit, so a probed group with none drops no window", () => {
+test("the named account's saving latches on the groups whose credits a plan funded, so a probed group with none drops no window", () => {
   const base = accountGroup();
-  const credited = accountGroup({ keptWarm: { requests: 2, tokens1h: 700, tokens5m: 300 }, probes: { ...base.probes, ok: 2 }, savingShares: { five_hour: 0.25, seven_day: 0.125 } });
-  const probed = accountGroup({ keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 }, probes: { ...base.probes, ok: 3 }, savingShares: {} });
+  const credited = accountGroup({ keptWarm: { planRequests: 2, planTokens1h: 700, planTokens5m: 300, requests: 2, tokens1h: 700, tokens5m: 300 }, probes: { ...base.probes, ok: 2, planOk: 2 }, savingShares: { five_hour: 0.25, seven_day: 0.125 } });
+  const probed = accountGroup({ keptWarm: { planRequests: 0, planTokens1h: 0, planTokens5m: 0, requests: 0, tokens1h: 0, tokens5m: 0 }, probes: { ...base.probes, ok: 3, planOk: 3 }, savingShares: {} });
   assert.ok(probed.planRequests > 0 && probed.planOutputTokens > 0, 'the probed group holds plan rows with tokens');
   assert.deepEqual(d.oneAccountGroupOf(base, [credited, probed]).savingShares, { five_hour: 0.25, seven_day: 0.125 }, 'a probed group with no credit adds nothing and drops nothing');
-  const partial = accountGroup({ keptWarm: { requests: 1, tokens1h: 0, tokens5m: 400 }, savingShares: { five_hour: 0.5 } });
-  assert.deepEqual(d.oneAccountGroupOf(base, [credited, partial]).savingShares, { five_hour: 0.75 }, 'a credited group that priced no 7-day saving leaves the window out');
+  const partial = accountGroup({ keptWarm: { planRequests: 1, planTokens1h: 0, planTokens5m: 400, requests: 1, tokens1h: 0, tokens5m: 400 }, savingShares: { five_hour: 0.5 } });
+  assert.deepEqual(d.oneAccountGroupOf(base, [credited, partial]).savingShares, { five_hour: 0.75 }, 'a group with a plan credit that priced no 7-day saving leaves the window out');
 });
 
 test('a group whose credits are all billed adds no saving window and drops none, in a sum of groups and in the named account\'s whole', () => {
   const base = accountGroup();
   const windows = { five_hour: 0.25, seven_day: 0.125 };
-  const credited = accountGroup({ keptWarm: { requests: 2, tokens1h: 700, tokens5m: 300 }, savingEquivalent: windows, savingShares: windows });
+  const credited = accountGroup({ keptWarm: { planRequests: 2, planTokens1h: 700, planTokens5m: 300, requests: 2, tokens1h: 700, tokens5m: 300 }, savingEquivalent: windows, savingShares: windows });
   // An overage's or an API key's credits price in dollars alone, beside plan rows the route priced on both windows.
-  const billed = accountGroup({ keptWarm: { requests: 3, tokens1h: 0, tokens5m: 900 }, savingEquivalent: {}, savingShares: {}, savingUsd: 0.4 });
+  const billed = accountGroup({ keptWarm: { planRequests: 0, planTokens1h: 0, planTokens5m: 0, requests: 3, tokens1h: 0, tokens5m: 900 }, savingEquivalent: {}, savingShares: {}, savingUsd: 0.4 });
   assert.ok(billed.planRequests > 0 && billed.planOutputTokens > 0 && billed.costEquivalent.five_hour !== undefined && billed.costEquivalent.seven_day !== undefined, 'the billed credits sit beside priced plan rows');
   assert.deepEqual(d.sumGroups([credited, billed]).savingEquivalent, windows, 'the sum keeps both windows');
   assert.deepEqual(d.oneAccountGroupOf(base, [credited, billed]).savingShares, windows, "the named account's whole keeps both windows");
   // A plan credit on a model the revision cannot price leaves its request's own plan cost without the windows too.
-  const unpriced = accountGroup({ costEquivalent: {}, keptWarm: { requests: 1, tokens1h: 0, tokens5m: 400 }, savingEquivalent: {}, savingShares: {} });
+  const unpriced = accountGroup({ costEquivalent: {}, keptWarm: { planRequests: 1, planTokens1h: 0, planTokens5m: 400, requests: 1, tokens1h: 0, tokens5m: 400 }, savingEquivalent: {}, savingShares: {}, unpriced: { five_hour: true, seven_day: true } });
   assert.deepEqual(d.sumGroups([credited, unpriced]).savingEquivalent, {}, 'an unpriced plan credit leaves both windows out of the sum');
   assert.deepEqual(d.oneAccountGroupOf(base, [credited, unpriced]).savingShares, {}, "and out of the named account's whole");
 });
@@ -686,17 +686,98 @@ test("a group whose answered probes are all billed beside priced plan rows adds 
   const base = accountGroup();
   const window = { cost: 0.002, wasted: 0.001 };
   const windows = { five_hour: window, seven_day: window };
-  const probed = accountGroup({ probeEquivalent: windows, probeShares: windows, probes: { ...base.probes, ok: 3 } });
+  const probed = accountGroup({ probeEquivalent: windows, probeShares: windows, probes: { ...base.probes, ok: 3, planOk: 3 } });
   // An overage's or an API key member's probes price in dollars alone, beside plan rows the route priced on both
   // windows.
-  const billed = accountGroup({ probeCostUsd: 0.4, probeEquivalent: {}, probeShares: {}, probes: { ...base.probes, ok: 2 } });
+  const billed = accountGroup({ probeCostUsd: 0.4, probeEquivalent: {}, probeShares: {}, probes: { ...base.probes, ok: 2, planOk: 0 } });
   assert.ok(billed.planRequests > 0 && billed.planOutputTokens > 0 && billed.costEquivalent.five_hour !== undefined && billed.costEquivalent.seven_day !== undefined, 'the billed probes sit beside priced plan rows');
   assert.deepEqual(d.sumGroups([probed, billed]).probeEquivalent, windows, 'the sum keeps both windows');
   assert.deepEqual(d.oneAccountGroupOf(base, [probed, billed]).probeShares, windows, "the named account's whole keeps both windows");
   // A plan probe on a model the revision cannot price leaves the group's own plan rows without the shared windows too.
-  const unpriced = accountGroup({ costEquivalent: {}, probeEquivalent: {}, probeShares: {}, probes: { ...base.probes, ok: 1 } });
+  const unpriced = accountGroup({ costEquivalent: {}, probeEquivalent: {}, probeShares: {}, probes: { ...base.probes, ok: 1, planOk: 1 }, probeUnpriced: { five_hour: true, seven_day: true }, unpriced: { five_hour: true, seven_day: true } });
   assert.deepEqual(d.sumGroups([probed, unpriced]).probeEquivalent, {}, 'an unpriced plan probe leaves both windows out of the sum');
   assert.deepEqual(d.oneAccountGroupOf(base, [probed, unpriced]).probeShares, {}, "and out of the named account's whole");
+});
+
+/** A group the route priced on both shared windows, with both cache halves, beside which a case sums another. */
+const pricedGroup = () => accountGroup({ cacheEquivalent: { five_hour: { read: 0.01, write: 0.01 }, seven_day: { read: 0.002, write: 0.002 } }, costEquivalent: { five_hour: 0.02, seven_day: 0.004 } });
+
+test("a sum of groups leaves a shared window out where a group reads it unpriced, the group's plan output count aside", () => {
+  // Plan rows that wrote input and no output on a model of no tier: the flag holds though the output count is zero.
+  const flagged = accountGroup({ cacheEquivalent: { five_hour: { read: 0.01, write: 0 } }, costEquivalent: { five_hour: 0.01 }, planOutputTokens: 0, unpriced: { five_hour: false, seven_day: true } });
+  const sum = d.sumGroups([pricedGroup(), flagged]);
+  assert.deepEqual([sum.costEquivalent, Object.keys(sum.cacheEquivalent)], [{ five_hour: 0.03 }, ['five_hour']], 'the window the group flags leaves both maps');
+  assert.deepEqual(sum.unpriced, { five_hour: false, seven_day: true }, 'and the sum carries the flag');
+});
+
+test('a sum of groups keeps a shared window a group with plan rows lacks while its flag is unset', () => {
+  // Plan rows with tokens whose 7-day figure is absent with the flag unset: the group's rows on that window were all
+  // billed.
+  const priced = pricedGroup();
+  const unflagged = accountGroup({ cacheEquivalent: { five_hour: { read: 0.01, write: 0 } }, costEquivalent: { five_hour: 0.01 }, unpriced: { five_hour: false, seven_day: false } });
+  assert.ok(unflagged.planRequests > 0 && unflagged.planOutputTokens > 0, 'the unflagged group holds plan rows with tokens');
+  const sum = d.sumGroups([priced, unflagged]);
+  assert.deepEqual([sum.costEquivalent.seven_day, sum.cacheEquivalent.seven_day], [priced.costEquivalent.seven_day, priced.cacheEquivalent.seven_day], 'the window stays in the sum');
+});
+
+test('a sum of groups leaves a probe window out where a group reads it unpriced, whatever the group\'s plan request count', () => {
+  const base = accountGroup();
+  const window = { cost: 0.002, wasted: 0.001 };
+  const probed = accountGroup({ probeEquivalent: { five_hour: window, seven_day: window }, probes: { ...base.probes, ok: 2, planOk: 2 } });
+  // A probe-only group: the plan probes ran on a model of no tier, and no plan request sits beside them.
+  const probeOnly = accountGroup({ costEquivalent: {}, planOutputTokens: 0, planRequests: 0, probeEquivalent: { five_hour: window }, probes: { ...base.probes, ok: 1, planOk: 1 }, probeUnpriced: { five_hour: false, seven_day: true } });
+  assert.deepEqual(d.sumGroups([probed, probeOnly]).probeEquivalent, { five_hour: { cost: 0.004, wasted: 0.002 } }, 'the probe window the group flags leaves the sum');
+});
+
+test('the probe guard reads the plan-funded answered probes', () => {
+  const base = accountGroup();
+  const window = { cost: 0.002, wasted: 0.001 };
+  const probed = (probes) => accountGroup({ probeEquivalent: { five_hour: window, seven_day: window }, probes: { ...base.probes, ...probes } });
+  assert.equal(d.probesRequired(probed({ ok: 3, planOk: 0 })), false, 'answered probes the plan funded none of oblige no probe window');
+  assert.equal(d.probesRequired(probed({ ok: 3, planOk: 2 })), true, 'plan-funded answered probes oblige the group to carry both probe windows');
+});
+
+test('the saving guard reads the plan-funded credits, a credit-only group among them', () => {
+  const credited = (keptWarm, over = {}) => accountGroup({ keptWarm: { planTokens1h: 0, planTokens5m: 0, requests: 2, tokens1h: 0, tokens5m: 800, ...keptWarm }, ...over });
+  // A credit-only group: a request received before the bucket and completed inside it carries no request of the bucket.
+  const creditOnly = { costEquivalent: {}, planOutputTokens: 0, planRequests: 0 };
+  assert.equal(d.savingRequired(credited({ planRequests: 2, planTokens5m: 800 }, creditOnly)), true, 'plan-funded credits oblige the group to carry both saving windows, with no plan request beside them');
+  assert.equal(d.savingRequired(credited({ planRequests: 0 }, creditOnly)), false, 'billed credits oblige none');
+  assert.equal(d.savingRequired(credited({ planRequests: 0 })), false, 'nor do billed credits beside plan rows');
+});
+
+test('the idle slots of the plan cards zero-fill against the flags under the equivalents, an unpriced slot stays a gap, and the shares keep the token test', () => {
+  const p = (at, over) => point(at * HOUR, 'desktop', { fiveHourEquivalent: 0.02, modelWeekEquivalent: 0.008, sevenDayEquivalent: 0.004, tokens: 100, uncachedTokens: 100, ...over });
+  const fold = (points, figure = 'equivalent') => d.foldBurn(points, 'key', 3_600, NONE, d.MAX_BURN_LINES, undefined, undefined, { figure });
+  // A bucket whose traffic ran off every model with a week of its own answers no week with the flag unset, and one
+  // holding a row the cost model could not price there answers none with the flag set.
+  const { lines, rows } = fold([p(0), p(1, { modelWeekEquivalent: null }), p(2, { modelWeekEquivalent: null, modelWeekUnpriced: true })]);
+  assert.deepEqual(rows.map((r) => r.week[0]), [0.008, 0, null], 'the idle slot reads zero and the unpriced one stays a gap');
+  assert.deepEqual(rows.map((r) => r.weekAnswered[0]), [true, false, false], 'neither the zero nor the gap is an answered figure');
+  assert.ok(Math.abs(lines[0].weekPerHour - 0.004) < 1e-12, 'the mean counts the idle slot and leaves the gap out');
+  const shared = fold([p(0), p(1, { fiveHourEquivalent: null, sevenDayEquivalent: null }), p(2, { fiveHourEquivalent: null, fiveHourUnpriced: true, sevenDayEquivalent: null })]);
+  assert.deepEqual(shared.rows.map((r) => [r.fiveHour[0], r.sevenDay[0]]), [[0.02, 0.004], [0, 0], [null, 0]], 'a null with tokens and no flag is idle, and the flag keeps the gap on its window alone');
+  assert.deepEqual(shared.lines[0].unpriced, { fiveHour: true, sevenDay: false }, 'the legend reads the flags');
+  // The shares carry no flag, so a null share with tokens behind it is still a slot the table could not price.
+  const shares = d.foldBurn([point(0, 'primary', { fiveHourShare: 0.02, fiveHourUnpriced: false, tokens: 100, uncachedTokens: 100, unit: 'window_share' }), point(HOUR, 'primary', { fiveHourUnpriced: false, tokens: 100, uncachedTokens: 100, unit: 'window_share' })], 'account', 3_600, new Set(['primary']));
+  assert.deepEqual([shares.rows.map((r) => r.fiveHour[0]), shares.lines[0].unpriced.fiveHour], [[0.02, null], true]);
+});
+
+test("the Cost by card's note counts the groups unpriced in range and their buckets, singular at one", () => {
+  assert.equal(d.unpricedNote(0, 0), null, 'nothing unpriced reads no note');
+  assert.equal(d.unpricedNote(1, 1), '1 group unpriced in 1 bucket, drawn as a gap');
+  assert.equal(d.unpricedNote(3, 5), '3 groups unpriced in 5 buckets, drawn as gaps');
+  assert.equal(d.unpricedNote(1, 3), '1 group unpriced in 3 buckets, drawn as gaps', 'the gaps follow the buckets');
+  assert.equal(d.unpricedNote(2, 1), '2 groups unpriced in 1 bucket, drawn as a gap', 'two groups unpriced in one bucket leave one gap per stack');
+});
+
+test("the probe tiles mark the plan side's estimate on the probe estimate alone, never on a dash or a side with no plan probe", () => {
+  const base = accountGroup();
+  const group = (over) => ({ ...base, ...over });
+  assert.equal(d.probeMarked(group({ estimated: true, probeEstimated: false }), 2, 0.01), false, 'a request row priced through the fallback marks no probe figure');
+  assert.equal(d.probeMarked(group({ estimated: true, probeEstimated: true }), 2, 0.01), true, 'a plan probe priced through the fallback marks it');
+  assert.equal(d.probeMarked(group({ estimated: true, probeEstimated: true }), 2, null), false, 'a dash is no figure, so nothing marks it');
+  assert.equal(d.probeMarked(group({ estimated: true, probeEstimated: true }), 0, 0), false, 'a side with no plan probe reads no estimate');
 });
 
 test('the net saving is the gross less the probe cost, under zero where the probes cost more', () => {
@@ -923,7 +1004,7 @@ test("the Cost section's head reads each position off one group of plan and bill
   const plan = d.costHeadOf('equivalent', g);
   assert.deepEqual([plan.tile, plan.subset, plan.meta], [{ figures: [{ text: dollars }], label: 'Dollar equivalent', note: d.UNIT_SUBSET.equivalent }, d.UNIT_SUBSET.equivalent, `${dollars} in range, equivalent`]);
   // The shares read per account, so the head carries the meta alone and the table its own subtitle.
-  assert.deepEqual(d.costHeadOf('share', g), { estimated: false, meta: 'shares per account', subset: null, tile: null });
+  assert.deepEqual(d.costHeadOf('share', g), { estimated: false, meta: 'shares per account', subset: null, tile: null, unpriced: false });
 });
 
 test('native marks an estimated equivalent and leaves out a side with no rows, and no dollar figure is marked', () => {
@@ -952,18 +1033,21 @@ test('native reads a dash on the subscription side where the route priced its pl
   assert.deepEqual(d.sidesOf(g, 'seven_day'), { billed: g.billedUsd, equivalent: null }, 'plan rows with no figure on the window read null');
   assert.deepEqual(d.sidesOf(accountGroup({ costEquivalent: {}, planRequests: 0 }), 'seven_day'), { billed: g.billedUsd, equivalent: undefined }, 'a sum with no plan row leaves the side out');
   const unpriced = d.costHeadOf('native', g);
-  assert.deepEqual([unpriced.tile.figures, unpriced.meta, unpriced.estimated], [[{ text: '-', word: 'subscription' }, { text: billed, word: 'billed' }], `- and ${billed} in range`, false], 'the dash carries no mark, since no estimate priced it');
+  assert.deepEqual([unpriced.tile.figures, unpriced.meta, unpriced.estimated, unpriced.unpriced], [[{ text: '-', word: 'subscription' }, { text: billed, word: 'billed' }], `- and ${billed} in range`, false, false], 'the dash carries no mark, since no estimate priced it');
+  // The route flags the window it left out, and the flag's dash takes its title whatever the totals summed.
+  const flagged = d.costHeadOf('native', accountGroup({ estimated: true, unpriced: { five_hour: true, seven_day: true } }));
+  assert.deepEqual([flagged.tile.figures, flagged.estimated, flagged.unpriced], [[{ text: '-', word: 'subscription' }, { text: billed, word: 'billed' }], false, true], 'a flagged window reads the dash under its title');
 });
 
-test('a sum of groups leaves out a shared probe window a group with answered probes lacks, so no partial sum reads as the whole', () => {
+test('a sum of groups leaves out a shared probe window a group with answered probes flags, so no partial sum reads as the whole', () => {
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const base = accountGroup();
   const window = { cost: 0.002, wasted: 0.001 };
-  const probed = (over = {}) => accountGroup({ probeEquivalent: { five_hour: window, seven_day: window }, probes: { ...base.probes, ok: 3 }, ...over });
+  const probed = (over = {}) => accountGroup({ probeEquivalent: { five_hour: window, seven_day: window }, probes: { ...base.probes, ok: 3, planOk: 3 }, ...over });
   const priced = probed();
   assert.ok(priced.planRequests > 0, 'the captured group holds plan rows');
-  const summed = d.sumGroups([priced, probed({ probeEquivalent: { five_hour: window } })]);
-  assert.equal(own(summed.probeEquivalent, 'seven_day'), false, 'the 7-day window a group with probes lacks stays out of the sum');
+  const summed = d.sumGroups([priced, probed({ probeEquivalent: { five_hour: window }, probeUnpriced: { five_hour: false, seven_day: true } })]);
+  assert.equal(own(summed.probeEquivalent, 'seven_day'), false, 'the 7-day window a group with probes flags stays out of the sum');
   assert.deepEqual(summed.probeEquivalent.five_hour, { cost: 0.004, wasted: 0.002 }, 'a window both carry still sums');
   // A group whose probes carry no plan window to lack leaves the other's windows whole: one with no probe, one whose
   // probes never ran, and one of billed traffic alone, whose probes are billed too.
