@@ -937,6 +937,7 @@ async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_tu
         ClientFacts {
             class: "claude-code/sdk-cli".into(),
             agent_type: Some("Explore".into()),
+            classifier: None,
             compaction: Some("auto".into()),
             context_compacted: Some("manual".into()),
             prev_tool_ms: Some(1_235),

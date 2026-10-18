@@ -13,9 +13,9 @@ use tokio::sync::mpsc;
 
 pub use event::{
     header_published, user_agent_cut, user_agent_of, AccountSelected, AttemptOutcome, AutoMode,
-    ClientFacts, CooldownSet, DiagnosticsSource, Event, Fork, GuardrailMatch, Kind, Origin,
-    Outcome, Phase, RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
-    ResponseHead, Usage, BODY_SHAPE_ERROR_CODE, HEADER_DENYLIST, OTHER_CLIENT,
+    Classifier, ClientFacts, CooldownSet, DiagnosticsSource, Event, Fork, GuardrailMatch,
+    Kind, Origin, Outcome, Phase, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
+    ResponseFacts, ResponseHead, Usage, BODY_SHAPE_ERROR_CODE, HEADER_DENYLIST, OTHER_CLIENT,
     USER_AGENT_MAX_BYTES,
 };
 

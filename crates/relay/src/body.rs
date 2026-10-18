@@ -77,6 +77,9 @@ pub const EXTENDED_TTL_BETA: &str = Injected::ExtendedTtlBeta.wire_name();
 /// The beta that asks the upstream to review each tool use; dropped with the `safeguards` member under an off
 /// auto-mode setting.
 pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
+/// The beta the client's auto-mode classifier sends, on both of its stages. With the class header `auxiliary` it
+/// marks the call.
+pub const CLASSIFIER_BETA: &str = "auto-mode-classifier-2026-07-16";
 
 /// A member an edit needs to find. A body toward the measured host that lacks one is refused rather than sent
 /// on: the account it would be billed against, or the model it would be served by, is not the one the router

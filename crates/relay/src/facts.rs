@@ -47,6 +47,8 @@ pub struct BodyFacts {
 /// charset-checked, a malformed value absent rather than refused.
 pub struct ClientHints {
     pub agent_type: Option<String>,
+    /// `anthropic-beta` carries `auto-mode-classifier-2026-07-16`, on any of its lines.
+    pub classifier_beta: bool,
     pub compaction: Option<String>,
     pub context_compacted: Option<String>,
     /// `anthropic-beta` carries `per-turn-control-2026-07-01`, on any of its lines.
@@ -205,17 +207,13 @@ impl ClientHints {
     pub fn read(headers: &HeaderMap) -> ClientHints {
         ClientHints {
             agent_type: crate::identity::header_id(headers, "x-claude-code-agent-type"),
+            classifier_beta: carries_beta(headers, crate::body::CLASSIFIER_BETA),
             compaction: crate::identity::header_id(headers, "x-claude-code-compaction"),
             context_compacted: crate::identity::header_id(
                 headers,
                 "x-claude-code-context-compacted",
             ),
-            per_turn_effort: headers
-                .get_all("anthropic-beta")
-                .iter()
-                .filter_map(|line| line.to_str().ok())
-                .flat_map(|line| line.split(','))
-                .any(|token| token.trim() == crate::lane::PER_TURN_BETA),
+            per_turn_effort: carries_beta(headers, crate::lane::PER_TURN_BETA),
             prev_tool_ms: headers
                 .get("x-claude-code-prev-tool-durations")
                 .and_then(|v| v.to_str().ok())
@@ -223,6 +221,16 @@ impl ClientHints {
             request_class: crate::identity::header_id(headers, "x-claude-code-request-class"),
         }
     }
+}
+
+/// Whether any `anthropic-beta` line names `beta` among its comma-separated tokens.
+fn carries_beta(headers: &HeaderMap, beta: &str) -> bool {
+    headers
+        .get_all("anthropic-beta")
+        .iter()
+        .filter_map(|line| line.to_str().ok())
+        .flat_map(|line| line.split(','))
+        .any(|token| token.trim() == beta)
 }
 
 /// Bound past which the header is not read at all: the sum is what the restoration surface reports, never the
@@ -360,6 +368,7 @@ fn prompt_units_of(text: &str) -> [u16; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::body::CLASSIFIER_BETA;
 
     #[test]
     fn a_string_content_last_message_is_a_fresh_turn() {
@@ -637,6 +646,7 @@ mod tests {
             (None, None, None, None)
         );
         assert!(!hints.per_turn_effort);
+        assert!(!hints.classifier_beta);
         let mut betas = HeaderMap::new();
         betas.append(
             "anthropic-beta",
@@ -648,6 +658,10 @@ mod tests {
             !ClientHints::read(&betas).per_turn_effort,
             "a line without the per-turn beta"
         );
+        assert!(
+            !ClientHints::read(&betas).classifier_beta,
+            "a line without the classifier beta"
+        );
         betas.append(
             "anthropic-beta",
             "per-turn-control-2026-07-01".parse().unwrap(),
@@ -655,6 +669,16 @@ mod tests {
         assert!(
             ClientHints::read(&betas).per_turn_effort,
             "the per-turn beta on a line of its own"
+        );
+        betas.append("anthropic-beta", CLASSIFIER_BETA.parse().unwrap());
+        let hints = ClientHints::read(&betas);
+        assert!(
+            hints.classifier_beta,
+            "the classifier beta on a line of its own"
+        );
+        assert!(
+            hints.per_turn_effort,
+            "the per-turn beta still read beside a third line"
         );
         let mut spaced = HeaderMap::new();
         spaced.insert(

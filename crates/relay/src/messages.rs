@@ -18,9 +18,9 @@ use axum::{Json, Router};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, AutoMode, Bus, ClientFacts, CooldownSet, DiagnosticsSource,
-    Event, Fork, GuardrailMatch, Kind, Origin, Outcome, RequestComplete, RequestObserved,
-    RequestShape, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
+    AccountSelected, AttemptOutcome, AutoMode, Bus, Classifier, ClientFacts, CooldownSet,
+    DiagnosticsSource, Event, Fork, GuardrailMatch, Kind, Origin, Outcome, RequestComplete,
+    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
 };
 use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
@@ -720,9 +720,17 @@ fn client_facts(
     facts: Option<&BodyFacts>,
 ) -> ClientFacts {
     let hints = ClientHints::read(headers);
+    let class = identity.map_or_else(|| client_class(headers), |i| i.client.clone());
+    // The pair marks under the Claude Code class alone: another client carrying it would hide its share from
+    // the prediction and the shedding, where the contract binds Claude Code alone.
+    let classifier = (ClientClass::of_label(&class) == ClientClass::ClaudeCode
+        && hints.request_class.as_deref() == Some("auxiliary")
+        && hints.classifier_beta)
+        .then_some(Classifier::Client);
     ClientFacts {
-        class: identity.map_or_else(|| client_class(headers), |i| i.client.clone()),
+        class,
         agent_type: hints.agent_type,
+        classifier,
         compaction: hints.compaction,
         context_compacted: hints.context_compacted,
         prev_tool_ms: hints.prev_tool_ms,
@@ -1516,6 +1524,7 @@ impl Relay {
             })
             .collect();
         let guardrail_id = evaluation.blocked.map(|i| guardrails[i].id.clone());
+        let client = client_facts(&parts.headers, Some(&identity), Some(&facts));
         trace
             .observed(
                 Some(&key),
@@ -1536,7 +1545,7 @@ impl Relay {
                     .as_ref()
                     .map(|c| c.message_boundaries.to_vec())
                     .unwrap_or_default(),
-                client_facts(&parts.headers, Some(&identity), Some(&facts)),
+                client,
                 auto_mode,
                 presented == Presented::Retired,
                 key.rotated_at,
