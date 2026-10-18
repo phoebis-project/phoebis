@@ -421,9 +421,9 @@ a renewal book nothing, and a restart drops every reservation with the requests 
 after a landing on another account waits before its head for the first request's head, as a `held` decision with the
 reason `rewrite` that names the request it waits for, up to `slow_down_hold_seconds` from that request's dispatch and
 never past its own deadline, since the upstream makes a cache entry readable only once the response that writes it has
-begun, so a move pays its rewrite once where two requests of the pin are in flight. A token count passes, a fresh
-placement waits nowhere, a request that already waited for a slot, a reset or the slow-down is not held again, and the
-wait ends at once when the first request ends without a head.
+begun, so a move pays its rewrite once where two requests of the pin are in flight. A token count passes, a session's
+first placement waits nowhere, a request that already waited for a slot, a reset or the slow-down is not held again, and
+the wait ends at once when the first request ends without a head.
 
 ### Moves
 
@@ -643,13 +643,13 @@ every session there gets the same stretch. The factor lives in memory beside the
 selection on the account and read until the next write, so a quiet account reads unslowed again at the purge tick and a
 restart starts from none. An entry read before its 5-hour window's passed reset answers nothing, the entry's own reset
 answering where the latest reading names none, the purge tick drops it, and a span the reset ends is recorded to the
-reset. The factor the holds realize is pulled toward 1 by the share of one `burn_average_seconds` the stretch has read
-over zero for, so a burst of a few minutes that would project past the ceiling costs holds in proportion to how long it
-has stood, and the full factor applies after one burn average. A window already at or past its ceiling takes its full
-factor at once, since its standing is measured and not projected. The ramp restarts with every window, since the reset
-clears the stamp, and the routing log's shed line shows the share as `ramp`, 0 wherever the factor reads 1, since
-nothing is held then. The holds realize the factor as a speed, which the router averages over `burn_average_seconds`
-beside the burn, and the demand every reader above divides by is that speed.
+reset. The holds apply the factor in proportion to the share of one `burn_average_seconds` the stretch has read over
+zero for, so a burst of a few minutes that would project past the ceiling costs holds in proportion to how long it has
+stood, and the full factor applies after one burn average. A window already at or past its ceiling takes its full factor
+at once, since its standing is measured and not projected. The ramp restarts with every window, since the reset clears
+the stamp, and the routing log's shed line shows the share as `ramp`, 0 wherever the factor reads 1, since nothing is
+held then. The holds realize the factor as a speed, which the router averages over `burn_average_seconds` beside the
+burn, and the demand every reader above divides by is that speed.
 
 The hold is served before the response head, inside the selection, as a `held` decision with the reason `slow_down`: the
 request waits the pin's cycle times `1 / f - 1` for the factor `f` the ramp leaves, so a session at half speed waits one
@@ -670,8 +670,9 @@ remaining reduction at one speed. The cap stands against the client's first-byte
 and the operator's choice.
 
 Probes, token counts, compactions, auxiliary requests (any `x-claude-code-request-class` outside `compaction`, `main`
-and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held, and the
-burn of each counts, so the holds of the main and subagent turns are sized to cover it. A probe has to land before the
+and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held for the
+slow-down, and the burn of each counts, so the holds of the main and subagent turns are sized to cover it. A probe has
+to land before the
 cache expires, a count costs nothing on the window, a compaction lowers the burn that follows it, and a fast request
 draws usage credits and no plan window.
 
