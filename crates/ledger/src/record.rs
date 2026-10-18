@@ -1,5 +1,8 @@
-//! One struct per ledger table, field order matching the table's column order. `RequestRecord::guardrails` is the one
-//! member no column holds: its rows live in the child table `request_guardrails`.
+//! One struct per ledger table, its fields in the table's column order but for a few members kept beside the ones they
+//! belong with: `RequestRecord`'s two truncation flags follow `bodies_captured`, `client_contract` follows
+//! `client_drift` and `classifier` follows `auto_mode`, and `row_to_request` reads each by its column's index.
+//! `RequestRecord::guardrails` is the one member no column holds: its rows live in the child table
+//! `request_guardrails`.
 
 use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary};
 use phoebis_store::AccountKind;

@@ -1457,8 +1457,9 @@ pub fn free_equivalent(
 }
 
 /// `Some(0.0)` on each window `priced_windows` walks for the model that `tier` holds a capacity on under the regime
-/// `entrypoint` names. A window the tier does not size is left out rather than nulled, since a null marks a reader's
-/// figure unpriced for a charge of nothing.
+/// `entrypoint` names. A window the tier does not size is left out rather than nulled, since the readers that walk the
+/// map (`ShareSums::add_priced` and the sums it feeds) would mark that window's figure unpriced for a charge of
+/// nothing.
 fn zero_windows(
     costs: &SubscriptionCosts,
     entrypoint: Option<&str>,

@@ -2688,8 +2688,9 @@ async fn a_group_on_a_model_without_a_weight_reads_its_tiers_equivalent_marked_e
     );
 }
 
-/// A classifier call's plan row reads zero in the equivalent, and its cache halves and its split by token kind read
-/// zero beside it, while a plain row's figures stay priced from its counts.
+/// A classifier call's plan row reads zero in its shares and in the equivalent, and its cache halves and its split by
+/// token kind read zero beside them, while a plain row's figures stay priced from its counts. The read names the one
+/// account both rows landed on, so the groups answer their shares.
 #[tokio::test]
 async fn a_classifier_rows_cache_equivalents_and_split_read_zero_beside_its_zero_equivalent() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -2721,7 +2722,10 @@ async fn a_classifier_rows_cache_equivalents_and_split_read_zero_beside_its_zero
     );
     let groups = groups_by(
         &db,
-        &RollupFilter::default(),
+        &RollupFilter {
+            accounts: vec!["a".into()],
+            ..RollupFilter::default()
+        },
         hour_range(WEEKDAY_OFF_PEAK),
         "model",
         &share_tables(),
@@ -2732,6 +2736,19 @@ async fn a_classifier_rows_cache_equivalents_and_split_read_zero_beside_its_zero
         group(&groups, "claude-fable-5-1"),
     );
     for window in [FIVE_HOUR, SEVEN_DAY] {
+        assert_eq!(
+            marked.cost_shares.as_ref().and_then(|m| m.get(window)),
+            Some(&0.0),
+            "the marked group's share of {window}: {marked:?}"
+        );
+        assert!(
+            plain
+                .cost_shares
+                .as_ref()
+                .and_then(|m| m.get(window))
+                .is_some_and(|share| *share > 0.0),
+            "the plain group's share of {window}: {plain:?}"
+        );
         assert_eq!(
             marked.cost_equivalent.get(window),
             Some(&0.0),
@@ -2766,6 +2783,71 @@ async fn a_classifier_rows_cache_equivalents_and_split_read_zero_beside_its_zero
         plain.equivalent_split.len() == 4
             && plain.equivalent_split.values().all(|part| *part > 0.0),
         "the plain group's split: {plain:?}"
+    );
+}
+
+/// A rollup row keyed as the client's classifier call reads a zero share and a zero equivalent on both windows of its
+/// burn bucket, while a plain row of the same counts in the next bucket reads its figures from its counts.
+#[test]
+fn a_classifier_rows_burn_bucket_reads_zero_shares_and_equivalents_beside_a_plain_rows_figures() {
+    let tables = share_tables();
+    let filter = SeriesFilter {
+        from: 0,
+        to: 10_800_000,
+        bucket_seconds: 3_600,
+        accounts: vec!["a".into()],
+        ..SeriesFilter::default()
+    };
+    let row = |hour: i64, classifier: &str| RollupRow {
+        input_tokens: 1_000,
+        output_tokens: 100,
+        ..RollupRow::key(
+            hour,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-sonnet-5-5",
+            "inference",
+            UNATTRIBUTED,
+            UNATTRIBUTED,
+            "none",
+            NO_CLASS,
+            "standard",
+            PLAN_FUNDING,
+            "standard",
+            "test_tier",
+            classifier,
+        )
+    };
+    let points = burn_series_over(
+        &[row(3_600, "client"), row(7_200, NO_CLASS)],
+        &tables,
+        &PRICES,
+        &filter,
+    )
+    .unwrap();
+    let figures = |at: i64| {
+        let point = points
+            .iter()
+            .find(|p| p.at == at)
+            .expect("the bucket is in the range");
+        [
+            point.five_hour_share,
+            point.seven_day_share,
+            point.five_hour_equivalent,
+            point.seven_day_equivalent,
+        ]
+    };
+    assert_eq!(
+        figures(3_600_000),
+        [Some(0.0); 4],
+        "the classifier row's shares and equivalents on both windows"
+    );
+    let plain = figures(7_200_000);
+    assert!(
+        plain.iter().all(|figure| figure.is_some_and(|f| f > 0.0)),
+        "the plain row's shares and equivalents on both windows: {plain:?}"
     );
 }
 
