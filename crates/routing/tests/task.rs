@@ -9385,8 +9385,9 @@ fn head_of(
     }
 }
 
-/// `a`'s reading of `window` as the handle answers it, once every report sent before the ask has landed.
-async fn stored_reading(handle: &RouterHandle, window: &str) -> WindowReading {
+/// `a`'s prediction of `window` as the handle answers it, once every report sent before the ask has landed. With no
+/// charge or booking on the account it reads as the stored reading.
+async fn predicted_reading(handle: &RouterHandle, window: &str) -> WindowReading {
     handle
         .samples()
         .await
@@ -9436,7 +9437,7 @@ async fn a_head_within_the_margin_holds_the_wall(window: &str, reset: Option<i64
     handle
         .report(head_of(window, headed, 0.99, reset, "r-1"))
         .await;
-    let held = stored_reading(&handle, window).await;
+    let held = predicted_reading(&handle, window).await;
     assert_eq!(
         (held.utilization, held.observed_at, held.reset, held.source),
         (1.0, headed, reset, WindowSource::Head),
@@ -9515,7 +9516,7 @@ async fn a_wall_of_the_next_reset_cycle_is_announced_again() {
         other => panic!("the passed reset, by the sample, not {other:?}"),
     }
     assert_eq!(
-        stored_reading(&handle, FIVE_HOUR).await.utilization,
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
         0.99,
         "a reading of the next cycle within the margin lands as read"
     );
@@ -9554,7 +9555,7 @@ async fn the_margin_is_two_points_and_a_thousandth_under_it_is_a_clear() {
         .report(head_reading(3_000, 1.0 - SPENT_MARGIN, reset, "r-1"))
         .await;
     assert_eq!(
-        stored_reading(&handle, FIVE_HOUR).await.utilization,
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
         1.0,
         "a head at the margin's bound reads the wall"
     );
@@ -9564,7 +9565,7 @@ async fn the_margin_is_two_points_and_a_thousandth_under_it_is_a_clear() {
         .report(head_reading(4_000, cleared, reset, "r-2"))
         .await;
     assert_eq!(
-        stored_reading(&handle, FIVE_HOUR).await.utilization,
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
         cleared,
         "a thousandth under the bound lands as read"
     );
@@ -9742,7 +9743,7 @@ async fn a_cooldown_set_at_the_wall_stands_through_a_head_within_the_margin() {
         "the rejection stands through the head"
     );
     assert_eq!(next_decision(&mut events).await.0.kind, "exhausted");
-    let held = stored_reading(&handle, FIVE_HOUR).await;
+    let held = predicted_reading(&handle, FIVE_HOUR).await;
     assert_eq!((held.utilization, held.source), (1.0, WindowSource::Head));
     now.store(3_000, Ordering::SeqCst);
     handle
@@ -9769,6 +9770,75 @@ async fn a_cooldown_set_at_the_wall_stands_through_a_head_within_the_margin() {
         matches!(handle.select(request(&handle, None, 3_100)).await.unwrap().result, SelectResult::Selected(ref s) if s.account.id == "a"),
         "a head under the margin releases the row"
     );
+}
+
+#[tokio::test]
+async fn a_wall_announced_by_a_sample_is_not_announced_again_under_its_reset() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = Some(10 * HOUR);
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 1.0, reset)))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    // A head that names no reset reads another cycle than the poll's, so it lands as read under the wall.
+    now.store(3_000, Ordering::SeqCst);
+    handle.report(head_reading(3_000, 0.99, None, "r-1")).await;
+    assert_eq!(
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
+        0.99
+    );
+    // The poll names the wall's reset again, the cycle the first poll's announcement was recorded for.
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_announced() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = Some(10 * HOUR);
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 1.0, reset)))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    // A head read before the poll arrives after it: the fold keeps the newer poll, so the head is no clear.
+    now.store(2_500, Ordering::SeqCst);
+    handle.report(head_reading(1_500, 0.90, reset, "r-1")).await;
+    let kept = predicted_reading(&handle, FIVE_HOUR).await;
+    assert_eq!(
+        (kept.utilization, kept.observed_at, kept.source),
+        (1.0, 2_000, WindowSource::Poll)
+    );
+    // A head that names no reset reads another cycle than the poll's, so it lands as read under the wall.
+    now.store(3_000, Ordering::SeqCst);
+    handle.report(head_reading(3_000, 0.99, None, "r-2")).await;
+    assert_eq!(
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
+        0.99
+    );
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
 }
 
 /// A main turn of `session` selected against `state` over the task's snapshot: the task's own state is out of the

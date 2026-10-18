@@ -1641,9 +1641,10 @@ struct Task {
     reset_announced: HashMap<(String, String), i64>,
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
-    /// The reset each account and window's wall was announced for, `None` for a 5-hour window open past its reset,
-    /// beside the instant of the announcement: a charge, a booking or a sample announces a wall once per reset cycle,
-    /// and the sample that confirms it names that cycle's reset and announces nothing.
+    /// The reset each account and window's wall was announced for, `None` where the reading named no reset, as a
+    /// 5-hour window open past its reset does, beside the instant of the announcement: a charge, a booking or a sample
+    /// announces a wall once per reset cycle, and the sample that confirms it names that cycle's reset and announces
+    /// nothing.
     spent_announced: HashMap<(String, String), (Option<i64>, i64)>,
     state: RoutingState,
     store: Arc<Store>,
@@ -4373,7 +4374,9 @@ impl Task {
     /// reading at the wall under the same reset cycle is raised to the stored utilization, with its own instant,
     /// reset and source, so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the
     /// wall again. A reading under the margin is a real clear and forgets the announcement, so the next crossing
-    /// announces anew. A reading of another cycle lands as read.
+    /// announces anew. A reading of another cycle lands as read. Only a reading newer than the stored one counts,
+    /// since the fold drops any other: an older reading, or one of the stored instant, goes to the fold as read and
+    /// touches no announcement.
     fn held_at_the_wall(
         &mut self,
         account_id: &str,
@@ -4385,7 +4388,10 @@ impl Task {
             let Some(stored) = stored.get(window) else {
                 continue;
             };
-            if stored.utilization < 1.0 || reading.utilization >= 1.0 {
+            if reading.observed_at <= stored.observed_at
+                || stored.utilization < 1.0
+                || reading.utilization >= 1.0
+            {
                 continue;
             }
             if reading.utilization >= 1.0 - SPENT_MARGIN {
