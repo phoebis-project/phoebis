@@ -96,9 +96,11 @@ export const LANES: Lane[] = [
 ];
 
 /**
- * The account that serves the story's unpriced traffic: Sonnet 4.6 alone, which the cost model has no weight for,
- * whatever the lane drew, so its buckets read no share. The sessions the story moves off it carry Sonnet 4.6 to primary,
- * whose 11:00 and 14:00 buckets read no share either. Every other subscription bucket stays priced.
+ * The account that serves Sonnet 4.6 alone, whatever the lane drew: the cost model has no weight of its own for it, so
+ * its buckets price through its model tier's latest weighted model as an estimate. The sessions the story moves off it
+ * carry Sonnet 4.6 to primary, whose 11:00 and 14:00 buckets read the estimate too. The story's one unpriced row is a
+ * plan request on a model the cost model lists in no tier, `UNPRICED_REQUEST`, which the mock adds behind its unpriced
+ * switch.
  */
 const UNPRICED_ACCOUNT = 'secondary';
 const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-4-6' : drawn);

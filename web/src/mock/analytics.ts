@@ -198,11 +198,12 @@ function windowSums(counted: HourlyRollup[], probeRows: HourlyRollup[], own: (r:
     for (const [window, figure] of Object.entries(own(r))) add(probe, window, figure);
   }
   const priced = (map: Map<string, WindowSum>) => [...map.entries()].filter(([, s]) => !s.unpriced);
-  // Each shared window flagged where a sum the window leaves out did. The route keys a model week a row named too,
-  // which no reader of the flags reads, and the mock's shape check holds each map to the captured fixture's keys.
+  // Both shared windows always and every model week a row named, as the route keys them, each flagged where a sum the
+  // window leaves out did.
   const unpricedOf = (...maps: Map<string, WindowSum>[]) => {
-    const flagged = (window: string) => maps.some((map) => map.get(window)?.unpriced === true);
-    return { five_hour: flagged('five_hour'), seven_day: flagged('seven_day') };
+    const out: Record<string, boolean> = { five_hour: false, seven_day: false };
+    for (const map of maps) for (const [window, s] of map) out[window] = out[window] === true || s.unpriced;
+    return out;
   };
   return {
     cache: Object.fromEntries(priced(read).flatMap(([window, r]) => { const w = write.get(window); return w === undefined || w.unpriced ? [] : [[window, { read: r.sum, write: w.sum }]]; })) as Record<string, { read: number; write: number }>,
