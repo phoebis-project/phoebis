@@ -747,7 +747,18 @@ function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, set
               <div className="bodies">
                 {/* Keyed on the request, so the next request's block starts with its dialog closed. */}
                 <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
-                <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                {bodies.data.response === null ? (
+                  // A capture without a response byte has nothing to open or copy, so the block says why there is none.
+                  // A request no account was tried for was answered by the router itself.
+                  <div className="body-block">
+                    <div className="body-block__head">
+                      <span>Response</span>
+                    </div>
+                    <p className="muted">{r.attempts.length === 0 ? 'No response: the router refused the request before an account answered.' : 'No response was captured.'}</p>
+                  </div>
+                ) : (
+                  <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                )}
               </div>
             ) : (
               <p className="muted">Bodies for this request have aged out of retention.</p>

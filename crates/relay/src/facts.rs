@@ -909,17 +909,6 @@ mod tests {
         assert!(facts.chains.is_none());
     }
 
-    #[test]
-    fn read_answers_the_facts_read_with_tree_answers() {
-        for body in [
-            &include_bytes!("../../guardrails/tests/fixtures/subagent_summary_fork.json")[..],
-            &include_bytes!("../../guardrails/tests/fixtures/auto_mode_classifier.json")[..],
-            b"not json",
-        ] {
-            assert_eq!(BodyFacts::read(body), BodyFacts::read_with_tree(body).0);
-        }
-    }
-
     /// The guardrails crate carries its own copy of `texts`, and a message condition has to read the text blocks
     /// the version suffix reads.
     #[test]

@@ -27,8 +27,8 @@ accounts' catalogs ([The models listing](client.md#the-models-listing)).
 ## Admission
 
 Before a request is relayed, the handler admits it in a fixed order, and each step refuses with the code its row of
-[Refusal codes](client.md#refusal-codes) names, so a refused request's row in the ledger says which step turned it away.
-An inference request and a token count take every step. A keepalive probe's key is read by its id, its body is the
+[Refusal codes](client.md#refusal-codes) names, so a refused request's row in the ledger says which refusal turned it
+away. An inference request and a token count take every step. A keepalive probe's key is read by its id, its body is the
 router's own, and the guardrails never evaluate it.
 
 The key comes first: the credential header is read (`auth_missing`, `auth_malformed`, `auth_ambiguous`) and the key it
@@ -41,8 +41,8 @@ The body is read under its bounds: the key's slot for arriving bodies (`key_body
 `proxy.max_request_bytes` (`request_too_large`), the process's byte budget (`body_budget_exhausted`), the read deadline
 of `proxy.body_read_seconds` (`request_timeout`), a connection that closes before the body ends (`request_incomplete`)
 and a body that runs past the bound (`request_too_large`). A gzip body is then inflated under the same bound
-(`request_too_large`, and `invalid_body` where the bytes are not valid gzip), so every later read and edit sees the
-plain bytes.
+(`body_budget_exhausted` where the budget cannot hold the inflated bound, `invalid_body` where the bytes are not valid
+gzip, and `request_too_large`), so every later read and edit sees the plain bytes.
 
 The body's facts are read once, the parsed tree beside them, and the ledger's standing is checked before the first fact
 is published, so no request is accepted that the writer cannot record (`ledger_behind`). The repeated-member check
@@ -56,15 +56,14 @@ The model and the identity are read from the body and the headers (`missing_mode
 under, and the conversation climb reads the boundary chains to place the request in its conversation ([The boundary
 chains](#the-boundary-chains)).
 
-Then every guardrail attached to the pool and then the key is evaluated, in their order, and an enforcing match refuses
-the request with `guardrail_blocked` before the facts are published and before any account is read
-([Guardrails](guardrails.md)). A key with no guardrail pays one lookup here and nothing else.
+Then every guardrail attached to the pool and then the key is evaluated, in their order, before the facts are published,
+so the facts carry the matches, and an enforcing match then refuses the request with `guardrail_blocked` before any
+account is read ([Guardrails](guardrails.md)). A key with no guardrail pays one lookup here and nothing else.
 
-The request's facts are published, the matched guardrails among them, and the candidates are resolved from the key's
-model rules (`model_not_allowed`). The drift checks judge the billing stamp
-and the version suffix once, before any account is selected (`client_drift`, [Client drift](#client-drift)), and the
-selection takes over: the session's pin or the pool's strategy, whose own refusals are on [When nothing can
-serve](routing.md#when-nothing-can-serve).
+The candidates are resolved from the key's model rules (`model_not_allowed`).
+The drift checks judge the billing stamp and the version suffix once, before any account is
+selected (`client_drift`, [Client drift](#client-drift)), and the selection takes over: the session's pin or the pool's
+strategy, whose own refusals are on [When nothing can serve](routing.md#when-nothing-can-serve).
 
 ## The body edits
 

@@ -64,6 +64,17 @@ fn condition(subject: Subject, operator: Operator, value: &str) -> Condition {
     }
 }
 
+fn header_condition(operator: Operator, name: &str, value: Option<&str>) -> Condition {
+    Condition {
+        subject: Subject::Header,
+        operator,
+        value: value.map(Into::into),
+        name: Some(name.into()),
+        path: None,
+        selector: None,
+    }
+}
+
 /// The preset's three conditions written out, so a case asserts its own guardrail rather than the shipped table.
 fn fork_conditions() -> Vec<Condition> {
     vec![
@@ -214,6 +225,13 @@ async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_i
             r#"blocked by guardrail "Subagent status summary""#
         )
     );
+    // The answer names the guardrail by its name alone, since the request row records the id.
+    for (name, value) in &answer.headers {
+        assert!(
+            !String::from_utf8_lossy(value.as_bytes()).contains(&row.id),
+            "{name} names the guardrail's id"
+        );
+    }
     assert!(
         up.requests().is_empty(),
         "no account was selected, so nothing went upstream"
@@ -357,6 +375,95 @@ async fn a_count_tokens_request_is_evaluated() {
     assert_eq!(
         (observed.kind, observed.guardrail_id.as_deref()),
         (Kind::CountTokens, Some("summary"))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_header_condition_reads_a_sent_headers_value_and_a_header_the_request_does_not_send_as_absent(
+) {
+    let up = upstream().await;
+    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
+    let unsent = guardrail(
+        "unsent",
+        "No marker header",
+        GuardrailMode::Observe,
+        vec![header_condition(Operator::Absent, "x-marker", None)],
+    );
+    guarded(&h, &unsent, &["main"], &[]).await;
+    let team = guardrail(
+        "team",
+        "Research team",
+        GuardrailMode::Enforce,
+        vec![header_condition(
+            Operator::Equals,
+            "x-team",
+            Some("research"),
+        )],
+    );
+    guarded(&h, &team, &["main"], &[]).await;
+    let mut req = fork();
+    set_header(&mut req, "x-team", "research");
+    let answer = send(&h, &mut sub, req).await;
+    assert_eq!(
+        (
+            answer.status,
+            answer.header("x-phoebis-error-code"),
+            answer.message.as_str()
+        ),
+        (
+            400,
+            Some("guardrail_blocked"),
+            r#"blocked by guardrail "Research team""#
+        )
+    );
+    assert!(up.requests().is_empty());
+    assert_eq!(
+        answer.observed().guardrails,
+        [
+            GuardrailMatch {
+                id: "unsent".into(),
+                position: 0,
+                blocked: false
+            },
+            GuardrailMatch {
+                id: "team".into(),
+                position: 1,
+                blocked: true
+            },
+        ]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_user_agent_condition_reads_the_header_cut_to_256_bytes_as_the_row_keeps_it() {
+    let up = upstream().await;
+    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
+    let mut req = fork();
+    let agent = req.headers()["user-agent"].to_str().unwrap();
+    let sent = format!("{agent} {}", "x".repeat(300));
+    set_header(&mut req, "user-agent", &sent);
+    let row = guardrail(
+        "long-agent",
+        "Long user agent",
+        GuardrailMode::Enforce,
+        vec![condition(
+            Subject::UserAgent,
+            Operator::Equals,
+            &sent[..256],
+        )],
+    );
+    guarded(&h, &row, &["main"], &[]).await;
+    let answer = send(&h, &mut sub, req).await;
+    assert_eq!(
+        (answer.status, answer.header("x-phoebis-error-code")),
+        (400, Some("guardrail_blocked")),
+        "the condition compares the first 256 bytes of the header"
+    );
+    assert_eq!(
+        answer.observed().guardrail_id.as_deref(),
+        Some("long-agent")
     );
     up.shutdown().await;
 }

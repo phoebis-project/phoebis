@@ -578,6 +578,7 @@ pub fn guardrail_counts(
     Ok(rows)
 }
 
+/// Whose rows a dry run's sample walks, by id: one key's, or every key's of a pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleSubject<'a> {
     Key(&'a str),

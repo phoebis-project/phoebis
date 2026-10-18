@@ -43,8 +43,9 @@ export const GUARDRAILS: Guardrail[] = [
     mode: 'observe',
     name: SUMMARY_PRESET?.name ?? 'Subagent status summary',
     pools: [{ id: 'all', label: 'all', position: 0 }],
-    // Stamped at the version the story created it from, so a later shipped version reads as an available update.
-    preset: { currentVersion: SUMMARY_PRESET?.version ?? 1, customized: false, id: 'subagent-status-summary', version: 1 },
+    // Stamped at the version its conditions are copied from, the presets route's current entry, so the stamp, the
+    // conditions and `customized` read as the mock's own writes would read them whichever version the binary ships.
+    preset: { currentVersion: SUMMARY_PRESET?.version ?? 1, customized: SUMMARY_PRESET === undefined, id: 'subagent-status-summary', version: SUMMARY_PRESET?.version ?? 1 },
     revision: 0,
     updatedAt: daysAgo(3),
   },

@@ -165,6 +165,8 @@ mod tests {
 
     #[test]
     fn a_pattern_past_the_size_limit_is_refused_with_a_one_line_message() {
+        // The regex crate's default size limit admits the pattern, so the refusal below is the 1 MiB limit's own.
+        assert!(regex::Regex::new(r"\w{100}").is_ok());
         let message = refusal(r"\w{100}");
         assert!(
             message.starts_with("pattern does not compile: "),

@@ -3887,13 +3887,12 @@ async function analyticsTables(theme) {
 }
 
 /**
- * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on
- * the landing tab (its group column the fill, Key under the default grouping) and the Guardrails card above it
- * (Guardrail), the misses-by-reason breakdown (Key
- * again, its nine figure headers wrapped so the group column keeps its room, each known reason's header its short
- * word with the full label on its title) and the placements table on Cache (Rung), and the member budgets on Burn
- * (Pool and Account, the Spent column as wide as its meter's floor) with the meter reconciliation (Upstream). The view
- * returns to Traffic afterwards, as the other Analytics checks leave it.
+ * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on the
+ * landing tab (its group column the fill, Key under the default grouping) and the Guardrails card above it (Guardrail),
+ * the misses-by-reason breakdown (Key again, its nine figure headers wrapped so the group column keeps its room, each
+ * known reason's header its short word with the full label on its title) and the placements table on Cache (Rung), and
+ * the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor) with the meter
+ * reconciliation (Upstream). The view returns to Traffic afterwards, as the other Analytics checks leave it.
  */
 async function analyticsColumns(theme) {
   await tableColumns(theme, 'analytics', '#traffic .card--table:not(.analytics-guardrails) table', ['Key']);

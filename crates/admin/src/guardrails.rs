@@ -39,9 +39,9 @@ pub(crate) const STALE_EDIT: &str =
 const RESERVED_IDS: [&str; 2] = ["presets", "test"];
 
 /// The guardrail's fields. On a create `id` is required, and `name` and `conditions` unless `preset` supplies them,
-/// `mode` defaults to `observe`, `enabled` to `true`, `action` to `block` and `description` to empty. On an edit any
-/// subset but `id` and `preset`. An absent `pools` or `keys` leaves those attachments as they are, and an empty list
-/// detaches every one. An unknown field in the body is refused.
+/// `mode` defaults to the preset's suggested mode or `observe`, `enabled` to `true`, `action` to `block` and
+/// `description` to empty. On an edit any subset but `id` and `preset`. An absent `pools` or `keys` leaves those
+/// attachments as they are, and an empty list detaches every one. An unknown field in the body is refused.
 #[derive(Deserialize, Default, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailInput {
@@ -106,7 +106,8 @@ pub(crate) struct AttachmentView {
     pub id: String,
     /// The pool's or the key's label at the read.
     pub label: String,
-    /// The guardrail's place in that pool's or key's list, from 0.
+    /// The guardrail's place in that pool's or key's order. A guardrail detached through its own route or deleted
+    /// leaves the others' values as they were, so the order can skip a value: sort by it and never index by it.
     pub position: u32,
 }
 
@@ -120,7 +121,8 @@ pub(crate) struct GuardrailRef {
     #[schema(example = "observe")]
     pub mode: String,
     pub enabled: bool,
-    /// The guardrail's place in the list, from 0.
+    /// The guardrail's place in the order. A guardrail detached through its own route or deleted leaves the others'
+    /// values as they were, so the list can skip a value: sort by it and never index by it.
     pub position: u32,
 }
 
@@ -168,7 +170,8 @@ pub(crate) struct GuardrailPresetState {
     pub id: String,
     /// The version the guardrail was created from, or the one its last update took.
     pub version: u32,
-    /// The highest version this build ships of the preset, above `version` where an update is available.
+    /// The highest version this build ships of the preset, above `version` where an update is available, or the
+    /// stamped version where this build ships no preset of that id.
     pub current_version: u32,
     /// Whether the guardrail's conditions differ from the preset's at `version`.
     pub customized: bool,

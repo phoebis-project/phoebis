@@ -680,9 +680,14 @@ test('a_guardrail_is_created_edited_attached_and_deleted_on_the_mock_with_the_ro
   assert.deepEqual(await listOf('all'), [['subagent-status-summary', 1]], 'a refused attachment stores nothing');
   assert.deepEqual((await api.listKeys()).find((k) => k.id === 'laptop').guardrails.map((r) => r.id), ['fresh']);
 
+  // Attached again ahead of the preset's row, so the delete has a pool side and an entry after it whose position moves
+  // if the delete renumbers the list.
+  const again = (await api.listPools()).find((p) => p.id === 'all');
+  await api.updatePool('all', { ...poolInputOf(again), guardrails: ['fresh', 'subagent-status-summary'] }, again.revision);
+  assert.deepEqual(await listOf('all'), [['fresh', 0], ['subagent-status-summary', 1]]);
   await api.deleteGuardrail('fresh');
+  assert.deepEqual(await listOf('all'), [['subagent-status-summary', 1]], "the delete takes the guardrail off the pool's list and keeps the other entry's position");
   await assert.rejects(() => api.getGuardrail('fresh'), refusedAs(404, 'guardrail not found'));
   const keys = await api.listKeys();
   assert.ok(keys.every((k) => k.guardrails.every((r) => r.id !== 'fresh')), 'the delete detaches the guardrail from every key');
-  assert.deepEqual(await listOf('all'), [['subagent-status-summary', 1]]);
 });

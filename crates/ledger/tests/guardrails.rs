@@ -19,6 +19,7 @@ use phoebis_ledger::{
 };
 
 const DAY_MS: i64 = 86_400_000;
+const HOUR_MS: i64 = 3_600_000;
 
 fn matched(guardrail_id: &str, position: u32, blocked: bool) -> GuardrailMatchRecord {
     GuardrailMatchRecord {
@@ -486,11 +487,15 @@ fn sample_ids(
 }
 
 /// A pool's sample reads both of its keys and a key's sample the one key, newest first, each leaving out a probe, an
-/// uncaptured row, another pool's row and a row older than the window, and the cursor carries the walk across pages.
+/// uncaptured row, another pool's row and a row older than the window while keeping one hours inside it, and the
+/// cursor carries the walk across pages.
 #[test]
 fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_probes_and_uncaptured_rows(
 ) {
     let db = LedgerDb::open_in_memory().unwrap();
+    // The newest rows sit seconds apart, the window reaches 72 hours back, `g` sits three hours inside it and `old`
+    // 1,000 hours back past it, so a bound placed where a window read in minutes puts it leaves `g` out.
+    let now = 1_000 * HOUR_MS;
     let hinted = RequestRecord {
         client: Some("claude-code".into()),
         request_class: Some("auxiliary".into()),
@@ -498,33 +503,37 @@ fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_p
         user_agent: Some("claude-cli/2.1.300".into()),
         compaction: Some("auto".into()),
         context_compacted: Some("true".into()),
-        ..sampled("a", 10_000, "k1", true, "inference")
+        ..sampled("a", now, "k1", true, "inference")
     };
     for row in [
         hinted,
-        sampled("b", 9_000, "k2", true, "count_tokens"),
-        sampled("c", 8_000, "k1", false, "inference"),
-        sampled("d", 7_000, "k2", true, "probe"),
-        sampled("e", 6_000, "k1", true, "inference"),
-        sampled("f", 5_000, "k2", true, "inference"),
-        sampled("old", 1_000, "k1", true, "inference"),
+        sampled("b", now - 1_000, "k2", true, "count_tokens"),
+        sampled("c", now - 2_000, "k1", false, "inference"),
+        sampled("d", now - 3_000, "k2", true, "probe"),
+        sampled("e", now - 4_000, "k1", true, "inference"),
+        sampled("f", now - 5_000, "k2", true, "inference"),
+        sampled("g", now - 3 * HOUR_MS, "k1", true, "inference"),
+        sampled("old", now - 1_000 * HOUR_MS, "k1", true, "inference"),
         RequestRecord {
             pool_id: Some("other".into()),
-            ..sampled("x", 9_500, "k3", true, "inference")
+            ..sampled("x", now - 500, "k3", true, "inference")
         },
     ] {
         db.insert_request(&row, &[], None).unwrap();
     }
-    let since = 2_000;
+    let since = now - 72 * HOUR_MS;
     let pool = SampleSubject::Pool("main");
     assert_eq!(
         sample_ids(&db, pool, since, None, 10),
-        (vec!["a".into(), "b".into(), "e".into(), "f".into()], None),
+        (
+            vec!["a".into(), "b".into(), "e".into(), "f".into(), "g".into()],
+            None
+        ),
         "both keys of the pool, newest first"
     );
     assert_eq!(
         sample_ids(&db, SampleSubject::Key("k1"), since, None, 10),
-        (vec!["a".into(), "e".into()], None)
+        (vec!["a".into(), "e".into(), "g".into()], None)
     );
     assert_eq!(
         sample_ids(&db, SampleSubject::Key("k2"), since, None, 10),
@@ -532,18 +541,19 @@ fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_p
     );
     assert_eq!(
         sample_ids(&db, pool, 0, None, 10).0,
-        ["a", "b", "e", "f", "old"],
+        ["a", "b", "e", "f", "g", "old"],
         "the window alone leaves the old row out"
     );
 
     let (first, next) = sample_ids(&db, pool, since, None, 2);
+    let cursor = format!("{}:b", now - 1_000);
     assert_eq!(
         (first, next.as_deref()),
-        (vec!["a".into(), "b".into()], Some("9000:b"))
+        (vec!["a".into(), "b".into()], Some(cursor.as_str()))
     );
     assert_eq!(
-        sample_ids(&db, pool, since, next.as_deref(), 2),
-        (vec!["e".into(), "f".into()], None),
+        sample_ids(&db, pool, since, next.as_deref(), 3),
+        (vec!["e".into(), "f".into(), "g".into()], None),
         "a last page of exactly the limit offers no cursor"
     );
 
@@ -554,7 +564,7 @@ fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_p
         rows,
         [SampleRow {
             id: "a".into(),
-            received_at: 10_000,
+            received_at: now,
             kind: "inference".into(),
             canonical_model: "claude-sonnet-5".into(),
             client: Some("claude-code".into()),

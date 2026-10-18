@@ -8364,7 +8364,7 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
   create.unmount();
   results.push({
     name: "/keys a new key's Guardrails group draws its pool's rows inherited and waits for the save to attach its own",
-    ok: JSON.stringify(freshRead) === JSON.stringify({ attach: false, rows: guardrailRefRows(pool?.guardrails ?? [], true), sentence: 'Guardrails can be attached once the key is saved.' }),
+    ok: (pool?.guardrails.length ?? 0) > 0 && JSON.stringify(freshRead) === JSON.stringify({ attach: false, rows: guardrailRefRows(pool?.guardrails ?? [], true), sentence: 'Guardrails can be attached once the key is saved.' }),
     missing: [pool?.id ?? 'no pool', JSON.stringify(freshRead)],
   });
 }
@@ -9928,7 +9928,14 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   const titles = [...page.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? '');
   const read = sectionRows(page);
   const outcome = [drawerRowOf(page, 'Outcome')?.querySelector('dd')?.textContent?.trim(), drawerRowOf(page, 'Error')?.querySelector('dd')?.textContent?.trim()];
+  const captured = [...page.container.querySelectorAll('.drawer section')].find((s) => s.querySelector('.section-title')?.textContent?.trim() === 'Captured bodies');
+  const bodyBlocks = [...(captured?.querySelectorAll('.body-block') ?? [])].map((b) => [b.querySelector('.body-block__head > span')?.textContent?.trim(), b.querySelector('p.muted')?.textContent?.trim() ?? null, b.querySelector('.link-btn') !== null]);
   page.unmount();
+  results.push({
+    name: "/requests a blocked row's captured Response says the router refused the request before an account answered",
+    ok: JSON.stringify(bodyBlocks) === JSON.stringify([['Request', null, true], ['Response', 'No response: the router refused the request before an account answered.', false]]),
+    missing: [blocked?.id ?? 'no blocked row', JSON.stringify(bodyBlocks)],
+  });
   results.push({
     name: '/requests the drawer of a blocked row names each match with its badge',
     ok:

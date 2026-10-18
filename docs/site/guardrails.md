@@ -4,7 +4,7 @@ A guardrail is the operator's filter on the requests a key may send: a named lis
 to pools and keys, that records the requests it matches or refuses them before any account is touched. This page is for
 the operator blocking a request shape, the client's subagent summary fork first. It covers what a guardrail is, the fork
 and the three presets the build ships, every condition the editor offers, the path from observing to enforcing, the test
-against captured bodies, what a blocked client receives and what this phase leaves out. The view that edits a guardrail
+against captured bodies, what a blocked client receives and what guardrails do not do. The view that edits a guardrail
 is on [The console](console.md#guardrails), the admin routes are in the [API reference](api-reference.md), and the
 refusal a blocked client meets is on [Refusal codes](client.md#refusal-codes).
 
@@ -21,8 +21,8 @@ A guardrail applies where it is attached. A pool's guardrails cover every key of
 order, and the key's own run after them in the key's order. A key cannot drop a guardrail its pool attached, no
 guardrail applies router-wide, and a guardrail attached to both a key and its pool is evaluated once, at its pool
 position. A disabled guardrail stays attached and runs nowhere. A new pool and a new key start with no guardrail: the
-guardrail dialog's "Applies to" group attaches a saved guardrail to pools and keys, and the pool and key dialogs attach
-saved guardrails from their side and arrange the order ([Pools](console.md#pools), [Keys](console.md#keys)).
+guardrail dialog's "Applies to" group attaches the guardrail to saved pools and keys, and the pool and key dialogs
+attach saved guardrails from their side and arrange the order ([Pools](console.md#pools), [Keys](console.md#keys)).
 
 In observe mode a match is recorded on the request row and the request goes on as if nothing had matched. In enforce
 mode a match refuses the request with a 400 before any account is selected ([What a blocked client
@@ -34,10 +34,10 @@ records every match in evaluation order with the one that blocked marked.
 The evaluation is one step of the relay's admission ([Admission](relay.md#admission)): after the key is authenticated,
 the body is read and the conversation is climbed, and before the request's facts are published and before any candidate
 account is resolved. It runs for an inference request and a token count and never for a keepalive probe. A blocked
-request touches no account, no pin, no hold, no window and no burn, so the slow-down never holds it and it refreshes
-nothing ([Slow-down](routing.md#slow-down)). The router reads its guardrails with the registry snapshot, so a save in
-the console takes effect on the next request without a restart. Deleting a guardrail removes its attachments and leaves
-the request rows that name it, which the Requests view marks `{id} (deleted)`.
+request touches no account, no pin, no hold, no window and no burn, so the slow-down never holds it and it refreshes no
+pin ([Slow-down](routing.md#slow-down)). The router reads its guardrails with the registry snapshot, so a save in the
+console takes effect on the next request without a restart. Deleting a guardrail removes its attachments and leaves the
+request rows that name it, which the Requests view marks `{id} (deleted)`.
 
 ## The subagent summary fork
 
@@ -50,8 +50,8 @@ The cost is in the cache reads. On one router over three days, 2026-10-13 to 202
 billion cached tokens and 26.3 million input tokens, 22 percent of every cached token the router read in those days and
 39 percent of the cached tokens its subagent traffic read. The figures are that router's over those days, since a
 session with no running subagent sends no fork and a session with several sends one per subagent every 30 seconds. The
-first preset below catches the fork, and the Requests view shows what it costs on your router before any request is
-refused ([Observe, then enforce](#observe-then-enforce)).
+Subagent status summary preset below catches the fork, and the Requests view shows what it costs on your router before
+any request is refused ([Observe, then enforce](#observe-then-enforce)).
 
 ## The presets
 
@@ -79,14 +79,14 @@ subagent's full cached context for about 24 output tokens, and no client setting
 were 22 percent of every cached token read over three days. Blocking them leaves the Agent tool's status line static and
 changes nothing else."
 
-`Prompt suggestion`, version 1, measured on Claude Code 2.1.296 to 2.1.301, catches a second fork of the same shape.
-After a turn in an interactive session the client forks the main thread's whole conversation to predict what the user
-types next and shows the answer in the input. The appended user block starts `[SUGGESTION MODE: Suggest what the user
-might naturally type next into Claude Code.]`, so the preset's third condition matches the last user message against
-`^\[SUGGESTION MODE: Suggest what the user might naturally type next`, after the same `request_class` and `tools`
-conditions. On the same router over three days, 2026-10-14 to 2026-10-17, 154 such forks read 48.2 million cached tokens
-for about seven output tokens each. The client setting `promptSuggestionEnabled` turns the feature off on one machine, a
-switch the summary fork has no equivalent of.
+`Prompt suggestion`, version 1, measured on Claude Code 2.1.296 to 2.1.301, catches a second fork of the same shape. In
+an interactive session the client forks the main thread's whole conversation to predict what the user types next and
+shows the answer in the input. The appended user block starts `[SUGGESTION MODE: Suggest what the user might naturally
+type next into Claude Code.]`, so the preset's third condition matches the last user message against `^\[SUGGESTION
+MODE: Suggest what the user might naturally type next`, after the same `request_class` and `tools` conditions. On the
+same router over three days, 2026-10-14 to 2026-10-17, 154 such forks read 48.2 million cached tokens for about seven
+output tokens each. The client setting `promptSuggestionEnabled` turns the feature off on one machine, a switch the
+summary fork has no equivalent of.
 
 `Away recap`, version 1, measured on the same client versions, catches the third. When the user steps away and comes
 back, the client forks the main thread's whole conversation to ask for a recap of the session in under 40 words. The
@@ -144,7 +144,7 @@ entry, whatever its role), `last_assistant` and `last_user`. Claude Code appends
 control entry. The pattern runs on each text block of each selected entry, a string content as one block and an array's
 `text` blocks one by one, and the condition holds when one block of one selected entry matches. A body without a
 `messages` array, or with no entry the selector picks, fails the condition. Tool results, tool inputs, images and
-documents are not read ([What this phase does not do](#what-this-phase-does-not-do)).
+documents are not read ([What guardrails do not do](#what-guardrails-do-not-do)).
 
 A pattern is in Rust's `regex` dialect: linear time in the text it searches, no lookaround, no backreferences, Unicode
 on, case-insensitive through an inline `(?i)`. A pattern is at most 2,048 characters and compiles under a 1 MiB size
@@ -225,18 +225,19 @@ last value, the client's debug log carries `[AgentSummary]` skip lines, and no e
 client shows for a blocked prompt suggestion or away recap is not measured, so run those two presets in observe until
 the Requests view has shown their matches.
 
-## What this phase does not do
+## What guardrails do not do
 
-A guardrail blocks, and the edit actions wait for the next phase: a regex replace within a selected text, a dropped
-message or member, a set member or a set header each change the bytes toward the upstream, which the billing hash and
-the drift checks guard ([Client drift](relay.md#client-drift)). An empty success answer in place of the 400, a shape
-that would let a fork fail silently, is deferred with them, and the action word stays `block`.
+A guardrail blocks and edits nothing: it makes no regex replace within a selected text, drops no message or member and
+sets no member or header, since each would change the bytes toward the upstream, which the billing hash and the drift
+checks guard ([Client drift](relay.md#client-drift)). No guardrail answers with an empty success in place of the 400, a
+shape that would let a fork fail silently, and the action word is `block`.
 
-A condition reads text blocks alone. Tool results, tool inputs, images and documents are not read, since the text blocks
-decide the first target and every fork's marker is a text block. A guardrail has no logical OR, since two guardrails
-give one and the editor's one row per condition stays flat. No guardrail reads a response, since the block runs before
-any account is touched and a response-side rule would act after the window was spent. No guardrail applies router-wide
-and no key opts out of its pool's, so a guardrail runs where it is attached and nowhere else.
+A condition reads text blocks alone. Tool results, tool inputs, images and documents are not read, since every fork the
+presets catch is told apart by a text block. A guardrail has no logical OR, since two guardrails give one and the
+editor's one row per condition stays flat. No guardrail reads a response, since the block runs before any account is
+touched and a response-side rule would act after the window was spent. No guardrail applies router-wide and no key opts
+out of its pool's: a guardrail is attached where it applies, and the console shows every attachment on the pool and the
+key.
 
 The record is the count and the bytes. The Analytics card reports the blocked requests' bytes and no token estimate of
 what a block saved, since a token figure would be a guess over a body the upstream never read. A block writes no

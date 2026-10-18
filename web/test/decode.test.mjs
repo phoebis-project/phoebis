@@ -2441,6 +2441,7 @@ test('a_guardrail_decodes_with_its_conditions_preset_and_attachments', () => {
   assert.ok(isIso(g.createdAt) && isIso(g.updatedAt) && typeof g.revision === 'number');
   assert.deepEqual(g.conditions[0], { name: raw.conditions[0].name, operator: raw.conditions[0].operator, path: raw.conditions[0].path, selector: raw.conditions[0].selector, subject: raw.conditions[0].subject, value: raw.conditions[0].value }, 'the route leaves an absent member out');
   assert.deepEqual(g.conditions.map((c) => Object.keys(c).sort()), Array.from({ length: raw.conditions.length }, () => ['name', 'operator', 'path', 'selector', 'subject', 'value']), 'every condition reads the same four optional keys');
+  assert.ok(raw.conditions.length >= 3, `the captured preset holds ${raw.conditions.length} conditions, and the line below reads the path of the second and the selector of the third`);
   assert.deepEqual([g.conditions[1].path, g.conditions[2].selector], [raw.conditions[1].path, raw.conditions[2].selector]);
   const [large] = fixture('guardrails').guardrails.map(d.decodeGuardrail);
   assert.deepEqual([large.id, large.mode, large.preset, large.keys], ['large-auxiliary', 'enforce', null, [{ id: 'desktop', label: 'Desktop', position: 0 }]]);

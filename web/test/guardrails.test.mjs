@@ -68,6 +68,16 @@ test('the_form_refusals_read_their_six_sentences', () => {
   assert.deepEqual(g.guardrailRefusals(form({ name: '' }), taken, false)[0], { field: 'Name', group: 'identity', text: 'The guardrail needs a name.' });
 });
 
+test('the_derived_id_lowers_the_name_joins_its_words_with_hyphens_and_stops_at_64_characters', () => {
+  // The id shape the route admits, so a derived id never meets the route's id refusal.
+  const shape = /^[a-z0-9][a-z0-9-]{0,63}$/;
+  const plain = g.derivedId('Subagent Status: Summary!');
+  assert.deepEqual(plain, { id: 'subagent-status-summary', unnamed: false }, 'uppercase lowered, a run of spaces and punctuation one hyphen, none at either end');
+  const long = g.derivedId(`Guardrail ${'x'.repeat(60)}`);
+  assert.deepEqual(long, { id: `guardrail-${'x'.repeat(54)}`, unnamed: false }, 'a slug past 64 characters is cut at 64');
+  for (const { id } of [plain, long]) assert.match(id, shape);
+});
+
 test('the_deleted_label', () => {
   const list = [{ id: 'large-auxiliary', name: 'Large auxiliary requests' }];
   assert.equal(g.guardrailLabel('ghost', list), 'ghost (deleted)');

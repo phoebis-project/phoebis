@@ -1647,6 +1647,8 @@ async fn the_limit_and_the_window_hold() {
     let app = &parts.app;
     // Past any capture window the harness could configure, with everything else the sample reads.
     write_row(&parts, fork_row("r-old", 1_000 * 60, "desktop"), Some(FORK));
+    // Three hours back, inside the window, so a window read in minutes leaves it out.
+    write_row(&parts, fork_row("r-hours", 3 * 60, "laptop"), Some(FORK));
     let (status, limited) = dry_run(
         app,
         &cookie,
@@ -1667,8 +1669,14 @@ async fn the_limit_and_the_window_hold() {
     assert_eq!(status, StatusCode::OK, "{whole}");
     assert_eq!(
         sample_ids(&whole),
-        ["r1-fork", "r2-classifier", "r3-fork", "r8-classifier"],
-        "the row older than the window is left out"
+        [
+            "r1-fork",
+            "r2-classifier",
+            "r3-fork",
+            "r8-classifier",
+            "r-hours"
+        ],
+        "the row hours back is kept and the row older than the window is left out"
     );
     assert_eq!(whole["sample"]["limit"], 200, "the default limit");
     // The admin harness builds its state with `BODY_CAPTURE_MAX_HOURS`, 72, as the longest capture a key may ask for.
@@ -1772,6 +1780,39 @@ async fn a_header_condition_on_a_kept_hint_evaluates_and_one_on_another_header_r
     assert_eq!(
         unknown["totals"],
         j!({"sampled": 4, "matched": 0, "unmatched": 2, "indeterminate": 2})
+    );
+
+    // One condition per hint the row keeps, each value apart from the others, so a hint read off another column
+    // fails its own condition.
+    write_row(
+        &parts,
+        RequestRecord {
+            request_class: Some("auxiliary".into()),
+            agent_type: Some("general-purpose".into()),
+            user_agent: Some("claude-cli/2.1.300 (external, cli)".into()),
+            compaction: Some("auto".into()),
+            context_compacted: Some("true".into()),
+            ..ledger_row("r0-hints", 0, "desktop")
+        },
+        Some(FORK),
+    );
+    let (status, hints) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [
+            {"subject": "header", "operator": "equals", "name": "x-claude-code-request-class", "value": "auxiliary"},
+            {"subject": "header", "operator": "equals", "name": "x-claude-code-agent-type", "value": "general-purpose"},
+            {"subject": "header", "operator": "equals", "name": "user-agent", "value": "claude-cli/2.1.300 (external, cli)"},
+            {"subject": "header", "operator": "equals", "name": "x-claude-code-compaction", "value": "auto"},
+            {"subject": "header", "operator": "equals", "name": "x-claude-code-context-compacted", "value": "true"},
+        ], "pool_id": "main", "limit": 1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{hints}");
+    assert_eq!(
+        verdicts(&hints),
+        [verdict("r0-hints", "matched", Value::Null)],
+        "each of the five hints reads from its own column"
     );
 }
 
