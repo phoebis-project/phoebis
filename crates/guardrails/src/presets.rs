@@ -12,8 +12,10 @@ pub struct Preset {
     pub conditions: Vec<Condition>,
 }
 
-// A shipped entry is never edited: a change to its conditions, its name or its description is a new entry with the
-// next version, since a stamped guardrail compares its conditions against the version it was created from.
+// A shipped entry's conditions are never edited: a change to them is a new entry with the next version, since a
+// stamped guardrail compares its conditions against the version it was created from. The other fields read from the
+// current entry (the name and the suggested mode are copied at creation and never compared, the description and the
+// measured range are the listing's text), so they are edited in place.
 static PRESETS: LazyLock<Vec<Preset>> = LazyLock::new(|| {
     vec![
         Preset {
@@ -23,9 +25,8 @@ static PRESETS: LazyLock<Vec<Preset>> = LazyLock::new(|| {
             description: concat!(
                 "Claude Code forks each running subagent's whole conversation every 30 seconds to ask for a status ",
                 "line of three to five words. Each fork reads the subagent's full cached context for about 24 output ",
-                "tokens, and no client setting turns it off. On one router the forks were 22 percent of every cached ",
-                "token read over three days. Blocking them leaves the Agent tool's status line static and changes ",
-                "nothing else.",
+                "tokens, and no client setting turns it off. Blocking the forks leaves the Agent tool's status line ",
+                "static and changes nothing else.",
             ),
             measured_on: "Claude Code 2.1.296 to 2.1.302",
             suggested_mode: GuardrailMode::Observe,
