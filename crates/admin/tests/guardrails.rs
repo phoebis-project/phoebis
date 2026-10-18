@@ -1676,7 +1676,7 @@ async fn the_limit_and_the_window_hold() {
             "r8-classifier",
             "r-hours"
         ],
-        "the row hours back is kept and the row older than the window is left out"
+        "the row three hours back is kept and the row older than the window is left out"
     );
     assert_eq!(whole["sample"]["limit"], 200, "the default limit");
     // The admin harness builds its state with `BODY_CAPTURE_MAX_HOURS`, 72, as the longest capture a key may ask for.

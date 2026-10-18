@@ -487,8 +487,8 @@ fn sample_ids(
 }
 
 /// A pool's sample reads both of its keys and a key's sample the one key, newest first, each leaving out a probe, an
-/// uncaptured row, another pool's row and a row older than the window while keeping one hours inside it, and the
-/// cursor carries the walk across pages.
+/// uncaptured row, another pool's row and a row older than the window while keeping a row a few hours inside it,
+/// and the cursor carries the walk across pages.
 #[test]
 fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_probes_and_uncaptured_rows(
 ) {

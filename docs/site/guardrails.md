@@ -227,10 +227,10 @@ the Requests view has shown their matches.
 
 ## What guardrails do not do
 
-A guardrail blocks and edits nothing: it makes no regex replace within a selected text, drops no message or member and
-sets no member or header, since each would change the bytes toward the upstream, which the billing hash and the drift
-checks guard ([Client drift](relay.md#client-drift)). No guardrail answers with an empty success in place of the 400, a
-shape that would let a fork fail silently, and the action word is `block`.
+A guardrail blocks a request and edits nothing: it makes no regex replace within a selected text, drops no message or
+member and sets no member or header, since each would change the bytes toward the upstream, which the billing hash and
+the drift checks guard ([Client drift](relay.md#client-drift)). No guardrail answers with an empty success in place of
+the 400, a shape that would let a fork fail silently, and the action word is `block`.
 
 A condition reads text blocks alone. Tool results, tool inputs, images and documents are not read, since every fork the
 presets catch is told apart by a text block. A guardrail has no logical OR, since two guardrails give one and the
