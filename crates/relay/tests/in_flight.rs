@@ -16,7 +16,7 @@ use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_routing::{
     DecisionRecord, DecisionSummary, FactValue, HoldOutcome, Report, RouterConfig, RouterEvent,
-    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
+    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
 use phoebis_store::{Failover, SlowDown, SubscriptionRow};
 use tokio::sync::broadcast;
@@ -1934,6 +1934,10 @@ async fn a_retry_in_place_keeps_the_one_key_permit() {
 /// The rate-limit tier the slowed harness puts its account on, which its pricer keys on.
 const SLOWED_TIER: &str = "default_claude_max_20x";
 
+/// The burn average the slowed harness sets on its pool, and how far before the held turn's clock its turns run. Five
+/// minutes keeps every instant the harness dates after the epoch, since `NOW` lies a thousand seconds past it.
+const SLOWED_AVERAGE_SECONDS: u64 = 300;
+
 /// Every pin on `SLOWED_TIER` burns a tenth of the 5-hour window an hour whatever its usage, and nothing is charged, so
 /// the window reads what the test reports.
 fn tenth_an_hour() -> SharePricer {
@@ -1942,10 +1946,14 @@ fn tenth_an_hour() -> SharePricer {
     })
 }
 
-/// `a` priced by `tenth_an_hour`, with `s1`'s cycle built by two turns ten seconds apart, then `a`'s 5-hour window at
-/// 0.9 an hour from its reset and the pool's slow-down turned on with a two-second cap and the shedding round off: the
-/// room under the ceiling lasts half the time to the reset, so `s1`'s next turn, at the clock this leaves, reads a
-/// factor of about a half and waits the cap.
+/// `a` priced by `tenth_an_hour`, the pool's slow-down turned on with a two-second cap, the shedding round off and the
+/// burn average at `SLOWED_AVERAGE_SECONDS`, `a`'s 5-hour window at 0.9 an hour from its reset, and three turns of `s1`
+/// ten seconds apart. The reading and the turns are dated one burn average before `s1`'s next turn, at the clock this
+/// leaves, so the stamp the renewals write has stood a burn average by then. The first turn places the pin and reads
+/// no slow-down, the second starts its pace and stamps the ramp, and the third builds its ten-second cycle, both
+/// renewals passing unheld at a ramp near 0. The gap of one burn average to the next turn is a pause that leaves the
+/// cycle standing, and the room under the ceiling lasts half the time to the reset, so that turn reads a factor of
+/// about a half and waits the cap.
 async fn slowed_harness(up: &FakeUpstream) -> Harness {
     let h = harness_with_router_config(
         up,
@@ -1968,7 +1976,34 @@ async fn slowed_harness(up: &FakeUpstream) -> Harness {
         )
         .unwrap();
     h.router.reload().await.unwrap();
-    for at in [NOW, NOW + 10_000] {
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.slow_down = SlowDown {
+        slow_down: true,
+        slow_down_hold_seconds: 2,
+        ..SlowDown::default()
+    };
+    pool.shedding.load_shedding = false;
+    pool.shedding.burn_average_seconds = SLOWED_AVERAGE_SECONDS;
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let back = SLOWED_AVERAGE_SECONDS as i64 * 1_000;
+    h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample::default().with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.9,
+                    reset: Some(NOW + 10_000 + 3_600_000),
+                    observed_at: NOW - back,
+                    source: WindowSource::Poll,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    for at in [NOW - back, NOW + 10_000 - back, NOW + 20_000 - back] {
         h.clock.store(at, Ordering::SeqCst);
         let resp = h
             .app
@@ -1979,31 +2014,6 @@ async fn slowed_harness(up: &FakeUpstream) -> Harness {
         assert_eq!(resp.status(), 200);
         drain(resp).await;
     }
-    let mut pool = h.store.pool("main").unwrap().unwrap();
-    pool.slow_down = SlowDown {
-        slow_down: true,
-        slow_down_hold_seconds: 2,
-        ..SlowDown::default()
-    };
-    pool.shedding.load_shedding = false;
-    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
-    h.router.reload().await.unwrap();
-    h.router
-        .report(Report::Sample {
-            account_id: "a".into(),
-            sample: UtilizationSample::default().with(
-                FIVE_HOUR,
-                WindowReading {
-                    utilization: 0.9,
-                    reset: Some(NOW + 10_000 + 3_600_000),
-                    observed_at: NOW + 10_000,
-                    source: WindowSource::Poll,
-                },
-            ),
-            incarnation: 1,
-            source_request_id: None,
-        })
-        .await;
     h.clock.store(NOW + 20_000, Ordering::SeqCst);
     h
 }
@@ -2062,7 +2072,7 @@ async fn a_slowed_pins_request_waits_before_the_head_and_the_completion_names_th
     );
     // The runtime's time runs on while the harness's clock stands short of the deadline: nothing is dialed.
     tokio::time::sleep(Duration::from_millis(1_500)).await;
-    assert_eq!(posts(&up), 2, "nothing is dialed while the hold runs");
+    assert_eq!(posts(&up), 3, "nothing is dialed while the hold runs");
     assert!(!waiting.is_finished());
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
     tokio::time::resume();
@@ -2071,7 +2081,7 @@ async fn a_slowed_pins_request_waits_before_the_head_and_the_completion_names_th
         .expect("the request goes on at its deadline")
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(posts(&up), 3, "one post once the hold ends");
+    assert_eq!(posts(&up), 4, "one post once the hold ends");
     let held = outcome(&resp).held.expect("the outcome names the hold");
     assert_eq!(held.waited_on, ["a"]);
     let waits = waits_of(&resp);
@@ -2120,7 +2130,7 @@ async fn a_second_request_of_the_same_pin_joins_the_standing_deadline() {
         "the second request of the pin waits to the first one's deadline"
     );
     tokio::time::sleep(Duration::from_millis(1_000)).await;
-    assert_eq!(posts(&up), 2, "neither is dialed before the deadline");
+    assert_eq!(posts(&up), 3, "neither is dialed before the deadline");
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
     tokio::time::resume();
     for request in waiting {
@@ -2139,6 +2149,872 @@ async fn a_second_request_of_the_same_pin_joins_the_standing_deadline() {
         );
         drain(resp).await;
     }
+    assert_eq!(posts(&up), 5);
+    up.shutdown().await;
+}
+
+/// A committed stream whose head and commit both wait for `up.release()`.
+fn gated_stream() -> Respond {
+    Respond::Gated(Box::new(Respond::Sse {
+        status: 200,
+        headers: vec![],
+        events: vec![message_start(), message_stop()],
+        delay_between: Duration::ZERO,
+    }))
+}
+
+/// A stream whose head comes at once and whose commit waits for `up.release()`.
+fn stalled_stream() -> Respond {
+    Respond::Stall {
+        status: 200,
+        headers: vec![],
+        events: vec![message_start(), message_stop()],
+    }
+}
+
+/// The hold cap of the moved harness's pool, in seconds.
+const MOVED_HOLD_SECONDS: u32 = 2;
+
+/// How long a woken request may take to go out: one slice of the relay's wait loop.
+const TICK: Duration = Duration::from_millis(250);
+
+/// The harness over `accounts` with the pool's hold cap at `MOVED_HOLD_SECONDS`, the slow-down and the shedding round
+/// off, `b`'s windows polled with room, and `s1`'s first turn answered on `a` with `a`'s 5-hour window spent ten hours
+/// from its reset, so the spent rule moves the session's next request to `b`. The clock is left at `NOW + 20_000`.
+async fn moved_harness(up: &FakeUpstream, accounts: &[TestAccount]) -> Harness {
+    let h = harness(up, accounts, PoolSpec::default()).await;
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.slow_down = SlowDown {
+        slow_down: false,
+        slow_down_hold_seconds: MOVED_HOLD_SECONDS,
+        ..SlowDown::default()
+    };
+    pool.shedding.load_shedding = false;
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let reading = |utilization: f64, reset: i64| WindowReading {
+        utilization,
+        reset: Some(reset),
+        observed_at: NOW,
+        source: WindowSource::Poll,
+    };
+    h.router
+        .report(Report::Sample {
+            account_id: "b".into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(0.3, NOW + 3 * 3_600_000))
+                .with(SEVEN_DAY, reading(0.1, NOW + 72 * 3_600_000)),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    let reset = (NOW / 1_000 + 10 * 3_600).to_string();
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        json_200_with_headers(&[
+            ("anthropic-ratelimit-unified-5h-utilization", "1.0"),
+            ("anthropic-ratelimit-unified-5h-reset", &reset),
+        ]),
+    );
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&first).account_id, "a");
+    drain(first).await;
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .samples()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(id, _)| id == "a")
+            .filter(|(_, sample)| {
+                sample
+                    .reading(FIVE_HOUR)
+                    .is_some_and(|r| r.utilization >= 1.0)
+            })
+    })
+    .await;
+    h.clock.store(NOW + 20_000, Ordering::SeqCst);
+    h
+}
+
+/// The subagent's summary fork of `session`, the class the client sends it under.
+fn fork_of(session: &str) -> Request<Body> {
+    let mut req = request_for(KEY, MODEL, session);
+    set_header(&mut req, "x-claude-code-request-class", "auxiliary");
+    req
+}
+
+/// `req` sent through the harness on a task of its own.
+fn sent(h: &Harness, req: Request<Body>) -> tokio::task::JoinHandle<axum::http::Response<Body>> {
+    let app = h.app.clone();
+    tokio::spawn(async move { app.oneshot(req).await.unwrap() })
+}
+
+/// The request id of the next decision that moved a pin to `account`.
+async fn moved_to(events: &mut broadcast::Receiver<RouterEvent>, account: &str) -> String {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the move's decision arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision {
+            summary, record, ..
+        } = event
+        {
+            if summary.kind == "moved" && record.outcome.account_id.as_deref() == Some(account) {
+                return record.request.request_id.clone();
+            }
+        }
+    }
+}
+
+/// The next held decision's record.
+async fn next_held(events: &mut broadcast::Receiver<RouterEvent>) -> DecisionRecord {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the hold's decision arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision {
+            summary, record, ..
+        } = event
+        {
+            if summary.kind == "held" {
+                return *record;
+            }
+        }
+    }
+}
+
+/// Every decision kind the router published for `request_id` until its last decision, a placement or a renewal.
+async fn decision_kinds(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    request_id: &str,
+) -> Vec<&'static str> {
+    let mut kinds = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the request's decision arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision {
+            summary, record, ..
+        } = event
+        {
+            if record.request.request_id == request_id {
+                kinds.push(summary.kind);
+                if summary.kind != "held" {
+                    return kinds;
+                }
+            }
+        }
+    }
+}
+
+/// Asserts the turn is still waiting with nothing dialed for it beyond the `dialed` posts already made.
+fn still_held(
+    up: &FakeUpstream,
+    turn: &tokio::task::JoinHandle<axum::http::Response<Body>>,
+    dialed: usize,
+) {
+    assert_eq!(
+        posts(up),
+        dialed,
+        "nothing is dialed for the turn while the first request's head is out"
+    );
+    assert!(!turn.is_finished(), "the turn still waits");
+}
+
+/// `task`'s response within five seconds of the runtime's clock.
+async fn answered(
+    task: tokio::task::JoinHandle<axum::http::Response<Body>>,
+) -> axum::http::Response<Body> {
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("the request is answered")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_moved_pins_turn_waits_for_the_forks_commit_and_goes_out_when_it_comes() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    let fork = sent(&h, fork_of("s1"));
+    let fork_id = moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    tokio::time::sleep_until(started + Duration::from_millis(207)).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.expect("a held outcome");
+    assert_eq!(
+        (hold.reason, hold.waits_for.as_deref(), hold.until),
+        ("rewrite", Some(fork_id.as_str()), Some(NOW + 22_000)),
+        "the turn waits for the fork's head, the cap from the fork's dispatch"
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        posts(&up),
+        2,
+        "nothing is dialed for the turn while the fork's head is out"
+    );
+    assert!(!turn.is_finished());
+    tokio::time::sleep_until(started + Duration::from_millis(2_560)).await;
+    up.release();
+    let released = tokio::time::Instant::now();
+    let turn = answered(turn).await;
+    assert!(
+        released.elapsed() <= TICK,
+        "the turn goes out at the fork's commit"
+    );
+    assert_eq!(turn.status(), 200);
+    assert_eq!(posts(&up), 3);
+    let waits = waits_of(&turn);
+    assert_eq!(
+        waits
+            .iter()
+            .map(|(reason, _)| reason.as_str())
+            .collect::<Vec<_>>(),
+        ["rewrite"]
+    );
+    assert!(
+        waits[0].1.abs_diff(2_353) <= 300,
+        "the wait ran from the turn's arrival to the fork's commit: {waits:?}"
+    );
+    let turn_id = outcome(&turn).request_id;
+    assert_eq!(
+        held.request.request_id, turn_id,
+        "the held decision is the turn's"
+    );
+    assert_eq!(
+        decision_kinds(&mut events, &turn_id).await,
+        ["renewed"],
+        "the hold is followed by the renewal"
+    );
+    drain(turn).await;
+    drain(answered(fork).await).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_bound_ends_the_wait_with_ran_out_and_a_later_head_holds_nothing_more() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(B, "/v1/messages", gated_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    tokio::time::sleep(Duration::from_millis(207)).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.clone().expect("a held outcome");
+    assert_eq!(hold.reason, "rewrite");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    still_held(&up, &turn, 2);
+    h.clock.store(NOW + 22_000, Ordering::SeqCst);
+    let turn = answered(turn).await;
+    assert_eq!(turn.status(), 200);
+    let waited = outcome(&turn).held.expect("the outcome names the wait");
+    let waits = waits_of(&turn);
+    assert_eq!(waits.len(), 1);
+    assert_eq!(waits[0].0, "rewrite");
+    assert!(
+        (2_000..=2_000 + TICK.as_millis() as u64).contains(&waits[0].1),
+        "the wait ran to the bound: {waits:?}"
+    );
+    let value = serde_json::to_value(&waited).unwrap();
+    assert_eq!(value["waits"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", true)),
+        "the bound ended the wait"
+    );
+    drain(turn).await;
+    up.release();
+    drain(answered(fork).await).await;
+    let third = answered(sent(&h, request_for(KEY, MODEL, "s1"))).await;
+    assert_eq!(third.status(), 200);
+    assert!(
+        outcome(&third).held.is_none(),
+        "the fork's head cleared the mark"
+    );
+    drain(third).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_first_requests_end_without_a_head_releases_the_waiter_at_once() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(
+        B,
+        "/v1/messages",
+        Respond::Gated(Box::new(Respond::CloseAfterRequest)),
+    );
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.clone().expect("a held outcome");
+    assert_eq!(hold.reason, "rewrite");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    still_held(&up, &turn, 2);
+    up.release();
+    let released = tokio::time::Instant::now();
+    let fork = answered(fork).await;
+    assert_eq!(
+        fork.status(),
+        502,
+        "the fork's leg was lost before its head"
+    );
+    drain(fork).await;
+    let turn = answered(turn).await;
+    assert!(
+        released.elapsed() <= TICK,
+        "the fork's end releases the turn"
+    );
+    assert_eq!(turn.status(), 200);
+    let waits = waits_of(&turn);
+    assert_eq!(waits.len(), 1);
+    assert!(
+        (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
+        "the wait ran to the fork's end, under the bound: {waits:?}"
+    );
+    let completion: serde_json::Value =
+        serde_json::to_value(outcome(&turn).held.expect("the wait")).unwrap();
+    assert_eq!(completion["waits"][0]["reason"], "rewrite");
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", false)),
+        "the fork's end ended the wait inside its bound"
+    );
+    drain(turn).await;
+    let third = answered(sent(&h, request_for(KEY, MODEL, "s1"))).await;
+    assert!(outcome(&third).held.is_none(), "the end cleared the mark");
+    drain(third).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_fresh_placement_and_its_fork_both_dial_at_once() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let turn = sent(&h, request_for(KEY, MODEL, "s2"));
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let fork = sent(&h, fork_of("s2"));
+    wait_for(Duration::from_secs(5), || (posts(&up) == 3).then_some(())).await;
+    while let Ok(event) = events.try_recv() {
+        if let RouterEvent::Decision { summary, .. } = event {
+            assert_ne!(summary.kind, "held", "a fresh placement holds nothing");
+        }
+    }
+    up.release();
+    drain(answered(turn).await).await;
+    drain(answered(fork).await).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_token_count_on_the_moved_pin_goes_out_at_once() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages/count_tokens", json_200());
+    up.add_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let mut count = request_for(KEY, MODEL, "s1");
+    *count.uri_mut() = "/v1/messages/count_tokens".parse().unwrap();
+    let count = answered(sent(&h, count)).await;
+    assert_eq!(count.status(), 200);
+    assert_eq!(posts(&up), 3, "the count goes out before the fork's commit");
+    assert!(
+        up.requests()[2]
+            .line
+            .starts_with("POST /v1/messages/count_tokens"),
+        "the third post is the count"
+    );
+    while let Ok(event) = events.try_recv() {
+        if let RouterEvent::Decision { summary, .. } = event {
+            assert_ne!(summary.kind, "held", "a count is never held");
+        }
+    }
+    drain(count).await;
+    up.release();
+    drain(answered(fork).await).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_retry_in_place_after_the_wait_dials_with_no_second_wait() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(B, "/v1/messages", gated_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    // The turn's first pass reads a throttle that clears inside the pool's retry bound, so it waits it out on b.
+    up.push_credential_rule(B, "/v1/messages", json_429_retry_after("1"));
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let hold = next_held(&mut events)
+        .await
+        .outcome
+        .hold
+        .expect("a held outcome");
+    assert_eq!(hold.reason, "rewrite");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    still_held(&up, &turn, 2);
+    h.clock.store(NOW + 22_000, Ordering::SeqCst);
+    let turn = answered(turn).await;
+    let o = outcome(&turn);
+    assert_eq!(
+        (turn.status().as_u16(), o.account_id.as_str()),
+        (200, "b"),
+        "retried in place on b"
+    );
+    assert_eq!(posts(&up), 4, "the throttled pass and its retry");
+    let waits = waits_of(&turn);
+    assert_eq!(
+        waits
+            .iter()
+            .map(|(reason, _)| reason.as_str())
+            .collect::<Vec<_>>(),
+        ["rewrite"],
+        "one wait, before the first pass"
+    );
+    assert!(waits[0].1 >= 1_000, "the wait ran to the bound: {waits:?}");
+    drain(turn).await;
+    up.release();
+    drain(answered(fork).await).await;
+    up.shutdown().await;
+}
+
+/// The decision of `request_id` that its wait led to, the first after its held one, which carries the wait in its
+/// holds.
+async fn after_the_wait(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    request_id: &str,
+) -> DecisionRecord {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the decision after the wait arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision {
+            summary, record, ..
+        } = event
+        {
+            if record.request.request_id == request_id && summary.kind != "held" {
+                return *record;
+            }
+        }
+    }
+}
+
+/// Whether the last wait the decision carries ran out, with its reason.
+fn last_wait(record: &DecisionRecord) -> Option<(&'static str, bool)> {
+    record
+        .request
+        .holds
+        .last()
+        .map(|hold| (hold.reason, hold.ran_out))
+}
+
+#[tokio::test]
+async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_head() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    // The fork's first pass on b reads a throttle it waits out on b, and its retry's head commits at the release.
+    up.push_credential_rule(B, "/v1/messages", json_429_retry_after("1"));
+    up.push_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    // The throttle cools b on the relay's clock until its retry is due and a margin past it, so the turn comes after
+    // that, under a cap long enough to hold it there.
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.slow_down.slow_down_hold_seconds = 10;
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    let fork_id = moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 3).then_some(())).await;
+    h.clock.store(NOW + 22_500, Ordering::SeqCst);
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.expect("a held outcome");
+    assert_eq!(
+        (hold.reason, hold.waits_for.as_deref(), hold.until),
+        ("rewrite", Some(fork_id.as_str()), Some(NOW + 30_000)),
+        "the throttle the fork retried in place answered nothing for its leg"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    still_held(&up, &turn, 3);
+    up.release();
+    let released = tokio::time::Instant::now();
+    let turn = answered(turn).await;
+    assert!(
+        released.elapsed() <= TICK,
+        "the retry's commit releases the turn"
+    );
+    assert_eq!(turn.status(), 200);
     assert_eq!(posts(&up), 4);
+    assert_eq!(
+        waits_of(&turn)
+            .iter()
+            .map(|(reason, _)| reason.as_str())
+            .collect::<Vec<_>>(),
+        ["rewrite"]
+    );
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", false)),
+        "the retry's head ended the wait inside its bound"
+    );
+    drain(turn).await;
+    drain(answered(fork).await).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_forks_commit_alone_releases_the_waiter_and_an_error_event_releases_it_too() {
+    // The fork's commit, with the clock standing under the bound.
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    next_held(&mut events).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    still_held(&up, &turn, 2);
+    up.release();
+    let released = tokio::time::Instant::now();
+    let turn = answered(turn).await;
+    assert!(
+        released.elapsed() <= TICK,
+        "the commit alone releases the turn"
+    );
+    let waits = waits_of(&turn);
+    assert!(
+        (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
+        "{waits:?}"
+    );
+    drain(turn).await;
+    drain(answered(fork).await).await;
+    tokio::time::resume();
+    up.shutdown().await;
+    drop(h);
+
+    // An error event ahead of `message_start` on the fork's leg: the fork fails over to c, and so does the turn.
+    let up = FakeUpstream::start(vec![]).await;
+    let far = (NOW + 22_000) / 1_000 + 10 * 3_600;
+    let rejected = json_429_unified(far, "five_hour");
+    let Respond::Json {
+        headers: rejected_headers,
+        ..
+    } = rejected.clone()
+    else {
+        unreachable!()
+    };
+    up.add_credential_rule(B, "/v1/messages", rejected);
+    up.push_credential_rule(
+        B,
+        "/v1/messages",
+        Respond::Stall {
+            status: 200,
+            headers: rejected_headers,
+            events: vec![ev(
+                "error",
+                r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#,
+            )],
+        },
+    );
+    up.add_credential_rule(C, "/v1/messages", json_200());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1), oauth("c", C, 2)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    let fork_id = moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    // a's spent window cools it, so a failover off b has c alone to land on.
+    h.router
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: phoebis_store::CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: NOW + 10 * 3_600_000,
+                set_at: NOW,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let held = next_held(&mut events).await;
+    let hold = held.outcome.hold.clone().expect("a held outcome");
+    assert_eq!(hold.waits_for.as_deref(), Some(fork_id.as_str()));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    still_held(&up, &turn, 2);
+    up.release();
+    let released = tokio::time::Instant::now();
+    let turn = answered(turn).await;
+    // The error event fails the fork over, so its leg on b answers nothing and the turn waits for the fork's next
+    // leg, which c answers at once.
+    assert!(
+        released.elapsed() <= TICK,
+        "the turn goes out within a tick of the error event"
+    );
+    let fork = answered(fork).await;
+    let waits = waits_of(&turn);
+    assert_eq!(waits[0].0, "rewrite");
+    assert!(
+        (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
+        "the wait ran to c's answer on the fork's next leg: {waits:?}"
+    );
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", false)),
+        "the fork's answer ended the wait inside its bound"
+    );
+    assert_eq!(
+        (
+            turn.status().as_u16(),
+            outcome(&turn).account_id.as_str(),
+            fork.status().as_u16(),
+            outcome(&fork).account_id.as_str()
+        ),
+        (200, "c", 200, "c"),
+        "both end on the sibling"
+    );
+    assert_eq!(
+        credentials_seen(&up)
+            .iter()
+            .filter(|c| c.as_str() == C)
+            .count(),
+        2
+    );
+    drain(turn).await;
+    drain(fork).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_probe_that_moved_the_pin_and_was_lost_before_its_commit_frees_the_pins_next_request() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(
+        B,
+        "/v1/messages",
+        Respond::Gated(Box::new(Respond::CloseAfterRequest)),
+    );
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let probe = phoebis_relay::Probe {
+        key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+    };
+    let relay = h.relay.clone();
+    let probing =
+        tokio::spawn(async move { relay.probe(probe, request_for(KEY, MODEL, "s1")).await });
+    let probe_id = moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let hold = next_held(&mut events)
+        .await
+        .outcome
+        .hold
+        .expect("a held outcome");
+    assert_eq!(
+        (hold.reason, hold.waits_for.as_deref()),
+        ("rewrite", Some(probe_id.as_str()))
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    still_held(&up, &turn, 2);
+    up.release();
+    let released = tokio::time::Instant::now();
+    let turn = answered(turn).await;
+    assert!(
+        released.elapsed() <= TICK,
+        "the probe's lost leg releases the turn"
+    );
+    assert_eq!(turn.status(), 200);
+    let waits = waits_of(&turn);
+    assert_eq!(waits.len(), 1, "the turn is not held again");
+    assert!(
+        (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
+        "the wait ran to the probe's end: {waits:?}"
+    );
+    drain(turn).await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), probing).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_cancelled_first_request_frees_the_waiter_at_once() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let held = next_held(&mut events).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    still_held(&up, &turn, 2);
+    fork.abort();
+    let aborted = tokio::time::Instant::now();
+    let turn = answered(turn).await;
+    assert!(
+        aborted.elapsed() <= TICK,
+        "the fork's cancel releases the turn"
+    );
+    let waits = waits_of(&turn);
+    assert!(
+        (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
+        "the wait ran to the fork's cancel, under the bound: {waits:?}"
+    );
+    assert_eq!(
+        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        Some(("rewrite", false)),
+        "the cancel ended the wait inside its bound"
+    );
+    drain(turn).await;
+    let third = answered(sent(&h, request_for(KEY, MODEL, "s1"))).await;
+    assert!(
+        outcome(&third).held.is_none(),
+        "the cancelled leg's report cleared the mark"
+    );
+    drain(third).await;
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_heads_map_is_empty_once_both_requests_ended() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    next_held(&mut events).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    up.release();
+    drain(answered(turn).await).await;
+    drain(answered(fork).await).await;
+    wait_for(Duration::from_secs(5), || {
+        (h.relay.heads_pending() == 0).then_some(())
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_held_decisions_record_names_the_rewrites_hold() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    up.push_credential_rule(B, "/v1/messages", stalled_stream());
+    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let fork = sent(&h, fork_of("s1"));
+    let fork_id = moved_to(&mut events, "b").await;
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
+    let record = next_held(&mut events).await;
+    let hold = record.outcome.hold.clone().expect("a held outcome");
+    assert_eq!(
+        (
+            hold.reason,
+            hold.waits_for.as_deref(),
+            hold.until,
+            hold.bound_ms
+        ),
+        (
+            "rewrite",
+            Some(fork_id.as_str()),
+            Some(NOW + 22_000),
+            i64::from(MOVED_HOLD_SECONDS) * 1_000
+        )
+    );
+    let value = serde_json::to_value(&record).unwrap();
+    let held = &value["outcome"]["hold"];
+    assert_eq!(held["waits_for"], serde_json::json!(fork_id));
+    for figure in ["factor", "speed", "stretch_ms", "threshold_ms", "cycle_ms"] {
+        assert!(held[figure].is_null(), "{figure} is null: {held}");
+    }
+    up.release();
+    drain(answered(turn).await).await;
+    drain(answered(fork).await).await;
+    tokio::time::resume();
+    up.shutdown().await;
+    drop(h);
+
+    // A slow-down's hold names no request it waits for, so its record carries no member.
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let h = slowed_harness(&up).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let waiting = sent(&h, request_for(KEY, MODEL, "s1"));
+    let record = next_held(&mut events).await;
+    assert_eq!(
+        record.outcome.hold.as_ref().map(|hold| hold.reason),
+        Some("slow_down")
+    );
+    let value = serde_json::to_value(&record).unwrap();
+    assert!(
+        value["outcome"]["hold"].get("waits_for").is_none(),
+        "the member is left out: {}",
+        value["outcome"]["hold"]
+    );
+    h.clock.store(NOW + 22_000, Ordering::SeqCst);
+    tokio::time::resume();
+    drain(answered(waiting).await).await;
     up.shutdown().await;
 }

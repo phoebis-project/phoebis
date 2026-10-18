@@ -179,8 +179,8 @@ pub struct PinFacts {
     pub marked_at: Option<i64>,
     pub marked_on: Option<String>,
     pub marked_window: Option<String>,
-    /// The pin's cycle, the time-weighted average of the gaps between a dispatch and the next arrival, `None` before
-    /// its first gap.
+    /// The pin's cycle, the count-weighted mean of its last eight gaps between a dispatch and the next arrival, `None`
+    /// until a gap under the pool's burn average has been measured.
     pub cycle_ms: Option<i64>,
     /// The end of the slow-down hold standing on the pin, `None` with none.
     pub slow_down_until: Option<i64>,
@@ -557,16 +557,18 @@ pub struct PinEventFacts {
 pub struct HoldOutcome {
     pub account_id: String,
     pub cohort: Option<String>,
-    /// The longest the hold may last: the pool's `slow_down_hold_seconds` under `slow_down`, its
+    /// The longest the hold may last: the pool's `slow_down_hold_seconds` under `slow_down` and `rewrite`, its
     /// `retry_in_place_seconds` under `cap` and `reset`.
     pub bound_ms: i64,
     /// `cap` for a hold on a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
-    /// before its head.
+    /// before its head, `rewrite` for a moved pin's wait for the head of the request that carried the move.
     pub reason: &'static str,
     /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
-    /// account's cooldown, under `slow_down` the pin's deadline. `None` under `cap`.
+    /// account's cooldown, under `slow_down` the pin's deadline, under `rewrite` the first request's dispatch plus the
+    /// cap. `None` under `cap`.
     pub until: Option<i64>,
-    /// The account's factor the hold was read under. `Some` under `slow_down`, `None` otherwise.
+    /// The factor the hold was sized from: the account's factor pulled toward 1 by the ramp, the shed line's `ramp`.
+    /// `Some` under `slow_down`, `None` otherwise.
     pub factor: Option<f64>,
     /// The speed the account's holds realize together. `Some` under `slow_down`, `None` otherwise.
     pub speed: Option<f64>,
@@ -576,6 +578,9 @@ pub struct HoldOutcome {
     pub threshold_ms: Option<i64>,
     /// The pin's cycle the hold was sized from. `Some` under `slow_down`, `None` otherwise.
     pub cycle_ms: Option<i64>,
+    /// The request whose head the hold waits for. `Some` under `rewrite`, `None` under the other reasons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waits_for: Option<String>,
 }
 
 /// The booking a move or a placement made on its destination, as the `reserve` step states it.

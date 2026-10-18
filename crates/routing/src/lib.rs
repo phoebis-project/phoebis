@@ -44,18 +44,18 @@ pub use state::{
     budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, entrypoint_of,
     is_plan_window, load_shedding, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down,
     slow_down_hold_ms, slow_down_stretch_ms, warm, AccountTicket, BandSegment, BurnUnit,
-    CreditsState, EvidenceSource, InFlight, KeyPermit, LongContextRates, MemberSpend,
+    CreditsState, EvidenceSource, HeadMark, InFlight, KeyPermit, LongContextRates, MemberSpend,
     OverageEvidence, PinPace, PinRef, PinUsage, Purged, RateTable, Rates, Reservation,
     RoutingState, SharePricer, SlowDownEdge, SlowDownState, StateWrite, UtilizationSample,
-    WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS, DEFAULT_WINDOW_CEILING, FAST_INPUT,
-    FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY,
+    WindowReading, WindowSource, BUCKET_LIFE_MS, BUCKET_TTL_MS, CYCLE_GAPS, DEFAULT_WINDOW_CEILING,
+    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MAX_BUCKETS_PER_ACCOUNT, SEVEN_DAY,
     SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
     credits_from_usage, sample_from_usage, spawn, AccountProjection, AccountSlowDown, BandWeight,
     BurnRates, LoadCounts, PinStanding, RegimeRates, ReloadError, Report, RouterConfig,
     RouterEvent, RouterGone, RouterHandle, SelectAnswer, WindowProjection, WriterStatus, COMMANDS,
-    UNATTRIBUTED_POOL, WRITER_DEPTH,
+    SPENT_MARGIN, UNATTRIBUTED_POOL, WRITER_DEPTH,
 };
 #[cfg(any(test, feature = "debug-hooks"))]
 pub use task::{LoopPark, ReportHold};

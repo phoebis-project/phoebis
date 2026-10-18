@@ -364,12 +364,12 @@ session's burn is averaged over." and holds `Window ceiling (%)`, from 50 to 100
 lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly
 window. A round runs on a member whose window would pass it.", and in the expert view `Burn average (s)`, from 600 to
 7200, with the hint "The time constant of each session's burn average. The projection, the slow-down and the round read
-it. A 5-hour window younger than twice it fires no round. Editable under the Custom preset in Load shedding." It closes
-on the "Member utilization" bar, whose hint reads "Each tick is a member's latest 5-hour or 7-day reading, as on the
-Quota page. Drag the ceiling's handle, or focus it and use the arrow keys." The bar is one track of used shares holding
-both windows' readings, a tick per member window with the hover `{account}: {window} {used}` and the legend "5-hour
-reading" and "7-day reading", and the ceiling stands on it in every view as the "Window ceiling" handle, dragged or
-moved with the arrow keys, with the field following it.
+it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it.
+Editable under the Custom preset in Load shedding." It closes on the "Member utilization" bar, whose hint reads "Each
+tick is a member's latest 5-hour or 7-day reading, as on the Quota page. Drag the ceiling's handle, or focus it and use
+the arrow keys." The bar is one track of used shares holding both windows' readings, a tick per member window with the
+hover `{account}: {window} {used}` and the legend "5-hour reading" and "7-day reading", and the ceiling stands on it in
+every view as the "Window ceiling" handle, dragged or moved with the arrow keys, with the field following it.
 
 Load shedding opens on "A member whose window would pass the ceiling before its reset, or within five hours on a weekly
 window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next
@@ -633,22 +633,23 @@ Status reads the code with the outcome word beside it where the
 request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One row is one client request
 however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, nothing for a
 request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
-account was at its cap, for a reset or for the slow-down, whose hover names each wait with its reason in the row's order
-and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`, or each with its own account
-where the waits span two, `waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the
-reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its
-header's hover naming what each kind of request reads under the position. Under Native a request a subscription window
-paid reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window,
-the model week among them, and the dollar equivalent on hover. Under Window shares it reads its account's own window
-shares, each with its window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), under All in
-dollars and Dollar equivalent its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under
-Billed dollars a dash with the hover "Nothing billed: a subscription request". An overage, fast mode or API-key request
-reads dollars under every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no
-subscription equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's
-latest weighted model", and a dash carries no mark. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with
-First, Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split
-Refresh button's body brings it up to now. An empty table reads "No requests match" with "Widen the date range or clear
-a filter." and "Reset filters", which clears the filters, the search and the range. What each figure means is on
+account was at its cap, for a reset, for the slow-down or for the rewrite in flight, whose hover names each wait with
+its reason in the row's order and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`
+or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits span two,
+`waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads
+`waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover
+naming what each kind of request reads under the position. Under Native a request a subscription window paid reads its
+20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the model week
+among them, and the dollar equivalent on hover. Under Window shares it reads its account's own window shares, each with
+its window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), under All in dollars and Dollar
+equivalent its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under Billed dollars a dash
+with the hover "Nothing billed: a subscription request". An overage, fast mode or API-key request reads dollars under
+every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no subscription
+equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted
+model", and a dash carries no mark. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous
+and Next, holds the requests up to the moment you opened it so paging does not shift, and the split Refresh button's
+body brings it up to now. An empty table reads "No requests match" with "Widen the date range or clear a filter." and
+"Reset filters", which clears the filters, the search and the range. What each figure means is on
 [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
@@ -1028,36 +1029,41 @@ Session (the first eight characters with the agent beneath), Account (a move nam
 landed on, and a registry change the pool, the key or the account it edited), Model, By, Fact, and Details, which opens
 the request's drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that
 placed it (`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold
-waited (`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold, what
-exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for
-a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a slow-down's start and end, `5h cleared`
+waited (`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold,
+`rewrite in flight` for a request that waited for a moved pin's first head and for the renewal after it, what exhausted
+the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for a
+renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a slow-down's start and end, `5h cleared`
 for a window read under its limit again, with the whole `5h cleared to 40% under its reset` on hover). Fact gives the
 value that made it so as a muted label with its value, `gap`, `idle`, `prefix`, `until`, a held request's `until 18:20`
 and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x` and an end's `slowest 0.35x`, a move's
-`runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite
-only` where the destination did not fit, or a renewal's window utilization, such as `5h 96%`, where that window's
-projection reached the ceiling. A verdict reads in one color across the rows, the card and the strip: good when it
-served the request, warning when it changed its course, critical for a refusal or an exhaustion, and neutral for none
+`runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by `least bad` or
+`rewrite only` where the destination did not fit, or a renewal's window utilization, such as `5h 96%`, where that
+window's projection reached the ceiling. A verdict reads in one color across the rows, the card and the strip: good when
+it served the request, warning when it changed its course, critical for a refusal or an exhaustion, and neutral for none
 and no. Every account, key, pool, model, session and request a row names is a link.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
-"Exhausted in jobs") and chips for the tier, the rule or the rung, `held for the reset at 18:20` on a request that
-waited for a reset, `held for the slow-down until 18:20` and `0.5x` on one the slow-down held, `reserved 10.4% of 5h` on
-a move or a placement that booked a reservation, the pin's warmth and the cache verdict (`cache pending` before the
-attempt reports usage). "How the router decided" draws the walk as a strip of stations in the engine's order, each with
-its verdict, the path the decision took in the accent, every branch it did not take as a stub, a step the record does
-not carry dashed and reading "not run", and the ways out as termini, Chosen, Held for a slot and Refused, the one
-reached filled in its tone. Two more ways out, Held for the reset and Held for the slow-down, are drawn only when the
-decision took them, a spent move that waited for a reset or a request the slow-down held, each in Held for a slot's
-place, so the strip names five termini and draws three. A move's track carries the Fit station after Move, the
-destination gate's table: a row per candidate the gate read with its projection, rewrite and reserved share on each
+"Exhausted in jobs", "Held on nightly for the rewrite in flight of req_5b2e8d47-c19 until 11:03") and chips for the
+tier, the rule or the rung, `held for the reset at 18:20` on a request that waited for a reset,
+`held for the slow-down until 18:20` and `0.5x` on one the slow-down held, `held for the rewrite in flight` on one that
+waited for a moved pin's first head, `reserved 10.4% of 5h` on a move or a placement that booked a reservation, the
+pin's warmth and the cache verdict (`cache pending` before the attempt reports usage). "How the router decided" draws
+the walk as a strip of stations in the engine's order, each with its verdict, the path the decision took in the accent,
+every branch it did not take as a stub, a step the record does not carry dashed and reading "not run", and the ways out
+as termini, Chosen, Held for a slot and Refused, the one reached filled in its tone. Three more ways out, Held for the
+reset, Held for the slow-down and Held for the rewrite in flight, are drawn only when the decision took them, a spent
+move that waited for a reset, a request the slow-down held or one that waited for a moved pin's first head, each in Held
+for a slot's place, so the strip names six termini and draws three. A move's track carries the Fit station after Move,
+the destination gate's table: a row per candidate the gate read with its projection, rewrite and reserved share on each
 window the gate read, its runway, the window that binds, its end and its verdict, the station's own verdict naming the
 order the gate took. Reserve stands after Pick, or after the last step where no pick ran, and lists the booking (the
 account, the share reserved and the burn on each window, the expiry and the attempt), or reads "Nothing was booked: the
 pin renewed in place." on a renewal and "Nothing was booked." on any other decision that booked nothing. A fresh
 placement's partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a hover on a station, a
-candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them from the keyboard.
+candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them from the keyboard. The
+Shed station's Windows group reads the slow-down's `speed`, the share of it the holds apply as `ramp`, and the speed the
+holds `realized`, in the order the engine applies them.
 
 "Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath,
 Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the reset, the
@@ -1088,8 +1094,9 @@ twenty-four, each marked `(then)`, the three settings it carried that a version 
 pin written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
 (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading
 `for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips
-`speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, a Cause on a
-failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown,
+`speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or
+`for the rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a
+Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown,
 `re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the spend against
 a budget. The foot offers the three widenings after "Widen to", this minute, this session and this account, names the
 record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A record the retention
@@ -1148,13 +1155,13 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |
-| slow-down ended | An account's slow-down span closed: its factor read 1 again for the safety wait, or its entry left at the purge, with the span's length, its lowest factor and the time it held requests. |
+| slow-down ended | An account's slow-down span closed: its factor read 1 again for the safety wait, the window it slowed for passed its reset, or its entry left at the purge, with the span's length, its lowest factor and the time it held requests. |
 | slow-down started | An account's slow-down began: its factor read under 1, so requests of its sessions wait their cycle times the slow-down up to the hold. |
 | warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL. |
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
 | window cleared | A quota window read under its limit again after a reading at the limit, with the readings before and after and the reset unchanged. |
 | window reset | A quota window reset, with the reading before it. |
-| window spent | A response head, the poll or the prediction read a quota window at its limit. |
+| window spent | A response head, the poll or the prediction read a quota window at its limit, once per reset cycle: a newer head of the same cycle within two points of 1.0 after it neither clears nor repeats it. |
 
 Other views open the log on what they show: a Requests row and its drawer on the request a quarter hour either side, the
 Sessions row menu's "View in routing log" on the session's decisions an hour either side of its last request, a pool

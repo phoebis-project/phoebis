@@ -68,8 +68,8 @@ pub(crate) struct Session {
     /// The pin's account's factor from the slow-down entry in force, null on a row with no pin and where no entry is
     /// in force.
     pub speed: Option<f64>,
-    /// The pin's cycle in milliseconds, null until two requests of the pin have arrived after its placement and on a
-    /// row with no pin.
+    /// The pin's cycle in milliseconds, null until two requests of the pin after its placement have measured a gap
+    /// under the pool's burn average, and on a row with no pin.
     pub cycle_ms: Option<f64>,
     /// The cache TTL in force at the pin's last refresh.
     pub cache_ttl_ms: Option<i64>,

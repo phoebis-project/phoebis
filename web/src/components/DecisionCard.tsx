@@ -76,7 +76,17 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
         <Badge tone={DECISION_KIND_TONE[row.kind]}>{DECISION_KIND_LABEL[row.kind]}</Badge>
         <span className="decision-card__sentence">
           {verdictSentence(record, row).map((c, i) => (
-            <span key={i}>{c.entity ? <Link to={entityHref(c.entity.kind, c.entity.id)}>{c.value}</Link> : c.value}</span>
+            <span key={i}>
+              {c.entity ? (
+                <Link to={entityHref(c.entity.kind, c.entity.id)}>{c.value}</Link>
+              ) : c.href ? (
+                <Link to={c.href} className={c.mono ? 'mono' : undefined}>
+                  {c.value}
+                </Link>
+              ) : (
+                c.value
+              )}
+            </span>
           ))}
         </span>
         <Chips chips={verdictChips(record, row)} />

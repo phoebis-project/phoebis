@@ -640,7 +640,7 @@ test("a record decodes the five settings, the hold's figures, the cause, the fac
   });
   const settings = (s) => [s.returnToPlan, s.returnToPlanDwellSeconds, s.slowDown, s.slowDownHoldSeconds, s.slowDownStretchSeconds];
   assert.deepEqual(settings(slowed.settings), ['when_cold', 1_200, true, 90, 2_400]);
-  assert.deepEqual(slowed.outcome.hold, { accountId: 'business', boundMs: 120_000, cohort: null, cycleMs: 20_000, factor: 0.5, reason: 'slow_down', speed: 0.6, stretchMs: 2_520_000, thresholdMs: 1_800_000, until: new Date(until).toISOString() });
+  assert.deepEqual(slowed.outcome.hold, { accountId: 'business', boundMs: 120_000, cohort: null, cycleMs: 20_000, factor: 0.5, reason: 'slow_down', speed: 0.6, stretchMs: 2_520_000, thresholdMs: 1_800_000, until: new Date(until).toISOString(), waitsFor: null });
   assert.deepEqual(slowed.outcome.cause, { cause: null, reason: 'rate_limit', scope: 'account', state: null, window: 'five_hour' }, "a cooldown's cause names no state");
   assert.deepEqual([slowed.candidates[0].factor, slowed.candidates[0].windows.five_hour.demand], [0.5, 0.17]);
   assert.deepEqual([slowed.pin.cycleMs, slowed.pin.slowDownUntil], [20_000, new Date(until).toISOString()]);
@@ -660,7 +660,7 @@ test("a record decodes the five settings, the hold's figures, the cause, the fac
   older.outcome.hold = { account_id: 'business', bound_ms: 60_000, cohort: null, reason: 'cap', until: null };
   const before = d.decodeDecisionRecord(older);
   assert.deepEqual(settings(before.settings), [null, null, null, null, null], 'the five settings read as not recorded');
-  assert.deepEqual(before.outcome.hold, { accountId: 'business', boundMs: 60_000, cohort: null, cycleMs: null, factor: null, reason: 'cap', speed: null, stretchMs: null, thresholdMs: null, until: null });
+  assert.deepEqual(before.outcome.hold, { accountId: 'business', boundMs: 60_000, cohort: null, cycleMs: null, factor: null, reason: 'cap', speed: null, stretchMs: null, thresholdMs: null, until: null, waitsFor: null });
   assert.equal(before.outcome.cause, null);
   assert.ok(before.candidates.every((c) => c.factor === null && Object.values(c.windows).every((w) => w.demand === null)), 'no factor and no demand');
   assert.deepEqual([before.pin.cycleMs, before.pin.slowDownUntil], [null, null]);
@@ -723,7 +723,9 @@ test('a candidate decodes its fit figures and an outcome its reservation and its
   const outcome = d.decodeDecisionRecord(body).outcome;
   assert.deepEqual([outcome.hold, outcome.markCleared, outcome.reservation], [null, null, null], "the fixture's placement held nothing, cleared no mark and booked nothing");
   const held = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, hold: { account_id: 'business', bound_ms: 60_000, cohort: null, reason: 'reset', until: reset }, kind: 'held' } }).outcome;
-  assert.deepEqual(held.hold, { accountId: 'business', boundMs: 60_000, cohort: null, cycleMs: null, factor: null, reason: 'reset', speed: null, stretchMs: null, thresholdMs: null, until: new Date(reset).toISOString() });
+  assert.deepEqual(held.hold, { accountId: 'business', boundMs: 60_000, cohort: null, cycleMs: null, factor: null, reason: 'reset', speed: null, stretchMs: null, thresholdMs: null, until: new Date(reset).toISOString(), waitsFor: null });
+  const rewrite = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, hold: { account_id: 'business', bound_ms: 120_000, cohort: null, reason: 'rewrite', until: reset, waits_for: 'r1' }, kind: 'held' } }).outcome;
+  assert.deepEqual([rewrite.hold.reason, rewrite.hold.waitsFor, rewrite.hold.until], ['rewrite', 'r1', new Date(reset).toISOString()], 'a rewrite hold names the request it waits for');
   const booked = d.decodeDecisionRecord({
     ...body,
     outcome: {
@@ -1466,7 +1468,7 @@ test('the routing log page decodes both row shapes from the fixture', () => {
   const declined = d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'exhausted'), exhaustion: { deadline: null, kind: 'credits', obstacle: 'credits', reason: 'declined', window: null } });
   assert.equal(declined.exhaustion.reason, 'declined', "an exhaustion's reason is kept, the Fact a credits exhaustion draws");
   const held = page.rows.find((r) => r.type === 'decision' && r.kind === 'held');
-  assert.deepEqual([held.hold, held.score.unit], [{ accountId: 'business', boundMs: 60_000, cohort: null, cycleMs: null, factor: null, reason: 'cap', speed: null, stretchMs: null, thresholdMs: null, until: null }, 'percent_per_hour']);
+  assert.deepEqual([held.hold, held.score.unit], [{ accountId: 'business', boundMs: 60_000, cohort: null, cycleMs: null, factor: null, reason: 'cap', speed: null, stretchMs: null, thresholdMs: null, until: null, waitsFor: null }, 'percent_per_hour']);
   const round = page.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');
   assert.ok(isIso(round.at));
   assert.deepEqual([round.accountId, round.agentId, round.poolId, round.requestId, round.sessionId], ['business', 'main', 'main', 'r-failover', 's1']);

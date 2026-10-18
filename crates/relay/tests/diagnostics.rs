@@ -1,13 +1,22 @@
 mod common;
 use common::*;
 
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
+use phoebis_bus::{Bus, Delivery, DiagnosticsSource, Event, RequestComplete, Subscriber};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::{MemoryKey, CACHE_DIAGNOSIS_BETA};
+use phoebis_routing::{
+    DecisionRecord, Report, RouterConfig, RouterEvent, UtilizationSample, WindowReading,
+    WindowSource, FIVE_HOUR, SEVEN_DAY,
+};
 use phoebis_store::MemoryStore;
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -1341,12 +1350,15 @@ async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_switch() {
     up.shutdown().await;
 }
 
+/// A probe replays its recipe's member, which from a chain's second probe on names a message older than the upstream
+/// keeps, so no probe names one, whether the recipe carried the client's member or the router inserts it.
 #[tokio::test]
-async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_never_remembered() {
+async fn a_probe_names_no_previous_message_id_and_its_own_answer_is_never_remembered() {
     let up = FakeUpstream::start(vec![]).await;
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_turn"));
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_probe_1"));
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_probe_2"));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_probe_3"));
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", ok_with_id("msg_turn_2"));
     let h = harness(
         &up,
@@ -1371,20 +1383,35 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
     };
+    let recipe = first_party_naming(Some("msg_a01"));
     let resp = h
         .relay
-        .probe(probe(), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .probe(probe(), first_party_request(&recipe, "s1"))
         .await;
     assert_eq!(resp.status(), 200);
-    assert_diagnosed_turn(&up.requests()[1], Some("msg_turn"));
+    let sent = &up.requests()[1].body;
+    assert_eq!(
+        member_of(sent),
+        Some(None),
+        "the recipe's own member names no message"
+    );
+    assert!(
+        signed_over_itself(sent),
+        "the hash is re-signed over the null"
+    );
 
-    // A second probe still names the turn: the first probe's own answer was not remembered.
     let resp = h
         .relay
         .probe(probe(), request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await;
     assert_eq!(resp.status(), 200);
-    assert_diagnosed_turn(&up.requests()[2], Some("msg_turn"));
+    assert_diagnosed_turn(&up.requests()[2], None);
+    let resp = h
+        .relay
+        .probe(probe(), request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_diagnosed_turn(&up.requests()[3], None);
     let key = phoebis_relay::MemoryKey::for_session(
         "desktop",
         h.store.api_key("desktop").unwrap().unwrap().created_at,
@@ -1396,7 +1423,8 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
             .previous(&key, "acct", "claude-sonnet-4-5")
             .message_id
             .as_deref(),
-        Some("msg_turn")
+        Some("msg_turn"),
+        "no probe's answer was remembered"
     );
     settle(&h).await;
     assert_eq!(
@@ -1413,7 +1441,7 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_diagnosed_inference_turn(&up.requests()[3], Some("msg_turn"));
+    assert_diagnosed_inference_turn(&up.requests()[4], Some("msg_turn"));
     up.shutdown().await;
 }
 
@@ -1719,5 +1747,494 @@ async fn a_first_turn_whose_first_message_another_session_shares_names_nothing()
         Some(None),
         "the entry belongs to s1, and a shared first message is no fork"
     );
+    up.shutdown().await;
+}
+
+/// The first-party fixture as a client that names `previous` in its own member signs it: the fixture's member cut,
+/// one naming `previous` put back before `stream` where the client sends it, and the hash signed over the result.
+fn first_party_naming(previous: Option<&str>) -> Vec<u8> {
+    let mut native = first_party_without_diagnostics();
+    let (stream, _) =
+        phoebis_cch::object_member_span(&native, &["stream"]).expect("the fixture streams");
+    let id = previous.map_or_else(|| "null".to_string(), |id| format!(r#""{id}""#));
+    native.splice(
+        stream..stream,
+        format!(r#""diagnostics":{{"previous_message_id":{id}}},"#).bytes(),
+    );
+    phoebis_cch::sign(&native).expect("the fixture signs")
+}
+
+/// `native` on the first-party head under `session`: a client that sends the member sends the diagnosis beta too.
+fn first_party_request(native: &[u8], session: &str) -> Request<Body> {
+    let mut req = request_from_fixture(inference_head(FixtureKind::OauthFirstParty), native, KEY);
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
+}
+
+/// Whether the hash on `body`'s billing line covers `body` as it stands: `sign` rewrites the five digits alone, so
+/// equal digits are an equal body.
+fn signed_over_itself(body: &[u8]) -> bool {
+    cch_digits(&phoebis_cch::sign(body).unwrap()) == cch_digits(body)
+}
+
+/// An OAuth 429 whose `Retry-After` is the only deadline it names, short enough to be waited out in place.
+fn json_429_retry_after(seconds: &str) -> Respond {
+    Respond::Json {
+        status: 429,
+        headers: vec![("retry-after".into(), seconds.into())],
+        body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#
+            .to_vec(),
+    }
+}
+
+/// `turn` with the completion the relay published for it on `sub`.
+async fn completed_turn(
+    h: &Harness,
+    sub: &mut Subscriber,
+    req: Request<Body>,
+) -> (String, RequestComplete) {
+    let served = turn(h, req).await;
+    let complete = drain_until_complete(sub)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .expect("the request completed");
+    (served, complete)
+}
+
+/// The decision the router recorded for `request_id`, read off its events under a five-second bound.
+async fn decision_of(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    request_id: &str,
+) -> DecisionRecord {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the router's decision arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision { record, .. } = event {
+            if record.request.request_id == request_id {
+                return *record;
+            }
+        }
+    }
+}
+
+/// A client's member names the message its previous request was answered with, which only the account that
+/// answered it can find: the leg a failover sends to another account names none, signed over the null, and the
+/// member stays the client's on every completion.
+#[tokio::test]
+async fn a_client_member_is_detached_on_the_leg_that_fails_over_and_the_hash_re_signed() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_a01"));
+    up.push_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b01"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b02"));
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+        bus,
+    )
+    .await;
+    let naming_a = first_party_naming(Some("msg_a01"));
+
+    let (served, complete) =
+        completed_turn(&h, &mut sub, first_party_request(&naming_a, "s1")).await;
+    assert_eq!(served, "a");
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_a01".into())),
+        "the session's first request passes the client's member as sent"
+    );
+    assert_eq!(complete.diagnostics, Some(DiagnosticsSource::Client));
+
+    let (served, complete) =
+        completed_turn(&h, &mut sub, first_party_request(&naming_a, "s1")).await;
+    assert_eq!(served, "b");
+    assert_eq!(credentials_seen(&up), [A, A, B], "a's 429 and b's 200");
+    let sent = &up.requests()[2].body;
+    assert_eq!(
+        member_of(sent),
+        Some(None),
+        "the leg to b names no message of a's"
+    );
+    assert!(
+        signed_over_itself(sent),
+        "the hash is re-signed over the null"
+    );
+    assert_eq!(complete.diagnostics, Some(DiagnosticsSource::Client));
+
+    let (served, complete) = completed_turn(
+        &h,
+        &mut sub,
+        first_party_request(&first_party_naming(Some("msg_b01")), "s1"),
+    )
+    .await;
+    assert_eq!(served, "b");
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_b01".into())),
+        "the next turn on b names b's answer as sent"
+    );
+    assert_eq!(complete.diagnostics, Some(DiagnosticsSource::Client));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_client_member_is_detached_on_the_first_turn_after_a_spent_move() {
+    let up = FakeUpstream::start(vec![]).await;
+    // Ten hours past NOW in Unix seconds, so the spent rule moves the pin rather than waiting for the reset.
+    let reset = NOW / 1_000 + 10 * 3_600;
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![
+                (
+                    "anthropic-ratelimit-unified-5h-utilization".into(),
+                    "1.0".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-5h-reset".into(),
+                    reset.to_string(),
+                ),
+            ],
+            body: br#"{"id":"msg_a01","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}"#
+                .to_vec(),
+        },
+    );
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b01"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b02"));
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    assert_eq!(
+        turn(&h, first_party_request(&first_party_naming(None), "s1")).await,
+        "a"
+    );
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .samples()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|(id, _)| id == "a")
+            .filter(|(_, sample)| {
+                sample
+                    .reading(FIVE_HOUR)
+                    .is_some_and(|r| r.utilization >= 1.0)
+            })
+    })
+    .await;
+    // A poll reads b's allowance, which the spent rule has to know before it moves the pin there.
+    let reading = |utilization: f64, reset: i64| WindowReading {
+        utilization,
+        reset: Some(reset),
+        observed_at: NOW,
+        source: WindowSource::Poll,
+    };
+    h.router
+        .report(Report::Sample {
+            account_id: "b".into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(0.3, NOW + 3 * 3_600_000))
+                .with(SEVEN_DAY, reading(0.1, NOW + 72 * 3_600_000)),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    let mut events = h.router.subscribe_events();
+    let naming_a = first_party_naming(Some("msg_a01"));
+    let resp = h
+        .app
+        .clone()
+        .oneshot(first_party_request(&naming_a, "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 1)
+    );
+    resp.into_body().collect().await.unwrap();
+    let record = decision_of(&mut events, &o.request_id).await;
+    assert_eq!(
+        (record.outcome.kind, record.outcome.rule),
+        ("moved", Some("spent")),
+        "the selection moves the pin off a's spent window"
+    );
+    let sent = &up.requests()[1].body;
+    assert_eq!(
+        member_of(sent),
+        Some(None),
+        "the first turn on b names no message of a's"
+    );
+    assert!(
+        signed_over_itself(sent),
+        "the hash is re-signed over the null"
+    );
+
+    assert_eq!(
+        turn(
+            &h,
+            first_party_request(&first_party_naming(Some("msg_b01")), "s1")
+        )
+        .await,
+        "b"
+    );
+    assert_eq!(named(&up), Some(Some("msg_b01".into())));
+    up.shutdown().await;
+}
+
+/// A client that sent the null it sends on a conversation's first message names nothing to detach, so its body and
+/// its hash go as sent. API key accounts, so no identity splice moves a byte either.
+#[tokio::test]
+async fn a_client_member_already_null_is_left_as_sent() {
+    const A_SECRET: &str = "sk-ant-api03-AAAA";
+    const B_SECRET: &str = "sk-ant-api03-BBBB";
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A_SECRET, "/v1/messages", ok_with_id("msg_a01"));
+    up.push_credential_rule(
+        A_SECRET,
+        "/v1/messages",
+        json_429_unified(RESET, "five_hour"),
+    );
+    up.push_credential_rule(B_SECRET, "/v1/messages", ok_with_id("msg_b01"));
+    let h = harness(
+        &up,
+        &[api_key("a", A_SECRET, 0), api_key("b", B_SECRET, 1)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let null = first_party_naming(None);
+    assert_eq!(turn(&h, first_party_request(&null, "s1")).await, "a");
+    assert_eq!(turn(&h, first_party_request(&null, "s1")).await, "b");
+    assert_eq!(credentials_seen(&up), [A_SECRET, A_SECRET, B_SECRET]);
+    let sent = &up.requests()[2].body;
+    assert_eq!(member_of(sent), Some(None));
+    assert_eq!(
+        cch_digits(sent),
+        cch_digits(&null),
+        "the hash is not re-signed"
+    );
+    assert_eq!(
+        sent.as_slice(),
+        null.as_slice(),
+        "the body goes byte for byte as sent"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_400_naming_a_detached_client_member_is_forwarded_unchanged() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_a01"));
+    up.push_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    up.push_credential_rule(B, "/v1/messages", json_400(REFUSED_DIAGNOSTICS));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b01"));
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let naming_a = first_party_naming(Some("msg_a01"));
+    assert_eq!(turn(&h, first_party_request(&naming_a, "s1")).await, "a");
+    let resp = h
+        .app
+        .clone()
+        .oneshot(first_party_request(&naming_a, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    assert_eq!(outcome(&resp).account_id, "b");
+    let answer = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        answer.as_ref(),
+        REFUSED_DIAGNOSTICS.as_bytes(),
+        "the upstream's 400 reaches the client as it came"
+    );
+    assert_eq!(
+        up.requests().len(),
+        3,
+        "a client member is never stripped and retried, detached or not"
+    );
+
+    // Nothing was latched: the next request, naming no member of its own, still gets the router's.
+    assert_eq!(
+        turn(&h, request_for(KEY, "claude-sonnet-4-5", "s2")).await,
+        "b"
+    );
+    assert!(has_diagnostics(&up.requests()[3].body));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_retry_in_place_after_a_move_detaches_nothing_more() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_a01"));
+    up.push_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    up.push_credential_rule(B, "/v1/messages", json_429_retry_after("1"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b01"));
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let naming_a = first_party_naming(Some("msg_a01"));
+    assert_eq!(turn(&h, first_party_request(&naming_a, "s1")).await, "a");
+    // The failover's leg to b meets a one-second throttle and waits it out on b.
+    let resp = h
+        .app
+        .clone()
+        .oneshot(first_party_request(&naming_a, "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 3)
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(credentials_seen(&up), [A, A, B, B]);
+    let sent = up.requests();
+    assert_eq!(
+        member_of(&sent[3].body),
+        member_of(&sent[2].body),
+        "the retry resends the bytes the leg built"
+    );
+    up.shutdown().await;
+}
+
+/// The purge dropped the session's row and nothing landed it since, so the routing holds no previous landing and
+/// the client's member goes as sent wherever the session is placed.
+#[tokio::test]
+async fn a_placement_with_no_previous_landing_passes_a_client_member_as_sent() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_a01"));
+    up.push_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b00"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b01"));
+    let h = harness_with_router_config(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec {
+            affinity_ttl_seconds: 60,
+            ..Default::default()
+        },
+        RouterConfig {
+            purge_interval: Duration::from_millis(10),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    let naming_a = first_party_naming(Some("msg_a01"));
+    assert_eq!(turn(&h, first_party_request(&naming_a, "s1")).await, "a");
+    h.clock.store(NOW + 120_000, Ordering::SeqCst);
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router.pins().await.unwrap().is_empty().then_some(())
+    })
+    .await;
+    // Another session's 429 cools a, so s1's next request is placed on b.
+    assert_eq!(
+        turn(&h, request_for(KEY, "claude-sonnet-4-5", "s2")).await,
+        "b"
+    );
+    assert_eq!(turn(&h, first_party_request(&naming_a, "s1")).await, "b");
+    assert_eq!(
+        named(&up),
+        Some(Some("msg_a01".into())),
+        "with no previous landing the member goes as the client sent it"
+    );
+    up.shutdown().await;
+}
+
+/// The session's own request met no 429 and dispatched no earlier leg: another session's 429 cooled `a`, and the
+/// selection released the pin onto `b`.
+#[tokio::test]
+async fn a_client_member_is_detached_when_a_cooldown_releases_the_pin_onto_a_sibling() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_a01"));
+    up.push_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b00"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b01"));
+    up.push_credential_rule(B, "/v1/messages", ok_with_id("msg_b02"));
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    assert_eq!(
+        turn(&h, first_party_request(&first_party_naming(None), "s1")).await,
+        "a"
+    );
+    assert_eq!(
+        turn(&h, request_for(KEY, "claude-sonnet-4-5", "s2")).await,
+        "b"
+    );
+    let mut events = h.router.subscribe_events();
+    let naming_a = first_party_naming(Some("msg_a01"));
+    let resp = h
+        .app
+        .clone()
+        .oneshot(first_party_request(&naming_a, "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 1)
+    );
+    resp.into_body().collect().await.unwrap();
+    let record = decision_of(&mut events, &o.request_id).await;
+    assert!(
+        record
+            .pin
+            .as_ref()
+            .is_some_and(|pin| pin.released.contains(&"cooldown")),
+        "the selection released the pin for the cooldown: {:?}",
+        record.pin
+    );
+    let sent = &up.requests()[3].body;
+    assert_eq!(
+        member_of(sent),
+        Some(None),
+        "the first turn on b names no message of a's"
+    );
+    assert!(
+        signed_over_itself(sent),
+        "the hash is re-signed over the null"
+    );
+
+    assert_eq!(
+        turn(
+            &h,
+            first_party_request(&first_party_naming(Some("msg_b01")), "s1")
+        )
+        .await,
+        "b"
+    );
+    assert_eq!(named(&up), Some(Some("msg_b01".into())));
     up.shutdown().await;
 }

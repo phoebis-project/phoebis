@@ -717,6 +717,17 @@ fn full_speed_unless_positive(realized: f64) -> f64 {
     }
 }
 
+/// Where a dropped or replaced entry's open span ends: the factor's return where it returned before `reset`, the
+/// passed reset of the window it slowed for where that reset is what dropped it, else the entry's last read.
+fn span_end(entry: &SlowDownState, reset: Option<i64>) -> i64 {
+    match (entry.clear_since, reset) {
+        (Some(clear), Some(reset)) => clear.min(reset),
+        (Some(clear), None) => clear,
+        (None, Some(reset)) => reset,
+        (None, None) => entry.read_at,
+    }
+}
+
 /// The fold a renewal with usage applies at `now`: the average decayed to `now`, plus `tokens` spread over the
 /// window, so the average is tokens per second.
 pub(crate) fn burn_folded(
@@ -739,6 +750,10 @@ pub fn warm(pin: &PinRow, now: i64) -> bool {
 /// stream's silence, not its length, so a request older than the longest turn a client runs is one the table
 /// gives up waiting on.
 pub const IN_FLIGHT_RECLAIM_MS: i64 = 3_600_000;
+
+/// The gaps a cycle averages over. Eight arrivals read a change of pace within a few minutes of 30 s turns, under
+/// any burn average, and let one long gap under the span fade from the cycle by an eighth with each later turn.
+pub const CYCLE_GAPS: u32 = 8;
 
 /// A move's or a placement's booking on its destination: the rewrite and the burn the request will land there,
 /// counted by `predicted` until the usage releases it before its charge, the request ends without usage, or the purge
@@ -793,6 +808,14 @@ pub struct SlowDownState {
     pub stretch_ms: i64,
     /// The threshold the read compared the stretch to, the pool's `slow_down_stretch_seconds` at the read.
     pub threshold_ms: i64,
+    /// The 5-hour reading's reset at the read, `None` where the reading named none or its reset had passed: the
+    /// window the entry was read in, which the stale test compares `read_at` against once the reset has passed.
+    pub reset: Option<i64>,
+    /// When the read's factor first read under 1 since it last read 1, cleared at a read whose factor reads 1: the
+    /// ramp's stamp, from which the factor the holds realize is pulled from 1 to the read's over one burn average.
+    /// Unlike `slowed_since` it clears at once, so a burst that ends and comes back ramps again from nothing, and
+    /// unlike `over_since` it stamps the stretch's zero crossing, not the threshold's.
+    pub ramp_since: Option<i64>,
 }
 
 /// One edge of an account's slow-down span, which the task announces as an event.
@@ -807,8 +830,9 @@ pub enum SlowDownEdge {
         demand: f64,
         reset: Option<i64>,
     },
-    /// The span closed, its length running from `since` to the instant the factor returned to 1, or to the entry's
-    /// last read where the purge dropped the entry before it did: the wait that closes a span is not slowed time.
+    /// The span closed, its length running from `since` to the instant the factor returned to 1, to the passed reset
+    /// of the window it slowed for where the reset cleared the entry, or to the entry's last read where the purge
+    /// dropped the entry before either: the wait that closes a span is not slowed time.
     Ended {
         since: i64,
         duration_ms: i64,
@@ -823,10 +847,27 @@ pub struct PinPace {
     /// The last dispatch of a request of a held class: its arrival, or the end of the hold it waited through, so a
     /// wait never counts as the pin's own gap.
     pub dispatched_at: i64,
-    /// The time-weighted average of the gaps between a dispatch and the next arrival, `None` before the first gap.
+    /// The count-weighted mean of the gaps between a dispatch and the next arrival: the first gap whole, then each gap
+    /// under the pool's burn average moves it by one over `min(gaps + 1, CYCLE_GAPS)`. `None` until a gap under the
+    /// pool's burn average has been measured.
     pub cycle_ms: Option<f64>,
+    /// The gaps folded so far, at most `CYCLE_GAPS`: the next fold's share is one over this count plus one, held at
+    /// one over `CYCLE_GAPS` once the count is there.
+    pub gaps: u32,
     /// The end of the slow-down hold standing on the pin.
     pub deadline: Option<i64>,
+}
+
+/// The request a moved pin's next requests wait for the head of, the wire attempt whose leg carries it, and the
+/// instant its selection dispatched it: the upstream makes a cache entry readable only once the response that
+/// writes it has begun, so a request out before that head would write the prefix again. Memory only, as the pace
+/// is: the next landing rebuilds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadMark {
+    pub request_id: String,
+    /// The selection's `attempt`, the leg's number: a failover lands the same request again under the next one.
+    pub attempt: u32,
+    pub at: i64,
 }
 
 /// The `window_ceiling` a pool is created with.
@@ -1125,6 +1166,9 @@ pub struct RoutingState {
     /// Each `funding_required` account's retry by account id. Memory only: the store keeps no instant for a mark,
     /// so a restart starts with none.
     funding_retries: HashMap<String, FundingRetry>,
+    /// The request each moved pin's next requests wait for the head of, by the pin's key. Memory only, as the paces
+    /// are, and it leaves with the row in `take_pin`, so a restart holds none.
+    head_marks: HashMap<PinKey, HeadMark>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
@@ -1217,6 +1261,7 @@ impl RoutingState {
                 })
                 .collect(),
             funding_retries: HashMap::new(),
+            head_marks: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
             next_epoch,
@@ -1387,6 +1432,7 @@ impl RoutingState {
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
+        self.head_marks.remove(key);
         Some(pin)
     }
 
@@ -2051,7 +2097,8 @@ impl RoutingState {
         on.into_iter().map(|(_, reservation)| reservation).collect()
     }
 
-    /// The account's slow-down entry on the pool as written, whatever the pool's switch reads now.
+    /// The account's slow-down entry on the pool as written, whatever the pool's switch or the window's reset reads
+    /// now.
     pub fn slow_down_state(&self, pool_id: &str, account_id: &str) -> Option<&SlowDownState> {
         self.slow_downs
             .get(&(pool_id.to_string(), account_id.to_string()))
@@ -2060,11 +2107,13 @@ impl RoutingState {
     /// The read's write, once per pinned selection on the account: the factor from the read, the speed folded toward
     /// `realized` (`speed x w + realized x (1 - w)` with `w = exp(-(now - read_at) / average_ms)`, the first write
     /// taking `realized` whole), `over_since` stamped while the read's stretch is over its threshold and cleared at or
-    /// under it, and the span the factor reads under 1 for opened and tracked. A read of 1 stamps `clear_since` and
-    /// leaves the span open, so a dip back under 1 inside `SLOW_DOWN_WAIT_MS` continues it and
-    /// `take_slow_down_edges` closes it once the factor has read 1 for the wait. A span that opens records its start
-    /// from this read, after the end of a span whose wait ran out before any drain closed it. Answers the entry as
-    /// written, the read's stretch and threshold beside its factor.
+    /// under it, `ramp_since` stamped while the factor reads under 1 and cleared at 1, and the span the factor reads
+    /// under 1 for opened and tracked. A read of 1 stamps `clear_since` and leaves the span open, so a dip back under 1
+    /// inside `SLOW_DOWN_WAIT_MS` continues it and `take_slow_down_edges` closes it once the factor has read 1 for the
+    /// wait. A span that opens records its start from this read, after the end of a span whose wait ran out before any
+    /// drain closed it. An entry read before its window's passed reset is replaced: its open span ends by that reset,
+    /// and this read writes the entry afresh as a first write does. Answers the entry as written, the read's stretch
+    /// and threshold beside its factor.
     pub fn write_slow_down(
         &mut self,
         pool_id: &str,
@@ -2082,6 +2131,30 @@ impl RoutingState {
         let over = read.stretch_ms > read.threshold_ms;
         let slowed = read.factor < 1.0;
         let key = (pool_id.to_string(), account_id.to_string());
+        // An entry read before its window's passed reset is the old window's: its span ends by that reset, and no speed
+        // or stamp of it carries into the window this read opens.
+        if let Some(reset) = self
+            .slow_downs
+            .get(&key)
+            .and_then(|entry| self.stale_reset(account_id, entry, now))
+        {
+            let stale = self
+                .slow_downs
+                .remove(&key)
+                .expect("the entry was just read");
+            if let Some(since) = stale.slowed_since {
+                self.slow_down_edges.push((
+                    pool_id.to_string(),
+                    account_id.to_string(),
+                    SlowDownEdge::Ended {
+                        since,
+                        duration_ms: span_end(&stale, Some(reset)) - since,
+                        factor_min: stale.factor_min,
+                        held_ms: stale.held_ms,
+                    },
+                ));
+            }
+        }
         let mut opened = !self.slow_downs.contains_key(&key) && slowed;
         let mut ended = None;
         self.slow_downs
@@ -2093,7 +2166,9 @@ impl RoutingState {
                 entry.stretch_ms = read.stretch_ms;
                 entry.threshold_ms = read.threshold_ms;
                 entry.read_at = now;
+                entry.reset = read.reset;
                 entry.over_since = over.then(|| entry.over_since.unwrap_or(now));
+                entry.ramp_since = slowed.then(|| entry.ramp_since.unwrap_or(now));
                 // A span whose factor has read 1 for the wait ended at the return, though no drain has closed it yet: a
                 // selection can land before the purge tick that would, and the dip it reads opens a span of its own.
                 if let (true, Some(since), Some(clear)) =
@@ -2131,7 +2206,9 @@ impl RoutingState {
                 factor: read.factor,
                 speed: realized,
                 read_at: now,
+                reset: read.reset,
                 over_since: over.then_some(now),
+                ramp_since: slowed.then_some(now),
                 slowed_since: slowed.then_some(now),
                 clear_since: None,
                 factor_min: read.factor.min(1.0),
@@ -2207,19 +2284,55 @@ impl RoutingState {
         }
     }
 
-    /// The entry in force for the account on the pool: `None` at once for a pool whose switch is off, whatever lingers
-    /// until the purge tick drops it, and `None` where no entry stands, an api_key account, an untiered account or one
-    /// with no 5-hour reading (which writes no entry) and an account no pinned selection has read since the last purge
-    /// or restart.
-    pub fn slow_down_in_force(&self, pool: &PoolRow, account_id: &str) -> Option<&SlowDownState> {
+    /// The passed reset the entry was read before, where there is one: the later of the stored 5-hour reading's
+    /// reset and the entry's own among those at or before `now`. A head's whole seconds and a poll's milliseconds
+    /// spell one reset two ways under a second apart, and whichever spelling has passed answers, since an entry
+    /// read before either was read in the old window. A reading that names no reset, as a poll of an idle window
+    /// does, and no reading at all add no candidate, so the entry's own reset answers alone. `None` while no
+    /// candidate has passed.
+    fn stale_reset(&self, account_id: &str, entry: &SlowDownState, now: i64) -> Option<i64> {
+        let reading = self
+            .samples
+            .get(account_id)
+            .and_then(|sample| sample.reading(FIVE_HOUR))
+            .and_then(|reading| reading.reset);
+        let passed = [reading, entry.reset]
+            .into_iter()
+            .flatten()
+            .filter(|reset| *reset <= now)
+            .max()?;
+        (entry.read_at < passed).then_some(passed)
+    }
+
+    /// Whether the entry was read before the passed reset of the window it was read in, so it is the old window's.
+    pub fn slow_down_stale(&self, account_id: &str, entry: &SlowDownState, now: i64) -> bool {
+        self.stale_reset(account_id, entry, now).is_some()
+    }
+
+    /// The entry in force for the account on the pool at `now`: `None` at once for a pool whose switch is off, whatever
+    /// lingers until the purge tick drops it, `None` for an entry read before its window's passed reset, so every
+    /// reader sees the window's reset clear the account at once, and `None` where no entry stands, an api_key account,
+    /// an untiered account or one with no 5-hour reading (which writes no entry) and an account no pinned selection has
+    /// read since the last purge or restart. The test reads the reset and not the window's start: `window_started`
+    /// opens the new window with the account's next request, so after an idle gap past the reset the start is that
+    /// request's upstream receipt, which falls just after the `read_at` of the selection that sent it, and a test on
+    /// the start would clear that entry again at the next read.
+    pub fn slow_down_in_force(
+        &self,
+        pool: &PoolRow,
+        account_id: &str,
+        now: i64,
+    ) -> Option<&SlowDownState> {
         slow_down(pool)
             .then(|| self.slow_down_state(&pool.id, account_id))
             .flatten()
+            .filter(|entry| !self.slow_down_stale(account_id, entry, now))
     }
 
-    /// The speed the demand divides the account's pins' burn by on `pool`: the entry's realized speed, 1 with none.
-    pub(crate) fn slow_down_speed(&self, pool: &PoolRow, account_id: &str) -> f64 {
-        self.slow_down_in_force(pool, account_id)
+    /// The speed the demand divides the account's pins' burn by on `pool` at `now`: the realized speed of the entry in
+    /// force, and 1 where none is, as for a stale entry.
+    pub(crate) fn slow_down_speed(&self, pool: &PoolRow, account_id: &str, now: i64) -> f64 {
+        self.slow_down_in_force(pool, account_id, now)
             .map_or(1.0, |entry| entry.speed)
     }
 
@@ -2228,13 +2341,17 @@ impl RoutingState {
         self.pin_paces.get(key)
     }
 
-    /// Folds an arrival into the pin's cycle: the gap since the last dispatch weighs in by `w = exp(-gap /
-    /// average_ms)`, so a long think moves the average more than a quick tool call, the first gap is taken whole, and
-    /// the arrival becomes the last dispatch. An arrival at or before the last dispatch folds nothing: a re-selection
-    /// of the same request (after a failover or a refused hold) carries the arrival already folded, whose gap of zero
-    /// would plant a cycle of zero, a request queued behind a later one has no gap to give, and an arrival before a
-    /// standing deadline, which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts its
-    /// pace with no gap.
+    /// Folds an arrival into the pin's cycle, the mean of its last gaps: the gap since the last dispatch moves the
+    /// cycle by `1 / min(gaps + 1, CYCLE_GAPS)` toward itself, so the first gap is taken whole, the first gaps read
+    /// their plain mean and every later one moves it by an eighth, and the cycle tracks a change of pace within eight
+    /// arrivals. A gap of `average_ms` or longer is a pause that folds nothing and leaves the cycle and its count
+    /// standing: a long think, a main agent waiting on its subagents or an idle session says nothing of the pace the
+    /// session runs at, and a hold sized from such a gap would hold the resumed session at the cap while the
+    /// water-filling counts it almost unslowed. The arrival still becomes the last dispatch, so the next gap is
+    /// measured from it. An arrival at or before the last dispatch folds nothing: a re-selection of the same request
+    /// (after a failover or a refused hold) carries the arrival already folded, whose gap of zero would drag the cycle
+    /// toward zero, a request queued behind a later one has no gap to give, and an arrival before a standing deadline,
+    /// which a hold made the last dispatch, rejoins the deadline. The pin's first arrival starts its pace with no gap.
     pub fn fold_pace(&mut self, key: &PinKey, received_at: i64, average_ms: i64) {
         let Some(pace) = self.pin_paces.get_mut(key) else {
             self.pin_paces.insert(
@@ -2242,6 +2359,7 @@ impl RoutingState {
                 PinPace {
                     dispatched_at: received_at,
                     cycle_ms: None,
+                    gaps: 0,
                     deadline: None,
                 },
             );
@@ -2250,15 +2368,18 @@ impl RoutingState {
         if received_at <= pace.dispatched_at {
             return;
         }
-        let gap = (received_at - pace.dispatched_at) as f64;
+        let gap = received_at - pace.dispatched_at;
+        pace.dispatched_at = received_at;
+        if gap >= average_ms {
+            return;
+        }
+        let gap = gap as f64;
+        let n = f64::from(pace.gaps.min(CYCLE_GAPS - 1) + 1);
         pace.cycle_ms = Some(match pace.cycle_ms {
             None => gap,
-            Some(cycle) => {
-                let w = (-gap / average_ms.max(1) as f64).exp();
-                cycle * w + gap * (1.0 - w)
-            }
+            Some(cycle) => cycle + (gap - cycle) / n,
         });
-        pace.dispatched_at = received_at;
+        pace.gaps = (pace.gaps + 1).min(CYCLE_GAPS);
     }
 
     /// Ends the pace under `key` with its pin's session: a fresh placement under the key starts with none.
@@ -2281,6 +2402,41 @@ impl RoutingState {
             pace.deadline = Some(until);
         }
         self.pace_held_until(key, until);
+    }
+
+    /// A landing that finds a mark replaces it, since the earlier request's entry is on an account the pin left.
+    pub(crate) fn mark_head(&mut self, key: &PinKey, request_id: &str, attempt: u32, at: i64) {
+        self.head_marks.insert(
+            key.clone(),
+            HeadMark {
+                request_id: request_id.to_string(),
+                attempt,
+                at,
+            },
+        );
+    }
+
+    /// The mark under `key` as the pin row spells it, with no resolution applied.
+    pub fn head_mark(&self, key: &PinKey) -> Option<&HeadMark> {
+        self.head_marks.get(key)
+    }
+
+    /// Clears the mark naming `request_id` at `attempt`, or at any attempt under `None`, wherever it stands: at most
+    /// one, since a landing replaces the mark. A `Head` report names its leg's attempt, so an earlier leg's report
+    /// delivered late never clears the mark a failover's landing set for the same request, while `Ended` names none
+    /// and clears whatever the request left.
+    pub(crate) fn clear_head_mark(&mut self, request_id: &str, attempt: Option<u32>) -> bool {
+        let before = self.head_marks.len();
+        self.head_marks.retain(|_, mark| {
+            !(mark.request_id == request_id
+                && attempt.is_none_or(|attempt| mark.attempt == attempt))
+        });
+        self.head_marks.len() != before
+    }
+
+    /// Clears the mark under `key`, the renewal's and the release's backstop for a report the closed queue refused.
+    pub(crate) fn clear_head_mark_of(&mut self, key: &PinKey) -> bool {
+        self.head_marks.remove(key).is_some()
     }
 
     /// Set by the task at spawn from its config, and by a test that prices a round through its own tables.
@@ -2795,6 +2951,9 @@ impl RoutingState {
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
             // its fast usage moves with it.
             let renewed = self.renewed.contains(&spelled);
+            // Read ahead of `take_pin`, which drops it: the mark lives as long as its row, so a `Head` report still
+            // finds it under the dated id.
+            let mark = self.head_marks.remove(&spelled);
             self.take_pin(&spelled);
             // The pace follows the row the merge keeps, so the session's cycle reads on under the dated id.
             let pace = self.pin_paces.remove(&spelled);
@@ -2813,6 +2972,11 @@ impl RoutingState {
                 if let Some(pace) = pace {
                     self.pin_paces.insert(dated_key.clone(), pace);
                 }
+                // A dated row this one replaces leaves with its own mark.
+                match mark {
+                    Some(mark) => self.head_marks.insert(dated_key.clone(), mark),
+                    None => self.head_marks.remove(&dated_key),
+                };
                 let moved = PinRow {
                     model: dated_id.to_string(),
                     lane: relaned(&pin.lane, spelling, dated_id),
@@ -3034,10 +3198,11 @@ impl RoutingState {
         }
     }
 
-    /// The slow-down entries a quiet account or a switched-off pool leaves, removed and answered in key order: an
-    /// entry whose account holds no pin of the pool, one no selection wrote for `IN_FLIGHT_RECLAIM_MS`, the backstop
-    /// the reservations use, and every entry of a pool whose slow-down is off or that left the registry, so a quiet
-    /// account reads unslowed again without a selection.
+    /// The slow-down entries a quiet account, a switched-off pool or a passed reset leaves, removed and answered in key
+    /// order: an entry whose account holds no pin of the pool, one no selection wrote for `IN_FLIGHT_RECLAIM_MS`, the
+    /// backstop the reservations use, one read before its window's passed reset, which every reader already reads as
+    /// cleared, and every entry of a pool whose slow-down is off or that left the registry, so a quiet account reads
+    /// unslowed again without a selection.
     fn purge_slow_downs(
         &mut self,
         snapshot: &RegistrySnapshot,
@@ -3055,7 +3220,10 @@ impl RoutingState {
                             .key(&pin.key_id)
                             .is_some_and(|key| key.pool_id == *pool_id)
                 });
-                pool.is_none() || !pinned || now - entry.read_at >= IN_FLIGHT_RECLAIM_MS
+                pool.is_none()
+                    || !pinned
+                    || now - entry.read_at >= IN_FLIGHT_RECLAIM_MS
+                    || self.slow_down_stale(account_id, entry, now)
             })
             .map(|(key, _)| key.clone())
             .collect();
@@ -3064,16 +3232,17 @@ impl RoutingState {
             .into_iter()
             .filter_map(|key| self.slow_downs.remove(&key).map(|entry| (key, entry)))
             .collect();
-        // No start stands without its end: a dropped span ends at the factor's return, or at the last read where the
-        // factor never returned.
+        // No start stands without its end: a dropped span ends at the factor's return, at the passed reset of the
+        // window it slowed for where that reset dropped it, or at the last read where the factor never returned.
         for ((pool_id, account_id), entry) in &dropped {
             if let Some(since) = entry.slowed_since {
+                let end = span_end(entry, self.stale_reset(account_id, entry, now));
                 self.slow_down_edges.push((
                     pool_id.clone(),
                     account_id.clone(),
                     SlowDownEdge::Ended {
                         since,
-                        duration_ms: entry.clear_since.unwrap_or(entry.read_at) - since,
+                        duration_ms: end - since,
                         factor_min: entry.factor_min,
                         held_ms: entry.held_ms,
                     },
@@ -4425,6 +4594,139 @@ mod tests {
         );
     }
 
+    /// The pace key the fold cases arrive under.
+    fn paced() -> PinKey {
+        PinKey {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+        }
+    }
+
+    #[test]
+    fn fold_pace_counts_its_gaps_to_eight_and_holds_the_count_there() {
+        const AVERAGE_MS: i64 = 1_800_000;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let read = |state: &RoutingState| {
+            let pace = state.pin_pace(&paced()).expect("a pace");
+            (pace.gaps, pace.cycle_ms)
+        };
+        state.fold_pace(&paced(), 0, AVERAGE_MS);
+        assert_eq!(
+            read(&state),
+            (0, None),
+            "the first arrival starts the pace with no gap"
+        );
+        for gap in 1..=8 {
+            state.fold_pace(&paced(), i64::from(gap) * 30_000, AVERAGE_MS);
+            assert_eq!(read(&state), (gap, Some(30_000.0)), "gap {gap}");
+        }
+        state.fold_pace(&paced(), 246_000, AVERAGE_MS);
+        assert_eq!(
+            read(&state),
+            (CYCLE_GAPS, Some(27_000.0)),
+            "a ninth gap leaves the count at eight and moves the cycle by an eighth"
+        );
+    }
+
+    #[test]
+    fn fold_pace_leaves_the_cycle_and_the_count_standing_over_a_pause() {
+        const AVERAGE_MS: i64 = 1_800_000;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let read = |state: &RoutingState| {
+            let pace = state.pin_pace(&paced()).expect("a pace");
+            (pace.gaps, pace.cycle_ms, pace.dispatched_at)
+        };
+        for gap in 0..=3 {
+            state.fold_pace(&paced(), gap * 30_000, AVERAGE_MS);
+        }
+        assert_eq!(read(&state), (3, Some(30_000.0), 90_000));
+        let paused = 90_000 + AVERAGE_MS;
+        state.fold_pace(&paced(), paused, AVERAGE_MS);
+        assert_eq!(
+            read(&state),
+            (3, Some(30_000.0), paused),
+            "a gap of the burn average folds nothing and dates the next gap"
+        );
+        let next = paused + AVERAGE_MS - 1;
+        state.fold_pace(&paced(), next, AVERAGE_MS);
+        assert_eq!(
+            read(&state),
+            (
+                4,
+                Some(30_000.0 + (AVERAGE_MS - 1 - 30_000) as f64 / 4.0),
+                next
+            ),
+            "a gap one millisecond under the burn average folds"
+        );
+    }
+
+    fn head_mark_of(request_id: &str, attempt: u32, at: i64) -> HeadMark {
+        HeadMark {
+            request_id: request_id.into(),
+            attempt,
+            at,
+        }
+    }
+
+    #[test]
+    fn mark_head_replaces_a_standing_mark_with_the_later_request() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.mark_head(&paced(), "r-1", 1, 1_000);
+        assert_eq!(
+            state.head_mark(&paced()),
+            Some(&head_mark_of("r-1", 1, 1_000))
+        );
+        state.mark_head(&paced(), "r-2", 2, 2_000);
+        assert_eq!(
+            state.head_mark(&paced()),
+            Some(&head_mark_of("r-2", 2, 2_000)),
+            "the later landing's request wins, its attempt with it"
+        );
+    }
+
+    #[test]
+    fn clear_head_mark_matches_the_request_and_its_attempt() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.mark_head(&paced(), "r-1", 2, 1_000);
+        assert!(!state.clear_head_mark("r-2", None), "another request");
+        assert!(
+            !state.clear_head_mark("r-1", Some(1)),
+            "an earlier leg of the request"
+        );
+        assert!(state.head_mark(&paced()).is_some(), "the mark stands");
+        assert!(state.clear_head_mark("r-1", Some(2)));
+        assert_eq!(state.head_mark(&paced()), None);
+        state.mark_head(&paced(), "r-1", 3, 2_000);
+        assert!(
+            state.clear_head_mark("r-1", None),
+            "no attempt clears the request's mark whatever its attempt"
+        );
+        assert!(!state.clear_head_mark("r-1", None), "once cleared");
+    }
+
+    #[test]
+    fn clear_head_mark_of_clears_the_key() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        assert!(!state.clear_head_mark_of(&paced()));
+        state.mark_head(&paced(), "r-1", 1, 1_000);
+        assert!(state.clear_head_mark_of(&paced()));
+        assert_eq!(state.head_mark(&paced()), None);
+    }
+
+    #[test]
+    fn take_pin_drops_the_mark() {
+        let (pin, _) = burning("s", 1.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        state.mark_head(&pin.key(), "r-1", 1, 1_000);
+        state.remove_pin(&pin.key());
+        assert_eq!(state.head_mark(&pin.key()), None);
+    }
+
     #[test]
     fn a_booking_left_on_the_source_by_a_request_in_flight_hides_no_live_pin_on_the_destination() {
         // Two requests share the pin: r1 is placed on a and stays in flight there while r2 fails over to b, where
@@ -4547,6 +4849,8 @@ mod tests {
             stretch_ms: 10 * MINUTE,
             threshold_ms: 30 * MINUTE,
             factor,
+            ramp: 1.0,
+            ramped: factor,
             speed: 1.0,
             plan: Vec::new(),
             realized: 1.0,
@@ -4619,6 +4923,8 @@ mod tests {
             stretch_ms: 10 * MINUTE,
             threshold_ms: 30 * MINUTE,
             factor,
+            ramp: 1.0,
+            ramped: factor,
             speed: 1.0,
             plan: Vec::new(),
             realized: 1.0,
@@ -4674,6 +4980,8 @@ mod tests {
             stretch_ms: 600_000,
             threshold_ms: 1_800_000,
             factor,
+            ramp: 1.0,
+            ramped: factor,
             speed: 1.0,
             plan: Vec::new(),
             realized: 1.0,
@@ -4753,6 +5061,139 @@ mod tests {
         );
     }
 
+    /// `a`'s entry on `p` as a read naming `reset` writes it at `read_at`.
+    fn written(state: &mut RoutingState, reset: Option<i64>, read_at: i64) -> SlowDownState {
+        state
+            .write_slow_down(
+                "p",
+                "a",
+                &SlowDownRead {
+                    reset,
+                    ..read_of(0.5)
+                },
+                1.0,
+                read_at,
+                1_800_000,
+            )
+            .clone()
+    }
+
+    #[test]
+    fn slow_down_stale_reads_the_passed_reset_of_the_entrys_window() {
+        const MINUTE: i64 = 60_000;
+        const R: i64 = 10 * HOUR_MS;
+        let fresh = || RoutingState::from_load(RoutingLoad::default());
+
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        let entry = written(&mut state, Some(R), R - 30 * MINUTE);
+        assert_eq!(entry.reset, Some(R));
+        assert!(
+            !state.slow_down_stale("a", &entry, R - MINUTE),
+            "its own reset lies ahead under a reading naming it"
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, R + MINUTE),
+            "its own reset passed under the reading still naming it"
+        );
+        read(
+            &mut state,
+            FIVE_HOUR,
+            0.1,
+            Some(R + 5 * HOUR_MS),
+            R + 2 * MINUTE,
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, R + 3 * MINUTE),
+            "its own reset passed under a reading naming the next one ahead"
+        );
+
+        // Read in the gap after the reset, before any reading of the new window.
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        let entry = written(&mut state, None, R + 10 * MINUTE);
+        assert_eq!(entry.reset, None);
+        assert!(
+            !state.slow_down_stale("a", &entry, R + 11 * MINUTE),
+            "read after the passed reset the reading names"
+        );
+        let next = R + 10 * MINUTE + 5 * HOUR_MS;
+        read(
+            &mut state,
+            FIVE_HOUR,
+            0.1,
+            Some(next),
+            R + 10 * MINUTE + 200,
+        );
+        assert!(
+            !state.slow_down_stale("a", &entry, R + 11 * MINUTE),
+            "read before the new window's reset, which lies ahead"
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, next),
+            "the reading names a later reset that has passed"
+        );
+
+        // A head's whole seconds and a poll's milliseconds spell one reset half a second apart: whichever has passed
+        // answers.
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        let entry = written(&mut state, Some(R + 500), R - MINUTE);
+        assert_eq!(entry.reset, Some(R + 500));
+        assert!(
+            state.slow_down_stale("a", &entry, R + 200),
+            "the reading's spelling has passed"
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, R + 1_000),
+            "both spellings have passed"
+        );
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R + 500), R - HOUR_MS);
+        let entry = written(&mut state, Some(R), R - MINUTE);
+        assert_eq!(entry.reset, Some(R));
+        assert!(
+            state.slow_down_stale("a", &entry, R + 200),
+            "the entry's own spelling has passed"
+        );
+    }
+
+    #[test]
+    fn slow_down_stale_reads_the_entrys_own_reset_where_the_reading_names_none() {
+        const MINUTE: i64 = 60_000;
+        const R: i64 = 10 * HOUR_MS;
+        let fresh = || RoutingState::from_load(RoutingLoad::default());
+
+        // A poll of an idle window names no reset, and its reading replaces the one that named the passed reset.
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        let entry = written(&mut state, Some(R), R - 30 * MINUTE);
+        read(&mut state, FIVE_HOUR, 0.0, None, R + MINUTE);
+        assert!(
+            state.slow_down_stale("a", &entry, R + 2 * MINUTE),
+            "its own reset passed under a reading naming none"
+        );
+
+        let mut state = fresh();
+        let entry = written(&mut state, Some(R), R - 30 * MINUTE);
+        assert!(
+            !state.slow_down_stale("a", &entry, R - MINUTE),
+            "no reading, and its own reset lies ahead"
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, R + MINUTE),
+            "no reading, and its own reset passed"
+        );
+
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.0, None, R - HOUR_MS);
+        let entry = written(&mut state, None, R - 30 * MINUTE);
+        assert!(
+            !state.slow_down_stale("a", &entry, R + MINUTE),
+            "neither the reading nor the entry names a reset"
+        );
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "a realized speed is positive and finite")]
@@ -4766,6 +5207,8 @@ mod tests {
             stretch_ms: 0,
             threshold_ms: 1_800_000,
             factor: 1.0,
+            ramp: 1.0,
+            ramped: 1.0,
             speed: 1.0,
             plan: Vec::new(),
             realized: 1.0,

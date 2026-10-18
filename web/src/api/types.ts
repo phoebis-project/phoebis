@@ -633,7 +633,7 @@ export interface CohortHold {
   /** The holds' waits summed, in milliseconds, whether a slot freed or the bound ran out. */
   heldMs: number;
   waitedOn: string[];
-  /** Each wait with its reason (`cap`, `reset`, `slow_down`), oldest first, and none on a row from before the member. */
+  /** Each wait with its reason (`cap`, `reset`, `slow_down`, `rewrite`), oldest first, and none on a row from before the member. */
   waits: { heldMs: number; reason: string }[];
 }
 
@@ -1247,7 +1247,8 @@ export interface RecordCompletion {
 
 /**
  * A hold: `cap` waits for a slot, `reset` for the spent window's reset at `until`, `slow_down` for the pin's deadline at
- * `until`. The slow-down's figures are set under `slow_down` alone and read null on a record from before them.
+ * `until`, `rewrite` for the head of the request that carried a move, `waitsFor`, bounded at `until`. The slow-down's
+ * figures are set under `slow_down` alone and read null on a record from before them.
  */
 export interface RecordHold {
   accountId: string;
@@ -1255,7 +1256,7 @@ export interface RecordHold {
   cohort: string | null;
   /** The pin's cycle the hold was sized from. */
   cycleMs: number | null;
-  /** The account's factor the hold was read under. */
+  /** The factor the hold was sized from: the account's factor pulled toward 1 by the ramp, the shed line's `ramp`. */
   factor: number | null;
   reason: string;
   /** The speed the account's holds realize together. */
@@ -1263,6 +1264,8 @@ export interface RecordHold {
   stretchMs: number | null;
   thresholdMs: number | null;
   until: string | null;
+  /** The request whose head the hold waited for, under `rewrite`. */
+  waitsFor: string | null;
 }
 
 /**
@@ -1673,7 +1676,8 @@ export interface Session {
   /** When the companion last reported; set only while `companion` is `silent`. */
   companionSince: string | null;
   createdAt: string | null;
-  /** The pin's cycle, null until two requests of the pin have arrived after its placement and on a row with no pin. */
+  /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
+   *  burn average, and on a row with no pin. */
   cycleMs: number | null;
   epoch: number | null;
   /** True when the pin's burn priced through the model tier's fallback weight. */

@@ -76,7 +76,8 @@ find or walk is refused rather than sent on under the account's credential ([ref
 | Splice the account's uuid into `metadata.user_id` (`"account_uuid":"..."` inside the escaped string) | Bill the request to the selected account | Inference and probe (the `count_tokens` schema has no `metadata`) | OAuth only (an API key has no identity) | None |
 | Replace `model` with the folded spelling: the `[1m]` suffix removed, ASCII lowercased | The long-context marker is a client-side routing hint | All three | Both | None |
 | Restore the absent fields of the billing line at `system[0].text`: `cch=00000`, `cc_prev_req={id}` and `cc_prompt_id={id}`, each at its place in the client's own field order | Give a reduced-shape request the first-party fields, never rewriting a present one | Inference from a `claude-cli/` agent whose version the client itself would spell, when the line is there and `system` is an array | Both | None, but a field an account refused once is latched off for that account |
-| Insert the top-level `diagnostics` member before `stream` (else last), naming the previous message id on this account or `null` | Ask the upstream for cache diagnostics | Inference and probe, where the client sent cache markers and at least one tool and no `diagnostics` of its own | Both | The pool's `cache_diagnostics` |
+| Insert the top-level `diagnostics` member before `stream` (else last), naming the previous message id on this account or `null` | Ask the upstream for cache diagnostics, naming `null` on the first request after a move and on a probe | Inference and probe, where the client sent cache markers and at least one tool and no `diagnostics` of its own | Both | The pool's `cache_diagnostics` |
+| Set a present `diagnostics.previous_message_id` to `null` | Name no message the account cannot find | The first request a session sends to an account other than the one its previous request landed on (a move, a failover's leg or its landing, a pin released or passed over) and every probe | Both | None |
 | Rewrite every ephemeral `cache_control` marker to the policy's TTL (`1h` writes `"ttl":"1h"` after `"type":"ephemeral"`, `5m` removes `ttl`), and under `inject_when_absent` add a top-level marker to a body with none, never on an auxiliary request | Apply the pool's cache TTL policy | Inference and probe | Both: the `metered` rules for an API-key account or an account in overage, else the `plan` rules, per model and per main or subagent branch | The pool's cache TTL policy ([Cache TTL](routing.md#cache-ttl)), off by default |
 | Re-sign the `cch=` hash over the edited bytes | Keep a client's own hash valid after the edits moved the bytes it covered | All three, where the client stamped a real hash, and a restored placeholder only under the switch | Both | `proxy.sign_cch_placeholder` in the bootstrap file, default `false`, for the restored placeholder alone |
 | Gzip the edited body, or send it as identity | The outbound coding | All three | Both | `proxy.upstream_gzip` in the bootstrap file: `auto` mirrors the client, `on` always gzip, `off` never |
@@ -468,6 +469,7 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 | The pre-commit hold | 30 seconds and 64 KiB | The client is waiting, and a longer hold buys no better verdict |
 | A retry in place | The pool's `retry_in_place_seconds`, 0 to 300, default 60 | The operator's bound on waiting out a throttle on the same account |
 | The slow-down's hold | The pool's `slow_down_hold_seconds`, 1 to 300, default 120 | Before the head, so the client's first-byte window covers it |
+| The wait for a moved pin's first head | The pool's `slow_down_hold_seconds` from the first request's dispatch, never past the request's deadline | Before the head, so the client's first-byte window covers it |
 
 A connect or handshake that times out counts as unsent, so the request is written once more on a fresh connection. A
 retry in place sleeps the throttle's delay on the same account, with the same credential, before any byte of the
@@ -476,12 +478,14 @@ deadline, which a retry or a sibling request of the pin rejoins, before the requ
 ([Slow-down](routing.md#slow-down)).
 
 Beneath these sit Claude Code's own waits. The client cuts a stream that has gone silent for 180 seconds with its
-watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The three
+watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The four
 relay waits that meet them differ. The head and idle guards sit above the client's window, so a dead upstream stream is
 the client's cut at 180 seconds, and the router's 600 seconds stand behind the client's window while the watchdog is on.
 A retry in place holds the head back for the throttle's delay, up to the pool's bound, so a bound above the client's
 first-byte window makes the client end the request and send it again. The slow-down's hold holds the head back too,
 served before any slot or reset wait and under its own bound, the pin's cycle times the slow-down up to
 `slow_down_hold_seconds`, whose default of 120 seconds leaves 60 of the window for the upstream's head and the
-pre-commit hold. The operator's choice is to keep each bound at or under the window, or to switch the watchdog off for a
-client whose requests may wait that long ([The client](client.md)).
+pre-commit hold. The wait for a moved pin's first head holds the head back too, under the same bound counted from the
+first request's dispatch and never past the request's own deadline, with the pool's `slow_down` on or off. The
+operator's choice is to keep each bound at or under the window, or to switch the watchdog off for a client whose
+requests may wait that long ([The client](client.md)).

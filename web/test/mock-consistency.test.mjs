@@ -1062,7 +1062,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const records = await decisionsOf(s);
     assert.ok(records.length > 20);
-    const seen = { exhausted: 0, held: 0, ranOut: 0, reset: 0, slowDown: 0 };
+    const seen = { exhausted: 0, held: 0, ranOut: 0, reset: 0, rewrite: 0, slowDown: 0 };
     for (const r of records) {
       const id = `${r.requestId}/${r.seq}`;
       const steps = r.walk.map((w) => w.step);
@@ -1081,6 +1081,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       // and no pick.
       if (r.outcome.hold?.reason === 'slow_down') {
         seen.slowDown += 1;
+        assert.deepEqual(
+          [r.pin?.found, steps.indexOf('move:shed') > steps.indexOf('pin'), steps.includes('partitions'), firstRung, steps.includes('pick'), steps[steps.length - 1]],
+          ['live', true, false, -1, false, 'reserve'],
+          walk,
+        );
+        continue;
+      }
+      // So does a moved pin's wait for the head of the request that carried the move.
+      if (r.outcome.hold?.reason === 'rewrite') {
+        seen.rewrite += 1;
         assert.deepEqual(
           [r.pin?.found, steps.indexOf('move:shed') > steps.indexOf('pin'), steps.includes('partitions'), firstRung, steps.includes('pick'), steps[steps.length - 1]],
           ['live', true, false, -1, false, 'reserve'],
@@ -1117,7 +1127,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         assert.equal(pick?.verdict, r.outcome.rung === null ? 'chosen' : undefined, walk);
       }
     }
-    assert.ok(seen.exhausted > 0 && seen.held > 0 && seen.ranOut > 0 && seen.reset > 0 && seen.slowDown > 0, JSON.stringify(seen));
+    assert.ok(seen.exhausted > 0 && seen.held > 0 && seen.ranOut > 0 && seen.reset > 0 && seen.rewrite > 0 && seen.slowDown > 0, JSON.stringify(seen));
     assert.ok(records.some((r) => r.requestId === 'req_51d0e2b8-7a0' && r.walk.some((w) => w.step === 'partitions')), 'the empty-eligible exhaustion walks the partitions');
   });
 
@@ -1598,6 +1608,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       [held.outcome.kind, held.outcome.hold.reason, held.outcome.hold.factor, held.outcome.hold.cycleMs, held.outcome.hold.until, held.pin.slowDownUntil, held.outcome.hold.boundMs],
       ['held', 'slow_down', 0.5, 42_000, until, until, 120_000],
     );
+    // The span that opened at 13:48 has stood past work's burn average by the held turn, so the hold applies the full
+    // factor, where the span's first read applies none of it.
+    const rampOf = (r) => r.walk.find((w) => w.step === 'move:shed')?.facts.find((f) => f.key === 'ramp')?.value;
+    assert.deepEqual([rampOf(held), rampOf(record('req_4f2a8d6e-b7a', 1))], [1, 0], "the slowed card's shed line reads the full ramp and the span's first read none");
     const renewal = record(row.id, 2);
     assert.deepEqual([renewal.outcome.kind, renewal.request.at, renewal.outcome.cohortHold], ['renewed', until, row.held], 'the renewal after the wait carries the hold the row names');
     const summaries = log.filter((x) => x.type === 'decision' && x.requestId === row.id).sort((x, y) => x.seq - y.seq);

@@ -874,15 +874,15 @@ interface StorySeed {
 
 /**
  * The routing log's hand-written requests: the story hour, the morning's shedding round and its move, nightly's
- * Fable-week round, the least-bad move onto nightly, the hold for nightly's reset, and studio's slowed sessions in work
- * with the round their stretch fires.
+ * Fable-week round, the least-bad move onto nightly and the wait for its head, the hold for nightly's reset, and
+ * studio's slowed sessions in work with the round their stretch fires.
  */
 export const STORY_IDS = new Set([
   'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2b9e4c7f-d36', 'req_2c7d9f15-b63', 'req_2e7c90a1-6d4',
   'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84',
   'req_4a9c3e7b-a27', 'req_4b0e9d17-c31',
   'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d1f8c3a-b27',
-  'req_5e2f7a19-b03',
+  'req_5d6f1b3a-e27', 'req_5e2f7a19-b03',
   'req_69e30548-32e', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
   'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
   'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
@@ -897,6 +897,8 @@ export const REJECTION_STORY_ID = 'req_7015b657-290';
 export const FORCED_MOVE_ID = 'req_5b2e8d47-c19';
 /** The conversation the least-bad move takes from the Overflow workspace to nightly. */
 const FORCED_SESSION_ID = 'a3e9c5d1-6b2f-4c8e-9d07-5f1a2b3c4d5e';
+/** The conversation's next request, held for the head of the least-bad move. */
+export const REWRITE_HELD_ID = 'req_5d6f1b3a-e27';
 /** The jobs request whose completion crossed research's daily budget. */
 export const BUDGET_CROSSING_ID = 'req_7c19e4a0-2f3';
 /**
@@ -1160,6 +1162,20 @@ function storyRequests(): RequestLog[] {
     // rewrite, so the move lands on the least bad one, and nightly's window is spent within the hour.
     { agentId: 'main', at: t(10, 52, 30), attempts: [{ accountId: 'overflow', at: t(10, 52, 30), ms: 14_000, status: 200 }], id: 'req_4e8b1d36-f72', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheRead: 612_000, cacheWrite5m: 24_000, input: 2_800, output: 1_900 } },
     { agentId: 'main', at: t(11, 1, 50), attempts: [{ accountId: 'nightly', at: t(11, 1, 50), ms: 21_000, status: 200 }], id: FORCED_MOVE_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: FORCED_SESSION_ID, usage: { cacheWrite1h: 640_000, input: 3_100, output: 2_400 } },
+    // The conversation's next request a second later waits on nightly for the move's head, which comes a second on,
+    // and then reads the prefix the move wrote.
+    {
+      agentId: 'main',
+      at: t(11, 1, 51),
+      attempts: [{ accountId: 'nightly', at: t(11, 1, 52), ms: 9_800, status: 200 }],
+      held: { cohort: null, heldMs: 1_000, waitedOn: ['nightly'], waits: [{ heldMs: 1_000, reason: 'rewrite' }] },
+      id: REWRITE_HELD_ID,
+      keyId: 'desktop',
+      model: 'claude-sonnet-5-5',
+      requestClass: 'main',
+      session: FORCED_SESSION_ID,
+      usage: { cacheRead: 643_100, cacheWrite1h: 1_900, input: 1_200, output: 1_050 },
+    },
     // A new conversation lands on nightly 40 s before its spent window resets, since primary is full. The 429 that
     // answers cools nightly to the reset, and the spent rule holds the request in place for it rather than move the
     // pin, so it renews on the fresh window.

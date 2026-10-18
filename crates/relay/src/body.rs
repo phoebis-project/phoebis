@@ -14,6 +14,8 @@ pub struct BodyEdits {
     pub cch_restamped: bool,
     pub restored: Vec<Injected>,
     pub cache_ttl_edited: bool,
+    /// A client-sent id was set to `null`, so a captured null can be told from one the client sent itself.
+    pub diagnostics_detached: bool,
 }
 
 /// What a body carrying no `cache_control` marker of its own does under a cache TTL policy.
@@ -43,6 +45,11 @@ pub struct NativeEdit<'a> {
     /// Whether a restored `cch=00000` is signed with this build's formula; off, the placeholder travels as the
     /// client's own unpatched paths send it.
     pub sign_placeholder: bool,
+    /// Sets a client-sent `diagnostics.previous_message_id` that names a message to `null`, on the first request a
+    /// session sends to an account other than the one its previous request landed on, whose named message only the
+    /// account it left can find, and on a probe, whose replayed member names a message older than the upstream keeps
+    /// from a chain's second probe on. Independent of `diagnostics`, since the client's member is the one that misses.
+    pub detach_diagnostics: bool,
 }
 
 /// What the edit does to the client's `safeguards` member under the pool's or key's auto-mode setting.
@@ -218,6 +225,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             restored.push(Injected::Diagnostics);
         }
     }
+    let diagnostics_detached = edit.detach_diagnostics && detach_diagnostics(body);
     let cache_ttl_edited = match edit.cache_ttl {
         Some(ttl) => set_cache_ttl(body, ttl, edit.markerless)?,
         None => false,
@@ -238,6 +246,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         cch_restamped,
         restored,
         cache_ttl_edited,
+        diagnostics_detached,
     })
 }
 
@@ -493,6 +502,20 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
     }
 }
 
+/// Sets a client-sent `diagnostics.previous_message_id` that names a message to `null`. A member already `null`, a
+/// `diagnostics` member without the id and an absent member name no message and are left as sent. Walked by the raw
+/// scanner the insert and the strip use, which answers the string value's span alone, so each left-alone case falls out
+/// of the one call with no second parse.
+fn detach_diagnostics(body: &mut Vec<u8>) -> bool {
+    match phoebis_cch::string_member_span(body, &["diagnostics", "previous_message_id"]) {
+        Some((start, end)) => {
+            body.splice(start..end, b"null".iter().copied());
+            true
+        }
+        None => false,
+    }
+}
+
 /// Whether the hash the client stamped differs from the one this build computes over the body as received.
 /// A body that stamped no hash has nothing to protect and never drifts, and the client's placeholder is no hash
 /// to check while it is the line's only `cch=`. A stamp the router cannot verify never travels under an account's
@@ -635,6 +658,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 safeguards: SafeguardsEdit::Keep,
                 sign_placeholder: false,
+                detach_diagnostics: false,
             },
         )
         .expect("a JSON object is editable");
@@ -659,6 +683,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     safeguards: SafeguardsEdit::Keep,
                     sign_placeholder: false,
+                    detach_diagnostics: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -680,6 +705,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     safeguards: SafeguardsEdit::Keep,
                     sign_placeholder: false,
+                    detach_diagnostics: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -700,6 +726,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     safeguards: SafeguardsEdit::Keep,
                     sign_placeholder: false,
+                    detach_diagnostics: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -720,6 +747,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 safeguards: SafeguardsEdit::Keep,
                 sign_placeholder: false,
+                detach_diagnostics: false,
             },
         )
         .expect("an api-key account never carried an identity");
@@ -740,6 +768,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 safeguards: SafeguardsEdit::Keep,
                 sign_placeholder: false,
+                detach_diagnostics: false,
             },
         )
         .expect("a JSON object is editable");
@@ -765,6 +794,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     safeguards: SafeguardsEdit::Keep,
                     sign_placeholder: false,
+                    detach_diagnostics: false,
                 },
             ),
             Err(RelayError::NotAnObject)
@@ -793,6 +823,100 @@ mod tests {
             body, br#"{"model":"m""#,
             "left untouched rather than guessed at"
         );
+    }
+
+    #[test]
+    fn detach_diagnostics_sets_a_named_id_to_null() {
+        let mut body = br#"{"diagnostics":{"previous_message_id":"msg_1"},"stream":true}"#.to_vec();
+        assert!(detach_diagnostics(&mut body));
+        assert_eq!(
+            body,
+            br#"{"diagnostics":{"previous_message_id":null},"stream":true}"#
+        );
+    }
+
+    #[test]
+    fn detach_diagnostics_leaves_a_null_id_as_sent() {
+        let sent = br#"{"diagnostics":{"previous_message_id":null},"stream":true}"#;
+        let mut body = sent.to_vec();
+        assert!(!detach_diagnostics(&mut body));
+        assert_eq!(body, sent);
+    }
+
+    #[test]
+    fn detach_diagnostics_leaves_an_absent_member_as_sent() {
+        let sent = br#"{"model":"m","stream":true}"#;
+        let mut body = sent.to_vec();
+        assert!(!detach_diagnostics(&mut body));
+        assert_eq!(body, sent);
+    }
+
+    #[test]
+    fn detach_diagnostics_leaves_a_member_without_the_id_as_sent() {
+        let sent = br#"{"diagnostics":{}}"#;
+        let mut body = sent.to_vec();
+        assert!(!detach_diagnostics(&mut body));
+        assert_eq!(body, sent);
+    }
+
+    /// The recorded first-party body with its own member naming `previous`, signed as the client signs it.
+    fn client_hashed_naming(previous: Option<&str>) -> Vec<u8> {
+        let mut body = fixture_body(BodyFixture::FirstParty9b244).to_vec();
+        phoebis_cch::remove_top_level_member(&mut body, "diagnostics")
+            .expect("the fixture carries the client's own member");
+        assert!(insert_diagnostics(&mut body, previous));
+        phoebis_cch::sign(&body).unwrap()
+    }
+
+    #[test]
+    fn edit_body_detaches_and_re_signs_a_client_hashed_body() {
+        let mut body = client_hashed_naming(Some("msg_1"));
+        let edits = edit_body(
+            &mut body,
+            &NativeEdit {
+                detach_diagnostics: true,
+                ..drop_edit(SafeguardsEdit::Keep)
+            },
+        )
+        .expect("a signed body is editable");
+        assert!(edits.diagnostics_detached);
+        let root: serde_json::Value =
+            serde_json::from_slice(&body).expect("the edited body parses");
+        assert!(
+            root["diagnostics"]["previous_message_id"].is_null(),
+            "the id reads null: {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert_eq!(
+            phoebis_cch::sign(&body).unwrap(),
+            body,
+            "the stamp covers the null"
+        );
+    }
+
+    #[test]
+    fn edit_body_with_the_flag_over_a_null_id_matches_the_call_without_it() {
+        let sent = client_hashed_naming(None);
+        let mut flagged = sent.clone();
+        let with_flag = edit_body(
+            &mut flagged,
+            &NativeEdit {
+                detach_diagnostics: true,
+                ..drop_edit(SafeguardsEdit::Keep)
+            },
+        )
+        .expect("a signed body is editable");
+        let mut plain = sent;
+        let without_flag = edit_body(
+            &mut plain,
+            &NativeEdit {
+                detach_diagnostics: false,
+                ..drop_edit(SafeguardsEdit::Keep)
+            },
+        )
+        .expect("a signed body is editable");
+        assert!(!with_flag.diagnostics_detached && !without_flag.diagnostics_detached);
+        assert_eq!(flagged, plain, "a null id names no message to detach");
     }
 
     #[test]
@@ -1056,6 +1180,7 @@ mod tests {
             markerless: Markerless::TakesTheMember,
             safeguards,
             sign_placeholder: false,
+            detach_diagnostics: false,
         }
     }
 

@@ -540,7 +540,7 @@ const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str
 const holdOf = (v: unknown): RecordHold | null =>
   orNull(v, (h) => ({
     accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort), cycleMs: numOrNull(h.cycle_ms), factor: numOrNull(h.factor), reason: str(h.reason, 'cap'), speed: numOrNull(h.speed),
-    stretchMs: numOrNull(h.stretch_ms), thresholdMs: numOrNull(h.threshold_ms), until: isoOrNull(h.until),
+    stretchMs: numOrNull(h.stretch_ms), thresholdMs: numOrNull(h.threshold_ms), until: isoOrNull(h.until), waitsFor: strOrNull(h.waits_for),
   }));
 /** Both shapes the router writes read through one object, the other shape's members null. */
 const causeOf = (v: unknown): MoveCause | null => orNull(v, (c) => ({ cause: strOrNull(c.cause), reason: strOrNull(c.reason), scope: strOrNull(c.scope), state: strOrNull(c.state), window: strOrNull(c.window) }));

@@ -6,7 +6,7 @@ import { endOf } from '@/lib/quota';
 import { ACCOUNTS } from './accounts';
 import { leadOf } from './lead';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
@@ -91,8 +91,11 @@ interface Spec {
   from?: string;
   /** The holds before this attempt's placement, summed as the placement's row names them. */
   heldBefore?: CohortHold;
-  /** A hold for a slot names its place, and one for a spent window's reset the reset it waits for. */
-  hold?: { cohort: string | null; place: 'cohort' | 'reset' | 'session_pin' | 'slow_down' | 'strategy_pick'; until?: number };
+  /**
+   * A hold for a slot names its place, one for a spent window's reset the reset it waits for, and one for a rewrite in
+   * flight the request whose head it waits for.
+   */
+  hold?: { cohort: string | null; place: 'cohort' | 'reset' | 'rewrite' | 'session_pin' | 'slow_down' | 'strategy_pick'; until?: number; waitsFor?: string };
   /** The holds the request waited through before this decision, each with the attempt that waited. */
   holds?: RecordRequest['holds'];
   /** The slots the story fills where a hold reads every member at its cap. */
@@ -425,6 +428,9 @@ function slowFactsOf(source: RecordCandidate | undefined, pool: PoolSeed, at: nu
     fact('stretch_ms', read.stretchMs, 'ms'),
     fact('threshold_ms', pool.slowDownStretchSeconds * 1_000, 'ms'),
     fact('factor', read.factor),
+    // The engine's share of the factor the holds apply: the time since the span's first read under 1 over the pool's
+    // burn average.
+    fact('ramp', rampAt(source.accountId, pool, at), 'percent'),
     fact('speed', read.speed),
     fact('demand_five_hour', source.windows.five_hour?.demand ?? 0, 'percent_per_hour'),
     ...(read.overSince === null ? [] : [fact('over_since', read.overSince, 'time')]),
@@ -434,6 +440,18 @@ function slowFactsOf(source: RecordCandidate | undefined, pool: PoolSeed, at: nu
 /** The account's slow-down read standing at `at`: none on a pool with the switch off or for an account it never slowed. */
 const slowReadAt = (accountId: string, pool: PoolSeed, at: number): SlowRead | null =>
   pool.slowDown ? (SLOW_READS.filter((x) => x.accountId === accountId && x.poolId === pool.id && x.from <= at).pop()?.read ?? null) : null;
+
+/**
+ * The ramp standing at `at`, 0 at a factor of 1 and capped at 1. A read at 1 or the purge ends the span, so the next
+ * read under 1 starts the ramp afresh, as the engine's stamp does. No story read stands at or past the ceiling, where
+ * the engine's ramp reads 1 at once, and no span under 1 crosses a reset, where the engine drops the stamp, so the
+ * helper reads neither case.
+ */
+function rampAt(accountId: string, pool: PoolSeed, at: number): number {
+  let since: number | null = null;
+  for (const x of SLOW_READS) if (x.accountId === accountId && x.poolId === pool.id && x.from <= at) since = x.read === null || x.read.factor >= 1 ? null : (since ?? x.from);
+  return since === null ? 0 : round3(Math.min(1, (at - since) / (pool.burnAverageSeconds * 1_000)));
+}
 
 /** Every pool member's standing at the decision's time, eligible or not. */
 function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
@@ -1044,8 +1062,10 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const resetHold = spec.kind === 'held' && spec.hold?.place === 'reset';
   // A slow-down hold waits on the pin the move rules left in place, before its renewal, so it reads no placement either.
   const slowHold = spec.kind === 'held' && spec.hold?.place === 'slow_down';
+  // So does a moved pin's wait for the head of the request that carried the move.
+  const rewriteHold = spec.kind === 'held' && spec.hold?.place === 'rewrite';
   if (spec.kind === 'placed' || spec.kind === 'moved') capTheRivals(spec, candidates, pool);
-  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold) readPlacementFits(spec, candidates, pool);
+  if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold && !rewriteHold) readPlacementFits(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
   const pinning = pool.affinityTtlSeconds > 0 && r.sessionId !== null && (typeof spec.pin === 'object' || spec.pin === 'none');
@@ -1095,7 +1115,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   // count follows its pin, since it writes none a move could leave, and a pin past its account's end is released at
   // renewal instead.
   let movedAmong: string[] | undefined;
-  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || resetHold || slowHold)) {
+  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || resetHold || slowHold || rewriteHold)) {
     const source = member(pin.accountId);
     const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
     const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
@@ -1130,7 +1150,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   }
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
   let tierSize = 0;
-  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold;
+  const placing = (spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold && !rewriteHold;
   if (placing) {
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r, movedAmong !== undefined);
@@ -1167,7 +1187,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
       walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.join('/')), ...scores]));
     }
   }
-  if (spec.kind === 'held' && spec.hold && !resetHold && !slowHold) {
+  if (spec.kind === 'held' && spec.hold && !resetHold && !slowHold && !rewriteHold) {
     walk.push(step('hold', 'held', [fact('place', spec.hold.place), fact('account_id', spec.accountId, null, spec.accountId), fact('bound_ms', pool.retryInPlaceSeconds * 1_000, 'ms')]));
   }
   const exhaustion = spec.kind === 'exhausted' ? (spec.exhaustion ?? exhaustionOf(candidates)) : null;
@@ -1227,21 +1247,24 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
         status: attempt?.upstreamStatus ?? null,
       }
     : null;
-  // A slow-down hold copies the read it was answered from, its bound the pool's longest wait for the slow-down.
+  // A slow-down hold copies the read it was answered from, its bound the pool's longest wait for the slow-down, which
+  // bounds a wait for a rewrite in flight too.
   const slowed = slowHold ? slowReadAt(spec.accountId ?? '', pool, spec.at) : null;
   const hold =
     spec.kind === 'held' && spec.hold
       ? {
           accountId: spec.accountId ?? '',
-          boundMs: (slowHold ? pool.slowDownHoldSeconds : pool.retryInPlaceSeconds) * 1_000,
+          boundMs: (slowHold || rewriteHold ? pool.slowDownHoldSeconds : pool.retryInPlaceSeconds) * 1_000,
           cohort: spec.hold.cohort,
           cycleMs: slowHold ? (spec.pinPace?.cycleMs ?? null) : null,
-          factor: slowed?.factor ?? null,
-          reason: resetHold ? 'reset' : slowHold ? 'slow_down' : 'cap',
+          // The factor the hold was sized from: the read's, pulled toward 1 by the ramp.
+          factor: slowed ? 1 - (1 - slowed.factor) * rampAt(spec.accountId ?? '', pool, spec.at) : null,
+          reason: resetHold ? 'reset' : slowHold ? 'slow_down' : rewriteHold ? 'rewrite' : 'cap',
           speed: slowed?.speed ?? null,
           stretchMs: slowed?.stretchMs ?? null,
           thresholdMs: slowed ? pool.slowDownStretchSeconds * 1_000 : null,
-          until: (resetHold || slowHold) && spec.hold.until !== undefined ? iso(spec.hold.until) : null,
+          until: (resetHold || slowHold || rewriteHold) && spec.hold.until !== undefined ? iso(spec.hold.until) : null,
+          waitsFor: spec.hold.waitsFor ?? null,
         }
       : null;
   // The decision that lands a failover's session on a pin names the cooldown that failed it over.
@@ -1390,10 +1413,10 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
   };
   switch (spec.kind) {
     case 'renewed': {
-      // The wait explains the renewal more than the pin's idle age does: the row names the slow-down it followed and
-      // how long it lasted.
-      const slowWait = spec.heldBefore?.waits.find((w) => w.reason === 'slow_down');
-      if (slowWait) return { by: by('hold', 'slow_down'), fact: [summaryFact('held', slowWait.heldMs, 'ms')] };
+      // The wait explains the renewal more than the pin's idle age does: the row names the slow-down or the rewrite in
+      // flight it followed and how long it lasted.
+      const heldWait = spec.heldBefore?.waits.find((w) => w.reason === 'slow_down' || w.reason === 'rewrite');
+      if (heldWait) return { by: by('hold', heldWait.reason), fact: [summaryFact('held', heldWait.heldMs, 'ms')] };
       if (r.kind === 'probe') return { by: by('none', ''), fact: [summaryFact('epoch', record.pin?.epoch ?? 0, 'count')] };
       if (record.pin?.warmth === 'cold') return { by: by('none', ''), fact: [summaryFact('cause', record.pin.warmthCause ?? '', 'text')] };
       // The first window, in the trigger's order, whose projection at its horizon reaches the ceiling names its reading.
@@ -1415,7 +1438,7 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
       if (spec.heldBefore) {
         const { waits } = spec.heldBefore;
         const reason = waits[waits.length - 1]?.reason;
-        const place = reason === 'slow_down' || reason === 'reset' ? reason : spec.heldBefore.cohort ? 'cohort' : 'strategy_pick';
+        const place = reason === 'slow_down' || reason === 'reset' || reason === 'rewrite' ? reason : spec.heldBefore.cohort ? 'cohort' : 'strategy_pick';
         return { by: by('hold', place), fact: [summaryFact('held', spec.heldBefore.heldMs, 'ms')] };
       }
       return { by: record.outcome.rung ? by('rung', record.outcome.rung.rung) : by('strategy', pool.strategy, record.outcome.tier), fact: placementFact() };
@@ -1425,8 +1448,9 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
         const factor = record.outcome.hold.factor;
         return { by: by('hold', 'slow_down'), fact: [summaryFact('until', Date.parse(record.outcome.hold.until), 'time'), ...(factor === null ? [] : [{ entity: null, key: 'factor', unit: null, value: factor }])] };
       }
-      // A wait for a reset names its end, since no slot and no pick explain it.
+      // A wait for a reset names its end, since no slot and no pick explain it, and so does a wait for a rewrite in flight.
       if (spec.hold?.place === 'reset' && spec.hold.until !== undefined) return { by: by('hold', 'reset'), fact: [summaryFact('until', spec.hold.until, 'time')] };
+      if (spec.hold?.place === 'rewrite' && spec.hold.until !== undefined) return { by: by('hold', 'rewrite'), fact: [summaryFact('until', spec.hold.until, 'time')] };
       return { by: by('hold', spec.hold?.place ?? 'strategy_pick'), fact: inFlight() };
     case 'exhausted': {
       const x = record.outcome.exhaustion;
@@ -1609,12 +1633,18 @@ function storySpecs(): Spec[] {
   const studioAt = (when: number, utilization: number) => ({ studio: oauthWindows('studio', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization } : w)) });
   // Nightly's Fable week where the morning's Fable session runs it ahead of the walk back's even climb.
   const nightlyAt = (when: number, utilization: number) => ({ nightly: oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '7d_fable' ? { ...w, utilization } : w)) });
-  // A pin's cycle after one more gap, the time-weighted average over the work pool's burn average.
+  // A pin's pace after one more gap. A gap at or over the work pool's burn average is a pause that folds nothing, and
+  // any other moves the cycle toward the gap by one over the number of gaps folded with it, capped at eight, so the
+  // cycle reads about the mean of the pin's last eight gaps.
   const averageMs = poolById.get('work')!.burnAverageSeconds * 1_000;
-  const foldCycle = (cycleMs: number, gapMs: number) => {
-    const w = Math.exp(-gapMs / averageMs);
-    return Math.round(cycleMs * w + gapMs * (1 - w));
+  const foldCycle = (pace: { cycleMs: number; gaps: number }, gapMs: number) => {
+    if (gapMs >= averageMs) return pace;
+    const gaps = Math.min(pace.gaps + 1, 8);
+    return { cycleMs: Math.round(pace.cycleMs + (gapMs - pace.cycleMs) / gaps), gaps };
   };
+  // Studio's morning pin holds one gap at 10:12:36, from its turn of 10:11:36 to 10:12: the placement before it and
+  // the renewal that carries the hold fold nothing.
+  const morningPace = { cycleMs: 24_000, gaps: 1 };
   return [
     // Two of the round's sessions placed on secondary just before it. Every pin a beat renews or moves is a request's.
     at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
@@ -1709,6 +1739,18 @@ function storySpecs(): Spec[] {
       pinFigures: { burn: { five_hour: 0.21, seven_day: 0.025 }, tokens: 640_000 },
       rule: 'return_to_plan',
     }),
+    // The conversation's next request a second later finds the move's head still out, so it waits on nightly for that
+    // head rather than write the 640k-token prefix a second time, bounded by the pool's hold cap from the move, and
+    // renews a second later, when the head comes.
+    at(REWRITE_HELD_ID, 1, 1, t(11, 1, 51), 'held', 'nightly', {
+      hold: { cohort: null, place: 'rewrite', until: t(11, 3, 50), waitsFor: FORCED_MOVE_ID },
+      pin: live('continues_pin', 1_000),
+    }),
+    at(REWRITE_HELD_ID, 2, 1, t(11, 1, 52), 'renewed', 'nightly', {
+      heldBefore: { cohort: null, heldMs: 1_000, waitedOn: ['nightly'], waits: [{ heldMs: 1_000, reason: 'rewrite' }] },
+      holds: [{ accountId: 'nightly', attempt: 1, cohort: null, heldMs: 1_000, ranOut: false }],
+      pin: live('continues_pin', 2_000),
+    }),
     // A new conversation lands on nightly with primary full, and nightly's spent window answers 429 40 s before it
     // resets: the reselect finds the pin on a spent account whose reset falls inside the retry bound, so the spent
     // rule holds the request there for the reset, and it renews on the fresh window.
@@ -1756,7 +1798,8 @@ function storySpecs(): Spec[] {
     // The morning session's first turn after its placement sets its pin's dispatch, and the next one, 24 s later,
     // gives the pin its cycle: at 0.40 it waits 36 s, and the renewal after the wait reads 0.35 and runs no round,
     // since the stretch reads under the threshold. Its turns after the reset read 1, and the second, past the wait,
-    // ends the span. Each turn after the hold folds its gap into the cycle over the pool's burn average.
+    // ends the span. The first turn after the hold comes past the pool's burn average, a pause that folds nothing, and
+    // the next folds its gap into the cycle.
     at('req_3d7b9e2f-a41', 1, 1, t(10, 11), 'placed', 'studio'),
     at('req_2b9e4c7f-d36', 1, 1, t(10, 11, 36), 'renewed', 'studio', { pin: live('continues_pin', 36_000) }),
     at('req_8e1c4a6d-b52', 1, 1, t(10, 12), 'held', 'studio', {
@@ -1771,10 +1814,10 @@ function storySpecs(): Spec[] {
       pin: live('continues_pin', 60_000),
       pinPace: { cycleMs: 24_000, slowDownUntil: t(10, 12, 36) },
     }),
-    at('req_f6a1d3e8-e47', 1, 1, t(10, 38, 20), 'renewed', 'studio', { pin: live('continues_pin', 1_544_000), pinPace: { cycleMs: foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), slowDownUntil: null } }),
+    at('req_f6a1d3e8-e47', 1, 1, t(10, 38, 20), 'renewed', 'studio', { pin: live('continues_pin', 1_544_000), pinPace: { cycleMs: foldCycle(morningPace, t(10, 38, 20) - t(10, 12, 36)).cycleMs, slowDownUntil: null } }),
     at('req_8d4b7f2c-f58', 1, 1, t(10, 40, 36), 'renewed', 'studio', {
       pin: live('continues_pin', 136_000),
-      pinPace: { cycleMs: foldCycle(foldCycle(24_000, t(10, 38, 20) - t(10, 12, 36)), t(10, 40, 36) - t(10, 38, 20)), slowDownUntil: null },
+      pinPace: { cycleMs: foldCycle(foldCycle(morningPace, t(10, 38, 20) - t(10, 12, 36)), t(10, 40, 36) - t(10, 38, 20)).cycleMs, slowDownUntil: null },
     }),
     // Studio's open span: a session placed at 13:47:24 opens it at its first turn after the placement, under the
     // threshold at 0.73, and the sessions placed after it are the round's other four pins.

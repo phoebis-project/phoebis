@@ -43,6 +43,7 @@ use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead}
 use phoebis_transport::TransportError;
 use serde_json::json;
 use tokio::io::AsyncRead;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -105,6 +106,8 @@ enum Waited {
     Cleared,
     /// The request's deadline came before the backoff cleared.
     Deadline,
+    /// The request the wait was for answered or ended before its bound.
+    Head,
 }
 
 /// Upstream response headers the relay keeps to itself: the connection and framing ones describe the upstream
@@ -252,6 +255,7 @@ pub struct Relay {
     #[cfg(feature = "debug-hooks")]
     pub(crate) decoders_built: Arc<std::sync::atomic::AtomicU64>,
     drift: DriftGuard,
+    heads: Arc<Heads>,
     pub(crate) limits: Limits,
     manager: Arc<CredentialManager>,
     memory: Arc<SessionMemory>,
@@ -323,6 +327,7 @@ impl Relay {
             #[cfg(feature = "debug-hooks")]
             decoders_built: Arc::default(),
             drift: DriftGuard,
+            heads: Arc::new(Mutex::new(HashMap::new())),
             limits,
             manager,
             memory: Arc::new(SessionMemory::new(MEMORY_CAP, MEMORY_IDLE_MS)),
@@ -344,6 +349,12 @@ impl Relay {
 
     pub(crate) fn router(&self) -> &RouterHandle {
         &self.router
+    }
+
+    /// The live requests the head map holds an entry for, so a test can tell that none outlives its request.
+    #[cfg(feature = "debug-hooks")]
+    pub fn heads_pending(&self) -> usize {
+        self.heads.lock().expect(HEADS_POISONED).len()
     }
 
     /// A decoder for the relay's own read of a response body: the hold's inspection copy or the bus copy.
@@ -1906,6 +1917,11 @@ impl Relay {
         // attempt that follows names the wait on its trace.
         let mut holds: Vec<HoldFacts> = Vec::new();
         let mut attempt: u8 = 0;
+        // The request's head entry, registered before its first selection is enqueued so a request a mark names
+        // always has one while it lives, and removed when this scope ends, whichever way the request ends. A count
+        // carries no mark, so it registers none.
+        let _head_entry = (trace.kind != Kind::CountTokens)
+            .then(|| HeadEntry::registered(self.heads.clone(), &trace.request_id));
         // The request's end report, armed before its first selection is enqueued so a request dropped while the
         // selection waits still releases what it booked. A count and a probe book nothing, so neither arms one.
         let mut end_guard = (trace.kind == Kind::Inference).then(|| {
@@ -2091,10 +2107,45 @@ impl Relay {
                     if hold.reason == "slow_down" {
                         let started = tokio::time::Instant::now();
                         let waited = self
-                            .wait_out(hold.until.unwrap_or(now), admitted.deadline, &answer.cancel)
+                            .wait_out(
+                                hold.until.unwrap_or(now),
+                                admitted.deadline,
+                                &answer.cancel,
+                                None,
+                            )
                             .await;
                         hold.held_ms = started.elapsed().as_millis() as u64;
                         hold.ran_out = matches!(waited, Waited::Deadline);
+                        holds.push(hold);
+                        trace.waited(&holds);
+                        continue;
+                    }
+                    // A moved pin's request waits for the head of the request that carried the move, inside the
+                    // relay, which owns both streams: the waiter wakes at that request's final answer, past any retry
+                    // in place or replay, or when it ends without one, and never polls the routing. The hold is its
+                    // own stage, as the slow-down's is.
+                    if hold.reason == "rewrite" {
+                        let started = tokio::time::Instant::now();
+                        // No entry means the request it waits for ended before this selection, so there is no head
+                        // to wait for and the waiter goes out at once, as one the sender's drop woke does.
+                        let first = hold
+                            .waits_for
+                            .as_deref()
+                            .and_then(|first| head_of(&self.heads, first));
+                        let waited = match first {
+                            Some(mut head) => {
+                                self.wait_out(
+                                    hold.until.unwrap_or(now),
+                                    admitted.deadline,
+                                    &answer.cancel,
+                                    Some(&mut head),
+                                )
+                                .await
+                            }
+                            None => Waited::Head,
+                        };
+                        hold.held_ms = started.elapsed().as_millis() as u64;
+                        hold.ran_out = matches!(waited, Waited::Cleared | Waited::Deadline);
                         holds.push(hold);
                         trace.waited(&holds);
                         continue;
@@ -2136,7 +2187,7 @@ impl Relay {
                             .deadline
                             .map_or(hold_bound, |deadline| deadline.min(hold_bound));
                         let waited = self
-                            .wait_out(hold.until.unwrap_or(now), Some(end), &answer.cancel)
+                            .wait_out(hold.until.unwrap_or(now), Some(end), &answer.cancel, None)
                             .await;
                         hold.held_ms = started.elapsed().as_millis() as u64;
                         hold.ran_out = matches!(waited, Waited::Deadline);
@@ -2493,10 +2544,20 @@ impl Relay {
                     incarnation_of: &no_incarnation,
                 })
             };
+            // The first request a session sends to an account other than the one its previous request landed on
+            // names a message only the account it left can find. A probe replays its recipe's member, which from a
+            // chain's second probe on names a message older than the upstream keeps, and the keepalive reads the
+            // cache tokens rather than the reason, so no probe names one. Read from the selection, so the relay keeps
+            // no memory of the session's last account, and whatever the pool's switch reads, since the client's
+            // member is the one that misses.
+            let detach = selection.left.is_some() || admitted.trace.kind == Kind::Probe;
             let named: Option<Option<String>> = (admitted.diagnostics
                 && !skip.contains(&Injected::Diagnostics)
                 && !admitted.client_diagnostics)
                 .then(|| {
+                    if detach {
+                        return None;
+                    }
                     own_root
                         .and_then(predecessor_under)
                         .or_else(|| {
@@ -2525,8 +2586,16 @@ impl Relay {
                         SafeguardsEdit::Drop
                     },
                     sign_placeholder: self.sign_cch_placeholder,
+                    detach_diagnostics: detach,
                 },
             )?;
+            if edits.diagnostics_detached {
+                tracing::debug!(
+                    account = %account.id,
+                    re_signed = edits.cch_restamped,
+                    "set the client's previous message id to null"
+                );
+            }
             if !claims_its_ttl(&edits) {
                 ttl = None;
             }
@@ -2576,6 +2645,18 @@ impl Relay {
         let mut retried_in_place = false;
         let mut replayed = false;
         let mut stripped_once = false;
+        // Built before the pass loop, so every pass of the leg shares it and a pass that continues drops nothing, with
+        // the attempt the selection wrote the landing's mark under. A count carries no mark.
+        let mut leg_head = (admitted.trace.kind != Kind::CountTokens).then(|| HeadGuard {
+            bodies: self.bodies.clone(),
+            clock: self.clock.clone(),
+            heads: self.heads.clone(),
+            router: self.router.clone(),
+            request_id: admitted.request_id.to_string(),
+            attempt: u32::from(*attempt) + 1,
+            sent: false,
+            goes_on: false,
+        });
 
         loop {
             // The wire-submission index is a u8 on the bus and the attempt row, so 255 submissions per request
@@ -2698,6 +2779,7 @@ impl Relay {
                 fast: admitted.fast,
                 floor_held: &admitted.floor_held,
                 fresh_pin: selection.pin.is_some() && !selection.trace.renewed,
+                head: &mut leg_head,
                 identity: admitted.identity,
                 injected: &injected,
                 key: admitted.key,
@@ -2818,8 +2900,21 @@ impl Relay {
                     replayed = true;
                     fresh = false;
                 }
-                Next::FailOver { auth_marked } => return Leg::FailOver { auth_marked },
-                Next::Respond(response) => return Leg::Respond(response),
+                Next::FailOver { auth_marked } => {
+                    // The next leg's landing writes a mark of its own, which that leg's answer clears.
+                    if let Some(leg_head) = leg_head.as_mut() {
+                        leg_head.goes_on();
+                    }
+                    return Leg::FailOver { auth_marked };
+                }
+                // The leg answers the client with this pass, so no later head comes on it. A pass the leg retries in
+                // place, replays or strips signals nothing, since the next pass answers for the leg.
+                Next::Respond(response) => {
+                    if let Some(leg_head) = leg_head.as_mut() {
+                        leg_head.arrived((self.clock)());
+                    }
+                    return Leg::Respond(response);
+                }
                 // The same account and the same credential once the throttle has passed.
                 Next::RetryInPlace(delay) => {
                     if until_cancelled(tokio::time::sleep(delay), cancel)
@@ -3011,6 +3106,12 @@ impl Relay {
         }
         // The commit's own arrival time: a held stream may have taken most of the hold timeout to commit.
         let arrived = (self.clock)();
+        // A stream that commits on `message_start` is the leg's final answer: the upstream writes the cache from here.
+        if let (Some(leg_head), Some(Commit::MessageStart(_))) =
+            (ctx.head.as_mut(), held.as_ref().map(|h| &h.commit))
+        {
+            leg_head.arrived(arrived);
+        }
         if !ctx.can_strip && head.status == 400 && latches(ctx.trace) {
             // This leg cannot retry a strip, so the 400 is forwarded as it came; the account is still latched
             // against the item it named, a fact about the account whether or not this request could use it.
@@ -3150,8 +3251,11 @@ impl Relay {
                             if floor {
                                 ctx.floor_held.store(true, Ordering::Relaxed);
                             }
-                            match self.wait_out(backoff.until, ctx.deadline, ctx.cancel).await {
-                                Waited::Cleared => {}
+                            match self
+                                .wait_out(backoff.until, ctx.deadline, ctx.cancel, None)
+                                .await
+                            {
+                                Waited::Cleared | Waited::Head => {}
                                 // The loop head answers the exhaustion past the deadline; this account is done.
                                 Waited::Deadline => break (None, None, true),
                                 // The 401's head is this attempt's, published before the verdict.
@@ -3986,15 +4090,20 @@ impl Relay {
         .await
     }
 
-    /// Sleeps until the relay's clock reaches `until`, or `deadline` when that comes first. The clock is read again
-    /// after every `HOLD_TICK` rather than slept against once, so a clock a test steps is noticed within a tick and
-    /// production time passes as it does.
+    /// Sleeps until the relay's clock reaches `until`, or `deadline` when that comes first, or until `head` reads the
+    /// answer of the request it belongs to. The clock is read again after every `HOLD_TICK` rather than slept against
+    /// once, so a clock a test steps is noticed within a tick and production time passes as it does. `None` waits to
+    /// the bound: the receiver is one more wake source, never a precondition.
     async fn wait_out(
         &self,
         until: i64,
         deadline: Option<i64>,
         cancel: &CancellationToken,
+        mut head: Option<&mut watch::Receiver<bool>>,
     ) -> Waited {
+        if head.as_deref().is_some_and(|head| *head.borrow()) {
+            return Waited::Head;
+        }
         let end = deadline.map_or(until, |deadline| deadline.min(until));
         loop {
             let now = (self.clock)();
@@ -4006,10 +4115,16 @@ impl Relay {
                 };
             }
             let slice = HOLD_TICK.min(Duration::from_millis((end - now) as u64));
-            if until_cancelled(tokio::time::sleep(slice), cancel)
-                .await
-                .is_none()
-            {
+            let slept = match head.as_deref_mut() {
+                // Any change wakes the waiter: the value moves to `true` at a leg's final answer alone, and a dropped
+                // sender means the request ended.
+                Some(head) => tokio::select! {
+                    slept = until_cancelled(tokio::time::sleep(slice), cancel) => slept,
+                    _ = head.changed() => return Waited::Head,
+                },
+                None => until_cancelled(tokio::time::sleep(slice), cancel).await,
+            };
+            if slept.is_none() {
                 return Waited::Cancelled;
             }
         }
@@ -4513,6 +4628,8 @@ struct Responding<'a> {
     floor_held: &'a AtomicBool,
     /// Whether this selection created `pin` rather than renewing one that already served.
     fresh_pin: bool,
+    /// The leg's head report, which the pass that learns the leg's answer sends.
+    head: &'a mut Option<HeadGuard>,
     identity: &'a RequestIdentity,
     /// The attempt's own additions, body and head, that a 400 might name.
     injected: &'a [Injected],
@@ -4641,6 +4758,141 @@ fn body_tokens(raw: &[u8]) -> u64 {
 fn ending(guard: &mut Option<EndGuard>, cause: &'static str) {
     if let Some(guard) = guard {
         guard.cause = cause;
+    }
+}
+
+/// Every live inference request and probe by request id, `false` until a leg's answer is final and `true` from then
+/// (a `message_start` commit, or the pass that answers the client) or from the leg's guard's drop, while a leg that
+/// fails over leaves it `false` for the next leg, so a waiter held for a later attempt's mark waits for that leg's
+/// head. The admission registers the entry before the first selection is enqueued, so a request a mark names always has
+/// one while it lives, and the `HeadEntry` the request's scope owns removes it at every end of the request. A waiter
+/// that finds no entry or `true` goes out at once and creates nothing. Nothing here outlives its request.
+type Heads = Mutex<HashMap<String, watch::Sender<bool>>>;
+
+// A poisoned map means a prior panic happened mid-update, so an entry may not describe its request.
+const HEADS_POISONED: &str = "relay head map mutex poisoned by a prior panic";
+
+/// A waiter's view of the entry under `request_id`, `None` where that request has ended. Creates nothing.
+fn head_of(heads: &Heads, request_id: &str) -> Option<watch::Receiver<bool>> {
+    heads
+        .lock()
+        .expect(HEADS_POISONED)
+        .get(request_id)
+        .map(watch::Sender::subscribe)
+}
+
+/// One request's entry in `Heads`, registered at its admission and removed when the request's scope ends, the
+/// handler's return and its drop alike, which drops the sender and wakes every waiter still on it.
+struct HeadEntry {
+    heads: Arc<Heads>,
+    request_id: String,
+}
+
+impl HeadEntry {
+    fn registered(heads: Arc<Heads>, request_id: &str) -> HeadEntry {
+        heads
+            .lock()
+            .expect(HEADS_POISONED)
+            .entry(request_id.to_string())
+            .or_insert_with(|| watch::channel(false).0);
+        HeadEntry {
+            heads,
+            request_id: request_id.to_string(),
+        }
+    }
+}
+
+impl Drop for HeadEntry {
+    fn drop(&mut self) {
+        // A drop during a panic's unwind must not panic again, so a poisoned map is cleaned all the same.
+        self.heads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.request_id);
+    }
+}
+
+/// One per leg of a turn or a probe, shared by every pass of the leg. Reports `Head` once, at the leg's final answer: a
+/// `message_start` commit, or the pass whose answer goes to the client (the hold's other ends, a JSON answer, a head
+/// outside 200 to 299), setting the request's `Heads` entry `true` first. A head the leg retries in place, replays or
+/// strips answers nothing, since the next pass answers for the leg. Its `Drop` reports where the leg ended before
+/// either (a pre-head transport error, a cancel, any early return, a failover), so the routing mark clears on every end
+/// of the leg. A leg that hands the request to another leg leaves the entry `false`, so a waiter held for the next
+/// landing's mark waits for that leg's head.
+struct HeadGuard {
+    bodies: TaskTracker,
+    clock: Clock,
+    heads: Arc<Heads>,
+    router: RouterHandle,
+    request_id: String,
+    attempt: u32,
+    sent: bool,
+    goes_on: bool,
+}
+
+impl HeadGuard {
+    /// The leg's answer is final at `at`, and no later head comes on this leg. The waiters wake first and the routing
+    /// clears the mark second, so a woken request that selects again finds the mark cleared or carries its hold past a
+    /// standing one.
+    fn arrived(&mut self, at: i64) {
+        if self.sent {
+            return;
+        }
+        self.sent = true;
+        self.answered();
+        self.report(at);
+    }
+
+    /// The leg hands the request to another leg: the entry reads `false` until that leg's answer is final, and the
+    /// drop reports this leg's end without reading `true`.
+    fn goes_on(&mut self) {
+        self.goes_on = true;
+        if let Some(sender) = self
+            .heads
+            .lock()
+            .expect(HEADS_POISONED)
+            .get(&self.request_id)
+        {
+            sender.send_if_modified(|answered| std::mem::replace(answered, false));
+        }
+    }
+
+    fn answered(&self) {
+        if let Some(sender) = self
+            .heads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&self.request_id)
+        {
+            sender.send_replace(true);
+        }
+    }
+
+    fn report(&self, at: i64) {
+        let report = Report::Head {
+            request_id: self.request_id.clone(),
+            attempt: self.attempt,
+            at,
+        };
+        // A control fact takes a slot of its own, as the end report does.
+        if let Err(report) = self.router.try_report(report) {
+            let router = self.router.clone();
+            self.bodies.spawn(async move {
+                router.report(*report).await;
+            });
+        }
+    }
+}
+
+impl Drop for HeadGuard {
+    fn drop(&mut self) {
+        if self.sent {
+            return;
+        }
+        if !self.goes_on {
+            self.answered();
+        }
+        self.report((self.clock)());
     }
 }
 
@@ -5141,5 +5393,37 @@ mod tests {
             inflate_request(&whole[..whole.len() - 4], 1 << 20),
             Err(RelayError::BodyNotGzip)
         ));
+    }
+
+    /// A bare map holding one live request's entry under `r`, its answer still unknown.
+    fn heads_with_r() -> Heads {
+        Mutex::new(HashMap::from([(
+            "r".to_string(),
+            tokio::sync::watch::channel(false).0,
+        )]))
+    }
+
+    #[test]
+    fn a_subscriber_after_the_commit_reads_true_at_once() {
+        let heads = heads_with_r();
+        heads
+            .lock()
+            .unwrap()
+            .get("r")
+            .expect("the entry stands")
+            .send_replace(true);
+        let head = head_of(&heads, "r").expect("the entry stands until the request ends");
+        assert!(
+            *head.borrow(),
+            "a waiter that subscribes after the commit reads the head and goes out at once"
+        );
+    }
+
+    #[test]
+    fn a_subscriber_after_the_end_finds_no_entry_and_no_orphan() {
+        let heads = heads_with_r();
+        heads.lock().unwrap().remove("r");
+        assert!(head_of(&heads, "r").is_none(), "the request ended");
+        assert_eq!(heads.lock().unwrap().len(), 0, "the lookup creates nothing");
     }
 }

@@ -4954,7 +4954,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         migrate?.closest('.field')?.classList.contains('field--beside') === true &&
         hintOf('Load shedding', 'Shed cap (%)') === "The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this." &&
         hintOf('Windows', 'Burn average (s)') ===
-          "The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. Editable under the Custom preset in Load shedding." &&
+          "The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it. Editable under the Custom preset in Load shedding." &&
         hintOf('Load shedding', 'Shed dwell (s)') === 'The least time between two rounds on one member, and how long a moved session stays off it.' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('min') === '10' &&
         field('Load shedding', 'Shed cap (%)')?.getAttribute('max') === '100',
@@ -9184,12 +9184,14 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     });
   }
   {
-    // The story holds one request for the slow-down on studio and one for the reset, each with its one wait.
+    // The story holds one request for the slow-down on studio, one for the reset and one for the rewrite in flight, each
+    // with its one wait.
     const onlyWait = (reason) => requests.find((r) => r.held?.waits.length === 1 && r.held.waits[0].reason === reason);
     const read = [];
     for (const [reason, words] of [
       ['slow_down', 'for the slow-down'],
       ['reset', 'for the reset'],
+      ['rewrite', 'for the rewrite in flight'],
     ]) {
       const r = onlyWait(reason);
       const cell = r ? await attemptsCellOf(r.id) : null;
@@ -13646,6 +13648,23 @@ m.unmount();
           );
         },
         what: 'slowed request',
+      },
+      {
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['spent', 'no'], ['overage', 'no'], ['return to plan', 'no'], ['drain', 'no'], ['shed', 'no'], ['Renew', 'not run'], ['Reserve', 'none']],
+        id: 'req_5d6f1b3a-e27',
+        seq: 1,
+        terminus: ['held_rewrite', 'Held for the rewrite in flight', 'held'],
+        // The moved session's next request waits for the head of the request that carried the move, which its lead and
+        // its Hold row link, the row with the hold's bound.
+        own: (card) => {
+          const lead = [...(card?.querySelectorAll('.decision-card__sentence a') ?? [])].find((a) => a.textContent === 'req_5b2e8d47-c19');
+          return (
+            sentenceOf(card) === 'Held on [nightly] for the rewrite in flight of [req_5b2e8d47-c19] until 11:03' &&
+            lead?.getAttribute('href') === '/requests/req_5b2e8d47-c19' &&
+            JSON.stringify(outcomeOf(card).Hold) === JSON.stringify(['on nightly', 'for the rewrite in flight of', 'req_5b2e8d47-c19', 'until 11:03', 'bound 2 min'])
+          );
+        },
+        what: 'request held for the rewrite in flight',
       },
       {
         expected: RENEWAL_STATIONS,

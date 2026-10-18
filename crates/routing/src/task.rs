@@ -83,6 +83,13 @@ struct Invalidated {
 /// reset lands hours after the last.
 const RESET_SLACK_MS: i64 = 60_000;
 
+/// How far under 1.0 a reading may land over a stored reading at the wall and still read the wall. A poll reads the
+/// endpoint's whole percent and a head the utilization's float, so near a wall a head lands up to a point under the
+/// poll's figure (0.96 against 0.97, 0.99 after 1.0) and can sit a hair under that point too (0.989 where the poll
+/// read 1.0), which a one-point margin would read as a clear. Two points cover the head's point under the poll with
+/// one point of room. It is a constant, measured on live samples.
+pub const SPENT_MARGIN: f64 = 0.02;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RouterEvent {
     CooldownCleared {
@@ -233,9 +240,10 @@ pub enum RouterEvent {
         reset: Option<i64>,
         at: i64,
     },
-    /// The factor read 1 for the safety wait, or the purge dropped the entry: the span from `since` to the instant the
-    /// factor returned to 1 (or the entry's last read, where it never did), with the lowest factor read in it and the
-    /// time its new holds waited.
+    /// The factor read 1 for the safety wait, the window's reset cleared the entry, or the purge dropped it: the span
+    /// from `since` to the instant the factor returned to 1, to the passed reset of the window it slowed for where the
+    /// reset cleared the entry, or to the entry's last read where the purge dropped the entry before either, with the
+    /// lowest factor read in it and the time its new holds waited.
     SlowDownEnded {
         account_id: String,
         pool_id: String,
@@ -538,6 +546,14 @@ pub enum Report {
         at: i64,
         cause: &'static str,
     },
+    /// A leg's answer is known: its head came, the pre-commit hold ended without one, or the leg ended before
+    /// either. The mark the moved pin's next requests wait on clears where it names `request_id` at `attempt`. A
+    /// control fact, never coalesced.
+    Head {
+        request_id: String,
+        attempt: u32,
+        at: i64,
+    },
     /// The ledger's latest read of a pool member's spend, replacing every row it names.
     MemberSpend(Vec<MemberSpend>),
     Overage {
@@ -610,6 +626,7 @@ impl Report {
         "cooldown",
         "credits",
         "ended",
+        "head",
         "member_spend",
         "overage",
         "pin_invalidated",
@@ -629,6 +646,7 @@ impl Report {
             Report::Cooldown { .. } => "cooldown",
             Report::Credits { .. } => "credits",
             Report::Ended { .. } => "ended",
+            Report::Head { .. } => "head",
             Report::MemberSpend(_) => "member_spend",
             Report::Overage { .. } => "overage",
             Report::PinInvalidated { .. } => "pin_invalidated",
@@ -734,6 +752,7 @@ impl Report {
             Report::Affinity(_)
             | Report::Cooldown { .. }
             | Report::Ended { .. }
+            | Report::Head { .. }
             | Report::PinInvalidated { .. }
             | Report::PinReleased { .. }
             | Report::PinRenewed { .. }
@@ -1027,7 +1046,8 @@ pub struct AccountProjection {
     pub pace_score: f64,
     /// The slow-down entry in force for the account at the ask's instant, read through `slow_down_in_force`: `None`
     /// where the pool's switch is off, the account is an api_key one, an untiered one or one with no 5-hour reading,
-    /// or no pinned selection has read it since the last purge or restart.
+    /// the entry was read before its window's passed reset, or no pinned selection has read it since the last purge or
+    /// restart.
     pub slow_down: Option<AccountSlowDown>,
 }
 
@@ -1074,7 +1094,8 @@ pub struct PinStanding {
     pub binding: Option<String>,
     /// The account's factor from the slow-down entry in force, `None` without one.
     pub speed: Option<f64>,
-    /// The pin's cycle from its pace, `None` until two requests of the pin have arrived after its placement.
+    /// The pin's cycle from its pace, `None` until two requests of the pin after its placement have measured a gap
+    /// under the pool's burn average.
     pub cycle_ms: Option<f64>,
 }
 
@@ -1655,9 +1676,10 @@ struct Task {
     reset_announced: HashMap<(String, String), i64>,
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
-    /// The reset each account and window's predicted wall was announced for, `None` for a 5-hour window open past its
-    /// reset, beside the instant of the announcement: a charge or a booking announces a wall once per reset cycle, and
-    /// the sample that confirms it names that cycle's reset and announces nothing.
+    /// The reset each account and window's wall was announced for, `None` where the reading named no reset, as a
+    /// 5-hour window open past its reset does, beside the instant of the announcement: a charge, a booking or a sample
+    /// announces a wall once per reset cycle, and the sample that confirms it names that cycle's reset and announces
+    /// nothing.
     spent_announced: HashMap<(String, String), (Option<i64>, i64)>,
     state: RoutingState,
     store: Arc<Store>,
@@ -2498,16 +2520,16 @@ fn projections(
                 account_id: account_id.to_string(),
                 windows,
                 pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now).score,
-                slow_down: state.slow_down_in_force(pool, account_id).map(|entry| {
-                    AccountSlowDown {
+                slow_down: state
+                    .slow_down_in_force(pool, account_id, now)
+                    .map(|entry| AccountSlowDown {
                         factor: entry.factor,
                         speed: entry.speed,
                         since: entry.slowed_since,
                         stretch_ms: entry.stretch_ms,
                         threshold_ms: entry.threshold_ms,
                         hold_ms: slow_down_hold_ms(pool),
-                    }
-                }),
+                    }),
             }
         })
         .collect()
@@ -2546,7 +2568,7 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
                 Some((runway_ms, binding)) => (runway_ms, Some(runway_ms.is_some()), binding),
             };
             let speed = pool
-                .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id))
+                .and_then(|pool| state.slow_down_in_force(pool, &pin.account_id, now))
                 .map(|entry| entry.factor);
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             PinStanding {
@@ -3700,6 +3722,15 @@ impl Task {
                     agent_id: pin.agent_id.clone(),
                     model: pin.model.clone(),
                 };
+                // The request that created the pin has ended, so a mark its landing set waits for nothing: the
+                // backstop for a `Head` the closed mailbox refused.
+                if self
+                    .state
+                    .pin(&key)
+                    .is_some_and(|current| current.epoch == pin.epoch)
+                {
+                    self.state.clear_head_mark_of(&key);
+                }
                 // The epoch names the one pin the request created, and with it the account the generations are
                 // checked against; a pin replaced since is another placement's to keep. A pin some selection
                 // renewed after its placement is serving another turn of the session, so the error that ended
@@ -3757,6 +3788,12 @@ impl Task {
                     model: pin.model.clone(),
                 };
                 if let Some(current) = self.state.pin(&key).cloned() {
+                    // A request of the standing row reached its stream's end: a mark is set at a placement and a
+                    // placement takes a new epoch, so a renewal of the same epoch belongs to the marked row, and
+                    // clearing early only shortens a hold. The backstop for a `Head` the closed mailbox refused.
+                    if current.epoch == pin.epoch {
+                        self.state.clear_head_mark_of(&key);
+                    }
                     // A probe's renewal is the refresh of the cache it read, which is another cache once the session
                     // changed lanes while it was in flight. A client's renewal folds its own burn whatever lane
                     // the pin moved to since, so it is not held to the lane.
@@ -3844,22 +3881,23 @@ impl Task {
                 }
                 // The edges compare each plan window's stored reading with the one that replaces it, so the stored
                 // ones are read before the fold.
-                let stored: HashMap<&str, WindowReading> = sample
+                let stored: HashMap<String, WindowReading> = sample
                     .windows
                     .keys()
                     .filter(|window| is_plan_window(window))
                     .filter_map(|window| {
                         let reading = self.state.sample(&account_id)?.reading(window)?;
-                        Some((window.as_str(), reading))
+                        Some((window.clone(), reading))
                     })
                     .collect();
+                let now = (self.clock)();
+                let sample = self.held_at_the_wall(sample, &stored, now);
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: a head and a poll can cross, and the older one's reading is one
                 // the window has already moved past.
                 let moved = self.state.record_sample(&account_id, sample.clone());
                 if !moved.is_empty() {
-                    let now = (self.clock)();
                     for row in self.state.recovered_cooldowns(&account_id, &sample, now) {
                         self.release_cooldown(row.account_id, row.scope, "recovered");
                     }
@@ -3873,7 +3911,7 @@ impl Task {
                         self.window_edges(
                             &account_id,
                             window,
-                            stored.get(window.as_str()).copied(),
+                            stored.get(window).copied(),
                             reading,
                             source_request_id.as_deref(),
                             now,
@@ -3889,6 +3927,8 @@ impl Task {
                 at,
                 cause,
             } => {
+                // The request ended, so no head of it is still to come.
+                self.state.clear_head_mark(&request_id, None);
                 // A request that holds no booking (a count, a probe, a fast request, a renewal, one the purge gave up
                 // on, one from before a restart) ends with nothing to release and nothing to say.
                 if let Some(reservation) = self.state.release_reservation(&request_id) {
@@ -3902,6 +3942,15 @@ impl Task {
                         at,
                     });
                 }
+            }
+            // A leg's report clears the mark its own landing set and never one a later landing of the same request
+            // set, since the full mailbox's fallback can deliver an earlier leg's report after the failover's landing.
+            Report::Head {
+                request_id,
+                attempt,
+                ..
+            } => {
+                self.state.clear_head_mark(&request_id, Some(attempt));
             }
             Report::Usage {
                 account_id,
@@ -4381,8 +4430,9 @@ impl Task {
                 });
             }
         }
-        // The clear leaves the reset to the next sample or the clock walk, and the wall the prediction announced
-        // leaves with it, so a reading back at the limit under the same reset is spent again.
+        // The clear leaves the reset to the next sample or the clock walk, and the wall's announcement, the
+        // prediction's or a sample's, leaves with it, so a reading back at the limit under the same reset is spent
+        // again.
         if let Some(stored) = stored.filter(|stored| stored.utilization >= 1.0) {
             if reading.utilization < 1.0 && passed.is_none() {
                 self.spent_announced
@@ -4409,6 +4459,12 @@ impl Task {
             && reading.utilization >= 1.0
             && !announced
         {
+            // Recorded as the prediction records its own, so a repeat of this cycle announces nothing whichever
+            // source announced first.
+            self.spent_announced.insert(
+                (account_id.to_string(), window.to_string()),
+                (reading.reset, now),
+            );
             self.emit(RouterEvent::WindowSpent {
                 account_id: account_id.to_string(),
                 window: window.to_string(),
@@ -4419,6 +4475,43 @@ impl Task {
                 at: now,
             });
         }
+    }
+
+    /// The sample as the routing reads it: a plan window's reading within `SPENT_MARGIN` of 1.0 over a stored
+    /// reading at the wall under the same reset cycle is raised to the stored utilization, with its own instant,
+    /// reset and source, so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the
+    /// wall again. A reading under the margin is a real clear and lands as read, so `window_edges` reads the window
+    /// cleared and forgets the announcement, and the next crossing announces anew. A reading of another cycle lands
+    /// as read. Only a reading newer than the stored one counts, since the fold drops any other: an older reading, or
+    /// one of the stored instant, goes to the fold as read.
+    fn held_at_the_wall(
+        &self,
+        mut sample: UtilizationSample,
+        stored: &HashMap<String, WindowReading>,
+        now: i64,
+    ) -> UtilizationSample {
+        for (window, reading) in sample.windows.iter_mut() {
+            let Some(stored) = stored.get(window) else {
+                continue;
+            };
+            if reading.observed_at <= stored.observed_at
+                || stored.utilization < 1.0
+                || reading.utilization >= 1.0
+            {
+                continue;
+            }
+            if reading.utilization >= 1.0 - SPENT_MARGIN
+                && same_cycle(
+                    (stored.reset, stored.observed_at),
+                    reading.reset,
+                    now,
+                    window,
+                )
+            {
+                reading.utilization = stored.utilization;
+            }
+        }
+        sample
     }
 
     /// Announces the window spent when the router's own figure took its prediction from `before`, under 1.0, to 1.0 or

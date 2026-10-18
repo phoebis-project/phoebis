@@ -338,7 +338,7 @@ abort the request and send it again. Before the head, the first byte has a windo
 32 KiB of request body, with one retry near 600 seconds. `CLAUDE_ENABLE_BYTE_WATCHDOG` and
 `CLAUDE_ENABLE_STREAM_WATCHDOG` switch the watchdog off.
 
-Four waits of the router meet those clocks. The router's own guards on the upstream, 600 seconds for the response head
+Five waits of the router meet those clocks. The router's own guards on the upstream, 600 seconds for the response head
 and 600 seconds for the gap between two stream events, sit above the client's window, so a dead upstream stream is cut
 by the client at 180 seconds with the watchdog on, and the router's guard stands behind it
 ([The relay's waits](relay.md#the-relays-waits)). A retry in place is the second wait: on a throttle the router sleeps
@@ -352,8 +352,13 @@ whose `slow_down` is on, a request of a slowed account's session waits before an
 times the slow-down, up to the pool's `slow_down_hold_seconds` (1 to 300, default 120), served before a slot or reset
 wait and under the same 180 s window, so the default leaves 60 s for the upstream's head and the pre-commit hold, and a
 bound over 150 s draws the pool's `hold_over_window` warning ([Slow-down](routing.md#slow-down)). A hold that crosses
-the window costs one visible retry, since the retry rejoins the pin's deadline. The choice is the operator's: keep each
-bound at or under the window, or switch the watchdog off for that client with `CLAUDE_ENABLE_BYTE_WATCHDOG=0`,
+the window costs one visible retry, since the retry rejoins the pin's deadline. The wait for a moved pin's first head is
+the fifth, under the slow-down's bound with the pool's `slow_down` on or off: the next request of a pin that landed on
+another account waits before any byte of the head for the head of the request that carried the move, up to the pool's
+`slow_down_hold_seconds` from that request's dispatch and never past its own deadline, since the upstream makes a cache
+entry readable only once the response that writes it has begun, so a move pays its rewrite once
+([The windows the router works from](routing.md#the-windows-the-router-works-from)). The choice is the operator's: keep
+each bound at or under the window, or switch the watchdog off for that client with `CLAUDE_ENABLE_BYTE_WATCHDOG=0`,
 `API_FORCE_IDLE_TIMEOUT=0` and `API_TIMEOUT_MS=18000000`, which lets the client wait out a hold longer than its window,
 the slow-down's among them where the operator raises its bound.
 

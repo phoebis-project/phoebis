@@ -198,15 +198,19 @@ pub struct HoldFacts {
     /// Whether the wait's bound ran out with no slot freed, which the relay learns when the wait ends.
     pub ran_out: bool,
     /// `cap` for a hold on a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait
-    /// before its head.
+    /// before its head, `rewrite` for a moved pin's wait for the head of the request that carried the move.
     pub reason: &'static str,
     /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
-    /// account's cooldown, under `slow_down` the pin's deadline. Under `cap` the admission, which the relay fills once
-    /// a slot freed, and `None` on the hold the selection answers and where the wait ran out.
+    /// account's cooldown, under `slow_down` the pin's deadline, under `rewrite` the first request's dispatch plus the
+    /// pool's hold cap. Under `cap` the admission, which the relay fills once a slot freed, and `None` on the hold the
+    /// selection answers and where the wait ran out.
     pub until: Option<i64>,
+    /// The request whose head the hold waits for. `Some` under `rewrite`, `None` under the other reasons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waits_for: Option<String>,
 }
 
-/// One wait of a request, oldest first: `cap`, `reset` or `slow_down` and how long it lasted.
+/// One wait of a request, oldest first: `cap`, `reset`, `slow_down` or `rewrite` and how long it lasted.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct HoldWait {
     pub reason: &'static str,
@@ -218,9 +222,11 @@ pub struct HoldWait {
 pub struct CohortHold {
     pub waited_on: Vec<String>,
     pub cohort: Option<String>,
-    /// The holds' waits summed: the time the request spent waiting, for a slot, a reset or a slow-down.
+    /// The holds' waits summed: the time the request spent waiting, for a slot, a reset, a slow-down or a rewrite in
+    /// flight.
     pub held_ms: u64,
-    /// Each wait apart, oldest first, so the request row tells a slot wait, a reset wait and a slow-down hold apart.
+    /// Each wait apart, oldest first, so the request row tells a slot wait, a reset wait, a slow-down hold and a wait
+    /// for a rewrite in flight apart.
     pub waits: Vec<HoldWait>,
 }
 
@@ -462,6 +468,11 @@ pub struct Selection {
     /// pool than the request was admitted under, which the relay refuses rather than dispatch under one pool's
     /// policy on another's member.
     pub pool_id: String,
+    /// The account the session's previous request landed on, where this selection lands elsewhere: the pin row
+    /// step 1 read, live, idle past the TTL or left behind by its pool, else the landing a failover carried to this
+    /// request. `None` on a renewal, a count's bound and a placement the routing holds no previous landing for.
+    /// The relay names no previous message on a request that carries it, since the account cannot find one.
+    pub left: Option<String>,
 }
 
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
@@ -720,13 +731,13 @@ pub(crate) fn pin_figures<'a>(
         // the source's speed, which the pin runs at there until the destination's own factor says otherwise.
         let rate = match figures {
             Figures::Pin(pin) => priced(window, regime, pin)
-                .map(|rate| rate / state.slow_down_speed(pool, &pin.account_id)),
+                .map(|rate| rate / state.slow_down_speed(pool, &pin.account_id, now)),
             // A failover's landing knows the session's own burn, while the destination's cache is cold, so the
             // rewrite above stays the body's.
             Figures::Fresh(_) if request.failed_over.is_some() => {
                 request.failed_over.as_ref().and_then(|failed_over| {
                     priced(window, regime, &failed_over.row).map(|rate| {
-                        rate / state.slow_down_speed(pool, &failed_over.from_account_id)
+                        rate / state.slow_down_speed(pool, &failed_over.from_account_id, now)
                     })
                 })
             }
@@ -741,7 +752,7 @@ pub(crate) fn pin_figures<'a>(
                     .filter(|p| plan_windows(&p.model).any(|w| w == window))
                     .filter_map(|p| {
                         priced(window, regime, p)
-                            .map(|rate| rate / state.slow_down_speed(pool, &p.account_id))
+                            .map(|rate| rate / state.slow_down_speed(pool, &p.account_id, now))
                     })
                     .collect(),
             ),
@@ -1225,6 +1236,8 @@ fn run(
     // non-portable request keeps a pin whose account left the pool: the fence below answers for that account,
     // because no other account holds the state the request refers to.
     let mut pin = None;
+    let mut previous_account: Option<String> = None;
+    let mut expired: Option<PinKey> = None;
     if let Some(session) = session {
         let key = PinKey {
             key_id: request.key_id.clone(),
@@ -1244,6 +1257,9 @@ fn run(
             state.pace_held_until(&key, until);
         }
         if let Some(mut current) = state.pin(&key).cloned() {
+            // Whatever `found` names the row, it says where the session's previous request landed, which the
+            // placement compares against.
+            previous_account = Some(current.account_id.clone());
             let serves = request
                 .candidates
                 .iter()
@@ -1283,7 +1299,7 @@ fn run(
             }
             // A turn of a held class folds its arrival into the pin's cycle under the live row's key, which a move
             // and a failover's landing write their row under again. A request carrying a hold, whatever held it, is
-            // a second selection whose arrival the first folded, and its gap of zero would plant a cycle of zero.
+            // a second selection whose arrival the first folded, and its gap of zero would drag the cycle toward zero.
             if found == "live"
                 && slowable(
                     request,
@@ -1292,6 +1308,15 @@ fn run(
                 && request.holds.is_empty()
             {
                 state.fold_pace(&current.key(), request.received_at, burn_average_ms(pool));
+            } else if found == "live"
+                && request
+                    .holds
+                    .last()
+                    .is_some_and(|hold| hold.reason == "rewrite")
+            {
+                // The head released the wait where it came, not at the bound, so the dispatch is this selection's
+                // instant and the pin's next gap is measured from it.
+                state.pace_held_until(&current.key(), request.now);
             }
             rec.pin = Some(pin_facts(
                 found,
@@ -1303,11 +1328,9 @@ fn run(
             if found == "live" {
                 pin = Some(current);
             } else {
-                state.remove_pin(&key);
-                // The session's pace ends with a pin that idled out or left the pool, so the placement that follows
-                // starts with none, rather than reading the idle time as one long gap.
-                state.drop_pace(&current.key());
-                writes.push(StateWrite::DeletePin(key));
+                // The row stands until the placement replaces it: that placement may be held for a slot first, and
+                // the selection after the wait reads the account the session left from this row.
+                expired = Some(key);
             }
         } else {
             rec.pin = Some(pin_facts(
@@ -1467,6 +1490,15 @@ fn run(
     // Step 3: a non-portable request is bound to its pin.
     if let (false, Some((current, warmth))) = (request.portable, pin.as_ref().zip(warmth)) {
         if in_set(&eligible, &current.account_id) {
+            if let Some(hold) = rewrite_answer(state, pool, request, current) {
+                return (
+                    SelectResult::Held {
+                        account_id: current.account_id.clone(),
+                        hold,
+                    },
+                    writes,
+                );
+            }
             rec.step("bound", "renewed", vec![account_fact(&current.account_id)]);
             return (
                 SelectResult::Selected(renew(
@@ -1580,6 +1612,7 @@ fn run(
                     ran_out: false,
                     reason: "reset",
                     until: Some(until),
+                    waits_for: None,
                 };
                 return (
                     SelectResult::Held {
@@ -1639,6 +1672,15 @@ fn run(
     // deadline stands on it.
     if let Some((current, warmth)) = pin.as_ref().zip(warmth) {
         if in_set(&eligible, &current.account_id) {
+            if let Some(hold) = rewrite_answer(state, pool, request, current) {
+                return (
+                    SelectResult::Held {
+                        account_id: current.account_id.clone(),
+                        hold,
+                    },
+                    writes,
+                );
+            }
             if let Some(hold) = slow_down_answer(state, snapshot, pool, request, current, rec) {
                 return (
                     SelectResult::Held {
@@ -1957,6 +1999,7 @@ fn run(
                         ran_out: false,
                         reason: "cap",
                         until: None,
+                        waits_for: None,
                     },
                     None => HoldFacts {
                         account_id: strategy_choice.account_id.clone(),
@@ -1967,6 +2010,7 @@ fn run(
                         ran_out: false,
                         reason: "cap",
                         until: None,
+                        waits_for: None,
                     },
                 };
                 let place = *rec.hold_place.get_or_insert("strategy_pick");
@@ -2049,6 +2093,14 @@ fn run(
         }
     }
 
+    let left = previous_account
+        .or_else(|| {
+            request
+                .failed_over
+                .as_ref()
+                .map(|f| f.from_account_id.clone())
+        })
+        .filter(|account| account != &chosen.account_id);
     // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
     // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it.
     let pin_ref = session.filter(|_| !request.count).map(|session| {
@@ -2079,7 +2131,17 @@ fn run(
             refresh_stamped: true,
             hashes_stamped: request.static_hash.is_some() || !request.boundaries.is_empty(),
         });
+        replace_expired(state, expired.take(), &mut writes);
         state.put_pin(row.clone());
+        // The landing writes the destination's cache, so the pin's next requests wait for this request's head.
+        if left.is_some() {
+            state.mark_head(
+                &row.key(),
+                &request.request_id,
+                request.attempt,
+                request.now,
+            );
+        }
         writes.push(StateWrite::UpsertPin(row));
         PinRef {
             key_id: request.key_id.clone(),
@@ -2121,9 +2183,27 @@ fn run(
                 cohort_hold,
             },
             pool_id: pool.id.clone(),
+            left,
         }),
         writes,
     )
+}
+
+/// Takes the row step 1 found idle past the TTL or left behind by its pool off the state, ahead of the pin that
+/// replaces it under its key, as a move takes its source's row. The session's pace ends with that row, so the landing
+/// starts with none rather than reading the idle time as one long gap.
+fn replace_expired(
+    state: &mut RoutingState,
+    expired: Option<PinKey>,
+    writes: &mut Vec<StateWrite>,
+) {
+    let Some(key) = expired else {
+        return;
+    };
+    if let Some(old) = state.remove_pin(&key) {
+        state.drop_pace(&old.key());
+    }
+    writes.push(StateWrite::DeletePin(key));
 }
 
 /// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `shed` is the source
@@ -2326,7 +2406,7 @@ fn projections_of(
     let average_ms = burn_average_ms(pool);
     let speed = match read {
         BurnRead::Achieved => 1.0,
-        BurnRead::Demand => state.slow_down_speed(pool, account_id),
+        BurnRead::Demand => state.slow_down_speed(pool, account_id, now),
     };
     let burn = match read {
         BurnRead::Achieved => state.burn_shares(account_id, &keep, tier, now, average_ms),
@@ -2528,11 +2608,17 @@ pub struct SlowDownRead {
     /// The pool's `slow_down_stretch_seconds`.
     pub threshold_ms: i64,
     pub factor: f64,
+    /// The share of the read's slow-down the holds apply: the time the stretch has read over zero over one burn
+    /// average, clamped to [0, 1], 1 on a window at or past the ceiling, whose standing is measured and not a
+    /// projection a short burst could still retract, and 0 at a factor of 1, which holds nothing.
+    pub ramp: f64,
+    /// The factor the plan received, `1 - (1 - factor) x ramp`: the hold's outcome names it.
+    pub ramped: f64,
     pub speed: f64,
     /// The holds of the pool's pins on the account whose pace has a cycle, every kept pin weighted by its priced
     /// decayed rate on `five_hour`: a pin without a cycle runs unheld and a pin whose cycle is too long for the cap is
     /// held at the cap, and the rest share the remaining reduction at one speed, so the account's pins realize the
-    /// factor together as far as the cap lets them. Empty while no pin on the account has a cycle.
+    /// ramped factor together as far as the cap lets them. Empty while no pin on the account has a cycle.
     pub plan: Vec<PinHold>,
     /// The speed the account's pins realize under the plan, `sum(b x s) / sum(b)` over every kept pin with
     /// `s = c / (c + h)` and `s = 1` for a pin without a cycle, so 1 while the plan is empty: the one figure the
@@ -2574,7 +2660,7 @@ pub(crate) fn slow_down_of(
     let reading = state.predicted(account_id, FIVE_HOUR, now)?;
     let utilization = reading.utilization;
     let horizon = horizon_of(snapshot, account_id, FIVE_HOUR, &reading, now);
-    let speed = state.slow_down_speed(pool, account_id);
+    let speed = state.slow_down_speed(pool, account_id, now);
     let demand = state
         .demand_shares(
             account_id,
@@ -2601,7 +2687,8 @@ pub(crate) fn slow_down_of(
         .unwrap_or_default();
     let limit = ceiling(pool, FIVE_HOUR);
     let to_horizon = seconds(horizon - now);
-    let (stretch, factor) = if utilization >= limit {
+    let at_ceiling = utilization >= limit;
+    let (stretch, factor) = if at_ceiling {
         let overrun = if demand > 0.0 {
             (utilization - limit) / demand
         } else {
@@ -2619,9 +2706,27 @@ pub(crate) fn slow_down_of(
             (room / banded.increase()).clamp(0.0, 1.0),
         )
     };
+    // The ramp: the share of the read's factor the holds apply, grown over one burn average from the instant the
+    // stretch first read over zero, so a burst of a few minutes whose demand projects past the ceiling costs holds in
+    // proportion to how long it has stood, and a demand that lasts gets the full factor once the average has absorbed
+    // it. A window at or past the ceiling is a measured fact and not a projection a burst could retract, so it takes
+    // the full factor at once. A factor of 1 applies no hold, so it applies no share. The entry of a passed window
+    // reads no stamp, so the ramp restarts with every window.
+    let average_ms = burn_average_ms(pool);
+    let stood = state
+        .slow_down_in_force(pool, account_id, now)
+        .and_then(|entry| entry.ramp_since)
+        .map_or(0, |since| (now - since).max(0));
+    let ramp = if at_ceiling {
+        1.0
+    } else if factor >= 1.0 {
+        0.0
+    } else {
+        (stood as f64 / average_ms.max(1) as f64).clamp(0.0, 1.0)
+    };
+    let ramped = 1.0 - (1.0 - factor) * ramp;
     // Every kept pin, each weighted by its own priced burn on the window: a pin without a cycle is never held, but its
     // burn runs at full speed and weighs in the speed the demand divides by.
-    let average_ms = burn_average_ms(pool);
     let pins: Vec<(PinKey, Option<f64>, f64)> = state
         .pins_on(account_id, &in_pool(snapshot, pool))
         .into_iter()
@@ -2637,7 +2742,7 @@ pub(crate) fn slow_down_of(
             (p.key(), cycle, weight)
         })
         .collect();
-    let (plan, realized) = water_fill(&pins, factor, slow_down_hold_ms(pool));
+    let (plan, realized) = water_fill(&pins, ramped, slow_down_hold_ms(pool));
     Some(SlowDownRead {
         utilization,
         horizon,
@@ -2647,6 +2752,8 @@ pub(crate) fn slow_down_of(
         stretch_ms: (stretch * 1_000.0).round() as i64,
         threshold_ms: slow_down_stretch_ms(pool),
         factor,
+        ramp,
+        ramped,
         speed,
         plan,
         realized,
@@ -3723,6 +3830,9 @@ fn slow_down_facts(
         Fact::int("stretch_ms", read.stretch_ms).unit("ms"),
         Fact::int("threshold_ms", read.threshold_ms).unit("ms"),
         Fact::number("factor", read.factor),
+        // The share of the factor the holds apply, so the line reads what the demand projected, how much of it applied
+        // and the speed realized, in that order.
+        Fact::number("ramp", read.ramp).unit("percent"),
         // The speed this read's plan realizes, the one the hold's outcome names, so the line and the card read one.
         Fact::number("speed", read.realized),
         Fact::number("demand_five_hour", read.demand * 3_600.0).unit("percent_per_hour"),
@@ -3786,6 +3896,45 @@ fn slow_down_hold(
     })
 }
 
+/// The hold of a moved pin's request that arrives before the head of the request that carried the move. The
+/// upstream makes a cache entry readable only once the response that writes it has begun, so a second request out
+/// before that head writes the prefix again at the write multiplier, where the round and the move's reservation
+/// priced one rewrite. Bounded by the pool's hold cap from the first request's dispatch whatever the slow-down
+/// switch, since the cap bounds a wait before a head and the switch governs a slowed pin's sizing alone, and the
+/// relay bounds it by the request's deadline. Nothing for a request that already waited (the relay's re-selection
+/// after any wait), a token count (it writes no cache), the first request itself, or a bound under the floor, since
+/// the head is due. Every other request of the pin waits, the summary fork, a fast request, a probe, a non-portable
+/// turn bound at step 3 and an api_key landing among them: the race costs the same tokens twice on each. The hold
+/// moves no dispatch: the head may release it long before the bound, and the renewal after it dates the dispatch.
+fn rewrite_answer(
+    state: &RoutingState,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    current: &PinRow,
+) -> Option<HoldFacts> {
+    if request.count || !request.holds.is_empty() {
+        return None;
+    }
+    let mark = state
+        .head_mark(&current.key())
+        .filter(|mark| mark.request_id != request.request_id)?;
+    let until = mark.at + slow_down_hold_ms(pool);
+    if until - request.now < SLOW_DOWN_MIN_HOLD_MS {
+        return None;
+    }
+    Some(HoldFacts {
+        account_id: current.account_id.clone(),
+        cohort: None,
+        held_ms: 0,
+        attempt: request.attempt,
+        seq: request.seq,
+        ran_out: false,
+        reason: "rewrite",
+        until: Some(until),
+        waits_for: Some(mark.request_id.clone()),
+    })
+}
+
 /// Step 5's slow-down hold for a pin step 4 left in place on an eligible account, `None` where the pin renews. Only a
 /// request of a held class that carries no hold is held: the second selection after any wait goes on. A deadline
 /// standing on the pin is rejoined to the same instant, whatever the pool's switch reads now, since the hold was
@@ -3833,6 +3982,7 @@ fn slow_down_answer(
         ran_out: false,
         reason: "slow_down",
         until: Some(plan.until),
+        waits_for: None,
     };
     rec.hold_plan = Some(plan);
     Some(hold)
@@ -4897,6 +5047,7 @@ fn renew(
             ..SelectionTrace::default()
         },
         pool_id: pool.id.clone(),
+        left: None,
     }
 }
 
@@ -5393,7 +5544,7 @@ pub(crate) fn pace_of(
                     tier,
                     now,
                     burn_average_ms(pool),
-                    state.slow_down_speed(pool, &candidate.account_id),
+                    state.slow_down_speed(pool, &candidate.account_id, now),
                 )
                 .get(window)
                 .copied()
@@ -6162,7 +6313,9 @@ fn candidate_facts(
         fit: None,
         binding: None,
         burn,
-        factor: state.slow_down_in_force(pool, id).map(|entry| entry.factor),
+        factor: state
+            .slow_down_in_force(pool, id, now)
+            .map(|entry| entry.factor),
     }
 }
 
@@ -6177,7 +6330,7 @@ fn five_hour_demand(
     burn: &BTreeMap<String, f64>,
     now: i64,
 ) -> f64 {
-    let speed = state.slow_down_speed(pool, account_id);
+    let speed = state.slow_down_speed(pool, account_id, now);
     let demand = match snapshot.tier(account_id) {
         Some(tier) if speed != 1.0 => state
             .demand_shares(
@@ -6314,7 +6467,7 @@ fn finish(
                 account_id: hold.account_id.clone(),
                 cohort: hold.cohort.clone(),
                 bound_ms: pool.map_or(0, |p| {
-                    if slowed {
+                    if slowed || hold.reason == "rewrite" {
                         slow_down_hold_ms(p)
                     } else {
                         seconds_ms(p.failover.retry_in_place_seconds)
@@ -6322,7 +6475,7 @@ fn finish(
                 }),
                 reason: hold.reason,
                 until: hold.until,
-                factor: read.map(|read| read.factor),
+                factor: read.map(|read| read.ramped),
                 speed: read.map(|read| read.realized),
                 stretch_ms: read.map(|read| read.stretch_ms),
                 threshold_ms: read.map(|read| read.threshold_ms),
@@ -6330,6 +6483,7 @@ fn finish(
                     .as_ref()
                     .filter(|_| slowed)
                     .and_then(|plan| plan.cycle_ms),
+                waits_for: hold.waits_for.clone(),
             });
         }
         SelectResult::Exhausted(exhaustion) => {
@@ -6467,12 +6621,12 @@ impl Readings<'_> {
         };
         let outcome = self.outcome;
         match outcome.kind {
-            // The wait explains the renewal more than the pin's idle age does: the row names the slow-down it followed
-            // and how long it lasted.
-            "renewed" if self.slow_down_wait().is_some() => (
-                by("hold", "slow_down"),
-                self.slow_down_wait().map(held_fact).into_iter().collect(),
-            ),
+            // The wait explains the renewal more than the pin's idle age does: the row names the slow-down or the
+            // rewrite in flight it followed and how long it lasted.
+            "renewed" if self.held_wait().is_some() => {
+                let hold = self.held_wait().expect("the guard read a wait");
+                (by("hold", hold.reason), vec![held_fact(hold)])
+            }
             "renewed" => (by("none", ""), self.renewal_fact()),
             "moved" => {
                 // A move continues as a fresh placement: its By says why it left, its Fact the runway the gate read
@@ -6517,10 +6671,10 @@ impl Readings<'_> {
                 // The wait explains the placement more than where it landed: the row names the hold it followed
                 // and how long it lasted.
                 Some(hold) => {
-                    // A reset wait and a slow-down hold are named by their reason, as the renewal names the
-                    // slow-down, so `strategy_pick` stays the cap wait's word.
+                    // A reset wait, a slow-down hold and a wait for a rewrite in flight are named by their reason,
+                    // as the renewal names the slow-down, so `strategy_pick` stays the cap wait's word.
                     let place = match hold.reason {
-                        "reset" | "slow_down" => hold.reason,
+                        "reset" | "slow_down" | "rewrite" => hold.reason,
                         _ if hold.cohort.is_some() => "cohort",
                         _ => "strategy_pick",
                     };
@@ -6538,6 +6692,25 @@ impl Readings<'_> {
                     (by, self.placement_fact())
                 }
             },
+            // A moved pin's wait for the head of the request that carried the move names its bound, as a reset's
+            // wait names its end.
+            "held"
+                if outcome
+                    .hold
+                    .as_ref()
+                    .is_some_and(|hold| hold.reason == "rewrite") =>
+            {
+                (
+                    by("hold", "rewrite"),
+                    outcome
+                        .hold
+                        .as_ref()
+                        .and_then(|hold| hold.until)
+                        .map(|until| summary_fact("until", FactValue::Int(until), "time"))
+                        .into_iter()
+                        .collect(),
+                )
+            }
             // A slowed pin's wait names its end and the factor it was sized under: no slot, pick or reset explains it.
             "held"
                 if outcome
@@ -6745,10 +6918,10 @@ impl Readings<'_> {
             .filter(|hold| hold.seq.checked_add(1) == Some(self.request.seq))
     }
 
-    /// The slow-down hold this selection follows, as `attempt_hold` reads it.
-    fn slow_down_wait(&self) -> Option<&HoldFacts> {
+    /// The slow-down hold or the wait for a rewrite in flight this selection follows, as `attempt_hold` reads it.
+    fn held_wait(&self) -> Option<&HoldFacts> {
         self.attempt_hold()
-            .filter(|hold| hold.reason == "slow_down")
+            .filter(|hold| hold.reason == "slow_down" || hold.reason == "rewrite")
     }
 
     /// A slow-down hold's `until` and the factor its read sized it under, a bare fraction as the walk states it.

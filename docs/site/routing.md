@@ -315,15 +315,15 @@ either. A cooling account never reaches either rung, since the eligible set excl
 eligible set, and both rungs refuse it through the allowance check. A subagent under `with_main` lands its first request
 on its parent agent's pin in place of the static walk, and one under `by_strategy` skips the static walk. Every case
 that finds no live match lands by the strategy. A held request of a subagent cohort waits where its cohort already is
-rather than on the strategy's own pick, and a session already on an account, under any of its agents, is never held
-while that account can still serve. A token count is never placed and never held: it is bound to no cap and occupies no
-slot, so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with a pin follows it
-past the cap and the move rules, and one without lands by the strategy and leaves the agent's next message to be placed
-under the cap. An entry's warmth lasts the marker's TTL on its tier. When every marker of the request carried one TTL
-and the response reports its cache writes at the other alone, the reported TTL is the lifetime of the message boundaries
-that response wrote, and of the static boundaries only when the response read nothing from the cache, since the usage
-names no tier. A static tier the response read from and a tier it only read keep their marker's lifetime, and a request
-with markers at both TTLs keeps each marker's.
+rather than on the strategy's own pick, and a session already on an account, under any of its agents, is never held for
+a slot while that account can still serve. A token count is never placed and never held: it is bound to no cap and
+occupies no slot, so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with a
+pin follows it past the cap and the move rules, and one without lands by the strategy and leaves the agent's next
+message to be placed under the cap. An entry's warmth lasts the marker's TTL on its tier. When every marker of the
+request carried one TTL and the response reports its cache writes at the other alone, the reported TTL is the lifetime
+of the message boundaries that response wrote, and of the static boundaries only when the response read nothing from the
+cache, since the usage names no tier. A static tier the response read from and a tier it only read keep their marker's
+lifetime, and a request with markers at both TTLs keeps each marker's.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, `ready` or
 `funding_required` past its retry instant, off cooldown, and not already tried by this request. A request sent fast is
@@ -435,7 +435,13 @@ API-key account fits while its worst live rate-limit bucket reads under 1.0.
 A move or a placement books its rewrite and its burn on the destination as a reservation, which the destination's
 prediction and burn count until the request's usage replaces it, the request ends without usage, or the reservation
 turns an hour old, so two moves in one second see each other. A token count, a keepalive probe, a request sent fast and
-a renewal book nothing, and a restart drops every reservation with the requests it belonged to.
+a renewal book nothing, and a restart drops every reservation with the requests it belonged to. The pin's next request
+after a landing on another account waits before its head for the first request's head, as a `held` decision with the
+reason `rewrite` that names the request it waits for, up to `slow_down_hold_seconds` from that request's dispatch and
+never past its own deadline, since the upstream makes a cache entry readable only once the response that writes it has
+begun, so a move pays its rewrite once where two requests of the pin are in flight. A token count passes, a session's
+first placement waits nowhere, a request that already waited for a slot, a reset or the slow-down is not held again, and
+the wait ends at once when the first request ends without a head.
 
 ### Moves
 
@@ -656,30 +662,40 @@ weighed at one over the band factor across a band edge as above, which is `1 - S
 stretch of zero, 0 once the window is at the ceiling, and applied alike to every pin the pool keeps on the account, so
 every session there gets the same stretch. The factor lives in memory beside the reservations, written at every pinned
 selection on the account and read until the next write, so a quiet account reads unslowed again at the purge tick and a
-restart starts from none. The holds realize the factor as a speed, which the router averages over `burn_average_seconds`
-beside the burn, and the demand every reader above divides by is that speed.
+restart starts from none. An entry read before its 5-hour window's passed reset answers nothing, the entry's own reset
+answering where the latest reading names none, the purge tick drops it, and a span the reset ends is recorded to the
+reset. The holds apply the factor in proportion to the share of one `burn_average_seconds` the stretch has read over
+zero for, so a burst of a few minutes that would project past the ceiling costs holds in proportion to how long it has
+stood, and the full factor applies after one burn average. A window already at or past its ceiling takes its full factor
+at once, since its standing is measured and not projected. The ramp restarts with every window, since the reset clears
+the stamp, and the routing log's shed line shows the share as `ramp`, 0 wherever the factor reads 1, since nothing is
+held then. The holds realize the factor as a speed, which the router averages over `burn_average_seconds` beside the
+burn, and the demand every reader above divides by is that speed.
 
 The hold is served before the response head, inside the selection, as a `held` decision with the reason `slow_down`: the
-request waits the pin's cycle times `1 / f - 1` for the factor `f`, so a session at half speed waits one cycle before
-each request and one at a quarter speed three, capped by `slow_down_hold_seconds` (1 to 300, default 120) and never past
-the request's own deadline. The cycle is the pin's average time from the dispatch of one request to the arrival of the
-next, over `burn_average_seconds`, so a pin's first requests pass unheld until a gap has been measured and a restart
-starts the measure over. The deadline belongs to the pin: a retry or a sibling request of the same pin arriving before
-it rejoins it for the remaining time, so two requests of one pin wait to one instant and a hold that crossed the
-client's window costs one visible retry and no doubled wait. A hold under a second is not served, a request is held for
-the slow-down once, and a slot or reset hold after it keeps its own bound of `retry_in_place_seconds`. A pin whose cycle
-is too long for the cap is held at the cap and runs faster than the factor, and the account's other pins share the
+request waits the pin's cycle times `1 / f - 1` for the factor `f` the ramp leaves, so a session at half speed waits one
+cycle before each request and one at a quarter speed three, capped by `slow_down_hold_seconds` (1 to 300, default 120)
+and never past the request's own deadline. The cycle is the pin's mean time from the dispatch of one request to the
+arrival of the next over about its last eight gaps, each arrival moving it by an eighth toward its gap and the first
+arrivals by their plain mean, so a pin's first requests pass unheld until a gap has been measured and a restart starts
+the measure over. A gap of `burn_average_seconds` or longer is a pause that enters no cycle, the next gap measured from
+the arrival that ended it, so a session that resumes after a long think or an idle hour is held for the pace it runs at
+and not for the pause. The deadline belongs to the pin: a retry or a sibling request of the same pin arriving before it
+rejoins it for the remaining time, so two requests of one pin wait to one instant and a hold that crossed the client's
+window costs one visible retry and no doubled wait. A hold under a second is not served, a request is held for the
+slow-down once, and a slot or reset hold after it keeps its own bound of `retry_in_place_seconds`. A pin whose cycle is
+too long for the cap is held at the cap and runs faster than the factor, and the account's other pins share the
 remaining reduction at one speed. The cap stands against the client's first-byte window of 180 seconds plus 1 second per
 32 KiB of body: the default leaves 60 seconds for the upstream's head and the pre-commit hold, and the pool's warning
 `hold_over_window` fires above 150 seconds. [When the client waits](client.md#when-the-client-waits) states the relation
 and the operator's choice.
 
 Probes, token counts, compactions, auxiliary requests (any `x-claude-code-request-class` outside `compaction`, `main`
-and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held, and the
-burn of each counts, so the holds of the main and subagent turns are sized to cover it. A probe has to land before the
-cache expires, a count costs nothing on the window, a compaction lowers the burn that follows it, and a fast request
-draws usage credits and no plan window. A request a guardrail blocks never reaches the selection, so it is never held,
-refreshes no pin and adds no burn ([Guardrails](guardrails.md)).
+and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held for the
+slow-down, and the burn of each counts, so the holds of the main and subagent turns are sized to cover it. A probe has
+to land before the cache expires, a count costs nothing on the window, a compaction lowers the burn that follows it, and
+a fast request draws usage credits and no plan window. A request a guardrail blocks never reaches the selection, so it
+is never held, refreshes no pin and adds no burn ([Guardrails](guardrails.md)).
 
 The handover to the round: with `load_shedding` on as well, the 5-hour window's trigger is the stretch in place of the
 projection. The round fires when the stretch has read over `slow_down_stretch_seconds` at a pinned selection and still
@@ -923,16 +939,17 @@ An account at the pool's `in_flight_cap` (default 16) is passed over while a sib
 request does not fit: the cap is a bound, the fit a preference. Only when every account that could serve is at its cap
 is the request held: it waits for a slot on the account it would have chosen, and every hold of one request for a slot
 or a reset shares one bound of `retry_in_place_seconds` from the first hold, whatever the pool's size, while the
-slow-down's hold has its own, `slow_down_hold_seconds` ([Slow-down](#slow-down)). A slot that frees inside it lands the
-request there, and past it the request is selected again with that account passed over. With every account passed over
-it is answered `429` with the error code `accounts_at_cap` and a `Retry-After` of the pool's `retry_in_place_seconds`
-held between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats a longer one as a block
-it does not retry. A request is held at most once per account and never past the request's one bound: a hold that runs
-out, or whose freed slot another request takes first, adds the account to the request's attempted set and the selection
-runs again. A request that dialed an account before its holds ran out, and a pool with no account to hold for, keep the
-`503 accounts_unavailable` below. A request whose session already holds a pin under any agent is never held, and a move
-whose every destination is at its cap is not made: the pin renews in place and the next request judges the move again. A
-held subagent waits where its cohort is.
+slow-down's hold and the wait for a moved pin's first head have their own, `slow_down_hold_seconds`
+([Slow-down](#slow-down)). A slot that frees inside it lands the request there, and past it the request is selected
+again with that account passed over. With every account passed over it is answered `429` with the error code
+`accounts_at_cap` and a `Retry-After` of the pool's `retry_in_place_seconds` held between 1 and 19 seconds: the client
+waits out a `Retry-After` under 20 seconds and treats a longer one as a block it does not retry. A request is held at
+most once per account and never past the request's one bound: a hold that runs out, or whose freed slot another request
+takes first, adds the account to the request's attempted set and the selection runs again. A request that dialed an
+account before its holds ran out, and a pool with no account to hold for, keep the `503 accounts_unavailable` below. A
+request whose session already holds a pin under any agent is never held for a slot, and a move whose every destination
+is at its cap is not made: the pin renews in place and the next request judges the move again. A held subagent waits
+where its cohort is.
 
 ### When nothing can serve
 
