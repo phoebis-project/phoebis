@@ -1233,6 +1233,7 @@ fn run(
     // because no other account holds the state the request refers to.
     let mut pin = None;
     let mut previous_account: Option<String> = None;
+    let mut expired: Option<PinKey> = None;
     if let Some(session) = session {
         let key = PinKey {
             key_id: request.key_id.clone(),
@@ -1312,11 +1313,9 @@ fn run(
             if found == "live" {
                 pin = Some(current);
             } else {
-                state.remove_pin(&key);
-                // The session's pace ends with a pin that idled out or left the pool, so the placement that follows
-                // starts with none, rather than reading the idle time as one long gap.
-                state.drop_pace(&current.key());
-                writes.push(StateWrite::DeletePin(key));
+                // The row stands until the placement replaces it: that placement may be held for a slot first, and
+                // the selection after the wait reads the account the session left from this row.
+                expired = Some(key);
             }
         } else {
             rec.pin = Some(pin_facts(
@@ -2116,6 +2115,7 @@ fn run(
             refresh_stamped: true,
             hashes_stamped: request.static_hash.is_some() || !request.boundaries.is_empty(),
         });
+        replace_expired(state, expired.take(), &mut writes);
         state.put_pin(row.clone());
         // The landing writes the destination's cache, so the pin's next requests wait for this request's head.
         if left.is_some() {
@@ -2171,6 +2171,23 @@ fn run(
         }),
         writes,
     )
+}
+
+/// Takes the row step 1 found idle past the TTL or left behind by its pool off the state, ahead of the pin that
+/// replaces it under its key, as a move takes its source's row. The session's pace ends with that row, so the landing
+/// starts with none rather than reading the idle time as one long gap.
+fn replace_expired(
+    state: &mut RoutingState,
+    expired: Option<PinKey>,
+    writes: &mut Vec<StateWrite>,
+) {
+    let Some(key) = expired else {
+        return;
+    };
+    if let Some(old) = state.remove_pin(&key) {
+        state.drop_pace(&old.key());
+    }
+    writes.push(StateWrite::DeletePin(key));
 }
 
 /// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `moving` is the

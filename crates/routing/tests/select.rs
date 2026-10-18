@@ -25479,6 +25479,88 @@ fn a_row_idle_past_the_ttl_re_placed_elsewhere_names_the_account_it_left() {
 }
 
 #[test]
+fn a_row_idle_past_the_ttl_stands_through_a_cap_hold_and_the_landing_after_the_wait_names_the_account_it_left(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let first = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    assert_eq!(picked(&select(&mut st, &s, &first, &mut rng()).0), "a");
+    let idle_at = T + 2 * HOUR;
+    let _on_a = st.in_flight().dispatched("a", idle_at);
+    let on_b = st.in_flight().dispatched("b", idle_at);
+    let idle = request(&s, Some("s1"), "claude-sonnet-5", true, &[], idle_at);
+    let d = decide(&mut st, &s, &idle, &mut rng());
+    let hold = match &d.result {
+        SelectResult::Held { hold, .. } => hold.clone(),
+        other => panic!("every destination at its cap holds the placement, got {other:?}"),
+    };
+    assert_eq!(hold.reason, "cap");
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle")
+    );
+    assert_eq!(
+        st.pin(&pin_key("s1")).map(|pin| pin.account_id.as_str()),
+        Some("a"),
+        "the row stands for the selection after the wait"
+    );
+    assert!(
+        d.writes.is_empty(),
+        "a held answer writes nothing: {:?}",
+        d.writes
+    );
+    drop(on_b);
+    let waited_at = idle_at + 1_000;
+    let waited = SelectRequest {
+        seq: 2,
+        holds: vec![HoldFacts {
+            held_ms: 1_000,
+            ..hold
+        }],
+        now: waited_at,
+        ..idle
+    };
+    let d = decide(&mut st, &s, &waited, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle"),
+        "the selection after the wait reads the row again"
+    );
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(left_of(&d.result), Some("a"));
+    assert_eq!(
+        st.head_mark(&pin_key("s1")),
+        Some(&HeadMark {
+            request_id: "r-1".into(),
+            attempt: 1,
+            at: waited_at,
+        })
+    );
+    assert_eq!(pinned(&st, "s1").account_id, "b");
+    let pin_writes: Vec<&str> = d
+        .writes
+        .iter()
+        .filter_map(|write| match write {
+            StateWrite::DeletePin(key) if *key == pin_key("s1") => Some("delete"),
+            StateWrite::UpsertPin(row) if row.key() == pin_key("s1") => Some("upsert"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pin_writes,
+        ["delete", "upsert"],
+        "the landing replaces the row under its key as a move does"
+    );
+}
+
+#[test]
 fn a_renewal_and_a_placement_with_no_row_name_no_account_left() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],
