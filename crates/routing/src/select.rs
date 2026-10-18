@@ -2510,6 +2510,12 @@ pub struct SlowDownRead {
     /// The pool's `slow_down_stretch_seconds`.
     pub threshold_ms: i64,
     pub factor: f64,
+    /// The share of the read's slow-down the holds apply: the time the stretch has read over zero over one burn
+    /// average, clamped to [0, 1], and 1 on a window at or past the ceiling, whose standing is measured and not a
+    /// projection a short burst could still retract.
+    pub ramp: f64,
+    /// The factor the plan received, `1 - (1 - factor) x ramp`: the hold's outcome names it.
+    pub ramped: f64,
     pub speed: f64,
     /// The holds of the pool's pins on the account whose pace has a cycle, every kept pin weighted by its priced
     /// decayed rate on `five_hour`: a pin without a cycle runs unheld and a pin whose cycle is too long for the cap is
@@ -2583,7 +2589,8 @@ pub(crate) fn slow_down_of(
         .unwrap_or_default();
     let limit = ceiling(pool, FIVE_HOUR);
     let to_horizon = seconds(horizon - now);
-    let (stretch, factor) = if utilization >= limit {
+    let at_ceiling = utilization >= limit;
+    let (stretch, factor) = if at_ceiling {
         let overrun = if demand > 0.0 {
             (utilization - limit) / demand
         } else {
@@ -2601,9 +2608,24 @@ pub(crate) fn slow_down_of(
             (room / banded.increase()).clamp(0.0, 1.0),
         )
     };
+    // The ramp: the share of the read's factor the holds apply, grown over one burn average from the instant the
+    // stretch first read over zero, so a burst of a few minutes whose demand projects past the ceiling costs holds in
+    // proportion to how long it has stood, and a demand that lasts gets the full factor once the average has absorbed
+    // it. A window at or past the ceiling is a measured fact and not a projection a burst could retract, so it takes
+    // the full factor at once. The entry of a passed window reads no stamp, so the ramp restarts with every window.
+    let average_ms = burn_average_ms(pool);
+    let stood = state
+        .slow_down_in_force(pool, account_id, now)
+        .and_then(|entry| entry.ramp_since)
+        .map_or(0, |since| (now - since).max(0));
+    let ramp = if at_ceiling {
+        1.0
+    } else {
+        (stood as f64 / average_ms.max(1) as f64).clamp(0.0, 1.0)
+    };
+    let ramped = 1.0 - (1.0 - factor) * ramp;
     // Every kept pin, each weighted by its own priced burn on the window: a pin without a cycle is never held, but its
     // burn runs at full speed and weighs in the speed the demand divides by.
-    let average_ms = burn_average_ms(pool);
     let pins: Vec<(PinKey, Option<f64>, f64)> = state
         .pins_on(account_id, &in_pool(snapshot, pool))
         .into_iter()
@@ -2619,7 +2641,7 @@ pub(crate) fn slow_down_of(
             (p.key(), cycle, weight)
         })
         .collect();
-    let (plan, realized) = water_fill(&pins, factor, slow_down_hold_ms(pool));
+    let (plan, realized) = water_fill(&pins, ramped, slow_down_hold_ms(pool));
     Some(SlowDownRead {
         utilization,
         horizon,
@@ -2629,6 +2651,8 @@ pub(crate) fn slow_down_of(
         stretch_ms: (stretch * 1_000.0).round() as i64,
         threshold_ms: slow_down_stretch_ms(pool),
         factor,
+        ramp,
+        ramped,
         speed,
         plan,
         realized,
@@ -3700,6 +3724,9 @@ fn slow_down_facts(
         Fact::int("stretch_ms", read.stretch_ms).unit("ms"),
         Fact::int("threshold_ms", read.threshold_ms).unit("ms"),
         Fact::number("factor", read.factor),
+        // The share of the factor the holds apply, so the line reads what the demand projected, how much of it applied
+        // and the speed realized, in that order.
+        Fact::number("ramp", read.ramp).unit("percent"),
         // The speed this read's plan realizes, the one the hold's outcome names, so the line and the card read one.
         Fact::number("speed", read.realized),
         Fact::number("demand_five_hour", read.demand * 3_600.0).unit("percent_per_hour"),
@@ -6295,7 +6322,7 @@ fn finish(
                 }),
                 reason: hold.reason,
                 until: hold.until,
-                factor: read.map(|read| read.factor),
+                factor: read.map(|read| read.ramped),
                 speed: read.map(|read| read.realized),
                 stretch_ms: read.map(|read| read.stretch_ms),
                 threshold_ms: read.map(|read| read.threshold_ms),

@@ -9440,13 +9440,14 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
 /// Pool `p` slowing its pins over the tiered account `a` alone, its session `s1` pinned there burning ten input tokens
 /// a second, a tenth of the 5-hour window an hour through `priced_config`, and the window at 0.9 with its reset 40
 /// minutes after `AT`: the room under the ceiling lasts half an hour at that burn, so the sessions would pass it ten
-/// minutes before the reset, a factor of about 0.75 and a stretch under the pool's half-hour threshold. The purge
-/// ticks every 50 ms.
+/// minutes before the reset, a factor of about 0.75 and a stretch under the pool's half-hour threshold. The pool's burn
+/// average is `SLOWED_AVERAGE_MS`. The purge ticks every 50 ms.
 async fn slowed_router(now: &Arc<AtomicI64>) -> RouterHandle {
     let store = shedding_store(&["a"]);
     let mut pool = store.pool("p").unwrap().unwrap();
     pool.slow_down.slow_down = true;
     pool.slow_down.slow_down_stretch_seconds = 1800;
+    pool.shedding.burn_average_seconds = (SLOWED_AVERAGE_MS / 1_000) as u64;
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     with_tier(&store, "a");
     store
@@ -9473,6 +9474,10 @@ async fn slowed_router(now: &Arc<AtomicI64>) -> RouterHandle {
 
 /// The 5-hour reset `slowed_router` seeds on `a`.
 const SLOWED_RESET: i64 = AT + 40 * 60_000;
+
+/// The burn average `slowed_router` sets on its pool, which the stamp turn is dated at least one of before the held
+/// turn.
+const SLOWED_AVERAGE_MS: i64 = 30 * 60_000;
 
 /// Session `s1`'s main turn at `at` under its own request id.
 fn slowed_turn(handle: &RouterHandle, request_id: &str, at: i64) -> SelectRequest {
@@ -9514,8 +9519,17 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
     let now = Arc::new(AtomicI64::new(AT));
     let handle = slowed_router(&now).await;
     let mut events = handle.subscribe_events();
-    // The first turn reads the factor under 1 and opens the span. The second, 30 s on, gives the pin its cycle and
-    // waits its part of the slow-down.
+    // An auxiliary turn one burn average before the first main turn reads the factor under 1, opens the span and
+    // stamps the ramp, so the hold below applies the read's whole factor. The first main turn starts the pin's pace,
+    // and the second, 30 s on, gives the pin its cycle and waits its part of the slow-down.
+    let stamped = AT - SLOWED_AVERAGE_MS;
+    handle
+        .select(SelectRequest {
+            request_class: Some("quota".into()),
+            ..slowed_turn(&handle, "r-0", stamped)
+        })
+        .await
+        .unwrap();
     handle
         .select(slowed_turn(&handle, "r-1", AT))
         .await
@@ -9552,7 +9566,7 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
         RouterEvent::Decision { record, .. } => record,
         other => panic!("the start follows the decision whose read opened the span, not {other:?}"),
     };
-    assert_eq!(first.request.request_id, "r-1");
+    assert_eq!(first.request.request_id, "r-0");
     match &seen[started[0]] {
         RouterEvent::SlowDownStarted {
             account_id,
@@ -9566,7 +9580,7 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
         } => {
             assert_eq!(
                 (account_id.as_str(), pool_id.as_str(), *reset, *at),
-                ("a", "p", Some(SLOWED_RESET), AT)
+                ("a", "p", Some(SLOWED_RESET), stamped)
             );
             assert!(*factor > 0.0 && *factor < 1.0, "{factor}");
             assert_eq!(
@@ -9641,8 +9655,8 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
         RouterEvent::SlowDownEnded {
             account_id: "a".into(),
             pool_id: "p".into(),
-            since: AT,
-            duration_ms: t3 - AT,
+            since: stamped,
+            duration_ms: t3 - stamped,
             factor_min: lowest,
             held_ms: until - t2,
             at: t3 + SLOW_DOWN_WAIT_MS,
@@ -9817,6 +9831,7 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
     pool.slow_down.slow_down = true;
     pool.slow_down.slow_down_stretch_seconds = 900;
     pool.slow_down.slow_down_hold_seconds = 90;
+    pool.shedding.burn_average_seconds = (SLOWED_AVERAGE_MS / 1_000) as u64;
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     with_tier(&store, "a");
     // `slowed_router`'s figures: s1 burns a tenth of the 5-hour window an hour on `a`, at 0.9 with 40 minutes left.
@@ -9837,8 +9852,17 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
         "no pinned selection has read the account yet"
     );
 
-    // The first pinned turn reads the factor under 1. No pin has a cycle yet, so none is held, the realized speed is
-    // 1 and the demand is the achieved burn.
+    // An auxiliary turn one burn average before the first main turn reads the factor under 1, opens the span and
+    // stamps the ramp, so the hold below applies the read's whole factor. The first main turn reads it under 1 again.
+    // No pin has a cycle yet, so none is held, the realized speed is 1 and the demand is the achieved burn.
+    let stamped = AT - SLOWED_AVERAGE_MS;
+    handle
+        .select(SelectRequest {
+            request_class: Some("quota".into()),
+            ..slowed_turn(&handle, "r-0", stamped)
+        })
+        .await
+        .unwrap();
     handle
         .select(slowed_turn(&handle, "r-1", AT))
         .await
@@ -9850,7 +9874,7 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
     assert!(entry.stretch_ms > 0, "{entry:?}");
     assert_eq!(
         (entry.speed, entry.since, entry.threshold_ms, entry.hold_ms),
-        (1.0, Some(AT), 900_000, 90_000),
+        (1.0, Some(stamped), 900_000, 90_000),
         "the entry's own speed, its span's start and the pool's threshold and hold cap"
     );
     let five_hour = a.windows[FIVE_HOUR];

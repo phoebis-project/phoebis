@@ -806,6 +806,11 @@ pub struct SlowDownState {
     /// The 5-hour reading's reset at the read, `None` where the reading named none or its reset had passed: the
     /// window the entry was read in, which the stale test compares `read_at` against once the reset has passed.
     pub reset: Option<i64>,
+    /// When the read's factor first read under 1 since it last read 1, cleared at a read whose factor reads 1: the
+    /// ramp's stamp, from which the factor the holds realize is pulled from 1 to the read's over one burn average.
+    /// Unlike `slowed_since` it clears at once, so a burst that ends and comes back ramps again from nothing, and
+    /// unlike `over_since` it stamps the stretch's zero crossing, not the threshold's.
+    pub ramp_since: Option<i64>,
 }
 
 /// One edge of an account's slow-down span, which the task announces as an event.
@@ -2062,12 +2067,13 @@ impl RoutingState {
     /// The read's write, once per pinned selection on the account: the factor from the read, the speed folded toward
     /// `realized` (`speed x w + realized x (1 - w)` with `w = exp(-(now - read_at) / average_ms)`, the first write
     /// taking `realized` whole), `over_since` stamped while the read's stretch is over its threshold and cleared at or
-    /// under it, and the span the factor reads under 1 for opened and tracked. A read of 1 stamps `clear_since` and
-    /// leaves the span open, so a dip back under 1 inside `SLOW_DOWN_WAIT_MS` continues it and
-    /// `take_slow_down_edges` closes it once the factor has read 1 for the wait. A span that opens records its start
-    /// from this read, after the end of a span whose wait ran out before any drain closed it. An entry read before its
-    /// window's passed reset is replaced: its open span ends by that reset, and this read writes the entry afresh as a
-    /// first write does. Answers the entry as written, the read's stretch and threshold beside its factor.
+    /// under it, `ramp_since` stamped while the factor reads under 1 and cleared at 1, and the span the factor reads
+    /// under 1 for opened and tracked. A read of 1 stamps `clear_since` and leaves the span open, so a dip back under 1
+    /// inside `SLOW_DOWN_WAIT_MS` continues it and `take_slow_down_edges` closes it once the factor has read 1 for the
+    /// wait. A span that opens records its start from this read, after the end of a span whose wait ran out before any
+    /// drain closed it. An entry read before its window's passed reset is replaced: its open span ends by that reset,
+    /// and this read writes the entry afresh as a first write does. Answers the entry as written, the read's stretch
+    /// and threshold beside its factor.
     pub fn write_slow_down(
         &mut self,
         pool_id: &str,
@@ -2122,6 +2128,7 @@ impl RoutingState {
                 entry.read_at = now;
                 entry.reset = read.reset;
                 entry.over_since = over.then(|| entry.over_since.unwrap_or(now));
+                entry.ramp_since = slowed.then(|| entry.ramp_since.unwrap_or(now));
                 // A span whose factor has read 1 for the wait ended at the return, though no drain has closed it yet: a
                 // selection can land before the purge tick that would, and the dip it reads opens a span of its own.
                 if let (true, Some(since), Some(clear)) =
@@ -2161,6 +2168,7 @@ impl RoutingState {
                 read_at: now,
                 reset: read.reset,
                 over_since: over.then_some(now),
+                ramp_since: slowed.then_some(now),
                 slowed_since: slowed.then_some(now),
                 clear_since: None,
                 factor_min: read.factor.min(1.0),
@@ -4668,6 +4676,8 @@ mod tests {
             stretch_ms: 10 * MINUTE,
             threshold_ms: 30 * MINUTE,
             factor,
+            ramp: 1.0,
+            ramped: factor,
             speed: 1.0,
             plan: Vec::new(),
             realized: 1.0,
@@ -4740,6 +4750,8 @@ mod tests {
             stretch_ms: 10 * MINUTE,
             threshold_ms: 30 * MINUTE,
             factor,
+            ramp: 1.0,
+            ramped: factor,
             speed: 1.0,
             plan: Vec::new(),
             realized: 1.0,
@@ -4795,6 +4807,8 @@ mod tests {
             stretch_ms: 600_000,
             threshold_ms: 1_800_000,
             factor,
+            ramp: 1.0,
+            ramped: factor,
             speed: 1.0,
             plan: Vec::new(),
             realized: 1.0,
@@ -5020,6 +5034,8 @@ mod tests {
             stretch_ms: 0,
             threshold_ms: 1_800_000,
             factor: 1.0,
+            ramp: 1.0,
+            ramped: 1.0,
             speed: 1.0,
             plan: Vec::new(),
             realized: 1.0,

@@ -1722,6 +1722,9 @@ async fn a_retry_in_place_keeps_the_one_key_permit() {
 /// The rate-limit tier the slowed harness puts its account on, which its pricer keys on.
 const SLOWED_TIER: &str = "default_claude_max_20x";
 
+/// The burn average the slowed harness sets on its pool, and how far before the held turn's clock its turns run.
+const SLOWED_AVERAGE_SECONDS: u64 = 1_800;
+
 /// Every pin on `SLOWED_TIER` burns a tenth of the 5-hour window an hour whatever its usage, and nothing is charged, so
 /// the window reads what the test reports.
 fn tenth_an_hour() -> SharePricer {
@@ -1730,10 +1733,13 @@ fn tenth_an_hour() -> SharePricer {
     })
 }
 
-/// `a` priced by `tenth_an_hour`, with `s1`'s cycle built by two turns ten seconds apart, then `a`'s 5-hour window at
-/// 0.9 an hour from its reset and the pool's slow-down turned on with a two-second cap and the shedding round off: the
-/// room under the ceiling lasts half the time to the reset, so `s1`'s next turn, at the clock this leaves, reads a
-/// factor of about a half and waits the cap.
+/// `a` priced by `tenth_an_hour`, the pool's slow-down turned on with a two-second cap, the shedding round off and the
+/// burn average at `SLOWED_AVERAGE_SECONDS`, and `a`'s 5-hour window at 0.9 an hour from its reset, then three turns of
+/// `s1` ten seconds apart one burn average before the clock this leaves: the first places the pin, the second starts
+/// its pace and the third builds its ten-second cycle. The read is the older one so the ramp has stood a burn average
+/// by `s1`'s next turn: the turns read the factor under 1 at a ramp near 0 and pass unheld, and the gap of one burn
+/// average to that turn is a pause that leaves the cycle standing. The room under the ceiling lasts half the time to
+/// the reset, so that turn reads a factor of about a half and waits the cap.
 async fn slowed_harness(up: &FakeUpstream) -> Harness {
     let h = harness_with_router_config(
         up,
@@ -1756,7 +1762,34 @@ async fn slowed_harness(up: &FakeUpstream) -> Harness {
         )
         .unwrap();
     h.router.reload().await.unwrap();
-    for at in [NOW, NOW + 10_000] {
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.slow_down = SlowDown {
+        slow_down: true,
+        slow_down_hold_seconds: 2,
+        ..SlowDown::default()
+    };
+    pool.shedding.load_shedding = false;
+    pool.shedding.burn_average_seconds = SLOWED_AVERAGE_SECONDS;
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let back = SLOWED_AVERAGE_SECONDS as i64 * 1_000;
+    h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample::default().with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.9,
+                    reset: Some(NOW + 10_000 + 3_600_000),
+                    observed_at: NOW - back,
+                    source: WindowSource::Poll,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    for at in [NOW - back, NOW + 10_000 - back, NOW + 20_000 - back] {
         h.clock.store(at, Ordering::SeqCst);
         let resp = h
             .app
@@ -1767,31 +1800,6 @@ async fn slowed_harness(up: &FakeUpstream) -> Harness {
         assert_eq!(resp.status(), 200);
         drain(resp).await;
     }
-    let mut pool = h.store.pool("main").unwrap().unwrap();
-    pool.slow_down = SlowDown {
-        slow_down: true,
-        slow_down_hold_seconds: 2,
-        ..SlowDown::default()
-    };
-    pool.shedding.load_shedding = false;
-    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
-    h.router.reload().await.unwrap();
-    h.router
-        .report(Report::Sample {
-            account_id: "a".into(),
-            sample: UtilizationSample::default().with(
-                FIVE_HOUR,
-                WindowReading {
-                    utilization: 0.9,
-                    reset: Some(NOW + 10_000 + 3_600_000),
-                    observed_at: NOW + 10_000,
-                    source: WindowSource::Poll,
-                },
-            ),
-            incarnation: 1,
-            source_request_id: None,
-        })
-        .await;
     h.clock.store(NOW + 20_000, Ordering::SeqCst);
     h
 }
@@ -1850,7 +1858,7 @@ async fn a_slowed_pins_request_waits_before_the_head_and_the_completion_names_th
     );
     // The runtime's time runs on while the harness's clock stands short of the deadline: nothing is dialed.
     tokio::time::sleep(Duration::from_millis(1_500)).await;
-    assert_eq!(posts(&up), 2, "nothing is dialed while the hold runs");
+    assert_eq!(posts(&up), 3, "nothing is dialed while the hold runs");
     assert!(!waiting.is_finished());
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
     tokio::time::resume();
@@ -1859,7 +1867,7 @@ async fn a_slowed_pins_request_waits_before_the_head_and_the_completion_names_th
         .expect("the request goes on at its deadline")
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(posts(&up), 3, "one post once the hold ends");
+    assert_eq!(posts(&up), 4, "one post once the hold ends");
     let held = outcome(&resp).held.expect("the outcome names the hold");
     assert_eq!(held.waited_on, ["a"]);
     let waits = waits_of(&resp);
@@ -1908,7 +1916,7 @@ async fn a_second_request_of_the_same_pin_joins_the_standing_deadline() {
         "the second request of the pin waits to the first one's deadline"
     );
     tokio::time::sleep(Duration::from_millis(1_000)).await;
-    assert_eq!(posts(&up), 2, "neither is dialed before the deadline");
+    assert_eq!(posts(&up), 3, "neither is dialed before the deadline");
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
     tokio::time::resume();
     for request in waiting {
@@ -1927,6 +1935,6 @@ async fn a_second_request_of_the_same_pin_joins_the_standing_deadline() {
         );
         drain(resp).await;
     }
-    assert_eq!(posts(&up), 4);
+    assert_eq!(posts(&up), 5);
     up.shutdown().await;
 }

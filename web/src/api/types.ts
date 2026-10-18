@@ -1221,7 +1221,7 @@ export interface RecordHold {
   cohort: string | null;
   /** The pin's cycle the hold was sized from. */
   cycleMs: number | null;
-  /** The account's factor the hold was read under. */
+  /** The factor the hold was sized from: the account's factor pulled toward 1 by the ramp, the shed line's `ramp`. */
   factor: number | null;
   reason: string;
   /** The speed the account's holds realize together. */

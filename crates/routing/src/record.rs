@@ -563,7 +563,8 @@ pub struct HoldOutcome {
     /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
     /// account's cooldown, under `slow_down` the pin's deadline. `None` under `cap`.
     pub until: Option<i64>,
-    /// The account's factor the hold was read under. `Some` under `slow_down`, `None` otherwise.
+    /// The factor the hold was sized from: the account's factor pulled toward 1 by the ramp, the shed line's `ramp`.
+    /// `Some` under `slow_down`, `None` otherwise.
     pub factor: Option<f64>,
     /// The speed the account's holds realize together. `Some` under `slow_down`, `None` otherwise.
     pub speed: Option<f64>,

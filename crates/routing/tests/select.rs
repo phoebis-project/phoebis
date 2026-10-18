@@ -19942,6 +19942,8 @@ fn seeded_read(factor: f64, at: i64) -> SlowDownRead {
         stretch_ms: 0,
         threshold_ms: 1_800_000,
         factor,
+        ramp: 1.0,
+        ramped: factor,
         speed: 1.0,
         plan: Vec::new(),
         realized: 1.0,
@@ -19952,11 +19954,12 @@ fn seeded_read(factor: f64, at: i64) -> SlowDownRead {
 const AVERAGE_MS: i64 = 1_800_000;
 
 /// The keys the slow-down adds to the shed line.
-const SLOW_DOWN_FACTS: [&str; 7] = [
+const SLOW_DOWN_FACTS: [&str; 8] = [
     "slow_down",
     "stretch_ms",
     "threshold_ms",
     "factor",
+    "ramp",
     "speed",
     "demand_five_hour",
     "over_since",
@@ -20519,6 +20522,7 @@ fn the_record_names_the_read_the_factor_the_demand_and_the_cycle() {
     ]);
     reading(&mut st, "a", 0.80, 2 * HOUR, T);
     reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    stamped(&mut st, &s, "s1", T + 20_000);
     decide(&mut st, &off, &main_turn(&off, "s1", T), &mut rng());
     decide(
         &mut st,
@@ -20550,6 +20554,16 @@ fn the_record_names_the_read_the_factor_the_demand_and_the_cycle() {
     let b = candidate(&d.record, "b");
     assert_eq!(b.factor, None, "no entry stands on b");
     assert_eq!(b.windows[FIVE_HOUR].demand, Some(0.0));
+    let ramp = line(&d.record, "move:shed")
+        .facts
+        .iter()
+        .find(|f| f.key == "ramp")
+        .expect("the shed line names the ramp");
+    assert_eq!(
+        (&ramp.value, ramp.unit),
+        (&FactValue::Number(1.0), Some("percent")),
+        "a stamp one burn average old applies the whole factor"
+    );
     let pin = d.record.pin.as_ref().expect("a pin block");
     assert_eq!(
         (pin.cycle_ms, pin.slow_down_until),
@@ -20702,6 +20716,25 @@ fn cycled(st: &mut RoutingState, off: &RegistrySnapshot, session: &str, gap: i64
     }
 }
 
+/// One auxiliary turn of `session` on the slowing pool one burn average before `at`: a pinned request step 4 reads
+/// and writes the entry for, never held and folding no pace, so the ramp's stamp is a burn average old at `at` and a
+/// hold at `at` reads the read's full factor.
+fn stamped(st: &mut RoutingState, on: &RegistrySnapshot, session: &str, at: i64) {
+    let d = decide(st, on, &auxiliary(on, session, at - AVERAGE_MS), &mut rng());
+    assert!(
+        matches!(d.result, SelectResult::Selected(_)),
+        "an auxiliary turn is never held: {:?}",
+        d.result
+    );
+    let account = pinned(st, session).account_id;
+    assert!(
+        st.slow_down_state("p", &account)
+            .and_then(|entry| entry.ramp_since)
+            .is_some(),
+        "the stamp turn read a factor under 1"
+    );
+}
+
 /// The hold a decision answered, with the account it waits on.
 fn held_on(d: &Decided) -> (String, HoldFacts) {
     match &d.result {
@@ -20729,6 +20762,7 @@ fn assert_cycle_over_factor(d: &Decided, received_at: i64) {
 fn a_slowed_pins_main_turn_is_held_for_its_cycle_over_the_factor_before_the_renewal() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let before = pinned(&st, "s1");
     let req = main_turn(&on, "s1", T + 20 * SECOND);
@@ -20897,6 +20931,7 @@ fn a_slowed_pins_main_turn_after_a_pause_is_held_for_the_pace_it_runs_at() {
             d.result
         );
     }
+    stamped(&mut st, &on, "s1", resumed);
     let req = main_turn(&on, "s1", resumed);
     let d = decide(&mut st, &on, &req, &mut rng());
     let (account_id, hold) = held_on(&d);
@@ -20961,6 +20996,7 @@ fn the_hold_is_capped_by_the_pools_hold_and_not_served_under_a_second() {
 fn a_second_request_of_the_pin_inside_the_deadline_rejoins_it_and_folds_nothing() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let first = main_turn(&on, "s1", T + 20 * SECOND);
     let (_, hold) = held_on(&decide(&mut st, &on, &first, &mut rng()));
@@ -21002,6 +21038,7 @@ fn a_second_request_of_the_pin_inside_the_deadline_rejoins_it_and_folds_nothing(
 fn a_request_carrying_its_slow_down_hold_renews_and_is_not_held_again() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let first = main_turn(&on, "s1", T + 20 * SECOND);
     let (_, hold) = held_on(&decide(&mut st, &on, &first, &mut rng()));
@@ -21047,6 +21084,7 @@ fn a_request_carrying_its_slow_down_hold_renews_and_is_not_held_again() {
 fn a_decision_past_the_pins_slow_down_deadline_records_no_deadline() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let first = main_turn(&on, "s1", T + 20 * SECOND);
     let (_, hold) = held_on(&decide(&mut st, &on, &first, &mut rng()));
@@ -21079,6 +21117,7 @@ fn a_decision_past_the_pins_slow_down_deadline_records_no_deadline() {
 fn a_placement_after_a_slow_down_hold_names_the_hold_it_followed() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let first = main_turn(&on, "s1", T + 20 * SECOND);
     let (_, hold) = held_on(&decide(&mut st, &on, &first, &mut rng()));
@@ -21250,6 +21289,7 @@ fn the_exempt_classes_are_never_held() {
     );
     reading(&mut st, "a", 0.88, 2 * HOUR, T);
     reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     for (session, _) in sessions {
         cycled(&mut st, &off, session, 10 * SECOND, T + 10 * SECOND);
     }
@@ -21334,6 +21374,7 @@ fn a_pin_whose_cycle_outruns_the_cap_is_held_at_the_cap_and_the_rest_take_up_the
     ]);
     reading(&mut st, "a", 0.83, 2 * HOUR, T);
     reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    stamped(&mut st, &on, "s2", T + 300 * SECOND);
     cycled(&mut st, &off, "s2", 10 * SECOND, T + 290 * SECOND);
     cycled(&mut st, &off, "s1", 300 * SECOND, T + 300 * SECOND);
 
@@ -21362,9 +21403,11 @@ fn a_pin_whose_cycle_outruns_the_cap_is_held_at_the_cap_and_the_rest_take_up_the
         ((capped + short_speed) / 2.0 / speed - 1.0).abs() < 1e-3,
         "the realized speed weighs each pin's speed by its burn: {speed}"
     );
+    // The stamp's entry at full speed, folded once over one burn average.
+    let w = (-1.0_f64).exp();
     assert!(close(
         st.slow_down_state("p", "a").expect("an entry").speed,
-        speed
+        w + (1.0 - w) * speed
     ));
 
     // s1's own turn five minutes on is held at the cap.
@@ -21382,10 +21425,12 @@ fn a_slow_down_read_folds_the_capped_pins_realized_speed_once() {
     let (off, on) = held_pools(120);
     // Ten minutes of decay and of the time to the reset gone: at 0.85 the factor reads about a half then.
     let mut st = slowed_s1(0.85);
+    stamped(&mut st, &on, "s1", T + 600 * SECOND);
     cycled(&mut st, &off, "s1", 300 * SECOND, T + 300 * SECOND);
-    assert!(
-        st.slow_down_state("p", "a").is_none(),
-        "the switched-off turns write no entry"
+    assert_eq!(
+        st.slow_down_state("p", "a").map(|entry| entry.speed),
+        Some(1.0),
+        "the switched-off turns fold no speed"
     );
     let d = decide(
         &mut st,
@@ -21409,23 +21454,30 @@ fn a_slow_down_read_folds_the_capped_pins_realized_speed_once() {
     let entry = st
         .slow_down_state("p", "a")
         .expect("the read wrote the entry");
+    let w = (-1.0_f64).exp();
     assert!(
-        (entry.speed / realized - 1.0).abs() < 1e-3,
-        "the entry's speed is the plan's, folded once: {}",
+        (entry.speed / (w + (1.0 - w) * realized) - 1.0).abs() < 1e-3,
+        "the entry's speed folds the plan's once into the stamp's full speed over one burn average: {}",
         entry.speed
     );
 }
 
 /// `s1` burning a tenth of 0.15 of `a`'s 5-hour window an hour and back every two minutes, the cap of
 /// `held_pools(120)`, and `s2` burning the rest with no cycle yet, on `a` at `five_hour` with its reset two hours after
-/// `T`, and `b` at 0.1. Held at the cap, `s1` runs at half its pace.
-fn a_tenth_with_a_cycle(off: &RegistrySnapshot, five_hour: f64) -> RoutingState {
+/// `T`, and `b` at 0.1. Held at the cap, `s1` runs at half its pace. The ramp's stamp is dated for a hold at `held_at`.
+fn a_tenth_with_a_cycle(
+    off: &RegistrySnapshot,
+    on: &RegistrySnapshot,
+    five_hour: f64,
+    held_at: i64,
+) -> RoutingState {
     let mut st = rounding(vec![
         burning("s1", "a", 1.5, true, T),
         burning("s2", "a", 13.5, true, T),
     ]);
     reading(&mut st, "a", five_hour, 2 * HOUR, T);
     reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    stamped(&mut st, on, "s1", held_at);
     cycled(&mut st, off, "s1", 120 * SECOND, T + 120 * SECOND);
     st
 }
@@ -21433,8 +21485,8 @@ fn a_tenth_with_a_cycle(off: &RegistrySnapshot, five_hour: f64) -> RoutingState 
 #[test]
 fn a_pin_without_a_cycle_runs_at_full_speed_and_the_held_pins_cover_its_burn() {
     let (off, on) = held_pools(120);
-    let mut st = a_tenth_with_a_cycle(&off, 0.80);
     let at = T + 240 * SECOND;
+    let mut st = a_tenth_with_a_cycle(&off, &on, 0.80, at);
     let req = main_turn(&on, "s1", at);
     let d = decide(&mut st, &on, &req, &mut rng());
     let shed = line(&d.record, "move:shed");
@@ -21452,8 +21504,11 @@ fn a_pin_without_a_cycle_runs_at_full_speed_and_the_held_pins_cover_its_burn() {
         Some(req.received_at + 120_000),
         "the held pin covers the unheld burn up to the cap"
     );
+    // The stamp's entry at full speed, folded once over one burn average.
+    let w = (-1.0_f64).exp();
+    let folded = w + (1.0 - w) * 0.95;
     assert!(
-        (st.slow_down_state("p", "a").expect("an entry").speed - 0.95).abs() < 1e-6,
+        (st.slow_down_state("p", "a").expect("an entry").speed - folded).abs() < 1e-6,
         "the entry holds the account's speed"
     );
 
@@ -21467,7 +21522,7 @@ fn a_pin_without_a_cycle_runs_at_full_speed_and_the_held_pins_cover_its_burn() {
     let achieved = number(fact(shed, "demand_five_hour"));
     let demand = number(fact(line(&next.record, "move:shed"), "demand_five_hour"));
     assert!(
-        (demand * 0.95 / achieved - 1.0).abs() < 1e-6,
+        (demand * folded / achieved - 1.0).abs() < 1e-6,
         "the demand is the achieved burn over the account's speed: {demand} against {achieved}"
     );
 }
@@ -21476,8 +21531,8 @@ fn a_pin_without_a_cycle_runs_at_full_speed_and_the_held_pins_cover_its_burn() {
 fn the_stretch_read_over_an_unheld_pins_full_speed_stays_under_the_threshold() {
     let (off, on) = held_pools(120);
     // At 0.74 the factor reads above 0.8, so the stretch starts under the half hour threshold.
-    let mut st = a_tenth_with_a_cycle(&off, 0.74);
     let at = T + 240 * SECOND;
+    let mut st = a_tenth_with_a_cycle(&off, &on, 0.74, at);
     let d = decide(&mut st, &on, &main_turn(&on, "s1", at), &mut rng());
     assert_eq!(held_on(&d).1.reason, "slow_down");
     let shed = line(&d.record, "move:shed");
@@ -21491,11 +21546,14 @@ fn the_stretch_read_over_an_unheld_pins_full_speed_stays_under_the_threshold() {
     let to_reset = stretch / (1.0 - factor);
     assert!(to_reset * (1.0 - factor * 0.5) > 1_800_000.0);
 
+    // The stamp's entry at full speed, folded once over one burn average.
+    let w = (-1.0_f64).exp();
+    let folded = w + (1.0 - w) * 0.95;
     let next = decide(&mut st, &on, &main_turn(&on, "s2", at), &mut rng());
     let shed = line(&next.record, "move:shed");
     let stretch = number(fact(shed, "stretch_ms"));
     assert!(
-        (stretch / (to_reset * (1.0 - factor * 0.95)) - 1.0).abs() < 1e-3,
+        (stretch / (to_reset * (1.0 - factor * folded)) - 1.0).abs() < 1e-3,
         "the next read divides the demand by the account's speed: {stretch}"
     );
     assert!(
@@ -21514,6 +21572,7 @@ fn the_stretch_read_over_an_unheld_pins_full_speed_stays_under_the_threshold() {
 fn an_exempt_request_passes_a_standing_deadline_unheld_and_folds_nothing() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let (_, hold) = held_on(&decide(
         &mut st,
@@ -21599,6 +21658,7 @@ fn an_exempt_request_passes_a_standing_deadline_unheld_and_folds_nothing() {
 fn a_cooled_source_with_a_standing_deadline_places_the_request_afresh_unheld() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let (_, hold) = held_on(&decide(
         &mut st,
@@ -21622,6 +21682,7 @@ fn a_cooled_source_with_a_standing_deadline_places_the_request_afresh_unheld() {
 
 /// `s1` held on `a` at `T + 20 s` for its ten-second cycle at about half speed, with the deadline answered.
 fn held_on_a(st: &mut RoutingState, off: &RegistrySnapshot, on: &RegistrySnapshot) -> i64 {
+    stamped(st, on, "s1", T + 20 * SECOND);
     cycled(st, off, "s1", 10 * SECOND, T + 10 * SECOND);
     let (_, hold) = held_on(&decide(
         st,
@@ -21725,9 +21786,11 @@ fn a_shed_moved_pin_is_held_on_its_destination_with_the_cycle_it_carried() {
         ("b".into(), Some(MigrateReason::Shed)),
         "the move's own request is not held"
     );
-    // b's 5-hour window climbs, so the moved pin reads slowed there.
+    // b's 5-hour window climbs, so the moved pin reads slowed there, and the held turn comes a burn average after the
+    // stamp, a pause that leaves the carried cycle standing.
     reading(&mut st, "b", 0.93, 2 * HOUR, T + SECOND);
-    let req = main_turn(&on, "s1", T + 10 * SECOND);
+    stamped(&mut st, &on, "s1", T + SECOND + AVERAGE_MS);
+    let req = main_turn(&on, "s1", T + SECOND + AVERAGE_MS);
     let d = decide(&mut st, &on, &req, &mut rng());
     let (account_id, hold) = held_on(&d);
     assert_eq!((account_id.as_str(), hold.reason), ("b", "slow_down"));
@@ -21744,6 +21807,7 @@ fn a_slow_down_hold_then_a_spent_window_inside_the_bound_is_held_for_the_reset()
     let held_then_spent = |reason: &'static str| {
         let (off, on) = held_pools(120);
         let mut st = slowed_s1(0.80);
+        stamped(&mut st, &on, "s1", T + 20 * SECOND);
         cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
         let first = main_turn(&on, "s1", T + 20 * SECOND);
         let (_, hold) = held_on(&decide(&mut st, &on, &first, &mut rng()));
@@ -21792,6 +21856,7 @@ fn a_slow_down_hold_then_a_spent_window_inside_the_bound_is_held_for_the_reset()
 fn a_held_decision_records_its_hold_and_the_row_names_it() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
+    stamped(&mut st, &on, "s1", T + 20 * SECOND);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let d = decide(
         &mut st,
@@ -21839,6 +21904,214 @@ fn a_held_decision_records_its_hold_and_the_row_names_it() {
         ]
     );
     assert_eq!(d.summary.hold, Some(outcome));
+}
+
+#[test]
+fn the_ramp_pulls_the_factor_toward_one_over_one_burn_average_after_the_stretch_first_reads_over_zero(
+) {
+    let (off, on) = paced_pools(120, AVERAGE_MS);
+    // s1 carries the burst on a ten-second cycle. s2 builds a cycle of its own ten minutes on, where a turn of s1 would
+    // fold its ten-minute gap into its cycle. Each held point re-reads a so the factor reads about a half there.
+    let mut st = rounding(vec![
+        burning("s1", "a", 15.0, true, T),
+        burning("s2", "a", 1.0, true, T),
+    ]);
+    reading(&mut st, "a", 0.80, 2 * HOUR, T);
+    reading(&mut st, "b", 0.1, 2 * HOUR, T);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    let shed_number = |d: &Decided, key: &str| number(fact(line(&d.record, "move:shed"), key));
+    let about_a_half = |factor: f64| {
+        assert!(
+            (0.4..=0.6).contains(&factor),
+            "the factor reads about a half: {factor}"
+        );
+    };
+
+    // The first read over zero stamps the entry and opens the span on the read's factor, and the plan holds nothing.
+    let started = T + 20 * SECOND;
+    let d = decide(&mut st, &on, &main_turn(&on, "s1", started), &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("the first read holds nothing: {:?}", d.result)
+    };
+    assert!(sel.trace.renewed, "the first read holds nothing");
+    let factor = shed_number(&d, "factor");
+    about_a_half(factor);
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "ramp"),
+        &FactValue::Number(0.0)
+    );
+    assert_eq!(
+        st.slow_down_state("p", "a")
+            .and_then(|entry| entry.ramp_since),
+        Some(started)
+    );
+    let edges = st.take_slow_down_edges(started);
+    assert!(
+        matches!(edges.as_slice(), [(_, _, SlowDownEdge::Started { factor: opened, .. })] if *opened == factor),
+        "the span opens on the read's factor: {edges:?}"
+    );
+
+    // Ten minutes on, a third of the burn average: the plan receives a factor a third of the way from 1 to the read's.
+    reading(&mut st, "a", 0.85, 2 * HOUR, T + 10 * MINUTE);
+    cycled(
+        &mut st,
+        &off,
+        "s2",
+        10 * SECOND,
+        T + 10 * MINUTE + 10 * SECOND,
+    );
+    let req = main_turn(&on, "s2", T + 10 * MINUTE + 20 * SECOND);
+    let d = decide(&mut st, &on, &req, &mut rng());
+    let (account_id, hold) = held_on(&d);
+    assert_eq!((account_id.as_str(), hold.reason), ("a", "slow_down"));
+    let factor = shed_number(&d, "factor");
+    about_a_half(factor);
+    let ramp = shed_number(&d, "ramp");
+    assert!(
+        (ramp - 1.0 / 3.0).abs() < 1e-3,
+        "ten minutes of a thirty-minute average: {ramp}"
+    );
+    let outcome = d.record.outcome.hold.clone().expect("a held outcome");
+    let ramped = outcome.factor.expect("the factor the hold was sized from");
+    assert!(
+        (ramped - (1.0 - (1.0 - factor) / 3.0)).abs() < 1e-6,
+        "the hold is sized from a factor a third of the way from 1 to the read's: {ramped} against {factor}"
+    );
+    assert_cycle_over_factor(&d, req.received_at);
+    let length = hold.until.expect("the pin's deadline") - req.received_at;
+    assert!(
+        length >= 2 * SLOW_DOWN_MIN_HOLD_MS,
+        "the ramped plan holds the pin: {length}"
+    );
+    // The ramped plan's realized speed folds into the entry once, over the ten minutes since the first read.
+    let w = (-600.0_f64 / 1_800.0).exp();
+    let speed = st.slow_down_state("p", "a").expect("an entry").speed;
+    let realized = outcome.speed.expect("the realized speed");
+    assert!(
+        (speed - (w + (1.0 - w) * realized)).abs() < 1e-3,
+        "the entry folds the ramped plan's speed: {speed} against {realized}"
+    );
+
+    // One burn average after the first read the plan receives the read's whole factor, and s1's gap of one burn
+    // average is a pause that leaves its cycle standing.
+    let resumed = started + AVERAGE_MS;
+    reading(&mut st, "a", 0.89, 2 * HOUR, resumed);
+    let req = main_turn(&on, "s1", resumed);
+    let d = decide(&mut st, &on, &req, &mut rng());
+    assert_eq!(held_on(&d).1.reason, "slow_down");
+    let factor = shed_number(&d, "factor");
+    about_a_half(factor);
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "ramp"),
+        &FactValue::Number(1.0)
+    );
+    let outcome = d.record.outcome.hold.clone().expect("a held outcome");
+    assert!(
+        (outcome.factor.expect("the factor the hold was sized from") - factor).abs() < 1e-12,
+        "the whole factor: {outcome:?} against {factor}"
+    );
+    assert_eq!(outcome.cycle_ms, Some(10_000));
+    assert_cycle_over_factor(&d, req.received_at);
+    // The read divides the pins' decayed burn by the speed the entry folded from the ramped plan.
+    let a = candidate(&d.record, "a");
+    let demand = shed_number(&d, "demand_five_hour");
+    assert!(
+        (demand - a.burn[FIVE_HOUR] / speed).abs() < 1e-6,
+        "the demand is the decayed burn over the entry's speed: {demand} against {}",
+        a.burn[FIVE_HOUR]
+    );
+}
+
+#[test]
+fn a_read_whose_factor_is_one_clears_the_stamp_and_the_next_burst_ramps_from_nothing() {
+    let (off, on) = paced_pools(120, AVERAGE_MS);
+    let mut st = slowed_s1(0.80);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    let ramp_since = |st: &RoutingState| {
+        st.slow_down_state("p", "a")
+            .and_then(|entry| entry.ramp_since)
+    };
+    decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 20 * SECOND),
+        &mut rng(),
+    );
+    assert_eq!(ramp_since(&st), Some(T + 20 * SECOND));
+
+    // The burst ends: the window reads far under the ceiling and the factor returns to 1.
+    reading(&mut st, "a", 0.1, 2 * HOUR, T + 30 * SECOND);
+    let d = decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 30 * SECOND),
+        &mut rng(),
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "factor"),
+        &FactValue::Number(1.0)
+    );
+    assert_eq!(ramp_since(&st), None, "a read of 1 clears the stamp");
+
+    // The burst comes back and ramps again from nothing.
+    reading(&mut st, "a", 0.80, 2 * HOUR, T + 40 * SECOND);
+    let d = decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", T + 40 * SECOND),
+        &mut rng(),
+    );
+    assert!(
+        matches!(d.result, SelectResult::Selected(_)),
+        "the burst's first read holds nothing: {:?}",
+        d.result
+    );
+    let shed = line(&d.record, "move:shed");
+    assert!(number(fact(shed, "factor")) < 1.0, "{:?}", shed.facts);
+    assert_eq!(fact(shed, "ramp"), &FactValue::Number(0.0));
+    assert_eq!(ramp_since(&st), Some(T + 40 * SECOND));
+}
+
+#[test]
+fn a_window_at_or_past_the_ceiling_takes_its_full_factor_at_once() {
+    let (off, on) = paced_pools(120, AVERAGE_MS);
+    let ceiling = on.pool("p").expect("the pool").window_ceiling;
+    // s1 on a ten-second cycle with a at `five_hour` and no stamp: its main turn at T + 20 s is the first read.
+    let first_read = |five_hour: f64| {
+        let mut st = rounding(vec![burning("s1", "a", 7.5, true, T)]);
+        reading(&mut st, "a", five_hour, 2 * HOUR, T);
+        reading(&mut st, "b", 0.1, 2 * HOUR, T);
+        cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+        let req = main_turn(&on, "s1", T + 20 * SECOND);
+        (decide(&mut st, &on, &req, &mut rng()), req.received_at)
+    };
+    let (d, received_at) = first_read(ceiling);
+    let (_, hold) = held_on(&d);
+    assert_eq!(
+        hold.until.expect("the pin's deadline") - received_at,
+        120_000,
+        "the window at the ceiling holds the pin at the cap at its first read"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        (fact(shed, "ramp"), fact(shed, "factor")),
+        (&FactValue::Number(1.0), &FactValue::Number(0.0))
+    );
+    assert_eq!(
+        d.record.outcome.hold.as_ref().and_then(|hold| hold.factor),
+        Some(0.0)
+    );
+
+    let (d, _) = first_read(ceiling - 0.001);
+    assert!(
+        matches!(d.result, SelectResult::Selected(_)),
+        "a thousandth under the ceiling is the projection's arm, which ramps: {:?}",
+        d.result
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "ramp"),
+        &FactValue::Number(0.0)
+    );
 }
 
 /// `s1` pinned on `a` burning `burn` and `b` at 0.1 two hours from its reset, `a`'s readings the case's own.

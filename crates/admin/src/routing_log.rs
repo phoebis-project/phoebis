@@ -237,7 +237,8 @@ pub(crate) struct SummaryHold {
     /// The instant the request waits for: under `reset` the later of the spent window's reset and the end of the
     /// account's cooldown, under `slow_down` the pin's deadline. Null under `cap`.
     pub until: Option<i64>,
-    /// The account's factor the hold was read under. Set under `slow_down`, null otherwise.
+    /// The factor the hold was sized from: the account's factor pulled toward 1 by the ramp, the shed line's `ramp`.
+    /// Set under `slow_down`, null otherwise.
     pub factor: Option<f64>,
     /// The speed the account's holds realize together. Set under `slow_down`, null otherwise.
     pub speed: Option<f64>,

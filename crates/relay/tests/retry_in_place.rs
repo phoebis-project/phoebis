@@ -1073,6 +1073,42 @@ async fn cycle_then_slow(h: &Harness) {
     h.clock.store(NOW + 20_000, Ordering::SeqCst);
 }
 
+/// The burn average `slow_then_cycle` sets on the pool, and how far before the held turn's clock its turns run.
+const SLOWED_AVERAGE_SECONDS: u64 = 1_800;
+
+/// The pool's slow-down turned on with a two-second cap, the shedding round off and the burn average at
+/// `SLOWED_AVERAGE_SECONDS`, and `a`'s 5-hour window at `utilization` with its reset at `reset`, then three turns of
+/// `s1` ten seconds apart one burn average before the clock this leaves, at `s1`'s next turn: the first places the
+/// pin, the second starts its pace and the third builds its ten-second cycle. The read is the older one so the ramp has
+/// stood a burn average by that turn: the turns read the factor under 1 at a ramp near 0 and pass unheld, and the gap
+/// of one burn average to that turn is a pause that leaves the cycle standing.
+async fn slow_then_cycle(h: &Harness, utilization: f64, reset: i64) {
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.slow_down = SlowDown {
+        slow_down: true,
+        slow_down_hold_seconds: 2,
+        ..SlowDown::default()
+    };
+    pool.shedding.load_shedding = false;
+    pool.shedding.burn_average_seconds = SLOWED_AVERAGE_SECONDS;
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let back = SLOWED_AVERAGE_SECONDS as i64 * 1_000;
+    five_hour_at(h, "a", utilization, reset, NOW - back).await;
+    for at in [NOW - back, NOW + 10_000 - back, NOW + 20_000 - back] {
+        h.clock.store(at, Ordering::SeqCst);
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, MODEL, "s1"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        drain(resp).await;
+    }
+    h.clock.store(NOW + 20_000, Ordering::SeqCst);
+}
+
 /// `account`'s 5-hour window at `utilization` with its reset at `reset`, read at `at`.
 async fn five_hour_at(h: &Harness, account: &str, utilization: f64, reset: i64, at: i64) {
     h.router
@@ -1219,8 +1255,7 @@ async fn a_slow_down_hold_is_cut_at_the_request_deadline_and_a_slot_wait_after_i
         .await
         .unwrap();
     assert_eq!(outcome(&open).account_id, "b");
-    cycle_then_slow(&h).await;
-    five_hour_at(&h, "a", 0.9, NOW + 10_000 + 3_600_000, NOW + 10_000).await;
+    slow_then_cycle(&h, 0.9, NOW + 10_000 + 3_600_000).await;
     let mut events = h.router.subscribe_events();
     tokio::time::pause();
     let app = h.app.clone();
@@ -1292,8 +1327,7 @@ async fn a_slow_down_hold_then_a_spent_window_waits_out_the_reset_under_its_own_
     )
     .await;
     on_tier(&h, &["a"]).await;
-    cycle_then_slow(&h).await;
-    five_hour_at(&h, "a", 0.9, NOW + 10_000 + 3_600_000, NOW + 10_000).await;
+    slow_then_cycle(&h, 0.9, NOW + 10_000 + 3_600_000).await;
     let mut events = h.router.subscribe_events();
     tokio::time::pause();
     let app = h.app.clone();
@@ -1322,7 +1356,7 @@ async fn a_slow_down_hold_then_a_spent_window_waits_out_the_reset_under_its_own_
         (200, "a", 1),
         "one wire attempt, on the account the pin stayed on"
     );
-    assert_eq!(credentials_seen(&up), [A, A, A]);
+    assert_eq!(credentials_seen(&up), [A, A, A, A]);
     assert_eq!(reasons(&waits_of(&resp)), ["slow_down", "reset"]);
     drain(resp).await;
     up.shutdown().await;
