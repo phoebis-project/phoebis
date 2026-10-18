@@ -10316,11 +10316,26 @@ async fn a_head_under_the_margin_after_a_wall_lets_the_next_poll_announce_it_aga
     now.store(3_000, Ordering::SeqCst);
     handle.report(head_reading(3_000, 0.90, reset, "r-1")).await;
     handle.samples().await.unwrap();
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.90,
+            reset,
+            WindowSource::Head,
+            Some("r-1")
+        )),
+        "a head under the margin reads the window cleared: {event:?}"
+    );
     now.store(4_000, Ordering::SeqCst);
     handle
         .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
         .await;
-    match next_spent(&mut events).await {
+    // The next edge is the wall itself, so the head cleared the window once.
+    match next_window_edge(&mut events).await {
         RouterEvent::WindowSpent {
             reset: spent_reset,
             source,
@@ -10395,6 +10410,20 @@ async fn a_cooldown_set_at_the_wall_stands_through_a_head_within_the_margin() {
         .await;
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == "account" && cause == "recovered" && at == 3_000)
+    );
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            1.0 - SPENT_MARGIN - 0.001,
+            reset,
+            WindowSource::Head,
+            Some("r-2")
+        )),
+        "the head that releases the row reads the window cleared: {event:?}"
     );
     wait_for(WRITTEN, || {
         store
