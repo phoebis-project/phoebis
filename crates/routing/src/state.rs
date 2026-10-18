@@ -2239,11 +2239,16 @@ impl RoutingState {
     /// The passed reset the entry was read before, where there is one: the later of the stored 5-hour reading's
     /// reset and the entry's own among those at or before `now`. A head's whole seconds and a poll's milliseconds
     /// spell one reset two ways under a second apart, and whichever spelling has passed answers, since an entry
-    /// read before either was read in the old window. `None` while neither has passed, where the reading names no
-    /// reset, and with no reading: a reset more than a window's length ahead is not a reading of a fresh window.
+    /// read before either was read in the old window. A reading that names no reset, as a poll of an idle window
+    /// does, and no reading at all add no candidate, so the entry's own reset answers alone. `None` while no
+    /// candidate has passed.
     fn stale_reset(&self, account_id: &str, entry: &SlowDownState, now: i64) -> Option<i64> {
-        let reading = self.samples.get(account_id)?.reading(FIVE_HOUR)?.reset?;
-        let passed = [Some(reading), entry.reset]
+        let reading = self
+            .samples
+            .get(account_id)
+            .and_then(|sample| sample.reading(FIVE_HOUR))
+            .and_then(|reading| reading.reset);
+        let passed = [reading, entry.reset]
             .into_iter()
             .flatten()
             .filter(|reset| *reset <= now)
@@ -4869,30 +4874,32 @@ mod tests {
         );
     }
 
+    /// `a`'s entry on `p` as a read naming `reset` writes it at `read_at`.
+    fn written(state: &mut RoutingState, reset: Option<i64>, read_at: i64) -> SlowDownState {
+        state
+            .write_slow_down(
+                "p",
+                "a",
+                &SlowDownRead {
+                    reset,
+                    ..read_of(0.5)
+                },
+                1.0,
+                read_at,
+                1_800_000,
+            )
+            .clone()
+    }
+
     #[test]
     fn slow_down_stale_reads_the_passed_reset_of_the_entrys_window() {
         const MINUTE: i64 = 60_000;
         const R: i64 = 10 * HOUR_MS;
         let fresh = || RoutingState::from_load(RoutingLoad::default());
-        let write = |state: &mut RoutingState, reset: Option<i64>, read_at: i64| {
-            state
-                .write_slow_down(
-                    "p",
-                    "a",
-                    &SlowDownRead {
-                        reset,
-                        ..read_of(0.5)
-                    },
-                    1.0,
-                    read_at,
-                    1_800_000,
-                )
-                .clone()
-        };
 
         let mut state = fresh();
         read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
-        let entry = write(&mut state, Some(R), R - 30 * MINUTE);
+        let entry = written(&mut state, Some(R), R - 30 * MINUTE);
         assert_eq!(entry.reset, Some(R));
         assert!(
             !state.slow_down_stale("a", &entry, R - MINUTE),
@@ -4917,7 +4924,7 @@ mod tests {
         // Read in the gap after the reset, before any reading of the new window.
         let mut state = fresh();
         read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
-        let entry = write(&mut state, None, R + 10 * MINUTE);
+        let entry = written(&mut state, None, R + 10 * MINUTE);
         assert_eq!(entry.reset, None);
         assert!(
             !state.slow_down_stale("a", &entry, R + 11 * MINUTE),
@@ -4940,18 +4947,11 @@ mod tests {
             "the reading names a later reset that has passed"
         );
 
-        let mut state = fresh();
-        let entry = write(&mut state, Some(R), R - 30 * MINUTE);
-        assert!(
-            !state.slow_down_stale("a", &entry, R + MINUTE),
-            "no reading, whatever the entry's own reset"
-        );
-
         // A head's whole seconds and a poll's milliseconds spell one reset half a second apart: whichever has passed
         // answers.
         let mut state = fresh();
         read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
-        let entry = write(&mut state, Some(R + 500), R - MINUTE);
+        let entry = written(&mut state, Some(R + 500), R - MINUTE);
         assert_eq!(entry.reset, Some(R + 500));
         assert!(
             state.slow_down_stale("a", &entry, R + 200),
@@ -4963,11 +4963,47 @@ mod tests {
         );
         let mut state = fresh();
         read(&mut state, FIVE_HOUR, 0.5, Some(R + 500), R - HOUR_MS);
-        let entry = write(&mut state, Some(R), R - MINUTE);
+        let entry = written(&mut state, Some(R), R - MINUTE);
         assert_eq!(entry.reset, Some(R));
         assert!(
             state.slow_down_stale("a", &entry, R + 200),
             "the entry's own spelling has passed"
+        );
+    }
+
+    #[test]
+    fn slow_down_stale_reads_the_entrys_own_reset_where_the_reading_names_none() {
+        const MINUTE: i64 = 60_000;
+        const R: i64 = 10 * HOUR_MS;
+        let fresh = || RoutingState::from_load(RoutingLoad::default());
+
+        // A poll of an idle window names no reset, and its reading replaces the one that named the passed reset.
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
+        let entry = written(&mut state, Some(R), R - 30 * MINUTE);
+        read(&mut state, FIVE_HOUR, 0.0, None, R + MINUTE);
+        assert!(
+            state.slow_down_stale("a", &entry, R + 2 * MINUTE),
+            "its own reset passed under a reading naming none"
+        );
+
+        let mut state = fresh();
+        let entry = written(&mut state, Some(R), R - 30 * MINUTE);
+        assert!(
+            !state.slow_down_stale("a", &entry, R - MINUTE),
+            "no reading, and its own reset lies ahead"
+        );
+        assert!(
+            state.slow_down_stale("a", &entry, R + MINUTE),
+            "no reading, and its own reset passed"
+        );
+
+        let mut state = fresh();
+        read(&mut state, FIVE_HOUR, 0.0, None, R - HOUR_MS);
+        let entry = written(&mut state, None, R - 30 * MINUTE);
+        assert!(
+            !state.slow_down_stale("a", &entry, R + MINUTE),
+            "neither the reading nor the entry names a reset"
         );
     }
 

@@ -9663,9 +9663,9 @@ async fn a_purge_that_drops_a_slowed_entry_ends_its_span() {
     use phoebis_routing::RouterEvent;
     let now = Arc::new(AtomicI64::new(AT));
     let handle = slowed_router(&now).await;
-    // A reading whose reset lies two hours out, past the purge below: the router's own reset passes forty minutes in,
-    // and the entry read before it would leave at that reset with its span ending there. The drop this case reads is
-    // the quiet account's, whose span ends at the entry's last read.
+    // A reading whose reset lies two hours out, past the purge below: `SLOWED_RESET` passes forty minutes in, and the
+    // entry read before it would leave at that reset with its span ending there. The drop this case reads is the quiet
+    // account's, whose span ends at the entry's last read.
     handle
         .report(observed(
             "a",
@@ -9735,6 +9735,14 @@ async fn a_purge_after_the_reset_drops_the_slowed_entry_and_ends_its_span_at_the
     // The window's reset passes with the session still pinned and no selection after it: the purge tick drops the
     // entry of the old window, and its span ends at the reset.
     now.store(SLOWED_RESET + 60_000, Ordering::SeqCst);
+    // Asked before the purge's end is awaited, so the answer holds whether or not the tick has dropped the entry yet.
+    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    assert_eq!(a.slow_down, None, "no entry answers after the reset");
+    let five_hour = a.windows[FIVE_HOUR];
+    assert_eq!(
+        five_hour.demand, five_hour.burn,
+        "the demand is the achieved burn: {five_hour:?}"
+    );
     let ended = loop {
         if let RouterEvent::SlowDownEnded {
             account_id,
@@ -9759,13 +9767,6 @@ async fn a_purge_after_the_reset_drops_the_slowed_entry_and_ends_its_span_at_the
             .iter()
             .any(|event| matches!(event, RouterEvent::SlowDownEnded { .. })),
         "the dropped entry's span ends once"
-    );
-    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
-    assert_eq!(a.slow_down, None, "no entry answers after the reset");
-    let five_hour = a.windows[FIVE_HOUR];
-    assert_eq!(
-        five_hour.demand, five_hour.burn,
-        "the demand is the achieved burn: {five_hour:?}"
     );
 }
 
