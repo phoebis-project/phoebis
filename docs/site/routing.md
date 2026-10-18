@@ -315,15 +315,15 @@ either. A cooling account never reaches either rung, since the eligible set excl
 eligible set, and both rungs refuse it through the allowance check. A subagent under `with_main` lands its first request
 on its parent agent's pin in place of the static walk, and one under `by_strategy` skips the static walk. Every case
 that finds no live match lands by the strategy. A held request of a subagent cohort waits where its cohort already is
-rather than on the strategy's own pick, and a session already on an account, under any of its agents, is never held
-while that account can still serve. A token count is never placed and never held: it is bound to no cap and occupies no
-slot, so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with a pin follows it
-past the cap and the move rules, and one without lands by the strategy and leaves the agent's next message to be placed
-under the cap. An entry's warmth lasts the marker's TTL on its tier. When every marker of the request carried one TTL
-and the response reports its cache writes at the other alone, the reported TTL is the lifetime of the message boundaries
-that response wrote, and of the static boundaries only when the response read nothing from the cache, since the usage
-names no tier. A static tier the response read from and a tier it only read keep their marker's lifetime, and a request
-with markers at both TTLs keeps each marker's.
+rather than on the strategy's own pick, and a session already on an account, under any of its agents, is never held for
+a slot while that account can still serve. A token count is never placed and never held: it is bound to no cap and
+occupies no slot, so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with a
+pin follows it past the cap and the move rules, and one without lands by the strategy and leaves the agent's next
+message to be placed under the cap. An entry's warmth lasts the marker's TTL on its tier. When every marker of the
+request carried one TTL and the response reports its cache writes at the other alone, the reported TTL is the lifetime
+of the message boundaries that response wrote, and of the static boundaries only when the response read nothing from the
+cache, since the usage names no tier. A static tier the response read from and a tier it only read keep their marker's
+lifetime, and a request with markers at both TTLs keeps each marker's.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, `ready` or
 `funding_required` past its retry instant, off cooldown, and not already tried by this request. A request sent fast is
@@ -690,10 +690,9 @@ and the operator's choice.
 Probes, token counts, compactions, auxiliary requests (any `x-claude-code-request-class` outside `compaction`, `main`
 and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held for the
 slow-down, and the burn of each counts, so the holds of the main and subagent turns are sized to cover it. A probe has
-to land before the
-cache expires, a count costs nothing on the window, a compaction lowers the burn that follows it, and a fast request
-draws usage credits and no plan window. A request a guardrail blocks never reaches the selection, so it is never held,
-refreshes no pin and adds no burn ([Guardrails](guardrails.md)).
+to land before the cache expires, a count costs nothing on the window, a compaction lowers the burn that follows it, and
+a fast request draws usage credits and no plan window. A request a guardrail blocks never reaches the selection, so it
+is never held, refreshes no pin and adds no burn ([Guardrails](guardrails.md)).
 
 The handover to the round: with `load_shedding` on as well, the 5-hour window's trigger is the stretch in place of the
 projection. The round fires when the stretch has read over `slow_down_stretch_seconds` at a pinned selection and still
@@ -945,9 +944,9 @@ waits out a `Retry-After` under 20 seconds and treats a longer one as a block it
 most once per account and never past the request's one bound: a hold that runs out, or whose freed slot another request
 takes first, adds the account to the request's attempted set and the selection runs again. A request that dialed an
 account before its holds ran out, and a pool with no account to hold for, keep the `503 accounts_unavailable` below. A
-request whose session already holds a pin under any agent is never held, and a move whose every destination is at its
-cap is not made: the pin renews in place and the next request judges the move again. A held subagent waits where its
-cohort is.
+request whose session already holds a pin under any agent is never held for a slot, and a move whose every destination
+is at its cap is not made: the pin renews in place and the next request judges the move again. A held subagent waits
+where its cohort is.
 
 ### When nothing can serve
 
