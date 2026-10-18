@@ -36,7 +36,7 @@ const FOLLOW_UPS: [&str; 3] = [
 /// key "the storage key matches the registry, nothing to recover", the corrupt canary over rows the key still opens,
 /// the discard summary (one line per count), the prompt, the generated key file's path, the preparation's failure,
 /// the discard's failure, and the three follow-up steps. A run that exits 1 or 2 removes the key file it wrote, with
-/// the directories it created for it, in one line naming them, and keeps the lock file its open created.
+/// the directories it created for it, in one line naming them, and keeps the registry's lock file.
 pub fn run(
     config_path: &Path,
     args: &RecoverKeyArgs,
@@ -80,6 +80,11 @@ fn recover(
         .map(init::owner_ids)
         .transpose()
         .map_err(|error| error.to_string())?;
+    // Handed over before the open answers, so an open the registry refuses still leaves the service a lock file it can
+    // open.
+    if let Some(owner) = owner {
+        lock_file_for(registry, owner)?;
+    }
     // The lock comes before the key file, so a refusal on a running router leaves no generated key behind.
     let mut store = match Store::open_for_recovery(registry) {
         Ok(store) => store,
@@ -94,27 +99,20 @@ fn recover(
         }
     };
     let key_file = &config.storage.encryption_key_file;
-    // The service's next start opens the lock file, so one a root run created goes to the service's user.
-    let handed = match (owner, store.created_lock()) {
-        (Some(owner), Some(lock)) => hand_over(lock, owner),
-        _ => Ok(()),
-    };
     let mut written = None;
-    let outcome = handed
-        .and_then(|()| key_of(key_file, owner))
-        .and_then(|(key, source)| {
-            discard(
-                &mut store,
-                registry,
-                &key,
-                source,
-                key_file,
-                args,
-                input,
-                out,
-                &mut written,
-            )
-        });
+    let outcome = key_of(key_file, owner).and_then(|(key, source)| {
+        discard(
+            &mut store,
+            registry,
+            &key,
+            source,
+            key_file,
+            args,
+            input,
+            out,
+            &mut written,
+        )
+    });
     if matches!(outcome, Ok(0)) {
         return outcome;
     }
@@ -327,6 +325,17 @@ fn hand_over(path: &Path, (uid, gid): (u32, u32)) -> Result<(), String> {
         .map_err(|error| format!("handing {} to the owner: {error}", path.display()))
 }
 
+/// Creates the lock file the store's open takes beside `registry`, at `0600` in one open, and hands it to `owner` at
+/// once, where none is there yet.
+fn lock_file_for(registry: &Path, owner: (u32, u32)) -> Result<(), String> {
+    let lock = permissions::data_dir_of(registry).join("lock");
+    match permissions::create_private_file(&lock, 0o600) {
+        Ok(_) => hand_over(&lock, owner),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(format!("creating {}: {error}", lock.display())),
+    }
+}
+
 /// Removes the key file `write_key` wrote with the directories it created, and answers the one line naming what went,
 /// followed by a line for each that stayed. The directories of a key file that stays are not empty, so they are left
 /// untried.
@@ -399,6 +408,31 @@ mod tests {
         let key_file = keys.join("storage.key");
         std::fs::write(&key_file, "").unwrap();
         (keys, key_file)
+    }
+
+    // Off root the one owner a run may hand a file to is itself, so the case reads the creation and the mode, while the
+    // root case in the binary's tests reads the hand-over to another user.
+    #[test]
+    fn the_lock_file_a_run_creates_for_its_owner_is_private_and_one_already_there_stays_as_it_is() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("router.sqlite");
+        let lock = dir.path().join("lock");
+        let own = unsafe { (libc::geteuid(), libc::getegid()) };
+        lock_file_for(&registry, own).unwrap();
+        let metadata = std::fs::symlink_metadata(&lock).unwrap();
+        assert_eq!(
+            (metadata.mode() & 0o777, metadata.uid(), metadata.gid()),
+            (0o600, own.0, own.1)
+        );
+        std::fs::write(&lock, "held").unwrap();
+        lock_file_for(&registry, own).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&lock).unwrap(),
+            "held",
+            "a lock file already there stays as it is"
+        );
     }
 
     // A read-only directory refuses an unlink inside it off root, which drives the lines a run reaches only when a

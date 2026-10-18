@@ -798,6 +798,34 @@ fn a_root_run_hands_the_owner_the_key_file_the_directory_and_the_lock_it_created
     );
 }
 
+#[test]
+#[ignore = "needs uid 0, so the owner runs it"]
+fn a_root_run_the_open_refuses_leaves_the_owner_the_lock_file_it_created() {
+    use std::os::unix::fs::MetadataExt;
+
+    assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
+    let (uid, gid) = nobody();
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path());
+    let lock = dir.path().join("lock");
+    let old = key(OLD_KEY);
+    seed(&registry(dir.path()), &old);
+    // A registry restored onto a new host comes without the lock file the service's own open leaves beside it.
+    std::fs::remove_file(&lock).unwrap();
+    set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION + 1);
+    let out = recover_key(&config, &["--yes", "--owner", "nobody"], b"");
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let metadata = std::fs::symlink_metadata(&lock).unwrap();
+    assert_eq!(
+        (metadata.uid(), metadata.gid()),
+        (uid, gid),
+        "the service's user can open the lock the refused run kept: {}",
+        printed(&out)
+    );
+    set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION);
+    assert_untouched(&registry(dir.path()), &old);
+}
+
 /// The one line a recovery refuses a corrupt canary with while `readable` sealed rows still open under the key.
 fn corrupt_canary_line(readable: u64) -> String {
     let rows = if readable == 1 { "row" } else { "rows" };
