@@ -98,6 +98,7 @@ const VIEWS = [
   { path: '/accounts', title: 'Accounts', wait: '.detail__head', slug: 'accounts' },
   { path: '/pools', title: 'Pools', wait: '.pool .serving', slug: 'pools' },
   { path: '/keys', title: 'Keys', wait: '.card--table tbody tr', slug: 'keys' },
+  { path: '/guardrails', title: 'Guardrails', wait: '.guardrails__table', slug: 'guardrails' },
   { path: '/models', title: 'Models', wait: '.models__rules', slug: 'models' },
   { path: '/requests', title: 'Requests', wait: '.requests__table', slug: 'requests' },
   { path: '/analytics', title: 'Analytics', wait: '.analytics-section#traffic', slug: 'analytics' },
@@ -262,7 +263,7 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 17 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
+    if (read.groups !== 18 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 18 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
@@ -1813,7 +1814,7 @@ async function poolCardAges(theme, say, where) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
 /** The groups whose every field is expert, which the rail leaves out while the mode is off. */
 const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Slow-down', 'Failover', 'Cache diagnostics'];
 /**
@@ -1950,8 +1951,8 @@ async function chevronWeight(label, svg, size, stroke) {
 
 /**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
- * viewport, then the frame and the rail's strips at 720 px. The plain rail holds twelve groups under the five parents,
- * the five expert-only groups left out, and the expert rail all seventeen. Every group on the rail is chosen and read
+ * viewport, then the frame and the rail's strips at 720 px. The plain rail holds thirteen groups under the five parents,
+ * the five expert-only groups left out, and the expert rail all eighteen. Every group on the rail is chosen and read
  * while it shows: its height against the body's window, every cell against the two columns, every label beside its
  * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled while
  * its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select, nothing
@@ -4317,15 +4318,16 @@ async function analyticsTables(theme) {
 }
 
 /**
- * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on
- * the landing tab (its group column the fill, Key under the default grouping), the misses-by-reason breakdown (Key
- * again, its ten figure headers wrapped so the group column keeps its room, each known reason's header its short
- * word with the full label on its title) and the placements table on Cache (Rung), and the member budgets on Burn
- * (Pool and Account, the Spent column as wide as its meter's floor) with the meter reconciliation (Upstream). The view
- * returns to Traffic afterwards, as the other Analytics checks leave it.
+ * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on the
+ * landing tab (its group column the fill, Key under the default grouping) and the Guardrails card above it (Guardrail),
+ * the misses-by-reason breakdown (Key again, its ten figure headers wrapped so the group column keeps its room, each
+ * known reason's header its short word with the full label on its title) and the placements table on Cache (Rung), and
+ * the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor) with the meter
+ * reconciliation (Upstream). The view returns to Traffic afterwards, as the other Analytics checks leave it.
  */
 async function analyticsColumns(theme) {
-  await tableColumns(theme, 'analytics', '#traffic .card--table table', ['Key']);
+  await tableColumns(theme, 'analytics', '#traffic .card--table:not(.analytics-guardrails) table', ['Key']);
+  await tableColumns(theme, 'analytics', '#traffic .analytics-guardrails table', ['Guardrail']);
   try {
     if (!(await tabTo(theme, 'Cache'))) return;
     await tableColumns(theme, 'analytics', '.misses-table table', ['Key']);
@@ -7363,11 +7365,11 @@ async function keyAccessSelects(theme) {
   await atRest();
 }
 
-const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
+const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Guardrails', 'Sessions', 'Capture'];
 
 /**
  * The key dialog on the grouped frame, on create and on edit, in the plain view and then in the expert view: the frame
- * and a flat rail of five groups that fits it, 8 px apart with no line between them and a refusal dot 6 px after its
+ * and a flat rail of six groups that fits it, 8 px apart with no line between them and a refusal dot 6 px after its
  * label on its line, each group inside one window of the body with the layout `groupGeometry` reads, the derived id
  * under a new key's typed Name, the moving warning leading Key on an edit that changes the pool, the bodies warning
  * leading Capture while capture is on, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every

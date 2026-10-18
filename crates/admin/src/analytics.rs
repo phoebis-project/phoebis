@@ -8,11 +8,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    breakdown_paged, bucket_seconds, burn_groups_paged, held_series, hour_ceil, hour_of,
-    hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account, parse_range,
-    read_account_rollups, read_reconciliations, rewrite_series, series_paged, session_burn_series,
-    AccountRollupRow, FundingFilter, HourlyWindowSample, LedgerError, LiveKeys, RollupFilter,
-    SeriesFilter, SharePricing, GROUP_BYS,
+    breakdown_paged, bucket_seconds, burn_groups_paged, guardrail_counts, held_series, hour_ceil,
+    hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
+    parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
+    session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample, LedgerError,
+    LiveKeys, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
 };
 use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -142,7 +142,7 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
     Ok(((from, to), group_by, filter, live, kinds))
 }
 
-/// The query of `GET /admin/analytics/accounts` and `GET /admin/analytics/rewrites`.
+/// The query of `GET /admin/analytics/accounts`, `GET /admin/analytics/guardrails` and `GET /admin/analytics/rewrites`.
 // Declared for the document alone, since the handler reads the request by hand.
 #[allow(dead_code)]
 #[derive(serde::Deserialize, utoipa::IntoParams)]
@@ -1176,10 +1176,84 @@ pub(crate) async fn rewrites(
     .into_response()
 }
 
+/// One row per guardrail that matched a request in the range, ordered by id.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailCounts {
+    pub from: i64,
+    pub to: i64,
+    pub guardrails: Vec<GuardrailCount>,
+}
+
+/// One guardrail's matches over the range.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardrailCount {
+    pub id: String,
+    /// The registry's current name, null for a guardrail the registry no longer holds.
+    pub name: Option<String>,
+    /// The matches that let the request through.
+    pub observed: u64,
+    /// The matches that blocked the request.
+    pub blocked: u64,
+    /// The blocked requests' bytes summed.
+    pub blocked_bytes: u64,
+}
+
+/// Read the matches per guardrail.
+#[utoipa::path(
+    get,
+    path = "/admin/analytics/guardrails",
+    operation_id = "analytics_guardrails",
+    tag = "Analytics",
+    params(RangeQuery),
+    responses(
+        (status = 200, description = "The observed and blocked matches and the blocked requests' bytes per guardrail over the range.", body = GuardrailCounts),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 500, response = LedgerFailure),
+    ),
+)]
+pub(crate) async fn guardrails(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let (from, to) = match parse_range(q.get("range").map(String::as_str), (state.clock)()) {
+        Ok(r) => r,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+    };
+    let rows = match state
+        .ledger
+        .db()
+        .read(move |c| guardrail_counts(c, from, to))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return ledger_failure(e),
+    };
+    let snapshot = state.router.snapshot();
+    let names = snapshot.guardrails();
+    Json(GuardrailCounts {
+        from,
+        to,
+        guardrails: rows
+            .into_iter()
+            .map(|row| GuardrailCount {
+                name: names.name_of(&row.guardrail_id).map(String::from),
+                id: row.guardrail_id,
+                observed: row.observed,
+                blocked: row.blocked,
+                blocked_bytes: row.blocked_bytes,
+            })
+            .collect(),
+    })
+    .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalyticsAccounts, Budgets, Burn, Placements, Reconciliations, Rewrites, WindowSample,
+        AnalyticsAccounts, Budgets, Burn, GuardrailCounts, Placements, Reconciliations, Rewrites,
+        WindowSample,
     };
     use crate::openapi::round_trip::{fixture, round_trips};
     use crate::openapi::{BreakdownRow, SeriesPointView};
@@ -1217,6 +1291,7 @@ mod tests {
         }
         round_trips::<Budgets>("analytics_budgets");
         round_trips::<Burn>("analytics_burn");
+        round_trips::<GuardrailCounts>("analytics_guardrails");
         round_trips::<Placements>("analytics_placements");
         round_trips::<Reconciliations>("analytics_reconciliations");
         round_trips::<Rewrites>("analytics_rewrites");

@@ -143,6 +143,8 @@ export interface RequestsAddress {
   cacheMissReasons: string[];
   client: string;
   efforts: string[];
+  /** Guardrail ids, `-` for a request no guardrail matched. */
+  guardrails: string[];
   held: boolean;
   keys: string[];
   kind: '' | RequestKind;
@@ -182,6 +184,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   statuses: list('statuses'),
   outcomes: list('outcomes'),
   cacheMissReasons: list('cache_miss_reasons'),
+  guardrails: list('guardrails'),
   kind: { default: '', kind: 'choice', name: 'kind', values: REQUEST_KINDS },
   rows: { default: '25', kind: 'choice', name: 'rows', values: ['10', '25', '50', '100'] },
   range: { default: '24h', kind: 'range', presets: RANGE_PRESETS },

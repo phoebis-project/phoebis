@@ -12,8 +12,8 @@ use phoebis_bus::{
     ResponseFacts, Usage,
 };
 use phoebis_ledger::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
-    RequestRecord,
+    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, GuardrailMatchRecord,
+    QuotaSampleRecord, Record, RequestRecord,
 };
 use phoebis_routing::{lane_key, ClientClass};
 use phoebis_store::{AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow};
@@ -460,6 +460,19 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // No fixture carries a secret shaped like a real one, so the stand-in stays whatever the capture mints.
     key_created["secret"] = j!("phoebis-fixture");
     hold(&planted, "key_created", "POST /admin/keys", key_created);
+    // One guardrail observing on the pool and one enforcing on the key, so the matches the request rows below carry
+    // name registry rows and the pool's and the key's answers carry both lists. The first comes from the preset, so
+    // the guardrail fixtures carry the stamp the console reads.
+    let response = post(app, "/admin/guardrails", r#"{"id":"subagent-status-summary","preset":"subagent-status-summary","description":"The status line fork the client sends for each running subagent.","pools":["main"]}"#, Some(&cookie)).await;
+    assert_eq!(response.status(), 201, "the observing guardrail is created");
+    hold(
+        &planted,
+        "guardrail_created",
+        "POST /admin/guardrails",
+        json(response).await,
+    );
+    let response = post(app, "/admin/guardrails", r#"{"id":"large-auxiliary","name":"Large auxiliary requests","description":"Auxiliary requests that ask for more than 4096 output tokens.","mode":"enforce","conditions":[{"subject":"request_class","operator":"equals","value":"auxiliary"},{"subject":"body","operator":"gt","path":"max_tokens","value":"4096"}],"keys":["desktop"]}"#, Some(&cookie)).await;
+    assert_eq!(response.status(), 201, "the enforcing guardrail is created");
     // A real selection through the router, so `sessions.json` captures a pinned row and the trace below is the
     // shape `select` actually serializes, not a hand-built stand-in.
     let snapshot = parts.router.snapshot();
@@ -701,6 +714,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
             auto_mode: Some("server".into()),
             held: Some(placed_held),
             diagnostics_source: Some("router".into()),
+            // An observing guardrail matched and let the request through, so the row carries a match and no block.
+            guardrails: vec![GuardrailMatchRecord {
+                guardrail_id: "subagent-status-summary".into(),
+                position: 0,
+                blocked: false,
+            }],
             // The serving attempt started 400 ms in, so the head and the first content follow its write.
             ttfb_ms: Some(400 + 120),
             ttfc_ms: Some(400 + 300),
@@ -963,6 +982,48 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
+    // An auxiliary request a guardrail refused at admission: no attempt, no answer and no captured body, the
+    // observing guardrail's match beside the blocking one's. Older than every other row, so the list keeps their
+    // order, and under no session, so the session rows keep their counts.
+    let blocked_at = hour_ago - 600;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            session_id: None,
+            finished_at: Some(blocked_at + 4),
+            attempts: 0,
+            request_bytes: Some(48_213),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            duration_ms: Some(4),
+            error_code: Some("guardrail_blocked".into()),
+            request_class: Some("auxiliary".into()),
+            stream_end_at: None,
+            guardrail_id: Some("large-auxiliary".into()),
+            guardrails: vec![
+                GuardrailMatchRecord {
+                    guardrail_id: "subagent-status-summary".into(),
+                    position: 0,
+                    blocked: false,
+                },
+                GuardrailMatchRecord {
+                    guardrail_id: "large-auxiliary".into(),
+                    position: 1,
+                    blocked: true,
+                },
+            ],
+            ..request(
+                key_generation,
+                "r-blocked",
+                blocked_at,
+                "desktop",
+                "s1",
+                400,
+                "rejected",
+            )
+        },
+        attempts: Vec::new(),
+        bodies: None,
+    });
     parts
         .keepalive
         .apply_event(
@@ -977,7 +1038,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
-    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, received_at: now }));
+    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now }));
     parts
         .keepalive
         .observe(Event::AccountSelected(AccountSelected {
@@ -1017,7 +1078,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 6
+        v["requests"].as_array().unwrap().len() == 7
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
@@ -1091,6 +1152,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             fork: phoebis_bus::Fork::default(),
             presented_retired: false,
             rotation_at: None,
+            guardrail_id: None,
+            guardrails: Vec::new(),
             received_at: now,
         }));
     parts
@@ -1280,6 +1343,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "/admin/analytics/burn?range=24h&group_by=account",
         ),
         (
+            "analytics_guardrails",
+            "/admin/analytics/guardrails?range=24h",
+        ),
+        (
             "analytics_placements",
             "/admin/analytics/placements?range=24h",
         ),
@@ -1298,6 +1365,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ),
         ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),
+        ("guardrail_presets", "/admin/guardrails/presets"),
+        (
+            "guardrail_show",
+            "/admin/guardrails/subagent-status-summary",
+        ),
+        ("guardrails", "/admin/guardrails"),
         ("keepalive_recipes", "/admin/keepalive/recipes"),
         ("key_models", "/admin/keys/desktop/models"),
         ("keys", "/admin/keys"),
@@ -1322,6 +1395,22 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // The pool's one captured row carries no request class, so the observing guardrail's answer holds an unmatched
+    // verdict with its failing index, the shape the console's test panel reads.
+    let response = post(
+        app,
+        "/admin/guardrails/test",
+        r#"{"guardrail":"subagent-status-summary","pool_id":"main","limit":50}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), 200, "the dry run answers");
+    hold(
+        &planted,
+        "guardrail_test",
+        "POST /admin/guardrails/test",
+        json(response).await,
+    );
     // Main goes idle and a tick opens its idle window, so the overview carries a pool's row with its ten buckets for
     // the console to decode. It is read after the others, which show main busy.
     let request_generation = parts

@@ -27,7 +27,7 @@ import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, SHARE_NOTE, UNPRICED_TITLE, m
 import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtEquivalent, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtUsd, shareLabel, shortModel, withEstimate } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, poolRefusals, sortKeys, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -35,12 +35,12 @@ import { minuteSpan, windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, cooldownBadge, kindOrdered, memberSpeed, overageBadge, poolStatusSentence, selectionOrder, type Placement, type StandingBadge, windingDownBadge } from '@/lib/selection';
-import { dollarsUnder, KeyDialog, nativeSidesOf, sumTileOf, type FundedSum } from './KeysPage';
+import { dollarsUnder, GuardrailList, KeyDialog, nativeSidesOf, sumTileOf, type FundedSum } from './KeysPage';
 
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail; the words stay while the refusal dots come and go.
-const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { identity: 'needed', keys: 'after saving', members: 'needed' };
+const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after saving', identity: 'needed', keys: 'after saving', members: 'needed' };
 // Every field of these groups belongs to the expert view, so with the mode off a group has nothing to show and leaves
 // the rail.
 const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement', 'slowDown']);
@@ -54,6 +54,8 @@ const CAP_PERCENT = { max: 100, min: 10 } as const;
  * group that edits it.
  */
 const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: (pool: Pool) => string }[] = [
+  // Every attached guardrail, a disabled one too, since its attachment stands either way.
+  { group: 'guardrails', on: (p) => p.guardrails.length > 0, word: (p) => (p.guardrails.length === 1 ? '1 guardrail' : `${p.guardrails.length} guardrails`) },
   { group: 'autoMode', on: (p) => !p.autoModeServer, word: () => 'server-side auto mode off' },
   // Drawn on every pool, so a pool whose switch is off says so on its card.
   { group: 'shedding', on: () => true, word: (p) => (p.loadShedding ? `sheds above ${percentOf(p.windowCeiling)} %` : 'shedding off') },
@@ -1029,6 +1031,8 @@ interface PoolForm {
   engine: PoolEngineFields;
   /** The Custom pill is held apart from the values, so its inputs stay open while an edit passes through a preset. */
   failoverCustom: boolean;
+  /** The pool's guardrail ids in the order they run, which the save sends apart from the input. */
+  guardrails: string[];
   /** Off sends the scheduled horizon as null, the recipe's break-even, and keeps the number for the switch coming back. */
   horizonOn: boolean;
   horizonSeconds: number;
@@ -1065,6 +1069,7 @@ const blankForm = (): PoolForm => ({
   customAffinity: false,
   engine: { ...POOL_ENGINE_DEFAULTS },
   failoverCustom: false,
+  guardrails: [],
   horizonOn: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds !== null,
   horizonSeconds: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds ?? 3_600,
   keepalive: true,
@@ -1122,6 +1127,7 @@ const formFrom = (pool: Pool): PoolForm => ({
     windowCeiling: pool.windowCeiling,
   },
   failoverCustom: failoverPresetOf(pool) === 'custom',
+  guardrails: guardrailIdsOf(pool.guardrails),
   horizonOn: pool.keepalive.scheduledHorizonSeconds !== null,
   horizonSeconds: pool.keepalive.scheduledHorizonSeconds ?? 3_600,
   keepalive: pool.keepalive.enabled,
@@ -1194,6 +1200,8 @@ export function PoolDialog({
   const [stale, setStale] = useState<string | null>(null);
   const [chosen, setChosen] = useState<PoolGroup>('identity');
   const settings = useAsync(() => api.getSettings(), []);
+  // Once per opening of a saved pool, since a create takes no attachment and offers nothing to attach.
+  const guardrailRegistry = useAsync(() => (open && pool ? api.listGuardrails() : Promise.resolve(null)), [open, pool?.id]);
   const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours;
   // The flag `GroupedDialog` hands its expert wrappers, whose registry the bodies built here cannot reach: a half cell
   // whose row-mate is expert spans the row while the mate is hidden.
@@ -1261,7 +1269,7 @@ export function PoolDialog({
     () =>
       pool || pools.some((p) => p.id === draftPoolId)
         ? pools
-        : [...pools, { autoModeServer: form.autoModeServer, bodyCaptureHours: draftCaptureHours, id: draftPoolId, members: Object.keys(form.members).map((accountId) => ({ accountId })), modelRules: form.modelRules, name: draftName }],
+        : [...pools, { autoModeServer: form.autoModeServer, bodyCaptureHours: draftCaptureHours, guardrails: [], id: draftPoolId, members: Object.keys(form.members).map((accountId) => ({ accountId })), modelRules: form.modelRules, name: draftName }],
     [pool, pools, draftCaptureHours, draftPoolId, draftName, form.autoModeServer, form.members, form.modelRules],
   );
   const suggestions = useCatalogSuggestions(Object.keys(form.members), open);
@@ -1427,7 +1435,7 @@ export function PoolDialog({
     setError(null);
     setStale(null);
     try {
-      if (pool) await api.updatePool(pool.id, input, pool.revision);
+      if (pool) await api.updatePool(pool.id, { ...input, ...guardrailsChange(form.guardrails, opened.guardrails) }, pool.revision);
       else await api.createPool(input);
     } catch (e) {
       // Stated inside the dialog, which stays open: it sits in the browser's top layer, where a toast raised
@@ -1715,6 +1723,22 @@ export function PoolDialog({
           <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
         </Field>
         {rulesRefusal && refusalCallout(rulesRefusal)}
+      </div>
+    ),
+    guardrails: (
+      <div className="cells">
+        {/* Field's frame without its label element: a label forwards a click on its text to the first button inside. */}
+        <Field
+          label="Guardrails"
+          plain
+          hint={
+            <>
+              Top to bottom. A pool&apos;s guardrails run before a key&apos;s own. <PageLink to="/guardrails">Manage guardrails</PageLink>
+            </>
+          }
+        >
+          <GuardrailList onChange={(ids) => set('guardrails', ids)} pending={pool ? undefined : 'Guardrails can be attached once the pool is saved.'} refs={pool?.guardrails ?? []} registry={guardrailRegistry} value={form.guardrails} />
+        </Field>
       </div>
     ),
     autoMode: (

@@ -36,6 +36,8 @@ export { PeakBand } from '@/components/costs/PeakBand';
 export { PlanRates } from '@/components/costs/PlanRates';
 export { WindowsByTier } from '@/components/costs/WindowsByTier';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, Pill, SwitchedNumber, Toggle } from '@/components/ui/primitives';
+// The guardrail dialog a check mounts alone, on a stamp the story does not hold.
+export { GuardrailDialog } from '@/pages/GuardrailsPage';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
 export { anchorTier, bandFactor, bandRuns, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, regimeNames, revisionAt, shareOf, smallestTier, tierCapacity, tierGroups, tierOrder, weightOf, weightOrFallback, windowMultiple, withRegime } from '@/lib/costs';

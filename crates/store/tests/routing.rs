@@ -363,7 +363,7 @@ fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
     let before = pin("k", "before", "claude-opus-5-5", "a");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} UPDATE meta SET value = '55' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V56} UPDATE meta SET value = '55' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -388,7 +388,7 @@ fn a_pins_entrypoint_survives_a_reopen_and_a_row_from_before_reads_empty() {
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     let pins = migrated.load_routing().unwrap().pins;
     assert_eq!(
         pins.iter().find(|p| p.session_id == "before"),
@@ -456,7 +456,7 @@ fn a_pins_shed_reason_survives_a_reopen_and_a_stamped_row_from_before_reads_none
     };
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} UPDATE meta SET value = '56' WHERE key = 'schema_version';"
+        "{UNDO_V58} UPDATE meta SET value = '57' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -484,7 +484,7 @@ fn a_pins_shed_reason_survives_a_reopen_and_a_stamped_row_from_before_reads_none
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     let pins = migrated.load_routing().unwrap().pins;
     assert_eq!(
         pins.iter().find(|p| p.session_id == "before"),
@@ -1034,9 +1034,9 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
-// The reverse of the registry's version 57: the pins lose `shed_reason`. One line with the marker last. The
+// The reverse of the registry's version 58: the pins lose `shed_reason`. One line with the marker last. The
 // trailing `\n` ends the marker's comment.
-const UNDO_V57: &str = "ALTER TABLE pins DROP COLUMN shed_reason; -- rollback\n";
+const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN shed_reason; -- rollback\n";
 // The reverse of the registry's version 56: the pins lose `entrypoint`. One line with the marker last. The trailing
 // `\n` ends the marker's comment.
 const UNDO_V56: &str = "ALTER TABLE pins DROP COLUMN entrypoint; -- rollback\n";
@@ -1108,7 +1108,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     let before = affinity_row("claude-sonnet-5", "hash-1", "a");
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute(
@@ -1134,7 +1134,7 @@ fn an_affinity_rows_message_id_round_trips_and_a_row_from_before_the_column_read
     drop(conn);
     let migrated =
         Store::open(&path, &storage_key).expect("the migration completes and the store opens");
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     assert_eq!(
         migrated.load_routing().unwrap().affinity,
         vec![AffinityRow {

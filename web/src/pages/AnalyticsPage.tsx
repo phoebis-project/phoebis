@@ -6,7 +6,7 @@ import { api } from '@/api';
 import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, ReconciliationsAnswer, RequestLog, RewritesAnswer, SubscriptionCosts } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, ReconciliationsAnswer, RequestLog, RewritesAnswer, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -26,7 +26,7 @@ import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
-import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, instant, pct, shareLabel, shortId, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
+import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, instant, pct, shareLabel, shortId, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
@@ -380,6 +380,8 @@ export function AnalyticsPage() {
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.subscriptionCosts) : null), [burn.data, burnSettings.data]);
   const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
+  // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
+  const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
   const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reload);
   const byEffort = useAsync(() => (tab === 'traffic' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
@@ -675,6 +677,9 @@ export function AnalyticsPage() {
               )}
             </Card>
           </div>
+          {/* Below the grid at full width, so the grid keeps its cards in pairs and the four columns read as the table
+              under it does. */}
+          <GuardrailsCard answer={guardrailCounts.stale ? null : guardrailCounts.data} error={guardrailCounts.error} />
           <BreakdownTable
             title={`Traffic by ${groupLabel.toLowerCase()}`}
             loading={loading}
@@ -2284,6 +2289,53 @@ function HeldChart({ answer, axis }: { answer: RewritesAnswer; axis: TimeAxis })
         </ResponsiveContainer>
       )}
     </div>
+  );
+}
+
+/**
+ * The guardrails that matched a request in the range: the observed matches, the blocks and the blocked requests'
+ * bytes, each guardrail by its current name, or its id marked deleted where the registry no longer holds it.
+ */
+function GuardrailsCard({ answer, error }: { answer: GuardrailCounts | null; error: string | null }) {
+  const rows = answer?.guardrails ?? [];
+  return (
+    <Card title="Guardrails" subtitle="Matches by guardrail in range, every key" padded={false} className="card--table analytics-guardrails">
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th className="col-fill">Guardrail</th>
+              <th className="right col-fit">Observed</th>
+              <th className="right col-fit">Blocked</th>
+              <th className="right col-fit">Blocked bytes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {error === null &&
+              rows.map((c) => {
+                const label = c.name ?? `${c.id} (deleted)`;
+                return (
+                  <tr key={c.id}>
+                    <td className="col-fill" title={label}>
+                      {label}
+                    </td>
+                    <td className="right num col-fit">{fmtInt(c.observed)}</td>
+                    <td className="right num col-fit">{fmtInt(c.blocked)}</td>
+                    <td className="right num col-fit">{fmtBytes(c.blockedBytes)}</td>
+                  </tr>
+                );
+              })}
+            {(error !== null || rows.length === 0) && (
+              <tr>
+                <td colSpan={4} className={error ? '' : 'muted'}>
+                  {error ? <ErrorState title="Could not load the guardrail matches" body={error} /> : answer === null ? <Skeleton height={22} /> : 'No guardrail matched in this range.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 

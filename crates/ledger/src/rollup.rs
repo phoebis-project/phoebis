@@ -2137,6 +2137,7 @@ mod tests {
         "meta",
         "parked_records",
         "quota_samples",
+        "request_guardrails",
         "requests",
         "rollups_hourly",
         "routing_conditions",
@@ -2406,7 +2407,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 40);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2470,7 +2471,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 40);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2566,7 +2567,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 40);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -4174,7 +4175,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 39);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 40);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

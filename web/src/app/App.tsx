@@ -4,6 +4,7 @@ import { Shell } from '@/components/shell/Shell';
 import { PageLoadFailed, Skeleton } from '@/components/ui/primitives';
 import { reloadOnChunkFailure } from '@/lib/chunks';
 import { DashboardPage } from '@/pages/DashboardPage';
+import { GuardrailsPage } from '@/pages/GuardrailsPage';
 import { KeysPage } from '@/pages/KeysPage';
 import { ModelsPage } from '@/pages/ModelsPage';
 import { QuotaPage } from '@/pages/QuotaPage';
@@ -36,6 +37,7 @@ export const routes = [
       { path: 'accounts', element: lazily(<AccountsPage />), errorElement: <PageLoadFailed /> },
       { path: 'accounts/:accountId', element: lazily(<AccountsPage />), errorElement: <PageLoadFailed /> },
       { path: 'analytics', element: lazily(<AnalyticsPage />), errorElement: <PageLoadFailed /> },
+      { path: 'guardrails', element: <GuardrailsPage /> },
       // Bookmarks and links out there still point at the old path.
       { path: 'keepalive', element: <Navigate to="/sessions" replace /> },
       { path: 'keys', element: <KeysPage /> },

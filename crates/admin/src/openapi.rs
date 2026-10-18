@@ -7,6 +7,7 @@ use axum::body::Bytes;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use phoebis_guardrails::{Condition, ConditionWords};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::openapi::example::ExampleBuilder;
@@ -30,16 +31,16 @@ A request that carries `Authorization: Bearer` with the admin secret is admitted
 
 ## Shapes
 
-Every error is `{"error": "<message>"}`. A `503` from a registry reload also carries the header `x-phoebis-error-code: registry_unavailable` and the message "the registry was written but could not be reloaded, and the next successful reload publishes it", a `409` from a pool, key or account edit over a row that changed since it was read carries `x-phoebis-error-code: stale_edit`, a store failure is `500 storage failure`, and a ledger failure is `500 ledger failure`. `expected_revision` on `PATCH /admin/accounts/{id}`, `PATCH /admin/keys/{id}` and `PATCH /admin/pools/{id}` is optional: its value is the row's `revision` as the last answer carried it. A malformed value answers `400`, a stale one `409` under `stale_edit`, and a body without it fences on the route's own read. Every time is Unix milliseconds. An `id` given on creation matches `[a-z0-9][a-z0-9-]{0,63}`. A `range` parameter is `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. The default differs per route and each operation says which. A list of ids in a query parameter is comma-separated.
+Every error is `{"error": "<message>"}`. A `503` from a registry reload also carries the header `x-phoebis-error-code: registry_unavailable` and the message "the registry was written but could not be reloaded, and the next successful reload publishes it", a `409` from an account, guardrail, key or pool edit over a row that changed since it was read carries `x-phoebis-error-code: stale_edit`, a store failure is `500 storage failure`, and a ledger failure is `500 ledger failure`. `expected_revision` on `PATCH /admin/accounts/{id}`, `PATCH /admin/guardrails/{id}`, `PATCH /admin/keys/{id}` and `PATCH /admin/pools/{id}` is optional: its value is the row's `revision` as the last answer carried it. A malformed value answers `400`, a stale one `409` under `stale_edit`, and a body without it fences on the route's own read. Every time is Unix milliseconds. An `id` given on creation matches `[a-z0-9][a-z0-9-]{0,63}`. A `range` parameter is `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. The default differs per route and each operation says which. A list of ids in a query parameter is comma-separated.
 
 ## Reading an operation
 
 Each operation names its request (path segments, query parameters, or body fields with their bounds), its answer (the top-level keys, with an example captured from the route where one exists) and its refusals (status and message per refusal). The gate's own refusals above apply to every operation and are not repeated under each. Any other path under `/admin/` answers `404 not found`, behind the same gate: an anonymous caller sees the gate's `401` first, whatever the path, and a session that reaches the `404` learns only that nothing serves the path. The proxy listener's routes, `GET /v1/usage` among them, and the metrics listener are not part of this document.
 "#;
 
-/// The document's static half: the info block, the one relative server, the seventeen tags in the API page's area order
-/// (`docs/site/api.md`), the bearer requirement on every operation, and the four shared responses. The paths join it in
-/// `router()`.
+/// The document's static half: the info block, the one relative server, the eighteen tags in the API page's area order
+/// (`docs/site/api-reference.md`), the bearer requirement on every operation, and the four shared responses. The paths
+/// join it in `router()`.
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Phoebis Router admin API"),
@@ -66,6 +67,9 @@ Each operation names its request (path segments, query parameters, or body field
             request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
+        (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \
+            before any account is selected, attached to pools and keys in order. `observe` records each match on the \
+            request, `enforce` refuses a matching request with `400 guardrail_blocked`."),
         (name = "Keepalive"),
         (name = "Keys", description = "The secret is answered on `POST /admin/keys` and `POST /admin/keys/{id}/rotate` \
             and nowhere else. A `key_json` answer never carries the digest either."),
@@ -225,6 +229,63 @@ pub(crate) struct RecipeViewSchema {
 pub(crate) struct ModelRuleView {
     pub pattern: String,
     pub not: bool,
+}
+
+/// One condition of a guardrail, every member a string, so an unknown word is refused with its reason. `name` is the
+/// `header` subject's, `path` the `body` subject's, `selector` the `message` subject's, and `value` the `equals`,
+/// `gt`, `lt` and `matches` operators'.
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConditionView {
+    /// `agent_type`, `body`, `client`, `header`, `kind`, `message`, `model`, `request_class`, or `user_agent`.
+    #[schema(example = "request_class")]
+    pub subject: String,
+    /// `absent`, `equals`, `gt`, `lt`, `matches`, or `present`, as the subject allows.
+    #[schema(example = "equals")]
+    pub operator: String,
+    /// The text `equals` compares, the number `gt` and `lt` compare against, or the pattern `matches` searches for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub value: Option<String>,
+    /// The header's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub name: Option<String>,
+    /// A member name followed by `.member`, `[n]`, `[-n]` or `[*]` segments, at most 256 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub path: Option<String>,
+    /// `any`, `any_assistant`, `any_user`, `first_user`, `last`, `last_assistant`, or `last_user`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, example = "last_user")]
+    pub selector: Option<String>,
+}
+
+impl From<&ConditionView> for ConditionWords {
+    fn from(view: &ConditionView) -> ConditionWords {
+        ConditionWords {
+            subject: view.subject.clone(),
+            operator: view.operator.clone(),
+            value: view.value.clone(),
+            name: view.name.clone(),
+            path: view.path.clone(),
+            selector: view.selector.clone(),
+        }
+    }
+}
+
+impl From<&Condition> for ConditionView {
+    fn from(condition: &Condition) -> ConditionView {
+        let words = condition.words();
+        ConditionView {
+            subject: words.subject,
+            operator: words.operator,
+            value: words.value,
+            name: words.name,
+            path: words.path,
+            selector: words.selector,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -805,6 +866,7 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("analytics_breakdown_speed", "200"),
     fixture!("analytics_budgets", "200"),
     fixture!("analytics_burn", "200"),
+    fixture!("analytics_guardrails", "200"),
     fixture!("analytics_placements", "200"),
     fixture!("analytics_reconciliations", "200"),
     fixture!("analytics_rewrites", "200"),
@@ -812,6 +874,11 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("analytics_series_accounts", "200"),
     fixture!("attention", "200"),
     fixture!("dashboard", "200"),
+    fixture!("guardrails", "200"),
+    fixture!("guardrail_created", "201"),
+    fixture!("guardrail_presets", "200"),
+    fixture!("guardrail_show", "200"),
+    fixture!("guardrail_test", "200"),
     fixture!("keepalive_overview", "200"),
     fixture!("keepalive_recipes", "200"),
     fixture!("keys", "200"),

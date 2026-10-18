@@ -7,6 +7,7 @@ export const POOL_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
   cacheDiagnostics: { label: 'Cache diagnostics', parent: 'Visibility' },
   cacheTtl: { label: 'Cache TTL', parent: 'Caching' },
   failover: { label: 'Failover', parent: 'Load' },
+  guardrails: { label: 'Guardrails', parent: 'Pool' },
   identity: { label: 'Identity', parent: 'Pool' },
   keepalive: { label: 'Keepalive', parent: 'Caching' },
   keys: { label: 'Keys', parent: 'Pool' },

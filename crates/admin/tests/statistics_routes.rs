@@ -308,7 +308,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(39), Some(0), Some(4_096)),
+        (Some(40), Some(0), Some(4_096)),
         "the ledger schema is at the migration that adds the landing stamp"
     );
     assert_eq!(

@@ -161,6 +161,10 @@ const PURGE_BODIES: &str = "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM
 /// outlives its attempts or the other way round. Ordered as the bodies slice is, by the received index.
 const PURGE_ATTEMPTS: &str = "DELETE FROM attempts WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
 
+/// The guardrail matches of the requests `PURGE_REQUESTS` selects next in the same transaction, so no match outlives
+/// its request. The same slice as the attempts'.
+const PURGE_REQUEST_GUARDRAILS: &str = "DELETE FROM request_guardrails WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
+
 const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
 
 /// Under the requests' cutoff and after their family, so a decision leaves in the pass that takes its request, which
@@ -192,6 +196,7 @@ fn purge_slice(
             Family::Requests => match cutoffs.request {
                 None => Purged::default(),
                 Some(at) => {
+                    tx.execute(PURGE_REQUEST_GUARDRAILS, params![at, slice])?;
                     let attempts = tx.execute(PURGE_ATTEMPTS, params![at, slice])?;
                     let requests = tx.execute(PURGE_REQUESTS, params![at, slice])?;
                     Purged {

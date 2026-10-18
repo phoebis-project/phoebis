@@ -23,6 +23,7 @@ hyper-util = { workspace = true }
 jiff = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
+phoebis-guardrails = { path = "../guardrails" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-profile = { path = "../profile" }
 phoebis-routing = { path = "../routing" }

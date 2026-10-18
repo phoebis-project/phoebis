@@ -274,3 +274,12 @@ test('a held row whose waits span two accounts names each wait with its own, and
   assert.deepEqual(d.heldWords(hold({ waitedOn: ['studio', 'studio'] })), { badge: 'waited 45 s', title: 'waited for the slow-down 42 s, for a slot 3 s on studio' }, 'two waits on one account');
   assert.deepEqual(d.heldWords(hold({ waitedOn: [] })), { badge: 'waited 45 s', title: 'waited for the slow-down 42 s, for a slot 3 s on an account' }, 'a row that names no account');
 });
+
+test('the_codec_reads_and_writes_the_guardrails_list', () => {
+  const read = d.REQUESTS_CODEC.fromParams(new URLSearchParams('guardrails=large-auxiliary,-'));
+  assert.deepEqual(read.guardrails, ['large-auxiliary', '-'], 'an id and none, as the route reads the comma list');
+  const written = d.REQUESTS_CODEC.toParams(read);
+  assert.deepEqual([...written.keys()], ['guardrails'], 'every other filter stands at its default');
+  assert.equal(written.get('guardrails'), 'large-auxiliary,-');
+  assert.deepEqual(d.REQUESTS_CODEC.fromParams(new URLSearchParams('')).guardrails, [], 'a bare address filters on no guardrail');
+});

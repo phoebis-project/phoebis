@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '@/api';
 import { slug } from '@/api/http';
-import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool, SharedEquivalent } from '@/api/types';
+import type { ApiKey, CreatedApiKey, Guardrail, GuardrailRef, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool, SharedEquivalent } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { FilterBar } from '@/components/FilterBar';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
+import { OptionList } from '@/components/ui/OptionList';
+import { Popover } from '@/components/ui/Popover';
 import { figuresValue, Tile } from '@/components/ui/Tile';
-import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
+import { IconChevron, IconInfo, IconPlus, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { KEYS_CODEC, type KeysAddress } from '@/lib/address';
 import { nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE, type DollarPosition } from '@/lib/analytics';
@@ -18,7 +20,7 @@ import { clock } from '@/lib/clock';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import type { PauseCause } from '@/lib/follow';
 import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
-import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
+import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, sortKeys, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { scrollToElement } from '@/lib/scroll';
 import type { UnitPosition } from '@/lib/unit';
@@ -521,10 +523,98 @@ export function KeysPage() {
   );
 }
 
-/** What the key dialog reads of a pool: its auto mode and capture defaults, the rules a key inherits, and whose catalogs to suggest from. */
-export type KeyDialogPool = Pick<Pool, 'autoModeServer' | 'bodyCaptureHours' | 'id' | 'modelRules' | 'name'> & { members: Pick<Pool['members'][number], 'accountId'>[] };
+/** What the key dialog reads of a pool: its auto mode and capture defaults, the rules and guardrails a key inherits, and whose catalogs to suggest from. */
+export type KeyDialogPool = Pick<Pool, 'autoModeServer' | 'bodyCaptureHours' | 'guardrails' | 'id' | 'modelRules' | 'name'> & { members: Pick<Pool['members'][number], 'accountId'>[] };
 
-const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: 'Capture', key: 'Key', models: 'Models', sessions: 'Sessions' };
+const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: 'Capture', guardrails: 'Guardrails', key: 'Key', models: 'Models', sessions: 'Sessions' };
+const KEY_GUARDRAILS_HINT = "The pool's guardrails run first and cannot be dropped here. This key's own run after them.";
+
+/** A row of a guardrail list: the route's ref, or the registry's row for one attached since the dialog opened. */
+type ListedGuardrail = Pick<GuardrailRef, 'enabled' | 'id' | 'name'> & { mode: GuardrailRef['mode'] | null };
+
+/** A row's name, its mode badge in the Guardrails view's tones, and the view's word for a switched-off guardrail. */
+function GuardrailWords({ guardrail: g }: { guardrail: ListedGuardrail }) {
+  return (
+    <>
+      <span className="pattern-editor__pattern">{g.name}</span>
+      {g.mode !== null && <Badge tone={g.mode === 'enforce' ? 'warning' : 'neutral'}>{g.mode}</Badge>}
+      {!g.enabled && <span className="muted">off</span>}
+    </>
+  );
+}
+
+/**
+ * A pool's or a key's guardrails in the order they run, each with move up, move down and remove, and "Attach guardrail"
+ * offering the registry's guardrails that neither the list nor `inherited` holds, since one on both runs once at its
+ * pool position. `inherited` draws a key's pool's rows first, read-only. `refs` are the record's own rows as the route
+ * reported them, which name a row before the registry answers. `pending` is the sentence a subject not saved yet reads
+ * in place of its own list and the control, since the create routes take no attachment.
+ */
+export function GuardrailList({ inherited = [], onChange, pending, refs, registry, value }: { inherited?: GuardrailRef[]; onChange: (ids: string[]) => void; pending?: string; refs: GuardrailRef[]; registry: Loaded<Guardrail[] | null>; value: string[] }): JSX.Element {
+  const boxId = useId();
+  const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const fromPool = [...inherited].sort((a, b) => a.position - b.position);
+  const own = pending === undefined ? value : [];
+  const listed = (id: string): ListedGuardrail => refs.find((r) => r.id === id) ?? registry.data?.find((g) => g.id === id) ?? { enabled: true, id, mode: null, name: id };
+  const taken = new Set([...value, ...fromPool.map((r) => r.id)]);
+  const options = (registry.data ?? []).filter((g) => !taken.has(g.id)).map((g) => ({ label: g.name, value: g.id }));
+  const held = registry.data === null ? (registry.error ? `The guardrail list did not load: ${registry.error}` : 'Reading the guardrail list') : options.length === 0 ? 'No other guardrail is left to attach' : undefined;
+  const move = (i: number, j: number) => {
+    const next = [...value];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  const attach = (picked: string[]) => {
+    setOpen(false);
+    anchor?.focus();
+    onChange([...value, ...picked.filter((id) => !value.includes(id))]);
+  };
+  return (
+    <div className="pattern-editor" role="group" aria-label="Guardrails">
+      {fromPool.length + own.length > 0 && (
+        <ol className="pattern-editor__rows">
+          {fromPool.map((r) => (
+            <li key={`inherited-${r.id}`} className="pattern-editor__row pattern-editor__row--inherited">
+              <GuardrailWords guardrail={r} />
+              <span className="pattern-editor__source">inherited</span>
+            </li>
+          ))}
+          {own.map((id, i) => {
+            const g = listed(id);
+            return (
+              <li key={id} className="pattern-editor__row">
+                <div className="pattern-editor__line">
+                  <GuardrailWords guardrail={g} />
+                  <span className="pattern-editor__actions">
+                    <Button size="sm" variant="ghost" className="pattern-editor__up" icon={<IconChevron size={14} />} aria-label={`Move ${g.name} up`} disabled={i === 0} onClick={() => move(i, i - 1)} />
+                    <Button size="sm" variant="ghost" icon={<IconChevron size={14} />} aria-label={`Move ${g.name} down`} disabled={i === own.length - 1} onClick={() => move(i, i + 1)} />
+                    <Button size="sm" variant="ghost" icon={<IconX size={14} />} aria-label={`Remove ${g.name}`} onClick={() => onChange(value.filter((x) => x !== id))} />
+                  </span>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {pending !== undefined ? (
+        <p className="muted">{pending}</p>
+      ) : (
+        <>
+          {fromPool.length + own.length === 0 && <p className="muted">No guardrails attached.</p>}
+          <div>
+            <Button ref={setAnchor} size="sm" icon={<IconPlus size={13} />} aria-haspopup="dialog" aria-expanded={open} disabled={held !== undefined} title={held} onClick={() => setOpen((o) => !o)}>
+              Attach guardrail
+            </Button>
+          </div>
+          <Popover anchor={anchor} id={boxId} label="Attach guardrail" onClose={() => setOpen(false)} open={open}>
+            <OptionList autoFocus label="Guardrails" onChange={attach} options={options} searchable value={[]} />
+          </Popover>
+        </>
+      )}
+    </div>
+  );
+}
 
 /**
  * Create or edit a key. `existing` switches the dialog to edit mode;
@@ -546,6 +636,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const [captureHours, setCaptureHours] = useState('6');
   const [optOut, setOptOut] = useState(false);
   const [enabled, setEnabled] = useState(true);
+  const [guardrails, setGuardrails] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState<string | null>(null);
@@ -564,6 +655,8 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const first = refusals[0] ?? null;
   const rulesRefusal = refusalOf('Model rules');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
+  // Once per opening of a saved key, since a create takes no attachment and offers nothing to attach.
+  const registry = useAsync(() => (open && existing ? api.listGuardrails() : Promise.resolve(null)), [open, existing?.id]);
   // The values the dialog opened with, which the discard question compares the fields against.
   const [opened, setOpened] = useState(() => keyFormOf(null, ''));
 
@@ -591,6 +684,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     setCaptureHours(form.captureHours);
     setOptOut(form.optOut);
     setEnabled(form.enabled);
+    setGuardrails(form.guardrails);
     setBusy(false);
     setError(null);
     setStale(null);
@@ -604,7 +698,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   }
 
   const moving = existing !== null && poolId !== existing.poolId;
-  const current = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
+  const current = { autoModeServer, captureHours, captureMode, enabled, expiry, guardrails, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
   // The server's words leave with the next edit to any field. A failed save changes none, so they stand until then.
   const [edited, setEdited] = useState(current);
   if ((Object.keys(current) as (keyof typeof current)[]).some((field) => current[field] !== edited[field])) {
@@ -619,7 +713,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     const input = keyInputOf(current, clock.now());
     try {
       if (existing) {
-        const updated = await api.updateKey(existing.id, input, existing.revision);
+        const updated = await api.updateKey(existing.id, { ...input, ...guardrailsChange(guardrails, opened.guardrails) }, existing.revision);
         setBusy(false);
         onUpdated?.(updated);
         return;
@@ -753,6 +847,24 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
           </Field>
         </Expert>
         {existing && <EffectiveList processed={processed} />}
+      </div>
+    ),
+    guardrails: (
+      <div className="cells">
+        {/* Field's frame without its label element: a label forwards a click on its text to the first button inside. */}
+        <Field
+          label="Guardrails"
+          plain
+          hint={
+            <>
+              {KEY_GUARDRAILS_HINT} <PageLink to="/guardrails">Manage guardrails</PageLink>
+            </>
+          }
+        >
+          {/* The chosen pool's list, so a key moved in this dialog shows the pool it lands in, and the key's own read of
+              its pool's list until the pool list arrives. */}
+          <GuardrailList inherited={pool?.guardrails ?? (existing?.poolId === poolId ? existing.poolGuardrails : [])} onChange={setGuardrails} pending={existing ? undefined : 'Guardrails can be attached once the key is saved.'} refs={existing?.guardrails ?? []} registry={registry} value={guardrails} />
+        </Field>
       </div>
     ),
     sessions: (

@@ -315,7 +315,11 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// seen. The table starts empty, and the first fold reconciles every completed window of the trailing 30 days whose
 /// readings and requests the ledger still holds.
 ///
-/// Version 39: a request row carries the instant the ledger wrote it, strictly increasing across the writer's rows,
+/// Version 39: the guardrail that blocked a request on its row and one child row per guardrail that matched it, with
+/// the request's instant copied so the index answers the range without a join. Most rows carry neither, so the column
+/// is nullable and the table starts empty.
+///
+/// Version 40: a request row carries the instant the ledger wrote it, strictly increasing across the writer's rows,
 /// indexed so a list read filters on it, and a poll that passes back the newest stamp of its last answer reads exactly
 /// the rows written since. No backfill: a row from before reads NULL, which no such filter answers. The same step gives
 /// each account hour the longest time a wall on the account arrived before its window's reset under a stretch round,
@@ -986,6 +990,12 @@ ALTER TABLE rollups_hourly ADD COLUMN kept_warm_1h_tokens INTEGER NOT NULL DEFAU
     ),
     (
         39,
+        "ALTER TABLE requests ADD COLUMN guardrail_id TEXT;
+CREATE TABLE request_guardrails (request_id TEXT NOT NULL, guardrail_id TEXT NOT NULL, position INTEGER NOT NULL, blocked INTEGER NOT NULL, received_at INTEGER NOT NULL, PRIMARY KEY (request_id, guardrail_id));
+CREATE INDEX request_guardrails_received ON request_guardrails (received_at, guardrail_id, blocked);",
+    ),
+    (
+        40,
         "ALTER TABLE requests ADD COLUMN landed_at INTEGER;
 CREATE INDEX requests_landed_at ON requests(landed_at);
 ALTER TABLE account_rollups_hourly ADD COLUMN wall_early_ms INTEGER NOT NULL DEFAULT 0;",

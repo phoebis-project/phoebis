@@ -225,6 +225,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -244,6 +245,7 @@ fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: Vec::new(),
+        ..Default::default()
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -278,6 +280,7 @@ fn with_member_budget(
             .accounts()
             .filter_map(|a| s.term(&a.id).cloned())
             .collect(),
+        ..Default::default()
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -361,6 +364,7 @@ fn key_recreated(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: Vec::new(),
+        ..Default::default()
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -5039,6 +5043,7 @@ fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> Regis
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: Vec::new(),
+        ..Default::default()
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -5063,6 +5068,7 @@ fn with_dwells(s: &RegistrySnapshot, dwells: &[(&str, u64)]) -> RegistrySnapshot
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: Vec::new(),
+        ..Default::default()
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
@@ -5079,6 +5085,7 @@ fn on_tier(s: &RegistrySnapshot) -> RegistrySnapshot {
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: tier_terms(&ids),
+        ..Default::default()
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }

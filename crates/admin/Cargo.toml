@@ -13,6 +13,7 @@ indexmap = { workspace = true }
 jiff = { workspace = true }
 phoebis-attention = { path = "../attention" }
 phoebis-bus = { path = "../bus" }
+phoebis-guardrails = { path = "../guardrails" }
 phoebis-keepalive = { path = "../keepalive" }
 phoebis-ledger = { path = "../ledger" }
 phoebis-oauth = { path = "../oauth" }

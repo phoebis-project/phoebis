@@ -43,11 +43,11 @@ pub use keepalive::{
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{
-    canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
-    Failover, MemberWrite, ModelRule, OveragePolicy, PoolMember, PoolRow,
-    RegistryChange, RegistryLoad, RetiredSecret, ReturnToPlan, RulesMode, SessionPlacement,
-    Shedding, SlowDown, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
-    ROTATION_GRACE_MS,
+    canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject,
+    BudgetPeriod, Failover, GuardrailAttachment, GuardrailRow, MemberWrite,
+    ModelRule, OveragePolicy, PoolMember, PoolRow, RegistryChange, RegistryLoad, RetiredSecret,
+    ReturnToPlan, RulesMode, SessionPlacement, Shedding, SlowDown, Strategy, SubagentPlacement,
+    SubscriptionTerm, WarmSessions, GUARDRAIL_BOUND, ROTATION_GRACE_MS,
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
@@ -152,6 +152,8 @@ pub enum StoreError {
     Crypto,
     #[error("the slot was disconnected or replaced while the pairing ran")]
     Disconnected,
+    #[error("guardrail {0} not found")]
+    GuardrailNotFound(String),
     #[error("another account already holds this identity")]
     IdentityTaken,
     #[error("storage key file must hold exactly 32 raw bytes or 64 hex characters, with at most one trailing newline")]
@@ -160,6 +162,8 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("key {0} would hold more than 64 guardrails")]
+    KeyGuardrailBound(String),
     /// The registry's sealed canary did not open under the key the file names, or, with no canary, none of its
     /// sealed rows did.
     #[error("the storage key does not match the registry at {path}")]
@@ -170,6 +174,8 @@ pub enum StoreError {
     KindChange(String),
     #[error("the data directory is locked by another process")]
     Locked,
+    #[error("pool {0} would hold more than 64 guardrails")]
+    PoolGuardrailBound(String),
     #[error("pool {0} still has api keys assigned to it")]
     PoolInUse(String),
     #[error("pool {0} not found")]

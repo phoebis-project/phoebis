@@ -102,6 +102,18 @@ test("the lists are alphabetical inside each group, the groups in the view's ord
   assert.equal(d.ROUTING_LOG_DIMENSIONS[0].word, 'kinds');
 });
 
+test('the_guardrail_dimension_sits_under_outcome_and_its_chip_reads_the_names', () => {
+  const fields = d.REQUESTS_DIMENSIONS.map((x) => x.field);
+  assert.deepEqual(d.REQUESTS_DIMENSIONS.find((x) => x.field === 'guardrails'), { field: 'guardrails', group: 'Outcome', kind: 'list', label: 'Guardrail', word: 'guardrail' });
+  assert.deepEqual(fields.slice(fields.indexOf('cacheMissReasons'), fields.indexOf('held') + 1), ['cacheMissReasons', 'guardrails', 'held'], 'between Cache miss reason and Held only');
+  // The registry's guardrail by its name, a loaded row's id the registry lacks as deleted, and none for a row no
+  // guardrail matched.
+  const options = d.guardrailOptions([{ id: 'large-auxiliary', name: 'Large auxiliary requests' }], [{ guardrails: [{ blocked: false, id: 'gone', position: 0 }] }], []);
+  const [chip] = d.chipsOf(d.REQUESTS_DIMENSIONS, { guardrails: ['large-auxiliary', 'gone', '-'] }, { guardrails: options });
+  const words = 'Large auxiliary requests, gone (deleted), none';
+  assert.deepEqual(chip, { field: 'guardrails', label: 'guardrail', mono: false, text: `guardrail: ${words}`, title: words, values: words });
+});
+
 test("a dimension whose list did not load carries the failure's words, and a list that loaded or is on its way carries none", () => {
   assert.deepEqual(d.notLoadedReason('keys', 'key', { data: null, error: 'the store is unavailable' }), { keys: 'The key list did not load: the store is unavailable' });
   assert.deepEqual(d.notLoadedReason('keys', 'key', { data: null, error: null }), {});

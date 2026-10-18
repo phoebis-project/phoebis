@@ -21,7 +21,7 @@
     "effective_body_capture_hours": 24,
     "auto_mode_server": null,
     "effective_auto_mode_server": true,
-    "prefix": "KxtrG2cq",
+    "prefix": "rKbKVPL_",
     "created_at": 1791721000000,
     "updated_at": 1791721000000,
     "revision": 6189767511104,
@@ -29,16 +29,14 @@
     "last_used_at": null,
     "retired_secret_last_used_at": null,
     "sessions_on_retired_secret": 0,
+    "guardrails": [],
+    "pool_guardrails": [],
     "usage_7d": {
       "billed_usd": 0.0,
       "cost_usd": 0.0,
       "equivalent": {
         "five_hour": 0.0,
-        "seven_day": 0.0,
-        "unpriced": {
-          "five_hour": false,
-          "seven_day": false
-        }
+        "seven_day": 0.0
       },
       "estimated": false,
       "requests": 0,
@@ -49,11 +47,7 @@
       "cost_usd": 0.0,
       "equivalent": {
         "five_hour": 0.0,
-        "seven_day": 0.0,
-        "unpriced": {
-          "five_hour": false,
-          "seven_day": false
-        }
+        "seven_day": 0.0
       },
       "estimated": false,
       "requests": 0

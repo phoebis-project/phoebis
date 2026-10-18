@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a window priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
@@ -240,6 +240,11 @@ async function emailLines(name, rows) {
   results.push({ name, ok: rows.length > 0 && wrong.length === 0, missing: wrong.map(([id, line]) => `${id}: ${JSON.stringify(line)}`) });
 }
 const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
+/**
+ * A listed pool as a write's input: its guardrails are refs, and the pool dialog sends that list only when its group
+ * changed, so a write built from the listing leaves it out.
+ */
+const poolInput = ({ guardrails: _, ...pool }) => pool;
 /** The request drawer's sections, in the order it draws them. */
 const DRAWER_SECTIONS = ['Outcome', 'Phases', 'Usage', 'Request', 'Request shape', 'Client hints', 'Captured bodies'];
 /** A row of the request drawer by its label, wherever its section is. */
@@ -2076,7 +2081,7 @@ m = await mount('/accounts');
 results.push({ name: 'nav calls the pages Accounts and Keys, and no text names the old page', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Accounts') && [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Keys') && !/\bupstreams\b/i.test(m.text()), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
 {
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Models', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
+  results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Guardrails', 'Models', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
 }
 expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max 20x since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 {
@@ -3694,12 +3699,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
   // The shedding badge draws on every card, reading the pool's ceiling with its switch on, so all reads its 75 % and
   // jobs and work the store's 95 %. The slow-down badge draws on work alone, the one pool with the switch on, and reads
-  // its threshold of 30 minutes.
+  // its threshold of 30 minutes. all carries the story's one pool guardrail, whose badge leads the strip, since the rail
+  // draws Guardrails before every other group a badge opens.
   const shedding = (id, ceiling) => [`sheds above ${ceiling} %`, `/pools?edit=${id}&group=shedding`, 'Opens the pool dialog on Load shedding'];
   results.push({
     name: "/pools the strip badges the features a pool has on, and the shedding's state, and opens the dialog on their groups",
     ok:
-      JSON.stringify(strip('all')) === JSON.stringify([shedding('all', 75), ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
+      JSON.stringify(strip('all')) ===
+        JSON.stringify([['1 guardrail', '/pools?edit=all&group=guardrails', 'Opens the pool dialog on Guardrails'], shedding('all', 75), ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
       JSON.stringify(strip('jobs')) === JSON.stringify([shedding('jobs', 95)]) &&
       JSON.stringify(strip('work')) ===
         JSON.stringify([
@@ -4472,7 +4479,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A warming pool with no member resolves nothing: its card draws the chip and no line, and its dialog no figure.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.createPool({ ...work, members: [], name: 'bare' });
+  await api.createPool({ ...poolInput(work), members: [], name: 'bare' });
   const page = await mount('/pools?edit=bare&group=keepalive');
   await page.settle(300);
   const card = [...page.container.querySelectorAll('.pool')].find((c) => c.id === 'bare');
@@ -4493,7 +4500,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // annex too, so the checks of one figure read it with its plan member alone.
   const storyWork = (await api.listPools()).find((p) => p.id === 'work');
   const memberOf = (x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority });
-  await api.updatePool('work', { ...storyWork, members: storyWork.members.filter((x) => x.kind === 'oauth').map(memberOf) });
+  await api.updatePool('work', { ...poolInput(storyWork), members: storyWork.members.filter((x) => x.kind === 'oauth').map(memberOf) });
   m.unmount();
   m = await mount('/pools');
   const cards = [...m.container.querySelectorAll('.pool')];
@@ -4566,7 +4573,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     await cancel(dlg);
   }
-  await api.updatePool('work', { ...storyWork, members: storyWork.members.map(memberOf) });
+  await api.updatePool('work', { ...poolInput(storyWork), members: storyWork.members.map(memberOf) });
   // The story's `all` resolves to a range: the card and the dialog read both ends.
   const allLine = ceilingsOf('all')?.textContent;
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
@@ -4596,11 +4603,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools keys section is not a multi-select', ok: keysGroup !== undefined && keysMulti.length === 0, missing: keysGroup === undefined ? ['no Keys group'] : keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
+    name: '/pools dialog rail lists the five parents and the eighteen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
@@ -4622,7 +4629,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 17 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
@@ -5804,7 +5811,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: reads.map(String),
   });
   const story = (await api.listPools()).find((p) => p.id === 'all');
-  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  const written = { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   const shedChip = () => m.container.querySelector('.pool__features a[href="/pools?edit=all&group=shedding"]')?.textContent?.trim() ?? null;
   const stale = await openAll();
   // Save pressed at the end of a long group, where the callout above the groups would sit out of view.
@@ -5961,7 +5968,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [String(freed), JSON.stringify(stored)],
   });
   // The story's own pool back, status and list, so the key dialogs below read the pool the fixture holds.
-  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
 }
 {
   // A key is posted against a pool id, so the create dialog offers none until the pool has been saved.
@@ -6238,7 +6245,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   dlg = await openAll();
   const story = (await api.listPools()).find((p) => p.id === 'all');
   // Another operator's write through the API: the same settings under a later stamp.
-  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   footButton(dlg, 'Save pool')?.click();
   await page.settle(600);
   const held = [dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
@@ -6289,13 +6296,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [String(stored), JSON.stringify(cleared ?? null), m.container.querySelector('dialog[open] .callout--critical')?.textContent ?? ''],
   });
   // The story's budget back, so the checks below read the pool the fixture holds.
-  await api.updatePool('all', { ...before, members: before.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', { ...poolInput(before), members: before.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
 }
 {
   // A budget on a subscription member bounds its metered spend: one stored through the API draws its two fields and
   // its metered lines, and the dialog's save keeps it.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.updatePool('work', { ...work, members: [{ accountId: 'studio', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
+  await api.updatePool('work', { ...poolInput(work), members: [{ accountId: 'studio', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
   m.unmount();
   m = await mount('/pools');
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
@@ -6322,7 +6329,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [...lines, ...standingBadges, ...fields.map((f) => (f === null ? 'no field' : `field ${f}`)), JSON.stringify(stored ?? null)],
   });
   // The story's membership back, so the budgets card below reads the rows the fixture holds.
-  await api.updatePool('work', work);
+  await api.updatePool('work', poolInput(work));
 }
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
@@ -6332,7 +6339,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // for the check, and the annex is the sibling with runway.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
-  const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  const written = (p, members) => ({ ...poolInput(p), members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   await api.updatePool('all', written(story('all'), story('all').members.filter((x) => x.accountId !== 'primary')));
   await api.updatePool('work', written(story('work'), [...story('work').members.filter((x) => x.accountId !== 'studio'), { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
@@ -6381,7 +6388,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // A ceiling the API stored finer than a percent reopens as stored and survives a save of another field, and one
   // typed out of its range holds the save until a value inside it is typed back.
   const story = (await api.listPools()).find((p) => p.id === 'all');
-  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  const written = { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   const openAll = async () => {
     [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
     await m.settle(300);
@@ -6523,7 +6530,7 @@ m.unmount();
   // The mock refuses a member its registry lacks, as the route does, so the stored member stays registered and the
   // list the page reads leaves it out.
   const story = (await api.listPools()).find((p) => p.id === 'all');
-  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  const written = { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   await api.updatePool('all', written);
   const listAccounts = api.listAccounts;
   api.listAccounts = async () => (await listAccounts.call(api)).filter((a) => a.id !== 'secondary');
@@ -6628,7 +6635,7 @@ localStorage.removeItem('phoebis.expertView');
 {
   // No member, since each of the story's accounts already belongs to a pool.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.createPool({ ...work, members: [], name: 'keyless' });
+  await api.createPool({ ...poolInput(work), members: [], name: 'keyless' });
   const read = (page) => {
     const card = [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'keyless');
     const tile = [...(card?.querySelectorAll('.pool__stats > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
@@ -6822,17 +6829,18 @@ localStorage.removeItem('phoebis.expertView');
       .split(' ')
       .filter(Boolean)
       .map((ref) => document.getElementById(ref)?.textContent?.trim());
-  const marks = ['identity', 'members', 'keys', 'models'].map((id) => markOf(id)?.textContent?.trim() ?? null);
+  const marks = ['identity', 'members', 'keys', 'models', 'guardrails'].map((id) => markOf(id)?.textContent?.trim() ?? null);
   results.push({
-    name: '/pools Create pool marks Identity and Members needed and Keys after saving, each hidden from the name and read in the description',
+    name: '/pools Create pool marks Identity and Members needed and Keys and Guardrails after saving, each hidden from the name and read in the description',
     ok:
-      JSON.stringify(marks) === '["needed","needed","after saving",null]' &&
+      JSON.stringify(marks) === '["needed","needed","after saving",null,"after saving"]' &&
       markOf('identity')?.getAttribute('aria-hidden') === 'true' &&
       JSON.stringify(described('identity')) === '["needed","holds a refusal"]' &&
       JSON.stringify(described('keys')) === '["after saving"]' &&
+      JSON.stringify(described('guardrails')) === '["after saving"]' &&
       rail(dlg, 'identity')?.querySelector('.dialog-rail__label')?.textContent === 'Identity' &&
-      (dlg?.querySelectorAll('.dialog-rail__mark').length ?? 0) === 3,
-    missing: [...marks.map(String), ...described('identity'), ...described('keys')],
+      (dlg?.querySelectorAll('.dialog-rail__mark').length ?? 0) === 4,
+    missing: [...marks.map(String), ...described('identity'), ...described('keys'), ...described('guardrails')],
   });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const name = dlg?.querySelector('input[placeholder="shared"]');
@@ -6929,7 +6937,7 @@ localStorage.removeItem('phoebis.expertView');
   const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
-  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 16 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 17 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
   [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
   await x.settle(150);
   results.push({
@@ -6939,7 +6947,7 @@ localStorage.removeItem('phoebis.expertView');
   });
   x.unmount();
   localStorage.removeItem('phoebis.expertView');
-  x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,autoMode');
+  x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,guardrails,autoMode');
   await x.settle(100);
   const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
   results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 12, missing: parents(x) });
@@ -7006,8 +7014,8 @@ localStorage.removeItem('phoebis.expertView');
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
-  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Windows', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
-  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Selection', 'Pinning', 'Windows', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Return rate by idle age'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
@@ -7015,6 +7023,7 @@ localStorage.removeItem('phoebis.expertView');
     Members: [[], null],
     Keys: [[], null],
     Models: [['Model rules'], null],
+    Guardrails: [['Guardrails'], null],
     Selection: [['Strategy', 'Prioritize subscription accounts'], null],
     Pinning: [['Session affinity'], '1 more setting in the '],
     Windows: [['Window ceiling (%)', 'Member utilization'], '1 more setting in the '],
@@ -7051,8 +7060,8 @@ localStorage.removeItem('phoebis.expertView');
   let dlg = await open('all');
   const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   results.push({
-    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the five expert-only groups gone',
-    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 17,
+    name: '/pools with the mode off the rail and the body hold thirteen groups under the five parents, the five expert-only groups gone',
+    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 18,
     missing: plainRail.map((x) => JSON.stringify(x)),
   });
   const plainRead = Object.fromEntries(PLAIN_GROUPS.map((label) => [label, [labelsIn(group(dlg, label)), lineIn(group(dlg, label))]]));
@@ -7083,11 +7092,11 @@ localStorage.removeItem('phoebis.expertView');
   const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   const expertRead = Object.fromEntries(Object.keys(EXPERT_FIELDS).map((label) => [label, labelsIn(group(dlg, label))]));
   results.push({
-    name: '/pools the line turns the mode on: the rail holds all 22 entries, every group draws its expert fields, and no line is left',
+    name: '/pools the line turns the mode on: the rail holds all 23 entries, every group draws its expert fields, and no line is left',
     ok:
       localStorage.getItem('phoebis.expertView') === 'on' &&
       JSON.stringify(expertRail) === JSON.stringify([PARENTS, EVERY_GROUP, EVERY_GROUP]) &&
-      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 22 &&
+      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 23 &&
       JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
       dlg?.querySelector('.dialog-group__more') === null,
     missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
@@ -7165,7 +7174,7 @@ localStorage.removeItem('phoebis.expertView');
       !p.container.querySelector('dialog[open]'),
     missing: [JSON.stringify(typed), hidden === null ? 'hidden' : 'drawn', `${sent.length} saves`, JSON.stringify(kept(sent[0])), JSON.stringify(kept(reread))],
   });
-  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', { ...poolInput(story), members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
   p.unmount();
 
   // A shed cap past 100 typed in the expert view, then the mode turned off: the refused field stays drawn and the
@@ -7295,18 +7304,19 @@ localStorage.removeItem('phoebis.expertView');
   [...k.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
   await k.settle(300);
   let keyDlg = [...k.container.querySelectorAll('dialog[open]')].pop();
-  const keyRead = (dlgOf) => Object.fromEntries(['Key', 'Access', 'Models', 'Sessions', 'Capture'].map((label) => [label, [labelsIn(group(dlgOf, label)), lineIn(group(dlgOf, label))]]));
+  const keyRead = (dlgOf) => Object.fromEntries(['Key', 'Access', 'Models', 'Guardrails', 'Sessions', 'Capture'].map((label) => [label, [labelsIn(group(dlgOf, label)), lineIn(group(dlgOf, label))]]));
   const plainKey = keyRead(keyDlg);
   const plainKeyWanted = {
     Key: [['Name', 'Pool', 'Notes'], null],
     Access: [['Expiry'], '1 more setting in the '],
     Models: [['Model rules'], '2 more settings in the '],
+    Guardrails: [['Guardrails'], null],
     Sessions: [['Cache warming opt-out'], null],
     Capture: [['Capture request and response bodies'], null],
   };
   results.push({
     name: '/keys with the mode off each group reads its plain fields, and the line counts the expert ones in Access and Models',
-    ok: JSON.stringify(plainKey) === JSON.stringify(plainKeyWanted) && keyDlg?.querySelector('select[aria-label="Server-side auto mode"], .segmented, button[role="switch"][aria-label="List [1m] twins in the models listing"]') === null && JSON.stringify(railOf(keyDlg)) === '["Key","Access","Models","Sessions","Capture"]',
+    ok: JSON.stringify(plainKey) === JSON.stringify(plainKeyWanted) && keyDlg?.querySelector('select[aria-label="Server-side auto mode"], .segmented, button[role="switch"][aria-label="List [1m] twins in the models listing"]') === null && JSON.stringify(railOf(keyDlg)) === '["Key","Access","Models","Guardrails","Sessions","Capture"]',
     missing: [JSON.stringify(plainKey), JSON.stringify(railOf(keyDlg))],
   });
   group(keyDlg, 'Models')?.querySelector('.dialog-group__more button')?.click();
@@ -7737,8 +7747,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     const railLabels = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((l) => l.textContent?.trim());
     const marked = [...(dlg?.querySelectorAll('.dialog-rail__group') ?? [])].filter((b) => b.querySelector('.dialog-rail__dot') && b.getAttribute('aria-describedby')).map((b) => b.getAttribute('data-group'));
     results.push({
-      name: '/keys dialog lists Key, Access, Models, Sessions and Capture on its rail',
-      ok: JSON.stringify(railLabels) === JSON.stringify(['Key', 'Access', 'Models', 'Sessions', 'Capture']) && dlg?.querySelector('.dialog-rail__parent') === null && JSON.stringify(marked) === '["key"]',
+      name: '/keys dialog lists Key, Access, Models, Guardrails, Sessions and Capture on its rail',
+      ok: JSON.stringify(railLabels) === JSON.stringify(['Key', 'Access', 'Models', 'Guardrails', 'Sessions', 'Capture']) && dlg?.querySelector('.dialog-rail__parent') === null && JSON.stringify(marked) === '["key"]',
       missing: [JSON.stringify(railLabels), JSON.stringify(marked)],
     });
     const headings = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
@@ -7788,7 +7798,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     const focused = dlg?.ownerDocument.activeElement === group(dlg, 'Sessions')?.querySelector('.dialog-group__title');
     results.push({
       name: '/keys choosing a group hides the others',
-      ok: JSON.stringify(hidden) === JSON.stringify(['Key', 'Access', 'Models', 'Capture']) && !group(dlg, 'Sessions')?.hidden && JSON.stringify(current) === '["sessions"]' && focused,
+      ok: JSON.stringify(hidden) === JSON.stringify(['Key', 'Access', 'Models', 'Guardrails', 'Capture']) && !group(dlg, 'Sessions')?.hidden && JSON.stringify(current) === '["sessions"]' && focused,
       missing: [JSON.stringify(hidden), JSON.stringify(current), `focus on the heading: ${focused}`],
     });
     rail(dlg, 'key')?.click();
@@ -8102,7 +8112,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     return [...m.container.querySelectorAll('dialog[open]')].pop();
   };
   const parts = (li) => [...li.children].map((c) => c.textContent?.trim()).join(' ');
-  const greyOf = (dlg) => [...(dlg?.querySelectorAll('.pattern-editor__row--inherited') ?? [])].map(parts);
+  // The Models group's rows alone, since the Guardrails group draws its pool's rows in the same gray.
+  const greyOf = (dlg) => [...(group(dlg, 'Models')?.querySelectorAll('.pattern-editor__row--inherited') ?? [])].map(parts);
   const greyRules = (rules) => rules.map((r) => `${r.not ? 'Deny' : 'Allow'} ${r.pattern} from pool`);
   const poolRules = async (id) => (await api.listPools()).find((p) => p.id === id)?.modelRules ?? [];
   const from = (await api.listKeys()).find((k) => k.id === 'laptop')?.poolId ?? 'absent';
@@ -8382,6 +8393,358 @@ await readsAgain('/keys', 'listKeys', 5_000);
   page.unmount();
 }
 
+// The Guardrails view over the story's two guardrails: the pool's observed preset and the desktop key's enforced one,
+// whose 24-hour figures the story's fork and blocked rows hold.
+const guardrailRows = (page) => [...page.container.querySelectorAll('.guardrails__table tbody tr.guardrail-row')];
+const guardrailRow = (page, name) => guardrailRows(page).find((tr) => tr.querySelector('td b')?.textContent?.trim() === name);
+/** A row's cells as they read, the Name cell its name alone. */
+const guardrailCells = (tr) => [...(tr?.children ?? [])].map((td, i) => (i === 0 ? (td.querySelector('b')?.textContent?.trim() ?? '') : (td.textContent?.trim() ?? '')));
+/** Opens the row's menu and answers its items' labels, the menu left open. */
+const guardrailMenu = async (page, tr) => {
+  tr?.querySelector('.menu__trigger')?.click();
+  await page.settle(120);
+  return [...page.container.querySelectorAll('.menu__list [role="menuitem"]')].map((b) => b.textContent?.trim());
+};
+/** The row's Edit, through its menu: the dialog it opens. */
+const editGuardrail = async (page, name) => {
+  await guardrailMenu(page, guardrailRow(page, name));
+  [...page.container.querySelectorAll('.menu__list [role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+  await page.settle(400);
+  return openDialogs(page).pop() ?? null;
+};
+{
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const day = await api.getAnalyticsGuardrails('24h');
+  const countOf = (id) => day.guardrails.find((c) => c.id === id) ?? { blocked: 0, observed: 0 };
+  const large = guardrailCells(guardrailRow(page, 'Large auxiliary requests'));
+  const summary = guardrailCells(guardrailRow(page, 'Subagent status summary'));
+  const figures = (id) => `${countOf(id).observed} observed${countOf(id).blocked} blocked`;
+  results.push({
+    name: '/guardrails lists the two guardrails with their mode, state, attachments, 24-hour matches and preset',
+    ok:
+      page.container.querySelector('.filter-bar__count')?.textContent === '2 guardrails' &&
+      page.text().includes('A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 400.') &&
+      JSON.stringify(large.slice(0, 6)) === JSON.stringify(['Large auxiliary requests', 'enforce', 'on', '0 pools, 1 key', figures('large-auxiliary'), '-']) &&
+      JSON.stringify(summary.slice(0, 6)) === JSON.stringify(['Subagent status summary', 'observe', 'on', '1 pool, 0 keys', figures('subagent-status-summary'), 'Subagent status summary v1']) &&
+      countOf('large-auxiliary').blocked === 3 &&
+      countOf('subagent-status-summary').observed > 0,
+    missing: [page.container.querySelector('.filter-bar__count')?.textContent ?? 'no count', JSON.stringify(large), JSON.stringify(summary), JSON.stringify(day.guardrails)],
+  });
+  results.push({
+    name: '/guardrails names the pools and keys a row applies to on its hover',
+    ok: guardrailRow(page, 'Large auxiliary requests')?.children[3]?.getAttribute('title') === 'key desktop' && guardrailRow(page, 'Subagent status summary')?.children[3]?.getAttribute('title') === 'pool all',
+    missing: guardrailRows(page).map((tr) => tr.children[3]?.getAttribute('title') ?? 'no title'),
+  });
+  columnsMarked('/guardrails every header cell is fit or fill, and Name and Preset are the fill columns', page.container.querySelector('.guardrails__table'), ['Name', 'Preset']);
+  // A second press of the trigger closes the menu, as on the Keys page.
+  const enforcing = await guardrailMenu(page, guardrailRow(page, 'Large auxiliary requests'));
+  await guardrailMenu(page, guardrailRow(page, 'Large auxiliary requests'));
+  const observing = await guardrailMenu(page, guardrailRow(page, 'Subagent status summary'));
+  await guardrailMenu(page, guardrailRow(page, 'Subagent status summary'));
+  results.push({
+    name: "/guardrails a row's menu offers Edit, Duplicate, Disable, the other mode and Delete",
+    ok: JSON.stringify(enforcing) === JSON.stringify(['Edit', 'Duplicate', 'Disable', 'Switch to observe', 'Delete']) && JSON.stringify(observing) === JSON.stringify(['Edit', 'Duplicate', 'Disable', 'Switch to enforce', 'Delete']),
+    missing: [JSON.stringify(enforcing), JSON.stringify(observing)],
+  });
+  const create = [...page.container.querySelectorAll('.filter-bar button')].find((b) => b.textContent?.trim() === 'Create guardrail');
+  create?.click();
+  await page.settle(150);
+  const menu = [...document.querySelectorAll('.popover .guardrails__create')].pop();
+  const entries = [...(menu?.children ?? [])].map((e) => `${e.getAttribute('role')}:${e.textContent?.trim()}`);
+  pressKey('Escape', menu);
+  await page.settle(100);
+  results.push({
+    name: '/guardrails Create guardrail offers a blank guardrail and each preset under its heading',
+    ok: JSON.stringify(entries) === JSON.stringify(['menuitem:Blank guardrail', 'presentation:From a preset', 'menuitem:Away recap', 'menuitem:Prompt suggestion', 'menuitem:Subagent status summary']),
+    missing: entries,
+  });
+  page.unmount();
+}
+await readsAgain('/guardrails', 'listGuardrails', 5_000);
+{
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const dlg = await editGuardrail(page, 'Subagent status summary');
+  const labels = [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].map((s) => s.getAttribute('aria-label'));
+  const conditions = group(dlg, 'Conditions');
+  const subjects = [...(conditions?.querySelectorAll('.conditions-editor__row') ?? [])].map((row) => row.querySelector('select')?.value);
+  const identity = group(dlg, 'Identity');
+  const line = identity?.querySelector('.guardrails__preset > p');
+  const pickers = [...(group(dlg, 'Applies to')?.querySelectorAll('button[aria-haspopup="dialog"]') ?? [])].map((b) => b.textContent?.trim());
+  results.push({
+    name: '/guardrails the dialog opens on a row with its four groups and the editor\'s rows',
+    ok:
+      dlg?.querySelector('.dialog__title')?.textContent?.trim() === 'Edit guardrail Subagent status summary' &&
+      JSON.stringify(labels) === JSON.stringify(['Identity', 'Conditions', 'Applies to', 'Test']) &&
+      JSON.stringify(subjects) === JSON.stringify(['request_class', 'body', 'message']) &&
+      (conditions?.textContent ?? '').includes('3 of 16') &&
+      line?.textContent?.trim() === 'From the preset Subagent status summary v1' &&
+      line?.querySelector('.badge') === null &&
+      JSON.stringify(pickers) === JSON.stringify(['1 pool', 'No keys']) &&
+      (dlg?.textContent ?? '').includes('Every group saves together.'),
+    missing: [dlg?.querySelector('.dialog__title')?.textContent ?? 'no dialog', JSON.stringify(labels), JSON.stringify(subjects), line?.textContent ?? 'no preset line', JSON.stringify(pickers)],
+  });
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+}
+{
+  // A stamp behind the build's version: the line carries both badges, and the update takes the current conditions.
+  const [stored] = (await api.listGuardrails()).filter((g) => g.id === 'subagent-status-summary');
+  const preset = (await api.listGuardrailPresets()).find((p) => p.id === 'subagent-status-summary');
+  const behind = { ...stored, conditions: stored.conditions.slice(0, 2), preset: { ...stored.preset, currentVersion: 2, customized: true } };
+  const page = await mountNode(React.createElement(GuardrailDialog, { existing: behind, existingIds: new Set(), keys: [], onClose: () => undefined, onSaved: () => undefined, open: true, pools: [], presets: [{ ...preset, version: 2 }] }));
+  const dlg = openDialogs(page).pop() ?? null;
+  const badges = [...(dlg?.querySelectorAll('.guardrails__preset > p .badge') ?? [])].map((b) => b.textContent?.trim());
+  const notice = dlg?.querySelector('.guardrails__preset .callout')?.textContent ?? '';
+  buttonIn(dlg, 'Update to the current preset')?.click();
+  await page.settle(150);
+  const rows = group(dlg, 'Conditions')?.querySelectorAll('.conditions-editor__row').length ?? 0;
+  results.push({
+    name: '/guardrails a stamp behind the build reads customized and update available, and the update takes the current conditions',
+    ok: JSON.stringify(badges) === JSON.stringify(['customized', 'update available']) && notice.includes('This build ships version 2 of the preset.') && rows === 3 && (dlg?.textContent ?? '').includes('Saving takes version 2.'),
+    missing: [JSON.stringify(badges), notice, `${rows} rows`],
+  });
+  page.unmount();
+}
+{
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const dlg = await editGuardrail(page, 'Subagent status summary');
+  rail(dlg, 'test')?.click();
+  await page.settle(150);
+  const test = group(dlg, 'Test');
+  const side = test?.querySelector('.segmented button[aria-pressed="true"]')?.textContent?.trim();
+  const subject = test?.querySelector('select[aria-label="Pool"]')?.value;
+  buttonIn(dlg, 'Run test')?.click();
+  await until(page, () => (test?.querySelectorAll('.guardrails__sample tbody tr').length ?? 0) > 0);
+  const stored = (await api.listGuardrails()).find((g) => g.id === 'subagent-status-summary');
+  const want = (await api.testGuardrail({ conditions: stored.conditions, limit: 200, poolId: 'all' })).totals;
+  const totals = test?.querySelector('.guardrails__totals')?.textContent?.trim();
+  const verdicts = [...(test?.querySelectorAll('.guardrails__sample tbody tr') ?? [])].map((tr) => tr.children[2]?.textContent?.trim());
+  results.push({
+    name: '/guardrails the test panel runs against the pool and reads its totals',
+    ok:
+      side === 'Pool' &&
+      subject === 'all' &&
+      totals === `${want.matched} matched, ${want.unmatched} unmatched, ${want.indeterminate} indeterminate of ${want.sampled} sampled` &&
+      want.matched > 0 &&
+      verdicts.length === want.sampled &&
+      verdicts[0] === 'matched' &&
+      verdicts.lastIndexOf('matched') === want.matched - 1,
+    missing: [String(side), String(subject), String(totals), JSON.stringify(want), verdicts.slice(0, 3).join(', ')],
+  });
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+}
+{
+  // A run still in flight when its dialog closes: its answer lands after the next guardrail's dialog opened, which has
+  // to show none of it, and a run there shows that guardrail's own totals until an input it ran on changes.
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const first = await editGuardrail(page, 'Subagent status summary');
+  rail(first, 'test')?.click();
+  await page.settle(150);
+  const held = deferNextCall('testGuardrail');
+  buttonIn(first, 'Run test')?.click();
+  await page.settle(50);
+  const inFlight = held.calls.length;
+  buttonIn(first, 'Cancel')?.click();
+  await page.settle(200);
+  const dlg = await editGuardrail(page, 'Large auxiliary requests');
+  rail(dlg, 'test')?.click();
+  await page.settle(150);
+  held.release();
+  // The mock answers the released call after its own latency, so the wait outlasts it.
+  await page.settle(700);
+  held.restore();
+  const test = group(dlg, 'Test');
+  const late = { error: test?.querySelector('[role="alert"]')?.textContent?.trim() ?? null, totals: test?.querySelector('.guardrails__totals')?.textContent?.trim() ?? null };
+  const subject = test?.querySelector('select[aria-label="Key"]')?.value;
+  buttonIn(dlg, 'Run test')?.click();
+  await until(page, () => (test?.querySelector('.guardrails__totals') ?? null) !== null);
+  const stored = (await api.listGuardrails()).find((g) => g.id === 'large-auxiliary');
+  const want = (await api.testGuardrail({ conditions: stored.conditions, limit: 200, keyId: 'desktop' })).totals;
+  const own = test?.querySelector('.guardrails__totals')?.textContent?.trim();
+  results.push({
+    name: "/guardrails a run whose dialog closed before its answer shows nothing in the next guardrail's dialog, whose own run shows its totals",
+    ok:
+      inFlight === 1 &&
+      dlg?.querySelector('.dialog__title')?.textContent?.trim() === 'Edit guardrail Large auxiliary requests' &&
+      subject === 'desktop' &&
+      late.totals === null &&
+      late.error === null &&
+      want.sampled > 0 &&
+      own === `${want.matched} matched, ${want.unmatched} unmatched, ${want.indeterminate} indeterminate of ${want.sampled} sampled`,
+    missing: [`${inFlight} calls held`, dlg?.querySelector('.dialog__title')?.textContent ?? 'no dialog', String(subject), JSON.stringify(late), String(own), JSON.stringify(want)],
+  });
+  const sample = [...(test?.querySelectorAll('select') ?? [])].find((s) => [...s.options].map((o) => o.value).join() === '50,200,500');
+  await changeSelect(page, sample, '50');
+  const changed = { rows: test?.querySelectorAll('.guardrails__sample tbody tr').length ?? 0, totals: test?.querySelector('.guardrails__totals')?.textContent?.trim() ?? null };
+  results.push({
+    name: '/guardrails a change of the sample size after a run clears the totals it no longer matches',
+    ok: sample !== undefined && sample.value === '50' && changed.totals === null && changed.rows === 0,
+    missing: [sample ? sample.value : 'no sample select', JSON.stringify(changed)],
+  });
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+}
+
+// The Guardrails group of the pool and key dialogs and the pool card's badge over the story's attachments, every figure
+// read through the mock: the pool all runs the preset's guardrail, and its key desktop adds the enforcing one after it.
+/** A guardrail list's rows as drawn: the name, the mode badge and its tone, the off word, and the inherited mark. */
+const guardrailListRows = (section) =>
+  [...(section?.querySelectorAll('.pattern-editor__row') ?? [])].map((li) => ({
+    badge: li.querySelector('.badge')?.textContent?.trim() ?? null,
+    name: li.querySelector('.pattern-editor__pattern')?.textContent?.trim() ?? '',
+    off: [...li.querySelectorAll('.muted')].some((s) => s.textContent?.trim() === 'off'),
+    source: li.querySelector('.pattern-editor__source')?.textContent?.trim() ?? null,
+    tone: li.querySelector('.badge')?.className ?? null,
+  }));
+/** The rows a list of refs draws, in position order, each marked inherited where the key's pool holds it. */
+const guardrailRefRows = (refs, inherited) =>
+  [...refs]
+    .sort((a, b) => a.position - b.position)
+    .map((r) => ({ badge: r.mode, name: r.name, off: !r.enabled, source: inherited ? 'inherited' : null, tone: `badge badge--${r.mode === 'enforce' ? 'warning' : 'neutral'}` }));
+const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+{
+  const pool = (await api.listPools()).find((p) => p.id === 'all');
+  const registry = await api.listGuardrails();
+  // The save is answered without a write, so the story's attachments stand for the checks after this one.
+  const { updatePool } = api;
+  const sent = [];
+  api.updatePool = async (id, input) => {
+    sent.push(input);
+    return (await api.listPools()).find((p) => p.id === id);
+  };
+  const page = await mount('/pools?edit=all&group=guardrails');
+  await page.settle(300);
+  const dlg = openDialogs(page).pop() ?? null;
+  const section = group(dlg, 'Guardrails');
+  const opened = { rows: guardrailListRows(section), shown: shownGroupOf(dlg) };
+  const hint = section?.querySelector('.field__hint');
+  const link = hint?.querySelector('a');
+  buttonIn(section, 'Attach guardrail')?.click();
+  await page.settle(150);
+  const box = [...document.querySelectorAll('.popover')].pop();
+  const offered = [...(box?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const unattached = registry.filter((g) => !(pool?.guardrails ?? []).some((r) => r.id === g.id));
+  box?.querySelector(CHOICE)?.click();
+  await page.settle(150);
+  const attached = guardrailListRows(section).map((r) => r.name);
+  const added = unattached[0];
+  section?.querySelector(`button[aria-label="Move ${added?.name} up"]`)?.click();
+  await page.settle(150);
+  const moved = guardrailListRows(section).map((r) => r.name);
+  buttonIn(dlg, 'Save pool')?.click();
+  await page.settle(400);
+  page.unmount();
+  const again = await mount('/pools?edit=all&group=guardrails');
+  await again.settle(300);
+  buttonIn(openDialogs(again).pop() ?? null, 'Save pool')?.click();
+  await again.settle(400);
+  again.unmount();
+  api.updatePool = updatePool;
+  const ids = (pool?.guardrails ?? []).map((r) => r.id);
+  results.push({
+    name: "/pools the pool dialog's Guardrails group lists the attached guardrail and Attach guardrail",
+    ok:
+      opened.shown === 'Guardrails' &&
+      ids.length > 0 &&
+      JSON.stringify(opened.rows) === JSON.stringify(guardrailRefRows(pool?.guardrails ?? [], false)) &&
+      (hint?.textContent ?? '').startsWith("Top to bottom. A pool's guardrails run before a key's own. Manage guardrails") &&
+      link?.getAttribute('href') === '/guardrails' &&
+      unattached.length > 0 &&
+      JSON.stringify(offered) === JSON.stringify(unattached.map((g) => g.name)) &&
+      JSON.stringify(attached) === JSON.stringify([...(pool?.guardrails ?? []).map((r) => r.name), added?.name]) &&
+      JSON.stringify(moved) === JSON.stringify([...(pool?.guardrails ?? []).slice(0, -1).map((r) => r.name), added?.name, (pool?.guardrails ?? []).at(-1)?.name]),
+    missing: [JSON.stringify(opened), hint?.textContent ?? 'no hint', link?.getAttribute('href') ?? 'no link', JSON.stringify(offered), JSON.stringify(attached), JSON.stringify(moved)],
+  });
+  results.push({
+    name: '/pools the pool dialog sends its guardrails as the whole list when it changed and leaves them out when it did not',
+    ok: sent.length === 2 && JSON.stringify(sent[0]?.guardrails) === JSON.stringify([...ids.slice(0, -1), added?.id, ids.at(-1)]) && !('guardrails' in (sent[1] ?? { guardrails: null })),
+    missing: sent.map((input) => JSON.stringify(input?.guardrails ?? 'no guardrails member')),
+  });
+}
+{
+  const pools = await api.listPools();
+  const word = (n) => (n === 1 ? '1 guardrail' : `${n} guardrails`);
+  const page = await mount('/pools');
+  await page.settle(300);
+  const cardOf = (id) => [...page.container.querySelectorAll('.pool')].find((c) => c.id === id);
+  const read = pools.map((p) => {
+    const badges = [...(cardOf(p.id)?.querySelectorAll('.pool__features .badge') ?? [])];
+    const own = badges.filter((b) => b.getAttribute('href') === `/pools?edit=${p.id}&group=guardrails`);
+    return { first: badges[0] === own[0] && own.length === 1, id: p.id, words: own.map((b) => [b.textContent?.trim(), b.getAttribute('title')]) };
+  });
+  const want = pools.map((p) => ({ first: p.guardrails.length > 0, id: p.id, words: p.guardrails.length > 0 ? [[word(p.guardrails.length), 'Opens the pool dialog on Guardrails']] : [] }));
+  const filtering = pools.find((p) => p.guardrails.length > 0);
+  cardOf(filtering?.id ?? '')?.querySelector(`.pool__features .badge[href="/pools?edit=${filtering?.id}&group=guardrails"]`)?.click();
+  await page.settle(400);
+  const dlg = openDialogs(page).pop() ?? null;
+  const opened = [dlg?.querySelector('.dialog__title')?.textContent?.trim() ?? 'no dialog', shownGroupOf(dlg), rail(dlg, 'guardrails')?.getAttribute('aria-current') ?? 'no rail entry'];
+  results.push({
+    name: '/pools the card of a pool with a guardrail carries the badge and opens the group',
+    ok: filtering !== undefined && pools.some((p) => p.guardrails.length === 0) && JSON.stringify(read) === JSON.stringify(want) && JSON.stringify(opened) === JSON.stringify([`Edit pool ${filtering?.name}`, 'Guardrails', 'true']),
+    missing: [JSON.stringify(read), JSON.stringify(opened)],
+  });
+  page.unmount();
+}
+{
+  const desktop = (await api.listKeys()).find((k) => k.id === 'desktop');
+  // A third guardrail in the registry the dialog reads, so the list it offers shows what it leaves out: the key's own
+  // and its pool's.
+  const { listGuardrails } = api;
+  const [first] = await listGuardrails.call(api);
+  const extra = { ...first, id: 'smoke-extra', keys: [], name: 'Smoke extra', pools: [] };
+  api.listGuardrails = async () => [...(await listGuardrails.call(api)), extra];
+  const page = await mount('/keys?edit=desktop&group=guardrails');
+  await page.settle(300);
+  const dlg = openDialogs(page).pop() ?? null;
+  const section = group(dlg, 'Guardrails');
+  const shown = shownGroupOf(dlg);
+  const rows = guardrailListRows(section);
+  const hint = section?.querySelector('.field__hint')?.textContent ?? '';
+  const ownFirst = [...(desktop?.guardrails ?? [])].sort((a, b) => a.position - b.position)[0];
+  const upHeld = section?.querySelector(`button[aria-label="Move ${ownFirst?.name} up"]`)?.disabled;
+  buttonIn(section, 'Attach guardrail')?.click();
+  await page.settle(150);
+  const offered = [...([...document.querySelectorAll('.popover')].pop()?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  await closeBoxes(page);
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+  api.listGuardrails = listGuardrails;
+  results.push({
+    name: "/keys the key dialog's Guardrails group draws the pool's rows inherited and the key's own after them",
+    ok:
+      shown === 'Guardrails' &&
+      (desktop?.poolGuardrails.length ?? 0) > 0 &&
+      (desktop?.guardrails.length ?? 0) > 0 &&
+      JSON.stringify(rows) === JSON.stringify([...guardrailRefRows(desktop?.poolGuardrails ?? [], true), ...guardrailRefRows(desktop?.guardrails ?? [], false)]) &&
+      hint.startsWith("The pool's guardrails run first and cannot be dropped here. This key's own run after them. Manage guardrails") &&
+      upHeld === true &&
+      JSON.stringify(offered) === JSON.stringify(['Smoke extra']),
+    missing: [shown, JSON.stringify(rows), hint, `first own row's Move up disabled ${upHeld}`, JSON.stringify(offered)],
+  });
+  // A new key takes no attachment, so its group reads its pool's rows and says when its own can be attached.
+  const pool = (await api.listPools())[0];
+  const create = await mount('/keys');
+  [...create.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
+  await create.settle(300);
+  const fresh = group(openDialogs(create).pop() ?? null, 'Guardrails');
+  const freshRead = { attach: buttonIn(fresh, 'Attach guardrail') !== undefined, rows: guardrailListRows(fresh), sentence: fresh?.querySelector('.pattern-editor > p.muted')?.textContent?.trim() ?? null };
+  create.unmount();
+  results.push({
+    name: "/keys a new key's Guardrails group draws its pool's rows inherited and waits for the save to attach its own",
+    ok: (pool?.guardrails.length ?? 0) > 0 && JSON.stringify(freshRead) === JSON.stringify({ attach: false, rows: guardrailRefRows(pool?.guardrails ?? [], true), sentence: 'Guardrails can be attached once the key is saved.' }),
+    missing: [pool?.id ?? 'no pool', JSON.stringify(freshRead)],
+  });
+}
+
 // A helper that cannot find the control a check needs fails that check by name, so a control that disappears
 // fails the run rather than leaving the check to read a page nothing narrowed.
 const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labeled ${label}`] });
@@ -8421,7 +8784,7 @@ m = await mount('/models');
   // The route's own answer for the key, so an edit an earlier check made to a key's list is read rather than assumed.
   const answeredRules = async (keyId) => (await api.getKeyModels(keyId)).rules.map((r) => [r.level, r.not ? 'Deny' : 'Allow', r.pattern, [...new Set(r.cooldowns.map((c) => c.accountId))].join(', ') || '-'].join(' | '));
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: '/models sits in the nav after Keys and titles the page', ok: nav.indexOf('Models') === nav.indexOf('Keys') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
+  results.push({ name: '/models sits in the nav after Guardrails and titles the page', ok: nav.indexOf('Models') === nav.indexOf('Guardrails') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
   // The keys checks leave a key of their own at the head of the list, so the first key is read, not assumed.
   const first = (await api.listKeys())[0];
   expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'View rejections and permits in the routing log', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
@@ -9986,10 +10349,109 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   }
 }
 {
+  // The story's matches are read off its rows, apart from the filter under test: the chip names the guardrail that
+  // blocked as the registry does and lists the day's rows it matched, and none lists the rows no guardrail matched.
+  const registry = await api.listGuardrails();
+  const blocker = registry.find((g) => requests.some((r) => r.guardrails.some((x) => x.id === g.id && x.blocked)));
+  const inDay = (r) => r.kind !== 'probe' && Date.parse(r.at) >= CLOCK_ORIGIN - 24 * 3_600_000 && Date.parse(r.at) <= CLOCK_ORIGIN;
+  const newest = (a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : -1);
+  const carrying = requests.filter((r) => inDay(r) && r.guardrails.some((x) => x.id === blocker?.id)).sort(newest);
+  const rest = requests.filter((r) => inDay(r) && r.guardrails.length === 0);
+  const tableRows = (page) =>
+    [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
+      const shown = tr.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
+      return requests.find((r) => shown !== '' && r.id.startsWith(shown)) ?? null;
+    });
+  const spy = countCalls('listRequests');
+  const page = await mount(`/requests?guardrails=${blocker?.id}`, { now: CLOCK_ORIGIN });
+  spy.restore();
+  const listedRows = tableRows(page);
+  const chip = chipRead(page, 'guardrail');
+  // The Add filter list offers the registry's guardrails by name and none, under Outcome.
+  await addFilter(page, 'Guardrail');
+  const offered = boxOptions().map((o) => o.textContent?.trim());
+  let heading = null;
+  await closeBoxes(page);
+  addFilterButton(page)?.click();
+  await page.settle(100);
+  for (const el of filterBox()?.querySelectorAll('.mselect__group, .add-filter__row') ?? []) {
+    if (el.classList.contains('mselect__group')) heading = el.textContent?.trim() ?? null;
+    else if (el.firstElementChild?.textContent?.trim() === 'Guardrail') break;
+  }
+  await closeBoxes(page);
+  page.unmount();
+  const none = await mount('/requests?guardrails=-', { now: CLOCK_ORIGIN });
+  const noneRows = tableRows(none);
+  const noneChip = chipRead(none, 'guardrail');
+  none.unmount();
+  results.push({
+    name: '/requests the Guardrail chip filters to the matched rows and none to the rest',
+    ok:
+      blocker !== undefined &&
+      carrying.length > 0 &&
+      chip === `guardrail: ${blocker.name}` &&
+      JSON.stringify(spy.calls.at(-1)?.[0]?.guardrails) === JSON.stringify([blocker.id]) &&
+      JSON.stringify(listedRows.map((r) => r?.id)) === JSON.stringify(carrying.slice(0, 25).map((r) => r.id)) &&
+      heading === 'Outcome' &&
+      JSON.stringify(offered) === JSON.stringify([...registry.map((g) => g.name), 'none']) &&
+      noneChip === 'guardrail: none' &&
+      rest.length > 0 &&
+      noneRows.length === Math.min(25, rest.length) &&
+      noneRows.every((r) => r !== null && rest.includes(r)),
+    missing: [chip, JSON.stringify(spy.calls.at(-1)?.[0]?.guardrails ?? null), `${listedRows.length} rows of ${carrying.length}`, String(heading), JSON.stringify(offered), noneChip, `${noneRows.length} rows of ${rest.length}`],
+  });
+}
+{
+  // A blocked row's drawer names each match in evaluation order with its badge, the registry's names first, then the
+  // id marked deleted once the registry no longer holds it.
+  const registry = await api.listGuardrails();
+  const blocked = requests.find((r) => r.guardrailId !== null);
+  const sectionRows = (page) => {
+    const section = [...page.container.querySelectorAll('.drawer section')].find((s) => s.querySelector('.section-title')?.textContent?.trim() === 'Guardrails');
+    return [...(section?.querySelectorAll('.kv__row') ?? [])].map((row) => [row.querySelector('dt')?.textContent?.trim(), row.querySelector('dd .badge')?.textContent?.trim(), row.querySelector('dd .badge')?.className]);
+  };
+  const wanted = (nameOf) => [...(blocked?.guardrails ?? [])].sort((a, b) => a.position - b.position).map((x) => [nameOf(x.id), x.blocked ? 'blocked' : 'observed', `badge badge--${x.blocked ? 'critical' : 'neutral'}`]);
+  const page = await mount(`/requests/${blocked?.id}`);
+  await page.settle(300);
+  const titles = [...page.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? '');
+  const read = sectionRows(page);
+  const outcome = [drawerRowOf(page, 'Outcome')?.querySelector('dd')?.textContent?.trim(), drawerRowOf(page, 'Error')?.querySelector('dd')?.textContent?.trim()];
+  const captured = [...page.container.querySelectorAll('.drawer section')].find((s) => s.querySelector('.section-title')?.textContent?.trim() === 'Captured bodies');
+  const bodyBlocks = [...(captured?.querySelectorAll('.body-block') ?? [])].map((b) => [b.querySelector('.body-block__head > span')?.textContent?.trim(), b.querySelector('p.muted')?.textContent?.trim() ?? null, b.querySelector('.link-btn') !== null]);
+  page.unmount();
+  results.push({
+    name: "/requests a blocked row's captured Response says the router refused the request before an account answered",
+    ok: JSON.stringify(bodyBlocks) === JSON.stringify([['Request', null, true], ['Response', 'No response: the router refused the request before an account answered.', false]]),
+    missing: [blocked?.id ?? 'no blocked row', JSON.stringify(bodyBlocks)],
+  });
+  results.push({
+    name: '/requests the drawer of a blocked row names each match with its badge',
+    ok:
+      blocked !== undefined &&
+      (blocked?.guardrails.length ?? 0) > 1 &&
+      JSON.stringify(titles) === JSON.stringify(['Outcome', 'Guardrails', ...DRAWER_SECTIONS.slice(1)]) &&
+      JSON.stringify(read) === JSON.stringify(wanted((id) => registry.find((g) => g.id === id)?.name ?? `${id} (deleted)`)) &&
+      JSON.stringify(outcome) === JSON.stringify(['rejected', 'guardrail_blocked']),
+    missing: [blocked?.id ?? 'no blocked row', JSON.stringify(titles), JSON.stringify(read), JSON.stringify(outcome)],
+  });
+  const { listGuardrails } = api;
+  api.listGuardrails = async () => (await listGuardrails.call(api)).filter((g) => g.id !== blocked?.guardrailId);
+  const gone = await mount(`/requests/${blocked?.id}`);
+  await gone.settle(300);
+  const goneRead = sectionRows(gone);
+  gone.unmount();
+  api.listGuardrails = listGuardrails;
+  results.push({
+    name: '/requests the drawer labels a match the registry no longer holds by its id marked deleted',
+    ok: JSON.stringify(goneRead) === JSON.stringify(wanted((id) => (id === blocked?.guardrailId ? `${id} (deleted)` : (registry.find((g) => g.id === id)?.name ?? `${id} (deleted)`)))),
+    missing: [JSON.stringify(goneRead)],
+  });
+}
+{
   // The drawer draws its seven sections and nothing of the attempts, however many the request made. Each attempt's
-  // routing is read in the routing log.
+  // routing is read in the routing log. A blocked row draws an eighth, which its own check reads.
   const several = requests.find((r) => r.attempts.length >= 3);
-  const none = requests.find((r) => r.attempts.length === 0);
+  const none = requests.find((r) => r.attempts.length === 0 && r.guardrails.length === 0);
   const read = [];
   for (const r of [several, none, laptopRow].filter(Boolean)) {
     await m.navigate(`/requests/${r.id}`);
@@ -11394,7 +11856,7 @@ m.unmount();
     results.push({
       name: '/requests the Add filter popover walks its two steps for a list, a pattern, an id, a choice and a flag and closes on Escape, a click outside and focus leaving',
       ok:
-        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 18 }) &&
+        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 19 }) &&
         JSON.stringify(head) === JSON.stringify({ back: true, remove: false, title: 'Outcome' }) &&
         JSON.stringify(list) === JSON.stringify({ open: true, outcomes: 'canceled', remove: true }) &&
         back &&
@@ -14494,6 +14956,51 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const drawn = Number((tile?.querySelector('.stat__value')?.textContent ?? '').replace(/[$,]/g, ''));
     results.push({ name: "/analytics the Fast mode spend tile reads the fast answers' dollars in range", ok: fastDay !== undefined && fastDay.costUsd > 0 && Math.abs(drawn - fastDay.costUsd) < 0.01, missing: [tile?.textContent ?? 'no tile', String(fastDay?.costUsd)] });
     await tab(m, 'Traffic');
+  }
+  {
+    // The Guardrails card stands under the Traffic grid at full width, before the Traffic table, and reads the counts
+    // route over the page's own range, whose answer the check reads again. The bytes are spelled out here, so the check
+    // holds the console's formatter to its binary units.
+    const bytesText = (n) => {
+      const units = ['B', 'KiB', 'MiB', 'GiB'];
+      let at = 0;
+      let figure = n;
+      while (at < units.length - 1 && figure >= 1024) {
+        figure /= 1024;
+        at += 1;
+      }
+      return `${Number.isInteger(figure) ? figure : figure.toFixed(1)} ${units[at]}`;
+    };
+    const spy = countCalls('getAnalyticsGuardrails');
+    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    await page.settle(300);
+    spy.restore();
+    const range = spy.calls.at(-1)?.[0];
+    const counts = range ? await api.getAnalyticsGuardrails(range) : null;
+    const guardrailsCard = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Guardrails');
+    const table = guardrailsCard?.querySelector('table');
+    const drawn = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim()));
+    const want = (counts?.guardrails ?? []).map((c) => [c.name ?? `${c.id} (deleted)`, fmtInt(c.observed), fmtInt(c.blocked), bytesText(c.blockedBytes)]);
+    const before = guardrailsCard?.previousElementSibling;
+    const after = guardrailsCard?.nextElementSibling?.querySelector('.card__title')?.textContent?.trim() ?? '';
+    results.push({
+      name: "/analytics the Guardrails card lists the story's two guardrails with their counts",
+      ok:
+        typeof range?.from === 'string' &&
+        typeof range?.to === 'string' &&
+        guardrailsCard?.querySelector('.card__subtitle')?.textContent?.trim() === 'Matches by guardrail in range, every key' &&
+        JSON.stringify([...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim())) === JSON.stringify(['Guardrail', 'Observed', 'Blocked', 'Blocked bytes']) &&
+        (counts?.guardrails ?? []).some((c) => c.observed > 0) &&
+        (counts?.guardrails ?? []).some((c) => c.blocked > 0 && c.blockedBytes > 0) &&
+        JSON.stringify(drawn) === JSON.stringify(want) &&
+        before?.classList.contains('grid-2') === true &&
+        [...before.children].some((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Migration rewrites') &&
+        after.startsWith('Traffic by '),
+      missing: [JSON.stringify(range ?? null), JSON.stringify(drawn), JSON.stringify(want), before?.className ?? 'no element before the card', after],
+    });
+    columnsMarked('/analytics the Guardrails card marks Guardrail as its fill column and its figures fit', table, ['Guardrail']);
+    fillTitles('/analytics every guardrail cell of the Guardrails card carries its own text as its title', table);
+    page.unmount();
   }
   {
     // The unit is the console-wide setting the top bar's switch holds, so no section head draws a control for it and a
@@ -20933,6 +21440,7 @@ m.unmount();
     // Under native, the shell's default, the cost tile reads an empty day's zero in each unit.
     ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).slice(0, 4).join(' ') === '0 0 0 0' && pairLines(c).join(' over ') === '0% subscription over $0.00 billed', 'no pool card, tiles 0 0 0 0, the cost tile 0% subscription over $0.00 billed'],
     ['/keys', (c, t) => t.includes('No keys yet'), 'No keys yet'],
+    ['/guardrails', (c) => c.querySelector('.guardrails__table .empty__title')?.textContent === 'No guardrails yet', 'No guardrails yet inside the table'],
     ['/models', (c, t) => t.includes("No keys: a key's processed rules show here once one exists."), 'No keys: ...'],
     ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],
     ['/analytics', (c, t) => t.includes('No traffic in this range.'), 'No traffic in this range.'],

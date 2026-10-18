@@ -1,0 +1,11 @@
+{
+  "model": "claude-haiku-4-5",
+  "max_tokens": 64,
+  "system": [
+    {"type": "text", "text": "Classify the shell command the user gives as safe or unsafe."}
+  ],
+  "messages": [
+    {"role": "user", "content": "Classify the command: ls -la"},
+    {"role": "assistant", "content": "safe"}
+  ]
+}

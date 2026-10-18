@@ -1971,6 +1971,120 @@
   grid-column: 1 / -1;
 }
 
+/* Guardrails: the sentence under the bar, a switched-off row in the secondary ink, and the create menu's rows. */
+.guardrails__lead {
+  margin: 0;
+}
+
+.guardrail-row--off > td {
+  color: var(--ink-2);
+}
+
+.guardrails__create {
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+}
+
+/* The dialog's preset line spans the identity cells, its badges on the line and the preset's own words under it. */
+.guardrails__preset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.guardrails__preset > p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+}
+
+.guardrails__totals {
+  margin: 0;
+  font-weight: 500;
+}
+
+/* The sample's side and its pool or key share a line, the select taking the room the segmented control leaves. */
+.guardrails__test .row .select {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+/* The conditions editor: one bordered row per condition, as the pattern editor draws its rules. */
+.conditions-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conditions-editor__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.conditions-editor__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.conditions-editor__row.is-refused {
+  border-color: var(--critical-border);
+}
+
+.conditions-editor__line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The cell grid widens every select to its cell, which on a condition's line would push the other cells off it. */
+.conditions-editor .conditions-editor__line .select {
+  flex: none;
+  width: auto;
+}
+
+.conditions-editor__line .input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.conditions-editor__actions {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.conditions-editor__up svg {
+  transform: rotate(180deg);
+}
+
+.conditions-editor__refusal {
+  margin: 0;
+  font-size: 12px;
+  color: var(--critical-ink);
+}
+
+.conditions-editor__foot {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
 /* The cells sit 8 px apart, so the fit columns leave the Client fill, which floors at sixteen characters, as much of the
    card as they can. Where the values run past the card the table scrolls inside its wrap. */
 .requests__table th,

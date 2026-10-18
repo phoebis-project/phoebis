@@ -88,8 +88,17 @@ outside its bound gets:
 | `cache_diagnostics` | `false` | `true` or `false`: `cache_diagnostics must be true or false` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false`. See below |
 | `body_capture_hours` | `0` (off) | at most `stats.body_capture_max_hours`: `body_capture_hours exceeds stats.body_capture_max_hours`. The console proposes 24 |
+| `guardrails` | unchanged when absent | an ordered list of at most 64 ids, refused on a create, the refusals in the paragraph below |
 | `expected_revision` | unset | the `revision` the pool was read at, a non-negative integer: `expected_revision is the revision the row was read at`. An edit lands only while the pool still carries it, else `409 the pool changed while it was being edited, so reload and try again` with the code `stale_edit` and nothing written. A create accepts it and ignores it |
 | `members` | none | a list of `{account_id, priority, budget_daily_usd, budget_monthly_usd}`, written as the whole membership when present, as `PUT /admin/pools/{id}/members` does |
+
+`guardrails` is the pool's guardrails as an ordered list of ids, replaced whole on an edit. A pool's guardrails cover
+every key of the pool and run before the key's own, in this order, which the pool dialog's Guardrails group arranges
+([Guardrails](guardrails.md)). Naming a guardrail twice answers `400 guardrails lists {id} twice`, a list past 64 `400
+pool {id} would hold more than 64 guardrails`, a list that with a key's own list takes a key of the pool past 64 `400
+key {id} would hold more than 64 guardrails`, the member on a create `400 guardrails applies on edit`, and an unknown
+guardrail `404 guardrail {id} not found`, in each case with nothing written. The write stamps the pool alone, so a
+guardrail attached from the pool's side keeps its own revision.
 
 An unknown field in the body, or a value past its field's type, is answered `400 body must be a JSON object`, and a
 create under an id a pool already holds `409 a pool with this id exists`. A member's `priority` is a number, `0` by
@@ -206,7 +215,16 @@ Every field, in the order the key's JSON body lists them, with the answer a valu
 | `keepalive_opt_out` | `false` | `true` or `false` |
 | `body_capture_hours` | unset, inheriting the pool's | `0` turns capture off, else at most `stats.body_capture_max_hours`: `body_capture_hours exceeds stats.body_capture_max_hours`. `null` inherits again |
 | `auto_mode_server` | unset, inheriting the pool's | `true`, `false` or `null`: `auto_mode_server must be true, false, or null`. `null` inherits again |
+| `guardrails` | unchanged when absent | an ordered list of at most 64 ids, refused on a create, the refusals in the paragraph below |
 | `expected_revision` | unset | the `revision` the key was read at, a non-negative integer: `expected_revision is the revision the row was read at`. An edit lands only while the key still carries it, else `409 the key changed while it was being edited, so reload and try again` with the code `stale_edit` and nothing written. A create accepts it and ignores it |
+
+`guardrails` is the key's own guardrails as an ordered list of ids, replaced whole on an edit. They run after the
+pool's, which the key cannot drop and the key dialog draws first as inherited, and a guardrail on both the key and its
+pool runs once, at its pool position ([Guardrails](guardrails.md)). Naming a guardrail twice answers `400 guardrails
+lists {id} twice`, a list that with the pool's takes the key past 64 `400 key {id} would hold more than 64 guardrails`,
+as does a `pool_id` change that moves the key under a pool whose guardrails, with the key's own, pass 64, the member on
+a create `400 guardrails applies on edit`, and an unknown guardrail `404 guardrail {id} not found`, in each case with
+nothing written.
 
 A create under an id a key already holds answers `409 a key with this id exists`. Rotate issues a new secret under the
 same id, and a revoked key cannot be rotated (`409 a revoked key cannot be rotated`). Revoke is permanent, so a revoked
@@ -660,7 +678,8 @@ Probes, token counts, compactions, auxiliary requests (any `x-claude-code-reques
 and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held, and the
 burn of each counts, so the holds of the main and subagent turns are sized to cover it. A probe has to land before the
 cache expires, a count costs nothing on the window, a compaction lowers the burn that follows it, and a fast request
-draws usage credits and no plan window.
+draws usage credits and no plan window. A request a guardrail blocks never reaches the selection, so it is never held,
+refreshes no pin and adds no burn ([Guardrails](guardrails.md)).
 
 The handover to the round: with `load_shedding` on as well, the 5-hour window's trigger is the stretch in place of the
 projection. The round fires when the stretch has read over `slow_down_stretch_seconds` at a pinned selection and still

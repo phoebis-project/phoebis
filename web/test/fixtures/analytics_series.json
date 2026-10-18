@@ -105,18 +105,18 @@
             "key": "desktop",
             "label": "desktop",
             "key_id": "desktop",
-            "requests": 2,
+            "requests": 3,
             "succeeded": 1,
             "rate_limited": 0,
             "failed": 0,
             "exhausted": 0,
-            "rejected": 0,
+            "rejected": 1,
             "attempts": 3,
             "failovers": 1,
             "incomplete": 1,
             "cache_hits": 2,
             "cache_misses": 0,
-            "uncached": 0,
+            "uncached": 1,
             "expired_between_turns": 0,
             "tokens": {
               "cache_read": 1500,
@@ -136,6 +136,7 @@
             },
             "cost_usd": 0.01065,
             "errors": {
+              "guardrail_blocked": 1,
               "stream_incomplete": 1
             },
             "cache_miss_reasons": {
@@ -150,7 +151,7 @@
                 0,
                 0,
                 0,
-                0,
+                1,
                 0,
                 0,
                 0,
@@ -456,7 +457,7 @@
             "cost_shares": null,
             "cache_shares": null,
             "probe_shares": null,
-            "plan_requests": 1,
+            "plan_requests": 2,
             "plan_output_tokens": 100,
             "cost_equivalent": {
               "five_hour": 8.8125e-6,

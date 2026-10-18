@@ -78,6 +78,7 @@ fn snapshot() -> RegistrySnapshot {
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: Vec::new(),
+        ..Default::default()
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }

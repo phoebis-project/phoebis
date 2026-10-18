@@ -1,9 +1,13 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use phoebis_guardrails::CompiledGuardrail;
 use phoebis_store::{
     digest_with, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad, SubscriptionTerm,
 };
 use subtle::ConstantTimeEq;
+
+use crate::guardrails::CompiledGuardrails;
 
 /// Which secret the caller presented: the key's live one, or the one a rotation retired and the grace still
 /// admits.
@@ -54,6 +58,7 @@ pub struct RegistrySnapshot {
     /// store read. It lags a rotation by one reload, which the fence allows for.
     credential_generations: HashMap<String, u64>,
     digest_key: [u8; 32],
+    guardrails: CompiledGuardrails,
     keys: HashMap<String, ApiKeyRow>,
     keys_by_digest: HashMap<[u8; 32], String>,
     pub loaded_at: i64,
@@ -107,6 +112,7 @@ impl RegistrySnapshot {
                 .collect(),
             credential_generations: load.credential_generations.into_iter().collect(),
             digest_key,
+            guardrails: CompiledGuardrails::default(),
             keys: load.keys.into_iter().map(|k| (k.id.clone(), k)).collect(),
             keys_by_digest,
             loaded_at,
@@ -120,6 +126,23 @@ impl RegistrySnapshot {
                 .map(|t| (t.account_id.clone(), t))
                 .collect(),
         }
+    }
+
+    /// The set compiled from the same load. A builder rather than an argument of `from_load`, so a caller that
+    /// builds a snapshot without the compile step keeps its call and carries an empty set.
+    pub fn with_guardrails(mut self, guardrails: CompiledGuardrails) -> RegistrySnapshot {
+        self.guardrails = guardrails;
+        self
+    }
+
+    /// The key's guardrails in evaluation order, its pool's first, read from the list the build derived so the
+    /// request path walks no attachment.
+    pub fn guardrails_for(&self, key: &ApiKeyRow) -> &[Arc<CompiledGuardrail>] {
+        self.guardrails.for_key(&key.id)
+    }
+
+    pub fn guardrails(&self) -> &CompiledGuardrails {
+        &self.guardrails
     }
 
     /// The digest narrows the search and the constant-time compare decides, as the static key table did. A

@@ -24,6 +24,7 @@ export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoad
 export { installClock } from '@/lib/clock';
 export { spanText } from '@/lib/format';
 export { useAsync, useNow, useRangeTakenAt } from '@/lib/hooks';
+export { GuardrailDialog, GuardrailsPage } from '@/pages/GuardrailsPage';
 export { KeyDialog } from '@/pages/KeysPage';
 export { PoolDialog } from '@/pages/PoolsPage';
 export { fakeClock } from '../smoke/clock';

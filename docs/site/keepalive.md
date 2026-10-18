@@ -110,6 +110,11 @@ resets the recipe's schedule and settles nothing. A failed turn decides no probe
 a retry inside the probe's entry earns the credit the failed turn could not, its gap measured from the last turn that
 answered.
 
+A request a guardrail blocks is a refused request to the engine. A blocked `compaction`, `main` or `subagent` request,
+or one with no class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does, and a
+blocked auxiliary request leaves the recipe, its schedule and its credit untouched
+([Guardrails](guardrails.md#what-a-guardrail-is)).
+
 ## The four fields
 
 The pool's `keepalive` object carries four fields:

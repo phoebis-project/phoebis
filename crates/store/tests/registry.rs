@@ -1,9 +1,11 @@
+use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Selector, Subject};
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
-    Affinity, AffinityChain, ApiKeyRow, CanaryRead, Failover, Identity, MemberWrite,
-    MemoryKey, MemoryRecord, MemoryStore, ModelRule, NewBundle, Overlap, PinBurn, PinRow, PoolRow,
-    ReturnToPlan, RulesMode, Secret, Shedding, SlowDown, StateCause, StorageKey, Store, StoreError,
-    Strategy, SubagentPlacement, SubscriptionRow,
+    Affinity, AffinityChain, ApiKeyRow, AttachmentSubject, CanaryRead, Failover,
+    GuardrailAttachment, GuardrailRow, Identity, MemberWrite, MemoryKey, MemoryRecord, MemoryStore,
+    ModelRule, NewBundle, Overlap, PinBurn, PinRow, PoolRow, ReturnToPlan, RulesMode, Secret,
+    Shedding, SlowDown, StateCause, StorageKey, Store, StoreError, Strategy, SubagentPlacement,
+    SubscriptionRow,
 };
 
 // Read by both the roll-back chains below and the standalone direct-open test further down.
@@ -139,9 +141,13 @@ const UNDO_V40: &str =
 // a seeded version-40 store is faithful. One line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
 const UNDO_V42: &str = "DROP INDEX IF EXISTS alert_deliveries_event; CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id);";
-// The reverse of the registry's version 57: the pins lose `shed_reason`. One line with the marker last. The
+// The reverse of the registry's version 58: the pins lose `shed_reason`. One line with the marker last. The
 // trailing `\n` ends the marker's comment.
-const UNDO_V57: &str = "ALTER TABLE pins DROP COLUMN shed_reason; -- rollback\n";
+const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN shed_reason; -- rollback\n";
+// The reverse of the registry's version 57: the guardrail tables, the attachments first since they reference the
+// guardrails, each `IF EXISTS` so a chain reads the same over a store that never ran the version. One line with the
+// marker last. The trailing `\n` ends the marker's comment.
+const UNDO_V57: &str = "DROP TABLE IF EXISTS guardrail_attachments; DROP TABLE IF EXISTS guardrail_tombstones; DROP TABLE IF EXISTS guardrails; -- rollback\n";
 // The reverse of the registry's version 56: the pins lose `entrypoint`. One line with the marker last. The trailing
 // `\n` ends the marker's comment.
 const UNDO_V56: &str = "ALTER TABLE pins DROP COLUMN entrypoint; -- rollback\n";
@@ -338,12 +344,12 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 57);
+    assert_eq!(store.schema_version().unwrap(), 58);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        57,
+        58,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -357,7 +363,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before a cooldown recorded when it was set looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
          VALUES ('a', 'account', 9000, 'rate_limit', 'five_hour', NULL); \
          UPDATE meta SET value = '8' WHERE key = 'schema_version';"
     ))
@@ -366,7 +372,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        57,
+        58,
         "a store left at version 8 is carried up"
     );
     assert_eq!(
@@ -395,14 +401,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before the depletion threshold existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        57,
+        58,
         "a store left at version 7 is carried up"
     );
     drop(migrated);
@@ -421,14 +427,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before account incarnations existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        57,
+        58,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -440,14 +446,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the account revision existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        57,
+        58,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -459,7 +465,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the change-log index existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} DROP INDEX registry_changes_target; {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} DROP INDEX registry_changes_target; {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
          UPDATE meta SET value = '2' WHERE key = 'schema_version';"
     ))
     .unwrap();
@@ -467,7 +473,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        57,
+        58,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -516,12 +522,12 @@ fn a_pool_and_a_pin_from_before_the_engine_columns_read_the_mapped_strategy_and_
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} UPDATE meta SET value = '24' WHERE key = 'schema_version'; {SEED_PRE_V25}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} UPDATE meta SET value = '24' WHERE key = 'schema_version'; {SEED_PRE_V25}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     let pools = migrated.pools().unwrap();
     let legacy = pools.iter().find(|p| p.id == "legacy").unwrap();
     let random = pools.iter().find(|p| p.id == "random").unwrap();
@@ -602,12 +608,12 @@ fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_def
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} UPDATE meta SET value = '28' WHERE key = 'schema_version'; {SEED_PRE_V29}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} UPDATE meta SET value = '28' WHERE key = 'schema_version'; {SEED_PRE_V29}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
 
     let pin = migrated
         .load_routing()
@@ -786,12 +792,12 @@ fn a_stored_policy_with_the_retired_keepalive_key_reads_as_set_after_the_migrati
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} UPDATE meta SET value = '38' WHERE key = 'schema_version'; {SEED_PRE_V39}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} UPDATE meta SET value = '38' WHERE key = 'schema_version'; {SEED_PRE_V39}"
     ))
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 57);
+    assert_eq!(store.schema_version().unwrap(), 58);
     let policy = phoebis_relay::CacheTtlPolicy::from_json(
         &store.pool("warm").unwrap().unwrap().cache_ttl_json,
     );
@@ -839,12 +845,12 @@ fn a_member_budget_with_its_period_lands_in_the_column_the_period_names() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} UPDATE meta SET value = '40' WHERE key = 'schema_version'; {SEED_PRE_V41}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} UPDATE meta SET value = '40' WHERE key = 'schema_version'; {SEED_PRE_V41}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     let members = migrated.pool_members("main").unwrap();
     let budgets_of = |id: &str| {
         let m = members.iter().find(|m| m.account_id == id).unwrap();
@@ -892,12 +898,12 @@ fn a_store_left_at_42_is_carried_to_43_without_the_pools_header_switch() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     assert_eq!(
         migrated
             .pools()
@@ -931,12 +937,12 @@ fn a_store_left_at_42_is_carried_to_43_without_the_keys_cap_or_fixed_source() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_KEY}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_KEY}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     let read = migrated.api_key("k").unwrap().expect("the key reads back");
     assert_eq!((read.label.as_str(), read.pool_id.as_str()), ("k", "main"));
     drop(migrated);
@@ -969,12 +975,12 @@ fn a_store_left_at_42_is_carried_to_43_with_every_unset_diagnostics_switch_off()
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_DIAGNOSTICS}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_DIAGNOSTICS}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     let pools = migrated.pools().expect("an unset switch reads as a bool");
     assert_eq!(
         pools
@@ -1005,12 +1011,12 @@ fn a_store_left_at_42_is_carried_to_43_without_the_rule_event_and_delivery_table
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_TABLES}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_TABLES}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     drop(migrated);
     let conn = rusqlite::Connection::open(&path).unwrap();
     let objects: Vec<String> = conn
@@ -1059,7 +1065,7 @@ fn a_store_left_at_43_is_carried_to_44_with_the_key_column_the_index_and_no_pare
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} UPDATE meta SET value = '43' WHERE key = 'schema_version'; {SEED_PRE_V44}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} UPDATE meta SET value = '43' WHERE key = 'schema_version'; {SEED_PRE_V44}"
     ))
     .unwrap();
     drop(conn);
@@ -1072,7 +1078,7 @@ fn a_store_left_at_43_is_carried_to_44_with_the_key_column_the_index_and_no_pare
     let before = wall_ms();
     let migrated = Store::open(&path, &storage_key).unwrap();
     let after = wall_ms();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     assert_eq!(
         migrated
             .load_routing()
@@ -1125,13 +1131,13 @@ fn a_pool_cap_written_under_the_old_column_reads_through_the_new_one() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} UPDATE pools SET shed_share = 0.25 WHERE id = 'main'; \
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} UPDATE pools SET shed_share = 0.25 WHERE id = 'main'; \
          UPDATE meta SET value = '53' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     assert_eq!(
         migrated.pool("main").unwrap().unwrap().shedding.shed_cap,
         0.25,
@@ -1156,7 +1162,7 @@ fn a_registry_holding_an_account_in_two_pools_refuses_to_migrate_naming_it() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} UPDATE meta SET value = '46' WHERE key = 'schema_version'; \
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} UPDATE meta SET value = '46' WHERE key = 'schema_version'; \
          INSERT INTO pool_members (pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd) \
          VALUES ('p2', 'a', 0, NULL, NULL);"
     ))
@@ -1192,7 +1198,7 @@ fn a_registry_holding_an_account_in_two_pools_refuses_to_migrate_naming_it() {
         .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
 }
 
 #[test]
@@ -1208,12 +1214,12 @@ fn migration_46_adds_the_shed_rounds_the_affinity_depth_and_the_state_cause_on_a
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} UPDATE meta SET value = '45' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} UPDATE meta SET value = '45' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     drop(migrated);
     let conn = rusqlite::Connection::open(&path).unwrap();
     // `(name, type, notnull, dflt_value)` of each column, in the table's order.
@@ -1289,7 +1295,7 @@ fn migration_50_drops_the_budgets_table_and_the_undo_restores_it() {
     );
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} UPDATE meta SET value = '49' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} UPDATE meta SET value = '49' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
@@ -1298,7 +1304,7 @@ fn migration_50_drops_the_budgets_table_and_the_undo_restores_it() {
         "the undo restores the table a version-49 store holds"
     );
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     drop(migrated);
     assert!(!has_budgets_table(&path), "V50 dropped the table");
 }
@@ -1323,7 +1329,7 @@ fn a_store_left_at_50_is_carried_to_52_and_a_pins_fast_burn_reads_back_as_writte
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} UPDATE meta SET value = '50' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
@@ -1333,7 +1339,7 @@ fn a_store_left_at_50_is_carried_to_52_and_a_pins_fast_burn_reads_back_as_writte
         "the undo leaves the pins of a version-50 store without the fast columns: {rewound:?}"
     );
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     let fast = PinRow {
         key_id: "k".into(),
         session_id: "s".into(),
@@ -1410,7 +1416,7 @@ fn migration_53_moves_the_marks_onto_the_pins_and_keeps_one_round_row_per_pool_a
     // A registry at 52 holding a round row of the old shape: V53 drops the row with the table.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} UPDATE meta SET value = '52' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} UPDATE meta SET value = '52' WHERE key = 'schema_version';"
     ))
     .unwrap();
     conn.execute_batch(
@@ -1425,7 +1431,7 @@ fn migration_53_moves_the_marks_onto_the_pins_and_keeps_one_round_row_per_pool_a
         "the undo leaves the pins of a version-52 store without the mark columns: {rewound:?}"
     );
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     assert!(
         migrated.load_routing().unwrap().shed_rounds.is_empty(),
         "the round written under 52 is gone with its table"
@@ -1456,7 +1462,7 @@ fn migration_54_renames_the_pool_fields_and_clamps_a_value_outside_its_bound() {
     // that is a number, `week` a burn window of a week, past the new ceiling.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} UPDATE pools SET shed_share = 0.05, burn_window_seconds = 120, shed_ahead_of_pace = NULL WHERE id = 'low'; \
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} UPDATE pools SET shed_share = 0.05, burn_window_seconds = 120, shed_ahead_of_pace = NULL WHERE id = 'low'; \
          UPDATE pools SET shed_ahead_of_pace = 0.2 WHERE id = 'lead'; \
          UPDATE pools SET burn_window_seconds = 604800 WHERE id = 'week'; \
          UPDATE meta SET value = '53' WHERE key = 'schema_version';"
@@ -1471,7 +1477,7 @@ fn migration_54_renames_the_pool_fields_and_clamps_a_value_outside_its_bound() {
     let before = logged(&conn);
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     drop(migrated);
     let columns = columns_of(&path, "pools");
     assert!(
@@ -1600,7 +1606,7 @@ fn migration_55_adds_the_slow_down_and_return_to_plan_columns_and_copies_the_dwe
     // A registry at 54 whose pool paces its rounds on a dwell off the default, which its return timing followed.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} UPDATE meta SET value = '54' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} UPDATE meta SET value = '54' WHERE key = 'schema_version';"
     ))
     .unwrap();
     let logged = |conn: &rusqlite::Connection| {
@@ -1612,7 +1618,7 @@ fn migration_55_adds_the_slow_down_and_return_to_plan_columns_and_copies_the_dwe
     let before = logged(&conn);
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     drop(migrated);
     let columns = columns_of(&path, "pools");
     assert!(
@@ -1893,14 +1899,14 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
     // the version this migration reads from rather than rolled back through every later one.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} UPDATE meta SET value = '23' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} UPDATE meta SET value = '23' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        57,
+        58,
         "the direct 23 to 28 open runs every migration between"
     );
     assert_eq!(
@@ -1988,7 +1994,7 @@ fn a_store_left_at_31_is_carried_to_32_with_the_windows_table() {
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} UPDATE meta SET value = '31' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} UPDATE meta SET value = '31' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
@@ -1997,7 +2003,7 @@ fn a_store_left_at_31_is_carried_to_32_with_the_windows_table() {
         "the roll-back left the store at 31"
     );
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     drop(migrated);
     assert!(has_windows_table(&path), "V32 created the table");
 }
@@ -2029,12 +2035,12 @@ fn a_store_left_at_32_is_carried_to_33_with_the_typed_burn_restarted() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} UPDATE meta SET value = '32' WHERE key = 'schema_version'; {HELD_AT_32}"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} UPDATE meta SET value = '32' WHERE key = 'schema_version'; {HELD_AT_32}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     let pin = migrated.load_routing().unwrap().pins.pop().unwrap();
     assert_eq!(
         (pin.burn, pin.burn_at, pin.burn_banded),
@@ -2087,13 +2093,13 @@ fn a_store_left_at_33_is_carried_to_34_without_the_fit_table() {
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} UPDATE meta SET value = '33' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} UPDATE meta SET value = '33' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     assert!(has_fit_table(&path), "the roll-back left the store at 33");
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     drop(migrated);
     assert!(!has_fit_table(&path), "V34 dropped the table");
 }
@@ -2175,12 +2181,12 @@ fn a_registry_from_before_the_auto_mode_columns_reopens_every_pool_on_and_every_
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} UPDATE meta SET value = '34' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} UPDATE meta SET value = '34' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key_store).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     assert!(migrated.pool("main").unwrap().unwrap().auto_mode_server);
     assert_eq!(
         migrated
@@ -2213,7 +2219,7 @@ fn a_store_left_at_37_is_carried_to_the_engines_three_keepalive_tables_alone() {
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} UPDATE meta SET value = '37' WHERE key = 'schema_version';"
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} UPDATE meta SET value = '37' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
@@ -2224,7 +2230,7 @@ fn a_store_left_at_37_is_carried_to_the_engines_three_keepalive_tables_alone() {
         keepalive_tables(&path)
     );
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     drop(migrated);
     assert_eq!(
         keepalive_tables(&path),
@@ -2387,7 +2393,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} \
+        "{UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} \
          DROP TABLE model_resolutions; \
          ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
          ALTER TABLE pools DROP COLUMN model_rules_json; \
@@ -2416,7 +2422,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), 58);
     migrated
         .insert_api_key(
             &key(&migrated, "old", "main", "phoebis-old-reissued"),
@@ -4500,4 +4506,794 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
         .collect();
     assert_eq!(members, vec!["claude".to_string(), "vendor".to_string()]);
     assert_eq!(store.api_key("desktop").unwrap().unwrap().pool_id, "main");
+}
+
+/// A guardrail named after its id, enabled, observing, with no preset stamp and no stamps of its own, matching the
+/// auxiliary class unless the case gives its conditions.
+fn guardrail(id: &str, conditions: Option<Vec<Condition>>) -> GuardrailRow {
+    GuardrailRow {
+        id: id.into(),
+        name: id.into(),
+        description: String::new(),
+        enabled: true,
+        mode: GuardrailMode::Observe,
+        action: GuardrailAction::Block,
+        conditions: conditions.unwrap_or_else(|| {
+            vec![Condition {
+                subject: Subject::RequestClass,
+                operator: Operator::Equals,
+                value: Some("auxiliary".into()),
+                name: None,
+                path: None,
+                selector: None,
+            }]
+        }),
+        preset_id: None,
+        preset_version: None,
+        incarnation: 1,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+/// The subjects every guardrail case attaches to: the pools `main` and `other`, `k1` in `main` and `k2` in `other`.
+fn seed_subjects(store: &Store) {
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store.insert_pool(&pool("other"), "test").unwrap();
+    store
+        .insert_api_key(&key(store, "k1", "main", "phoebis-k1-secret"), "test")
+        .unwrap();
+    store
+        .insert_api_key(&key(store, "k2", "other", "phoebis-k2-secret"), "test")
+        .unwrap();
+}
+
+fn guarded_store() -> Store {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    seed_subjects(&store);
+    store
+}
+
+fn ids(list: &[&str]) -> Vec<String> {
+    list.iter().map(|id| id.to_string()).collect()
+}
+
+/// One subject's guardrails with their positions, in the order the subject runs them.
+fn attached(store: &Store, subject: &AttachmentSubject) -> Vec<(String, u32)> {
+    store
+        .guardrail_attachments()
+        .unwrap()
+        .into_iter()
+        .filter(|attachment| &attachment.subject == subject)
+        .map(|attachment| (attachment.guardrail_id, attachment.position))
+        .collect()
+}
+
+fn at(list: &[(&str, u32)]) -> Vec<(String, u32)> {
+    list.iter()
+        .map(|(id, position)| (id.to_string(), *position))
+        .collect()
+}
+
+fn on_pool(id: &str) -> AttachmentSubject {
+    AttachmentSubject::Pool(id.into())
+}
+
+fn on_key(id: &str) -> AttachmentSubject {
+    AttachmentSubject::Key(id.into())
+}
+
+#[test]
+fn migration_57_adds_the_guardrail_tables_and_a_store_left_at_56_is_carried_to_57() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let guardrail_objects = |path: &std::path::Path| -> Vec<String> {
+        let conn = rusqlite::Connection::open(path).unwrap();
+        let objects: Vec<String> = conn
+            .prepare(SCHEMA_OBJECTS)
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        objects
+            .into_iter()
+            .filter(|name| name.starts_with("guardrail"))
+            .collect()
+    };
+    let expected = [
+        "guardrail_attachments",
+        "guardrail_attachments_subject",
+        "guardrail_tombstones",
+        "guardrails",
+    ];
+    let store = Store::open(&path, &key).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 58);
+    drop(store);
+    assert_eq!(guardrail_objects(&path), expected);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V58} {UNDO_V57} UPDATE meta SET value = '56' WHERE key = 'schema_version';"
+    ))
+    .unwrap();
+    drop(conn);
+    assert!(guardrail_objects(&path).is_empty());
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        migrated.schema_version().unwrap(),
+        58,
+        "a store left at version 56 is carried up"
+    );
+    drop(migrated);
+    assert_eq!(guardrail_objects(&path), expected);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO guardrails (id, name, conditions_json, created_at, updated_at) VALUES ('g1', 'g1', '[]', 1, 1)",
+        [],
+    )
+    .unwrap();
+    let defaults: (String, bool, String, String, i64) = conn
+        .query_row(
+            "SELECT description, enabled, mode, action, incarnation FROM guardrails WHERE id = 'g1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        defaults,
+        (String::new(), true, "observe".into(), "block".into(), 1),
+        "a row naming only what a create requires reads the documented defaults"
+    );
+}
+
+#[test]
+fn a_guardrail_round_trips_with_its_conditions_mode_and_preset_stamp() {
+    let store = guarded_store();
+    let row = GuardrailRow {
+        description: "the summary fork".into(),
+        mode: GuardrailMode::Enforce,
+        preset_id: Some("subagent-status-summary".into()),
+        preset_version: Some(1),
+        ..guardrail(
+            "g1",
+            Some(vec![
+                Condition {
+                    subject: Subject::RequestClass,
+                    operator: Operator::Equals,
+                    value: Some("auxiliary".into()),
+                    name: None,
+                    path: None,
+                    selector: None,
+                },
+                Condition {
+                    subject: Subject::Header,
+                    operator: Operator::Present,
+                    value: None,
+                    name: Some("x-team".into()),
+                    path: None,
+                    selector: None,
+                },
+                Condition {
+                    subject: Subject::Body,
+                    operator: Operator::Gt,
+                    value: Some("4".into()),
+                    name: None,
+                    path: Some("tools.length".into()),
+                    selector: None,
+                },
+                Condition {
+                    subject: Subject::Message,
+                    operator: Operator::Matches,
+                    value: Some("(?i)summar".into()),
+                    name: None,
+                    path: None,
+                    selector: Some(Selector::LastUser),
+                },
+            ]),
+        )
+    };
+    let written = store.insert_guardrail(&row, &[], &[], "test").unwrap();
+    assert_eq!(written.incarnation, 1);
+    assert!(written.created_at > 0);
+    assert_eq!(written.updated_at, written.created_at);
+    assert_eq!(
+        written,
+        GuardrailRow {
+            created_at: written.created_at,
+            updated_at: written.updated_at,
+            ..row
+        },
+        "the committed row carries what was written with the store's own stamps"
+    );
+    assert_eq!(store.guardrail("g1").unwrap(), Some(written.clone()));
+    assert_eq!(store.guardrails().unwrap(), vec![written]);
+    assert_eq!(store.guardrail("ghost").unwrap(), None);
+}
+
+#[test]
+fn a_guardrail_edit_is_fenced_on_its_stamp_and_its_incarnation() {
+    let store = guarded_store();
+    let written = store
+        .insert_guardrail(&guardrail("g1", None), &[], &[], "test")
+        .unwrap();
+    let edit = GuardrailRow {
+        name: "renamed".into(),
+        ..written.clone()
+    };
+    assert!(matches!(
+        store.update_guardrail(&edit, written.updated_at - 1, None, None, "test"),
+        Err(StoreError::Stale)
+    ));
+    assert!(matches!(
+        store.update_guardrail(
+            &GuardrailRow {
+                incarnation: 2,
+                ..edit.clone()
+            },
+            written.updated_at,
+            None,
+            None,
+            "test"
+        ),
+        Err(StoreError::Stale)
+    ));
+    assert!(matches!(
+        store.update_guardrail(
+            &GuardrailRow {
+                id: "ghost".into(),
+                ..edit.clone()
+            },
+            written.updated_at,
+            None,
+            None,
+            "test"
+        ),
+        Err(StoreError::GuardrailNotFound(id)) if id == "ghost"
+    ));
+    assert_eq!(
+        store.guardrail("g1").unwrap(),
+        Some(written.clone()),
+        "a refused edit writes nothing"
+    );
+    let stamped = store
+        .update_guardrail(&edit, written.updated_at, None, None, "test")
+        .unwrap();
+    assert!(stamped > written.updated_at);
+    assert_eq!(
+        store.guardrail("g1").unwrap(),
+        Some(GuardrailRow {
+            updated_at: stamped,
+            ..edit
+        })
+    );
+}
+
+#[test]
+fn a_guardrail_created_again_under_a_deleted_id_restarts_at_the_next_incarnation() {
+    let store = guarded_store();
+    let first = store
+        .insert_guardrail(&guardrail("g1", None), &[], &[], "test")
+        .unwrap();
+    assert_eq!(first.incarnation, 1);
+    store.delete_guardrail("g1", "test").unwrap();
+    assert_eq!(store.guardrail("g1").unwrap(), None);
+    assert!(matches!(
+        store.delete_guardrail("g1", "test"),
+        Err(StoreError::GuardrailNotFound(id)) if id == "g1"
+    ));
+    let second = store
+        .insert_guardrail(&guardrail("g1", None), &[], &[], "test")
+        .unwrap();
+    assert_eq!(second.incarnation, 2);
+    assert!(
+        matches!(
+            store.update_guardrail(&first, second.updated_at, None, None, "test"),
+            Err(StoreError::Stale)
+        ),
+        "an edit read from the deleted guardrail does not land on its replacement"
+    );
+    store.delete_guardrail("g1", "test").unwrap();
+    let third = store
+        .insert_guardrail(&guardrail("g1", None), &[], &[], "test")
+        .unwrap();
+    assert_eq!(third.incarnation, 3);
+}
+
+#[test]
+fn deleting_a_guardrail_removes_its_attachments_and_deleting_a_pool_or_a_key_removes_theirs() {
+    let store = guarded_store();
+    for id in ["g1", "g2"] {
+        store
+            .insert_guardrail(
+                &guardrail(id, None),
+                &ids(&["main", "other"]),
+                &ids(&["k1", "k2"]),
+                "test",
+            )
+            .unwrap();
+    }
+    assert_eq!(store.guardrail_attachments().unwrap().len(), 8);
+    store.delete_guardrail("g1", "test").unwrap();
+    let left: Vec<String> = store
+        .guardrail_attachments()
+        .unwrap()
+        .into_iter()
+        .map(|attachment| attachment.guardrail_id)
+        .collect();
+    assert_eq!(left, ids(&["g2", "g2", "g2", "g2"]));
+    store.delete_api_key("k2", "test").unwrap();
+    assert!(attached(&store, &on_key("k2")).is_empty());
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    store
+        .update_api_key(
+            &ApiKeyRow {
+                pool_id: "other".into(),
+                ..k1.clone()
+            },
+            k1.updated_at,
+            "test",
+        )
+        .unwrap();
+    store.delete_pool("main", "test").unwrap();
+    assert_eq!(
+        store.guardrail_attachments().unwrap(),
+        vec![
+            GuardrailAttachment {
+                guardrail_id: "g2".into(),
+                subject: on_key("k1"),
+                position: 1,
+            },
+            GuardrailAttachment {
+                guardrail_id: "g2".into(),
+                subject: on_pool("other"),
+                position: 1,
+            },
+        ]
+    );
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "k2", "other", "phoebis-k2-again"), "test")
+        .unwrap();
+    assert!(
+        attached(&store, &on_pool("main")).is_empty() && attached(&store, &on_key("k2")).is_empty(),
+        "a pool and a key created again under a deleted id start with no guardrail"
+    );
+}
+
+#[test]
+fn the_guardrail_side_appends_a_new_subject_keeps_a_held_position_and_detaches_one_left_out() {
+    let store = guarded_store();
+    let g1 = store
+        .insert_guardrail(
+            &guardrail("g1", None),
+            &ids(&["main"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    let g2 = store
+        .insert_guardrail(&guardrail("g2", None), &ids(&["main"]), &[], "test")
+        .unwrap();
+    assert_eq!(
+        attached(&store, &on_pool("main")),
+        at(&[("g1", 0), ("g2", 1)])
+    );
+    let main_stamp = store.pool("main").unwrap().unwrap().updated_at;
+    let other_stamp = store.pool("other").unwrap().unwrap().updated_at;
+    let k1_stamp = store.api_key("k1").unwrap().unwrap().updated_at;
+    store
+        .update_guardrail(&g1, g1.updated_at, Some(&ids(&["other"])), None, "test")
+        .unwrap();
+    assert_eq!(attached(&store, &on_pool("main")), at(&[("g2", 1)]));
+    assert_eq!(attached(&store, &on_pool("other")), at(&[("g1", 0)]));
+    assert_eq!(attached(&store, &on_key("k1")), at(&[("g1", 0)]));
+    store
+        .update_guardrail(
+            &g2,
+            g2.updated_at,
+            Some(&ids(&["main", "other"])),
+            None,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        attached(&store, &on_pool("main")),
+        at(&[("g2", 1)]),
+        "a held subject keeps its position"
+    );
+    assert_eq!(
+        attached(&store, &on_pool("other")),
+        at(&[("g1", 0), ("g2", 1)]),
+        "a new subject takes the end of its order"
+    );
+    assert_eq!(
+        (
+            store.pool("main").unwrap().unwrap().updated_at,
+            store.pool("other").unwrap().unwrap().updated_at,
+            store.api_key("k1").unwrap().unwrap().updated_at,
+        ),
+        (main_stamp, other_stamp, k1_stamp),
+        "a write from the guardrail's side leaves the subjects' stamps"
+    );
+}
+
+#[test]
+fn the_subject_side_replaces_the_list_whole_in_the_given_order() {
+    let store = guarded_store();
+    let g1 = store
+        .insert_guardrail(
+            &guardrail("g1", None),
+            &ids(&["main"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    store
+        .insert_guardrail(
+            &guardrail("g2", None),
+            &ids(&["main"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    let main = store.pool("main").unwrap().unwrap();
+    let stamped = store
+        .update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&ids(&["g2", "g1"])),
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        attached(&store, &on_pool("main")),
+        at(&[("g2", 0), ("g1", 1)])
+    );
+    assert_eq!(store.pool("main").unwrap().unwrap().updated_at, stamped);
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    store
+        .update_api_key_with_guardrails(&k1, k1.updated_at, Some(&[]), "test")
+        .unwrap();
+    assert!(attached(&store, &on_key("k1")).is_empty());
+    assert_eq!(
+        store.guardrail("g1").unwrap().unwrap().updated_at,
+        g1.updated_at,
+        "a write from the subject's side leaves the guardrail's stamp"
+    );
+}
+
+#[test]
+fn a_subject_write_naming_an_unknown_guardrail_writes_nothing() {
+    let store = guarded_store();
+    store
+        .insert_guardrail(
+            &guardrail("g1", None),
+            &ids(&["main"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    let changes = store.registry_changes_after(0, 1_000).unwrap().len();
+    let main = store.pool("main").unwrap().unwrap();
+    assert!(matches!(
+        store.update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&ids(&["g1", "ghost"])),
+            "test",
+        ),
+        Err(StoreError::GuardrailNotFound(id)) if id == "ghost"
+    ));
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    assert!(matches!(
+        store.update_api_key_with_guardrails(&k1, k1.updated_at, Some(&ids(&["ghost"])), "test"),
+        Err(StoreError::GuardrailNotFound(id)) if id == "ghost"
+    ));
+    assert_eq!(attached(&store, &on_pool("main")), at(&[("g1", 0)]));
+    assert_eq!(attached(&store, &on_key("k1")), at(&[("g1", 0)]));
+    assert_eq!(
+        store.pool("main").unwrap().unwrap().updated_at,
+        main.updated_at
+    );
+    assert_eq!(
+        store.api_key("k1").unwrap().unwrap().updated_at,
+        k1.updated_at
+    );
+    assert_eq!(
+        store.registry_changes_after(0, 1_000).unwrap().len(),
+        changes
+    );
+}
+
+#[test]
+fn the_bound_is_checked_inside_the_write_on_a_key_a_pool_and_a_pool_move() {
+    let store = guarded_store();
+    store.insert_pool(&pool("empty"), "test").unwrap();
+    let sixty_four: Vec<String> = (1..=64).map(|n| format!("g{n:02}")).collect();
+    for id in &sixty_four {
+        store
+            .insert_guardrail(&guardrail(id, None), &[], &[], "test")
+            .unwrap();
+    }
+    // The sixty-fifth exists before either side names it, so each refusal below is the bound's and never a missing
+    // id's.
+    store
+        .insert_guardrail(&guardrail("g65", None), &[], &[], "test")
+        .unwrap();
+    let sixty_five: Vec<String> = sixty_four
+        .iter()
+        .cloned()
+        .chain(["g65".to_string()])
+        .collect();
+    let state = |store: &Store| {
+        (
+            store.guardrail_attachments().unwrap(),
+            store.api_key("k2").unwrap().unwrap().pool_id,
+            store.guardrails().unwrap(),
+        )
+    };
+
+    let empty = store.pool("empty").unwrap().unwrap();
+    store
+        .update_pool_with_members_and_guardrails(
+            &empty,
+            empty.updated_at,
+            None,
+            Some(&sixty_four),
+            "test",
+        )
+        .unwrap();
+    let before = state(&store);
+    assert!(matches!(
+        store.insert_guardrail(&guardrail("g65", None), &ids(&["empty"]), &[], "test"),
+        Err(StoreError::PoolGuardrailBound(id)) if id == "empty"
+    ));
+    assert_eq!(state(&store), before);
+    let empty = store.pool("empty").unwrap().unwrap();
+    assert!(matches!(
+        store.update_pool_with_members_and_guardrails(
+            &empty,
+            empty.updated_at,
+            None,
+            Some(&sixty_five),
+            "test",
+        ),
+        Err(StoreError::PoolGuardrailBound(id)) if id == "empty"
+    ));
+    assert_eq!(state(&store), before);
+
+    let main = store.pool("main").unwrap().unwrap();
+    store
+        .update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&sixty_four),
+            "test",
+        )
+        .unwrap();
+    let before = state(&store);
+    assert!(matches!(
+        store.insert_guardrail(&guardrail("g65", None), &[], &ids(&["k1"]), "test"),
+        Err(StoreError::KeyGuardrailBound(id)) if id == "k1"
+    ));
+    assert_eq!(state(&store), before);
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    assert!(matches!(
+        store.update_api_key_with_guardrails(&k1, k1.updated_at, Some(&ids(&["g65"])), "test"),
+        Err(StoreError::KeyGuardrailBound(id)) if id == "k1"
+    ));
+    assert_eq!(state(&store), before);
+
+    let k2 = store.api_key("k2").unwrap().unwrap();
+    store
+        .update_api_key_with_guardrails(&k2, k2.updated_at, Some(&ids(&["g65"])), "test")
+        .unwrap();
+    let before = state(&store);
+    let k2 = store.api_key("k2").unwrap().unwrap();
+    assert!(matches!(
+        store.update_api_key(
+            &ApiKeyRow {
+                pool_id: "main".into(),
+                ..k2.clone()
+            },
+            k2.updated_at,
+            "test"
+        ),
+        Err(StoreError::KeyGuardrailBound(id)) if id == "k2"
+    ));
+    assert_eq!(state(&store), before);
+    assert_eq!(store.api_key("k2").unwrap().unwrap().pool_id, "other");
+}
+
+#[test]
+fn the_load_answers_the_guardrails_by_id_and_the_attachments_in_position_order() {
+    let store = guarded_store();
+    store
+        .insert_guardrail(
+            &guardrail("g2", None),
+            &ids(&["main"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    store
+        .insert_guardrail(
+            &guardrail("g1", None),
+            &ids(&["main", "other"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    let load = store.load_registry().unwrap();
+    assert_eq!(
+        load.guardrails
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["g1", "g2"]
+    );
+    assert_eq!(load.guardrails, store.guardrails().unwrap());
+    let attachment =
+        |guardrail_id: &str, subject: AttachmentSubject, position: u32| GuardrailAttachment {
+            guardrail_id: guardrail_id.into(),
+            subject,
+            position,
+        };
+    assert_eq!(
+        load.guardrail_attachments,
+        vec![
+            attachment("g2", on_key("k1"), 0),
+            attachment("g1", on_key("k1"), 1),
+            attachment("g2", on_pool("main"), 0),
+            attachment("g1", on_pool("main"), 1),
+            attachment("g1", on_pool("other"), 0),
+        ]
+    );
+}
+
+#[test]
+fn the_change_log_records_the_three_guardrail_kinds_and_the_guardrails_member_on_a_pool_and_a_key_edit(
+) {
+    let store = guarded_store();
+    let start = store.newest_registry_change_id().unwrap().unwrap_or(0);
+    let g1 = store
+        .insert_guardrail(
+            &guardrail("g1", None),
+            &ids(&["main"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    store
+        .insert_guardrail(&guardrail("g2", None), &[], &[], "test")
+        .unwrap();
+    store
+        .update_guardrail(
+            &GuardrailRow {
+                name: "renamed".into(),
+                mode: GuardrailMode::Enforce,
+                ..g1.clone()
+            },
+            g1.updated_at,
+            Some(&ids(&["main", "other"])),
+            None,
+            "test",
+        )
+        .unwrap();
+    for _ in 0..2 {
+        let main = store.pool("main").unwrap().unwrap();
+        store
+            .update_pool_with_members_and_guardrails(
+                &main,
+                main.updated_at,
+                None,
+                Some(&ids(&["g2", "g1"])),
+                "test",
+            )
+            .unwrap();
+    }
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    store
+        .update_api_key_with_guardrails(&k1, k1.updated_at, Some(&ids(&["g2"])), "test")
+        .unwrap();
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    store.update_api_key(&k1, k1.updated_at, "test").unwrap();
+    store.delete_guardrail("g2", "test").unwrap();
+    let changes: Vec<(String, String, serde_json::Value)> = store
+        .registry_changes_after(start, 100)
+        .unwrap()
+        .into_iter()
+        .map(|change| {
+            (
+                change.kind,
+                change.target,
+                serde_json::from_str(&change.diff_json).unwrap(),
+            )
+        })
+        .collect();
+    let kinds: Vec<(&str, &str)> = changes
+        .iter()
+        .map(|(kind, target, _)| (kind.as_str(), target.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("guardrail_created", "g1"),
+            ("guardrail_created", "g2"),
+            ("guardrail_updated", "g1"),
+            ("pool_updated", "main"),
+            ("pool_updated", "main"),
+            ("key_updated", "k1"),
+            ("key_updated", "k1"),
+            ("guardrail_deleted", "g2"),
+        ]
+    );
+    let created = &changes[0].2;
+    assert_eq!(created["name"], "g1");
+    assert_eq!(created["mode"], "observe");
+    assert_eq!(created["pools"], serde_json::json!(["main"]));
+    assert_eq!(created["keys"], serde_json::json!(["k1"]));
+    let updated = &changes[2].2;
+    assert_eq!(updated["name"], "renamed");
+    assert_eq!(updated["mode"], "enforce");
+    assert_eq!(
+        updated["pools"],
+        serde_json::json!(["main", "other"]),
+        "the lists read as they stand after the write"
+    );
+    assert_eq!(updated["keys"], serde_json::json!(["k1"]));
+    assert_eq!(
+        changes[3].2["guardrails"],
+        serde_json::json!({ "from": ["g1"], "to": ["g2", "g1"] })
+    );
+    assert!(
+        changes[4].2.get("guardrails").is_none(),
+        "a list written back unchanged adds no member"
+    );
+    assert_eq!(
+        changes[5].2["guardrails"],
+        serde_json::json!({ "from": ["g1"], "to": ["g2"] })
+    );
+    assert!(
+        changes[6].2.get("guardrails").is_none(),
+        "a key edit without a list adds no member"
+    );
+    assert_eq!(changes[7].2, serde_json::json!({}));
+}
+
+#[test]
+fn a_row_whose_conditions_do_not_parse_or_whose_mode_is_an_unknown_word_fails_the_load() {
+    for column in ["conditions_json", "mode"] {
+        let dir = tempfile::tempdir().unwrap();
+        let key = StorageKey::generate();
+        let path = dir.path().join("router.sqlite");
+        let store = Store::open(&path, &key).unwrap();
+        seed_subjects(&store);
+        store
+            .insert_guardrail(&guardrail("g1", None), &ids(&["main"]), &[], "test")
+            .unwrap();
+        assert!(store.load_registry().is_ok());
+        drop(store);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            &format!("UPDATE guardrails SET {column} = 'x' WHERE id = 'g1'"),
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let store = Store::open(&path, &key).unwrap();
+        assert!(
+            matches!(
+                store.load_registry(),
+                Err(StoreError::Sqlite(
+                    rusqlite::Error::FromSqlConversionFailure(..)
+                ))
+            ),
+            "a {column} the store cannot read fails the load"
+        );
+    }
 }
