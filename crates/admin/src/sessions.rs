@@ -207,10 +207,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
-    // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it, or
-    // the share of the account's own 5-hour window through the model's anchor rates over its tier's capacity
-    // ratio, both under the pin's regime. The anchor rates alone are the 20x equivalent. Each account's tier is read
-    // once per request.
+    // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it and its
+    // unmetered usage at that same set, or the share of the account's own 5-hour window through the model's anchor
+    // rates over its tier's capacity ratio, both under the pin's regime. The anchor rates alone are the 20x equivalent.
+    // Each account's tier is read once per request.
     let revisions = state.pricing.revisions();
     let prices = revisions.in_force(now);
     let costs = state.tables.revisions.in_force(now);

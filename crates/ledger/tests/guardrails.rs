@@ -96,8 +96,8 @@ fn names(db: &LedgerDb, sql: &str) -> Vec<String> {
     .unwrap()
 }
 
-/// A fresh ledger and one a build at 38 wrote both open at 40 with the column on the request row, the child table
-/// and its index led by the instant, and a row from before the column reads no guardrail.
+/// A fresh ledger and one a build at 38 wrote both open at the newest version with the column on the request row, the
+/// child table and its index led by the instant, and a row from before the column reads no guardrail.
 #[tokio::test]
 async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_and_on_one_at_38() {
     let fresh = Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -107,10 +107,14 @@ async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_
         let db = LedgerDb::open(&path).unwrap();
         db.insert_request(&request("before", 1_000, "k", Vec::new()), &[], None)
             .unwrap();
+        // Migration 40's two request columns and migration 41's index and two columns leave too, the index before
+        // the column SQLite refuses to drop while indexed, so the replay from 38 adds them again.
         db.write(|c| {
             c.execute_batch(
                 "DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms; \
+                 ALTER TABLE requests DROP COLUMN classifier; \
+                 ALTER TABLE requests DROP COLUMN client_contract; \
                  DROP INDEX request_guardrails_received; DROP TABLE request_guardrails; \
                  ALTER TABLE requests DROP COLUMN guardrail_id; \
                  UPDATE meta SET value = '38' WHERE key = 'schema_version';",
@@ -124,7 +128,7 @@ async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_
         (&fresh, "the fresh ledger"),
         (&migrated, "the ledger at 38"),
     ] {
-        assert_eq!(db.schema_version().await.unwrap(), 40, "{which}");
+        assert_eq!(db.schema_version().await.unwrap(), 41, "{which}");
         assert!(
             names(db, "SELECT name FROM pragma_table_info('requests')")
                 .iter()
@@ -434,6 +438,7 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         ttfc_ms: None,
         error_code: Some("guardrail_blocked".into()),
         client_drift: None,
+        client_contract: None,
         client_version: None,
         response_bytes: None,
         response_chunks: None,

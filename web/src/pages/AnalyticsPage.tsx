@@ -19,7 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, ratioOff, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, GUARDRAIL_BLOCKED, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, ratioOff, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -42,16 +42,16 @@ type QueryDim = 'accountId' | 'keyId' | 'model' | 'poolId';
 type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
-const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
+const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', classifier: 'Classifier', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
 /** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
 const SPEED_SERIES = [
   { key: 'standard', label: 'standard', slot: 0 },
   { key: 'fast', label: 'fast', slot: 4 },
 ] as const;
-/** The group-by's eleventh option, which the Burn section alone honors: no rollup carries a session. */
+/** The group-by's twelfth option, which the Burn section alone honors: no rollup carries a session. */
 const SESSION_OPTION = 'Session (Burn only)';
 const SESSION_OPTION_HINT = 'The Burn section groups by session, and every other section groups by key, since no rollup carries a session';
-/** The page's one group-by control: the breakdown's ten groupings, then the Burn section's own session grouping. */
+/** The page's one group-by control: the breakdown's eleven groupings, then the Burn section's own session grouping. */
 const GROUP_OPTIONS: readonly { label: string; title?: string; value: BurnGroup }[] = [...(Object.keys(GROUP_LABEL) as GroupBy[]).map((value) => ({ label: GROUP_LABEL[value], value })), { label: SESSION_OPTION, title: SESSION_OPTION_HINT, value: 'session' }];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
 const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key', model: 'model', poolId: 'pool' };
@@ -87,7 +87,6 @@ const shareOrDash = (share: number | null | undefined) => (share === null || sha
 const inputOf = (g: AnalyticsGroup) => g.tokens.uncachedInput + g.tokens.cacheRead + g.tokens.cacheWrite5m + g.tokens.cacheWrite1h;
 const hitRatioOf = (g: AnalyticsGroup) => (g.cacheHits + g.cacheMisses + g.uncached ? g.cacheHits / (g.cacheHits + g.cacheMisses + g.uncached) : null);
 const cachedShareOf = (g: AnalyticsGroup) => (inputOf(g) ? g.tokens.cacheRead / inputOf(g) : null);
-const errorRateOf = (g: AnalyticsGroup) => (g.requests ? (g.requests - g.succeeded) / g.requests : 0);
 const probesOf = (g: AnalyticsGroup) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
 const usdOrDash = (v: number | null) => (v === null ? '-' : fmtUsd(v));
 /**
@@ -648,7 +647,7 @@ export function AnalyticsPage() {
               </BarChart>
             </ChartCard>
 
-            <Card title="Errors by code" subtitle="Non-200 responses in range">
+            <Card title="Errors by code" subtitle="Non-200 responses in range, the guardrail blocks left out">
               {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
             </Card>
 
@@ -1482,6 +1481,7 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
 
 function ErrorBars({ errors, color }: { color: string; errors: Record<string, number> }) {
   const rows = Object.entries(errors)
+    .filter(([label]) => label !== GUARDRAIL_BLOCKED)
     .map(([label, count]) => ({ count, label }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   return <CountBars color={color} empty="No errors in range." rows={rows} />;

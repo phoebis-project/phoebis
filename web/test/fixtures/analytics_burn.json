@@ -933,9 +933,9 @@
         "five_hour_unpriced": false,
         "seven_day_unpriced": false,
         "model_week_unpriced": false,
-        "cached_tokens": 2000,
-        "tokens": 7200,
-        "uncached_tokens": 4000
+        "cached_tokens": 2500,
+        "tokens": 9000,
+        "uncached_tokens": 5000
       },
       {
         "at": 1791720000000,

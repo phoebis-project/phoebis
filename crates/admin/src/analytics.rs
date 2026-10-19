@@ -27,6 +27,7 @@ use crate::AdminState;
 /// rollups carry no session.
 const BURN_GROUP_BYS: &[&str] = &[
     "account",
+    "classifier",
     "client",
     "effort",
     "key",
@@ -113,7 +114,7 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
     if !GROUP_BYS.contains(&group_by.as_str()) {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent",
+            "group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent",
         ));
     }
     let mut filter = filter_of(q);
@@ -160,7 +161,7 @@ pub(crate) struct RangeQuery {
 pub(crate) struct RollupQuery {
     /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
     pub range: Option<String>,
-    /// `account`, `all`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
+    /// `account`, `all`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
     /// `user_agent`. Default `all`.
     pub group_by: Option<String>,
     /// A comma-separated list. A value names the key's id, or `<id>@<generation>` for an earlier holder's rows,
@@ -223,10 +224,10 @@ pub(crate) struct PlacementsQuery {
 pub(crate) struct BurnQuery {
     /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
     pub range: Option<String>,
-    /// `account`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `session`, `speed`, or
-    /// `user_agent`. Default `account`. The `session` grouping reads the twenty sessions with the most tokens over the
-    /// range, since the hourly rollups carry no session dimension. The rest read the hourly rollups the way
-    /// `breakdown` and `series` do.
+    /// `account`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `session`,
+    /// `speed`, or `user_agent`. Default `account`. The `session` grouping reads the twenty sessions with the most
+    /// tokens over the range, since the hourly rollups carry no session dimension. The rest read the hourly rollups the
+    /// way `breakdown` and `series` do.
     pub group_by: Option<String>,
     /// A comma-separated list. Naming exactly one account answers `unit` and the shares under any grouping.
     pub accounts: Option<String>,
@@ -259,7 +260,7 @@ pub(crate) struct Series {
     pub from: i64,
     pub to: i64,
     pub bucket_seconds: i64,
-    /// `account`, `all`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
+    /// `account`, `all`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
     /// `user_agent`.
     #[schema(example = "account")]
     pub group_by: String,
@@ -276,7 +277,7 @@ pub(crate) struct Series {
     params(RollupQuery),
     responses(
         (status = 200, description = "The points over the range.", body = Series),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `pricing table: the range needs {count} points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `pricing table: the range needs {count} points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
 )]
@@ -328,7 +329,7 @@ pub(crate) async fn series(
 pub(crate) struct Breakdown {
     pub from: i64,
     pub to: i64,
-    /// `account`, `all`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
+    /// `account`, `all`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
     /// `user_agent`.
     #[schema(example = "account")]
     pub group_by: String,
@@ -345,7 +346,7 @@ pub(crate) struct Breakdown {
     params(RollupQuery),
     responses(
         (status = 200, description = "The rows over the range.", body = Breakdown),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
 )]
@@ -792,8 +793,8 @@ pub(crate) struct Burn {
     pub from: i64,
     pub to: i64,
     pub bucket_seconds: i64,
-    /// `account`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `session`, `speed`, or
-    /// `user_agent`.
+    /// `account`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `session`,
+    /// `speed`, or `user_agent`.
     #[schema(example = "account")]
     pub group_by: String,
     pub points: Vec<BurnPoint>,
@@ -860,7 +861,7 @@ pub(crate) struct BurnPoint {
     params(BurnQuery),
     responses(
         (status = 200, description = "The points over the range.", body = Burn),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor the other parameters:\n- `group_by is account, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent_groups`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor the other parameters:\n- `group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent_groups`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
 )]
@@ -887,7 +888,7 @@ pub(crate) async fn burn(
     if !BURN_GROUP_BYS.contains(&group_by.as_str()) {
         return failure(
             StatusCode::BAD_REQUEST,
-            "group_by is account, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent",
+            "group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent",
         );
     }
     let agent_groups = agent_list(&q, "user_agent_groups");

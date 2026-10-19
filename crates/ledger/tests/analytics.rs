@@ -1246,8 +1246,8 @@ fn the_speed_filter_reads_the_serving_attempts_speed() {
 }
 
 /// One request for the share cases, through `insert_request`: the attempt's five token counts as given, its head's
-/// overage flag and its answer's speed as named, the account tier it recorded, and a client where a case needs the
-/// row keyed apart from a credit.
+/// overage flag and its answer's speed as named, the account tier it recorded, a client where a case needs the row
+/// keyed apart from a credit, and the classifier standing where a case marks the client's own classifier call.
 struct ShareRow<'a> {
     id: &'a str,
     account: &'a str,
@@ -1260,6 +1260,7 @@ struct ShareRow<'a> {
     speed: Option<&'a str>,
     client: Option<&'a str>,
     tier: Option<&'a str>,
+    classifier: Option<&'a str>,
 }
 
 impl Default for ShareRow<'_> {
@@ -1276,6 +1277,7 @@ impl Default for ShareRow<'_> {
             speed: None,
             client: None,
             tier: Some("test_tier"),
+            classifier: None,
         }
     }
 }
@@ -1296,6 +1298,7 @@ fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
             outcome: "succeeded".into(),
             attempts: 1,
             client: row.client.map(String::from),
+            classifier: row.classifier.map(String::from),
             ..Default::default()
         },
         &[AttemptRecord {
@@ -3093,6 +3096,169 @@ async fn a_group_on_a_model_without_a_weight_reads_its_tiers_equivalent_marked_e
     );
 }
 
+/// A classifier call's plan row reads zero in its shares and in the equivalent, and its cache halves and its split by
+/// token kind read zero beside them, while a plain row's figures stay priced from its counts. The read names the one
+/// account both rows landed on, so the groups answer their shares.
+#[tokio::test]
+async fn a_classifier_rows_cache_equivalents_and_split_read_zero_beside_its_zero_equivalent() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let cached = PinUsage {
+        input: 500,
+        cache_read: 2_000,
+        write_5m: 300,
+        write_1h: 0,
+        output: 50,
+    };
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-classifier",
+            model: "claude-opus-5-5",
+            usage: cached,
+            classifier: Some("client"),
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plain",
+            model: "claude-fable-5-1",
+            usage: cached,
+            ..ShareRow::default()
+        },
+    );
+    let groups = groups_by(
+        &db,
+        &RollupFilter {
+            accounts: vec!["a".into()],
+            ..RollupFilter::default()
+        },
+        hour_range(WEEKDAY_OFF_PEAK),
+        "model",
+        &share_tables(),
+    )
+    .await;
+    let (marked, plain) = (
+        group(&groups, "claude-opus-5-5"),
+        group(&groups, "claude-fable-5-1"),
+    );
+    for window in [FIVE_HOUR, SEVEN_DAY] {
+        assert_eq!(
+            marked.cost_shares.as_ref().and_then(|m| m.get(window)),
+            Some(&0.0),
+            "the marked group's share of {window}: {marked:?}"
+        );
+        assert!(
+            plain
+                .cost_shares
+                .as_ref()
+                .and_then(|m| m.get(window))
+                .is_some_and(|share| *share > 0.0),
+            "the plain group's share of {window}: {plain:?}"
+        );
+        assert_eq!(
+            marked.cost_equivalent.get(window),
+            Some(&0.0),
+            "the marked group's {window}: {marked:?}"
+        );
+        assert!(
+            marked
+                .cache_equivalent
+                .get(window)
+                .is_some_and(|c| c.read == 0.0 && c.write == 0.0),
+            "the marked group's cache halves on {window}: {marked:?}"
+        );
+        assert!(
+            plain.cost_equivalent.get(window).is_some_and(|e| *e > 0.0)
+                && plain
+                    .cache_equivalent
+                    .get(window)
+                    .is_some_and(|c| c.read > 0.0 && c.write > 0.0),
+            "the plain group's {window}: {plain:?}"
+        );
+    }
+    assert_eq!(
+        marked.equivalent_split.keys().copied().collect::<Vec<_>>(),
+        ["input", "cache_read", "cache_write", "output"],
+        "the marked group's split is priced, not empty: {marked:?}"
+    );
+    assert!(
+        marked.equivalent_split.values().all(|part| *part == 0.0),
+        "the marked group's split: {marked:?}"
+    );
+    assert!(
+        plain.equivalent_split.len() == 4
+            && plain.equivalent_split.values().all(|part| *part > 0.0),
+        "the plain group's split: {plain:?}"
+    );
+}
+
+/// A rollup row keyed as the client's classifier call reads a zero share and a zero equivalent on both windows of its
+/// burn bucket, while a plain row of the same counts in the next bucket reads its figures from its counts.
+#[test]
+fn a_classifier_rows_burn_bucket_reads_zero_shares_and_equivalents_beside_a_plain_rows_figures() {
+    let tables = share_tables();
+    let filter = SeriesFilter {
+        from: 0,
+        to: 10_800_000,
+        bucket_seconds: 3_600,
+        accounts: vec!["a".into()],
+        ..SeriesFilter::default()
+    };
+    let row = |hour: i64, classifier: &str| RollupRow {
+        input_tokens: 1_000,
+        output_tokens: 100,
+        ..RollupRow::key(
+            hour,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-sonnet-5-5",
+            "inference",
+            UNATTRIBUTED,
+            UNATTRIBUTED,
+            "none",
+            NO_CLASS,
+            "standard",
+            PLAN_FUNDING,
+            "standard",
+            "test_tier",
+            classifier,
+        )
+    };
+    let points = burn_series_over(
+        &[row(3_600, "client"), row(7_200, NO_CLASS)],
+        &tables,
+        &PRICES,
+        &filter,
+    )
+    .unwrap();
+    let figures = |at: i64| {
+        let point = points
+            .iter()
+            .find(|p| p.at == at)
+            .expect("the bucket is in the range");
+        [
+            point.five_hour_share,
+            point.seven_day_share,
+            point.five_hour_equivalent,
+            point.seven_day_equivalent,
+        ]
+    };
+    assert_eq!(
+        figures(3_600_000),
+        [Some(0.0); 4],
+        "the classifier row's shares and equivalents on both windows"
+    );
+    let plain = figures(7_200_000);
+    assert!(
+        plain.iter().all(|figure| figure.is_some_and(|f| f > 0.0)),
+        "the plain row's shares and equivalents on both windows: {plain:?}"
+    );
+}
+
 /// The burn prices each row by its funding: a subscription row in the share of its own windows where the read names
 /// its one account, an api_key row in dollars, and every plan row in the 20x equivalent under every scope, so the
 /// equivalents of two accounts add into one figure while their shares do not.
@@ -3259,6 +3425,7 @@ fn a_billed_burn_row_reads_in_dollars_and_a_zero_equivalent_whatever_tier_its_ke
                 BILLED_FUNDING,
                 "standard",
                 tier,
+                "-",
             )
         };
         let point = burn_series_over(&[row], &tables, &PRICES, &filter)
@@ -3327,6 +3494,7 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
             },
             "standard",
             MAX_20X,
+            "-",
         )
     };
     let unpriced = row("claude-mystery-2", "standard");
@@ -3386,6 +3554,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
                 },
                 "standard",
                 tier,
+                "-",
             )
         };
         burn_series_over(&[row], &tables, &PRICES, &filter)
@@ -3460,6 +3629,7 @@ fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard
                 PLAN_FUNDING,
                 "standard",
                 MAX_20X,
+                "-",
             )
         };
         burn_series_over(&[row], &tables, &PRICES, &filter)
@@ -3509,6 +3679,7 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_
             FAST_FUNDING,
             "standard",
             MAX_20X,
+            "-",
         )
     };
     let share = |model: &str| {
@@ -3578,6 +3749,7 @@ fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
                 PLAN_FUNDING,
                 "standard",
                 MAX_20X,
+                "-",
             )
         };
         burn_series_over(&[row], &tables, &PRICES, &filter)
@@ -4337,6 +4509,7 @@ fn burn_row(hour: i64, model: &str, speed: &str, funding: &str, tier: &str) -> R
             funding,
             "standard",
             tier,
+            "-",
         )
     }
 }
@@ -6790,6 +6963,7 @@ fn a_probe_row_on_a_model_the_revision_lacks_prices_at_the_dearest_listed_cells(
             PLAN_FUNDING,
             "standard",
             UNATTRIBUTED,
+            "-",
         )
     };
     let groups = breakdown(

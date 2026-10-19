@@ -737,9 +737,13 @@ export interface RequestLog {
   /** The model the router resolved the request to, which a pin and its events are keyed by. */
   canonicalModel: string;
   capturedBodies: boolean;
+  /** `client` for the client's own auto-mode classifier call, which takes no share of a plan window, and `null` otherwise. */
+  classifier: 'client' | null;
   /** The class the router derived at admission: `claude-code/<entrypoint>` or `other`; `null` on a row from before the
    * router recorded it. */
   client: string | null;
+  /** The item a `client_contract` refusal named, and `null` for every other request. */
+  clientContract: string | null;
   /** The kind a client-drift refusal answered with (`hash` or `version_suffix`); `null` for every other request. */
   clientDrift: string | null;
   compaction: string | null;
@@ -785,6 +789,8 @@ export interface RequestLog {
   /** The client's own session, the one its companion registers under. */
   sessionId: string | null;
   shape: RequestShape;
+  /** `client_classifier` where the shares read zero by rule, and `null` for a figure priced from the counts. */
+  shareReason: 'client_classifier' | null;
   status: number | null;
   /**
    * The serving attempt's account tier, null for an API-key account, a request no attempt served and an unknown tier.
@@ -862,6 +868,8 @@ export interface RequestQuery {
   agentTypes?: string[];
   /** The serving attempt's cache miss reason, any name the beta sent. */
   cacheMissReasons?: string[];
+  /** `client`, `-`: the classifier standing. */
+  classifiers?: string[];
   /** A pattern over the client class, the grammar of `userAgent`. */
   client?: string;
   cursor?: string;
@@ -969,7 +977,7 @@ export interface DecisionSummary {
   model: string | null;
   poolId: string | null;
   probe: boolean;
-  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
+  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its sentence. */
   refusal: { code: string; kind: string; reason: string } | null;
   requestId: string;
   rule: string | null;
@@ -1303,7 +1311,7 @@ export interface RecordOutcome {
   /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */
   pinEvents: { kind: string; reason: string | null }[];
   pinWritten: { action: string; epoch: number; hashesStamped: boolean; lane: string; refreshStamped: boolean } | null;
-  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
+  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its sentence. */
   refusal: { code: string; kind: string; reason: string } | null;
   /** What the decision booked on the account until the usage replaces it: the rewrite and the burn per hour by plan window. */
   reservation: { accountId: string; burn: Record<string, number>; expiresAt: string; rewrite: Record<string, number> } | null;
@@ -1336,7 +1344,7 @@ export interface DecisionRecord {
   walk: WalkStep[];
 }
 
-export type AnalyticsGroupBy = 'account' | 'all' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'request_class' | 'speed' | 'user_agent';
+export type AnalyticsGroupBy = 'account' | 'all' | 'classifier' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'request_class' | 'speed' | 'user_agent';
 
 /** The rows a read keeps by who paid for them: `billed` the overage, fast and API key rows, `plan` the plan-funded rows. */
 export type FundingFilter = 'billed' | 'plan';

@@ -1111,10 +1111,11 @@ async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_tu
         ClientFacts {
             class: "claude-code/sdk-cli".into(),
             agent_type: Some("Explore".into()),
+            classifier: None,
             compaction: Some("auto".into()),
             context_compacted: Some("manual".into()),
             prev_tool_ms: Some(1_235),
-            request_class: None,
+            request_class: Some("main".into()),
             turn_origin: Some("human".into()),
         }
     );
@@ -1132,6 +1133,7 @@ async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_tu
         observed.client,
         ClientFacts {
             class: "claude-code/sdk-cli".into(),
+            request_class: Some("main".into()),
             ..Default::default()
         }
     );
@@ -1150,8 +1152,7 @@ async fn the_observed_event_carries_no_fork_for_a_sessions_own_turn() {
     let bus = Bus::new();
     let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[api_key("a", A, 0)], PoolSpec::default(), bus).await;
-    let plain_body =
-        br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#;
+    let plain_body = br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s1\"}"}}"#;
 
     let mut with_session =
         request_from_fixture(inference_head(FixtureKind::ApiKey), plain_body, KEY);
@@ -1169,7 +1170,7 @@ async fn the_observed_event_carries_no_fork_for_a_sessions_own_turn() {
 /// request selects with neither the class nor `context_compacted`, and a refusal before the body is read
 /// publishes neither hash.
 #[tokio::test]
-async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_neither() {
+async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_the_class_alone() {
     use phoebis_profile::fixtures::{
         body as fixture_body, inference_head, BodyFixture, FixtureKind,
     };
@@ -1264,24 +1265,24 @@ async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_
         "cold zeroes the refresh; the continuation fallback's own Refresh would leave it at the clock instead"
     );
 
-    // The header-less path: no class and no compacted header selects with neither fact.
+    // Without the compacted header: the request carries the class the client always sends and no compacted fact.
     let req = request_for(KEY, "claude-sonnet-4-5", "s2");
     h.app.clone().oneshot(req).await.unwrap();
     let (events, _) = drain_until_complete(&mut sub).await;
     let Event::RequestObserved(observed) = &events[0] else {
         panic!("{events:?}")
     };
-    assert_eq!(observed.client.request_class, None);
+    assert_eq!(observed.client.request_class.as_deref(), Some("main"));
     assert_eq!(observed.client.context_compacted, None);
 
-    // A refusal before the body is read carries neither the class nor a chain.
+    // A refusal before the body is read reads the class off the head alone and carries no chain.
     let refused = request_for("phoebis-nobody", "claude-sonnet-4-5", "s3");
     h.app.clone().oneshot(refused).await.unwrap();
     let (events, _) = drain_until_complete(&mut sub).await;
     let Event::RequestObserved(observed) = &events[0] else {
         panic!("{events:?}")
     };
-    assert_eq!(observed.client.request_class, None);
+    assert_eq!(observed.client.request_class.as_deref(), Some("main"));
     assert_eq!(observed.static_hash, None);
     assert!(observed.boundaries.is_empty());
     up.shutdown().await;

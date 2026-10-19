@@ -177,6 +177,15 @@ test('listRequests passes the cache miss reasons, the efforts and the request cl
   for (const name of ['cache_miss_reasons', 'efforts', 'request_classes']) assert.ok(!String(calls[1].url).includes(name), `no ${name} filter, no parameter`);
 });
 
+test('the_classifiers_filter_serializes_beside_the_request_classes', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ classifiers: ['client', '-'], requestClasses: ['auxiliary'] });
+  const params = new URL(calls[0].url, 'http://x').searchParams;
+  assert.deepEqual([params.get('classifiers'), params.get('request_classes')], ['client,-', 'auxiliary']);
+  await new HttpApi().listRequests({});
+  assert.ok(!String(calls[1].url).includes('classifiers'), 'no classifier filter, no parameter');
+});
+
 test('the request list encodes the outcome list', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ outcomes: ['canceled', 'failed'] });

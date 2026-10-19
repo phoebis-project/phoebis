@@ -2505,8 +2505,9 @@ impl RoutingState {
     /// the sum over the priced pins; `keep` is the account's current pool, built by the caller from the snapshot
     /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
     /// `WindowShare` a burn is the subscription cost model's anchor share per second, which orders the pins as the
-    /// tier's share does, and under `Usd` the pin's fast usage counts beside its row's copy, as
-    /// `BurnRates::price_pin` sums them. `None` for a pin burning a type its row cannot price.
+    /// tier's share does, and under `Usd` the pin's fast usage and the usage of the client's own classifier calls
+    /// count beside its row's copy, as `BurnRates::price_pin` sums them. `None` for a pin burning a type its row
+    /// cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,
@@ -2949,7 +2950,7 @@ impl RoutingState {
         for pin in moved_pins {
             let spelled = pin.key();
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
-            // its fast usage moves with it.
+            // its fast and unmetered usage move with it.
             let renewed = self.renewed.contains(&spelled);
             // Read ahead of `take_pin`, which drops it: the mark lives as long as its row, so a `Head` report still
             // finds it under the dated id.
@@ -3369,7 +3370,9 @@ mod tests {
                 ..PinBurn::default()
             },
             burn_fast: PinBurn::default(),
+            burn_unmetered: PinBurn::default(),
             last_input_tokens: 0,
+            last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
             shed_from: None,
@@ -3508,6 +3511,59 @@ mod tests {
         assert!(
             state.fast_burns().is_empty(),
             "the fast usage leaves with the pin"
+        );
+    }
+
+    #[test]
+    fn a_pins_unmetered_usage_moves_with_a_rekey_leaves_with_the_pin_and_never_reaches_a_fresh_pin_under_its_key(
+    ) {
+        let (pin, _) = burning("s", 1.0);
+        let unmetered = PinBurn {
+            input: 2.0,
+            ..PinBurn::default()
+        };
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![PinRow {
+                burn_unmetered: unmetered,
+                ..pin.clone()
+            }],
+            ..RoutingLoad::default()
+        });
+        state.apply_resolution("m", "m-20260101", 0);
+        let dated = PinKey {
+            model: "m-20260101".into(),
+            ..pin.key()
+        };
+        assert_eq!(
+            state
+                .pins
+                .iter()
+                .map(|(key, p)| (key.clone(), p.burn_unmetered))
+                .collect::<Vec<_>>(),
+            vec![(dated.clone(), unmetered)],
+            "the rekey carries the unmetered usage to the dated id"
+        );
+        state.put_pin(PinRow {
+            epoch: 2,
+            ..pin.clone()
+        });
+        assert_eq!(
+            state.pin(&dated).map(|p| p.burn_unmetered),
+            Some(PinBurn::default()),
+            "a fresh pin under the key starts without the replaced pin's unmetered usage"
+        );
+        state.put_pin(PinRow {
+            epoch: 3,
+            burn_unmetered: unmetered,
+            ..pin
+        });
+        state.remove_pin(&dated);
+        assert!(
+            !state
+                .pins
+                .values()
+                .any(|p| p.burn_unmetered != PinBurn::default()),
+            "the unmetered usage leaves with the pin"
         );
     }
 

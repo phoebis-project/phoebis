@@ -130,6 +130,9 @@ pub struct SelectRequest {
     pub lane: String,
     /// The body carried `speed: "fast"`: fast eligibility applies.
     pub fast: bool,
+    /// The request is the client's own classifier call: it books nothing, its body prices no rewrite and it takes the
+    /// `none` verdict, as a fast request does.
+    pub classifier: bool,
     /// The relay's estimate of the body's prompt tokens from its bytes (canonical bytes over four, the byte
     /// estimate the static affinity entries carry): a fresh session's rewrite, since it has no pin to read one from.
     pub body_tokens: u64,
@@ -652,15 +655,27 @@ fn budget_unknown(
 }
 
 /// The rewrite a selection prices for the pin's next write: its last context, or the body's estimate for a fresh
-/// session or a pin never renewed with usage, as one cache write at the lane's TTL (five minutes until a pin reports
-/// one). The gate's booking and the pick's figure price the same tokens through it.
+/// session, a pin never renewed with usage or a pin a classifier call renewed last, as one cache write at the lane's
+/// TTL (five minutes until a pin reports one). The gate's booking and the pick's figure price the same tokens through
+/// it.
 pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> PinUsage {
+    // The plan windows see nothing of the client's classifier call, so its body is no rewrite to fit or to book. A
+    // renewed pin's own context stays the session's, since a move still rewrites it.
+    let body = if request.classifier {
+        0
+    } else {
+        request.body_tokens
+    };
     // A pin never renewed with usage reads its context from the body, as a fresh session does, and a fresh
-    // session's TTL is unknown before a pin exists, so its write prices at five minutes.
+    // session's TTL is unknown before a pin exists, so its write prices at five minutes. A pin a classifier call
+    // renewed last holds a classifier body as its context, which the plan windows never see either, so a move or a
+    // round prices the request's own body there, zero for a classifier request.
     let (tokens, ttl_ms) = match pin {
-        Some(pin) if pin.last_input_tokens > 0 => (pin.last_input_tokens, pin.cache_ttl_ms),
-        Some(pin) => (request.body_tokens, pin.cache_ttl_ms),
-        None => (request.body_tokens, 300_000),
+        Some(pin) if pin.last_input_tokens > 0 && !pin.last_classifier => {
+            (pin.last_input_tokens, pin.cache_ttl_ms)
+        }
+        Some(pin) => (body, pin.cache_ttl_ms),
+        None => (body, 300_000),
     };
     if ttl_ms >= 3_600_000 {
         PinUsage {
@@ -2051,11 +2066,12 @@ fn run(
     // would carry the rewrite and burn of a stream it no longer serves until the usage, the end or the expiry. A
     // retry in place renews and never reaches here, so its booking stands. Then the selection books its rewrite and
     // burn on the destination until the usage replaces it or the request ends. A count writes no cache, a probe
-    // replays a recipe the account carries, and a fast request draws usage credits and no plan window, so none of
-    // them books. A destination without a tier prices nothing, and nothing priced is nothing to book, so an unpriced
-    // destination leaves no entry to expire or release.
+    // replays a recipe the account carries, a fast request draws usage credits and no plan window, and the client's
+    // classifier call takes no share of a plan window, so none of them books. A destination without a tier prices
+    // nothing, and nothing priced is nothing to book, so an unpriced destination leaves no entry to expire or
+    // release.
     state.release_reservation(&request.request_id);
-    if !(request.count || request.probe || request.fast) {
+    if !(request.count || request.probe || request.fast || request.classifier) {
         if let Some(tier) = snapshot.tier(&chosen.account_id) {
             let prior = match moving {
                 Some(_) => Vec::new(),
@@ -2208,8 +2224,9 @@ fn replace_expired(
 
 /// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `shed` is the source
 /// and the word a shed move or a failover's landing stamps. `moving` is the row a move takes off its source or a
-/// failover took off its account, whose burn averages and last prompt the new row carries, so the destination's
-/// projection counts the pin from the moment it lands and a later move prices its rewrite from a figure.
+/// failover took off its account, whose burn averages and last prompt, with whether a classifier call wrote it, the
+/// new row carries, so the destination's projection counts the pin from the moment it lands and a later move prices
+/// its rewrite from a figure.
 fn fresh_pin(
     request: &SelectRequest,
     session: &str,
@@ -2219,22 +2236,27 @@ fn fresh_pin(
     moving: Option<&PinRow>,
 ) -> PinRow {
     // The rates are typed tokens per second and carry no unit, so the copy needs no re-pricing.
-    let (burn, burn_at, burn_banded, burn_fast, last_input_tokens) = match moving {
-        Some(moving) => (
-            moving.burn,
-            moving.burn_at,
-            moving.burn_banded,
-            moving.burn_fast,
-            moving.last_input_tokens,
-        ),
-        None => (
-            PinBurn::default(),
-            None,
-            PinBurn::default(),
-            PinBurn::default(),
-            0,
-        ),
-    };
+    let (burn, burn_at, burn_banded, burn_fast, burn_unmetered, last_input_tokens, last_classifier) =
+        match moving {
+            Some(moving) => (
+                moving.burn,
+                moving.burn_at,
+                moving.burn_banded,
+                moving.burn_fast,
+                moving.burn_unmetered,
+                moving.last_input_tokens,
+                moving.last_classifier,
+            ),
+            None => (
+                PinBurn::default(),
+                None,
+                PinBurn::default(),
+                PinBurn::default(),
+                PinBurn::default(),
+                0,
+                false,
+            ),
+        };
     let mut row = PinRow {
         key_id: request.key_id.clone(),
         session_id: session.to_string(),
@@ -2253,7 +2275,9 @@ fn fresh_pin(
         burn_at,
         burn_banded,
         burn_fast,
+        burn_unmetered,
         last_input_tokens,
+        last_classifier,
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
         cache_ttl_ms: 300_000,
@@ -7305,6 +7329,7 @@ mod banded_tests {
             held_out: false,
             lane: lane_key(model, "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         };
         let read = fit_of(

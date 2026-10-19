@@ -1,5 +1,8 @@
-//! One struct per ledger table, field order matching the table's column order. `RequestRecord::guardrails` is the one
-//! member no column holds: its rows live in the child table `request_guardrails`.
+//! One struct per ledger table, its fields in the table's column order but for a few members kept beside the ones they
+//! belong with: `RequestRecord`'s two truncation flags follow `bodies_captured`, `client_contract` follows
+//! `client_drift` and `classifier` follows `auto_mode`, and `row_to_request` reads each by its column's index.
+//! `RequestRecord::guardrails` is the one member no column holds: its rows live in the child table
+//! `request_guardrails`.
 
 use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary};
 use phoebis_store::AccountKind;
@@ -39,6 +42,9 @@ pub struct RequestRecord {
     /// The kind a client-drift refusal answered with, whether or not the refusal reached an account: `hash` or
     /// `version_suffix`. `None` for a request that never tripped either self-check.
     pub client_drift: Option<String>,
+    /// The item a `client_contract` refusal named, one of the six words of the contract, and `None` for every other
+    /// request and on a row from before the column.
+    pub client_contract: Option<String>,
     pub kept_warm: bool,
     pub bodies_captured: bool,
     /// Whether the captured body is shorter than what the relay saw; false when nothing was captured. The
@@ -83,6 +89,8 @@ pub struct RequestRecord {
     pub fork_depth: Option<u32>,
     /// `server`, `stripped`, `body_shape`; null for every other request.
     pub auto_mode: Option<String>,
+    /// `client` for the client's own auto-mode classifier call, null otherwise and on a row from before the column.
+    pub classifier: Option<String>,
     /// The `CohortHold` JSON of the holds the request waited through; `None` for a request never held.
     pub held: Option<String>,
     /// The ledger task's clock when the answer's `message_stop` chunk arrived, held to `finished_at` so a ledger

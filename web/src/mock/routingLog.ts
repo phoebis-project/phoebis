@@ -1026,11 +1026,12 @@ const laneOf = (r: RequestLog) => `${r.canonicalModel}|${r.shape.requestedSpeed 
 /**
  * What a placement or a move books on the account it chose until the usage replaces it: the rewrite of the pin's last
  * prompt, or of the body for a fresh session, and the burn it brings, per plan window the model draws. A count, a
- * probe and a fast request book nothing, and neither does an API-key account, which has no plan window.
+ * probe, a fast request and a client classifier call book nothing, and neither does an API-key account, which has no
+ * plan window.
  */
 function reservationOf(spec: Spec, chosen: RecordCandidate | undefined): { reservation: NonNullable<RecordOutcome['reservation']>; step: WalkStep } | null {
   const r = spec.request;
-  if ((spec.kind !== 'placed' && spec.kind !== 'moved') || chosen?.kind !== 'oauth' || r.kind !== 'inference' || r.shape.requestedSpeed === 'fast') return null;
+  if ((spec.kind !== 'placed' && spec.kind !== 'moved') || chosen?.kind !== 'oauth' || r.kind !== 'inference' || r.shape.requestedSpeed === 'fast' || r.classifier !== null) return null;
   const id = chosen.accountId;
   const rewrite = rewriteOf(spec.kind === 'moved' ? (spec.pinFigures?.tokens ?? bodyTokensOf(r)) : bodyTokensOf(r), r.canonicalModel);
   const brought = spec.kind === 'moved' && spec.pinFigures ? spec.pinFigures.burn : spec.story ? PRIOR_BURN : {};
@@ -1705,6 +1706,7 @@ function storySpecs(): Spec[] {
     }),
     at('req_6c3a9e27-5b1', 1, 1, t(14, 18, 5), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'revoked', kind: 'key', reason: 'the key was revoked' } }),
     at('req_e0a4c6f2-118', 1, 1, t(14, 14, 2), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'drift', kind: 'client', reason: 'hash' } }),
+    at('req_f1c8e3a5-29d', 1, 1, t(14, 14, 20), 'refused', null, { pin: 'not_looked_up', refusal: { code: 'contract', kind: 'client', reason: 'class_header' } }),
     at('req_51d0e2b8-7a0', 1, 1, t(14, 16, 40), 'exhausted', null, { exhaustion: { deadline: iso(startOfDay(t(14, 16, 40)) + DAY), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, pin: 'pinning_off' }),
     // The compacted conversation renews its pin cold.
     at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live('compacted', 491_000, 'cold') }),
@@ -1728,6 +1730,9 @@ function storySpecs(): Spec[] {
     at('req_4b0e9d17-c31', 1, 1, t(14, 26, 58), 'placed', 'primary'),
     at('req_4b0e9d17-c31', 2, 2, t(14, 27, 1), 'placed', 'nightly', { attempted: ['primary'], failover: 'fast_lane', from: 'primary', pin: live() }),
     at('req_f8085653-422', 1, 1, t(14, 27, 28), 'renewed', 'primary', { pin: live('continues_pin', 506_000) }),
+    // The client's two classifier calls are placed on primary and book nothing there, as a fast request books nothing.
+    at('req_4d9a1e6b-c20', 1, 1, t(12, 41, 8), 'placed', 'primary'),
+    at('req_63a8d2f5-b17', 1, 1, t(12, 41, 10), 'placed', 'primary'),
     // A conversation the Overflow workspace answered, cold there nine minutes on, returns to a plan with its
     // 640k-token context. Primary fits but is full, and the rest fall short of the ceiling, so the gate answers the
     // least bad set and Pace takes nightly, whose window the conversation spends within the hour.

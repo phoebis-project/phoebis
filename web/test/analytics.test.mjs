@@ -491,6 +491,27 @@ test('the probe totals sum each group\'s held probes, and the mock holds a few o
   assert.equal(all.probes.held, held, 'the mock route sums the probe rows it groups');
 });
 
+test("the mock's client classifier group reads zero cache, saving and split figures over hours that read, wrote and kept warm", () => {
+  // A plan-funded hour on the story's Max 20x account lends the counters no share reads, and the case writes every
+  // member the share rule does read.
+  const template = d.ALL_ROLLUPS.find((r) => r.accountId === 'primary' && r.funding === 'plan' && r.kind === 'inference' && r.classifier === '-');
+  assert.ok(template, 'the story holds a plan-funded hour on primary');
+  const tokens = { ...template.tokens, cacheRead: 2_000_000, cacheWrite1h: 300_000, cacheWrite5m: 200_000, output: 40_000, uncachedInput: 50_000 };
+  const row = (classifier, sessionId) => ({ ...template, classifier, equivalents: { five_hour: 0, seven_day: 0 }, keptWarm: { requests: 3, tokens1h: 400_000, tokens5m: 100_000 }, model: 'claude-sonnet-5-5', sessionId, shares: { five_hour: 0, seven_day: 0 }, tokens });
+  const groups = d.groupsOf([row('client', 's-free'), row('client', 's-free-again'), row('-', 's-plain')], { accountIds: ['primary'], groupBy: 'classifier', includeProbes: false });
+  const pairs = (map) => Object.values(map ?? {}).flatMap((c) => [c.read, c.write]);
+  const figures = (g) => ({
+    cache: [...pairs(g.cacheShares), ...pairs(g.cacheEquivalent)],
+    saving: [...Object.values(g.savingShares ?? {}), ...Object.values(g.savingEquivalent ?? {})],
+    split: Object.values(g.equivalentSplit),
+  });
+  const free = figures(groups.find((g) => g.key === 'client'));
+  const plain = figures(groups.find((g) => g.key === '-'));
+  // The same counts without the marker price above zero, so each zero below is the free rule's.
+  for (const [family, values] of Object.entries(plain)) assert.ok(values.length > 0 && values.every((v) => v > 0), `the plain hour's ${family} figures: ${values}`);
+  for (const [family, values] of Object.entries(free)) assert.ok(values.length > 0 && values.every((v) => v === 0), `the client group's ${family} figures: ${values}`);
+});
+
 test("the mock prices a fast hour and a fast answer at the model's fast cells", async () => {
   // The mock draws its story from the clock it loads at and its seeded stream, so the case loads a copy of the bundle
   // at one fixed instant, and the rollups read the same figures on every run in one time zone.
@@ -1088,4 +1109,14 @@ test('ratioOff marks a ratio outside the band after a rise of five percent', () 
   assert.equal(d.ratioOff({ observedRise: 0.05, ratio: 3 }), true, 'a rise of five percent counts');
   assert.equal(d.ratioOff({ observedRise: 0.3, ratio: 1.1 }), false);
   assert.deepEqual([0.8, 1.25].map((ratio) => d.ratioOff({ observedRise: 0.3, ratio })), [false, false], 'the edges sit inside the band');
+});
+
+test('the error rate leaves the requests a guardrail blocked out of both sides, as the Dashboard tile does', () => {
+  const day = { errors: { guardrail_blocked: 684, upstream_unreachable: 13 }, requests: 26_112, succeeded: 25_407 };
+  assert.equal(d.blockedOf(day), 684);
+  assert.equal(d.errorRateOf(day), (26_112 - 684 - 25_407) / (26_112 - 684), 'the other failures over the other requests');
+  assert.equal(d.errorRateOf({ errors: {}, requests: 10, succeeded: 9 }), 0.1, 'without a block the rate is the plain one');
+  assert.equal(d.errorRateOf({ errors: { guardrail_blocked: 5 }, requests: 5, succeeded: 0 }), 0, 'blocks alone rate no request');
+  assert.equal(d.errorRateOf({ errors: {}, requests: 0, succeeded: 0 }), 0, 'no request rates zero');
+  assert.equal(d.blockedOf({ errors: Object.create({ guardrail_blocked: 5 }) }), 0, 'an inherited count is no count');
 });

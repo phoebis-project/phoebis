@@ -103,6 +103,41 @@ fn answered(
     .unwrap();
 }
 
+/// `served` as the client's own classifier call: the same plan-funded attempt, on a request the marker held.
+fn served_as_classifier(db: &LedgerDb, id: &str, model: &str, completed: i64, input: u64) {
+    let started = completed - 30_000;
+    db.insert_request(
+        &RequestRecord {
+            id: id.into(),
+            received_at: started,
+            finished_at: Some(completed),
+            model: model.into(),
+            canonical_model: model.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            classifier: Some("client".into()),
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            started_at: started,
+            finished_at: Some(completed),
+            outcome: "succeeded".into(),
+            input_tokens: Some(input),
+            output_tokens: Some(0),
+            tier: Some(MAX_20X.into()),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+}
+
 /// A poll's reading of account `a`'s `window` observed at `at`.
 fn reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> QuotaSampleRecord {
     QuotaSampleRecord {
@@ -512,6 +547,40 @@ fn an_estimated_attempt_is_counted_and_an_overage_attempt_draws_nothing() {
     assert!(
         close(rows[0].predicted_share, 0.3),
         "0.1 and 0.2, the overage answer adding nothing: {}",
+        rows[0].predicted_share
+    );
+    assert!(close(rows[0].ratio, 1.0), "{}", rows[0].ratio);
+}
+
+#[test]
+fn a_classifier_attempt_beside_a_main_turn_predicts_the_main_turns_share_alone() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.20, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    // 0.1 of the window from ten Sonnet units, and nothing from the thirty units of the classifier call beside it.
+    served(&db, "main", SONNET, SATURDAY + 5 * MINUTE, 10, None);
+    served_as_classifier(&db, "classifier", SONNET, SATURDAY + 10 * MINUTE, 30);
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.requests, r.estimated))
+            .collect::<Vec<_>>(),
+        [(1, 0)],
+        "the main turn alone is counted: {rows:?}"
+    );
+    assert!(
+        close(rows[0].predicted_share, 0.1),
+        "the main turn's share alone: {}",
         rows[0].predicted_share
     );
     assert!(close(rows[0].ratio, 1.0), "{}", rows[0].ratio);

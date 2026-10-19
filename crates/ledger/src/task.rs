@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_bus::{spawn_subscriber, Bus, Delivery, Subscriber};
+use phoebis_bus::{spawn_subscriber, Bus, Classifier, Delivery, Subscriber};
 use phoebis_oauth::Clock;
 use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle, FIVE_HOUR};
 use phoebis_store::{AccountKind, BudgetPeriod, Store};
@@ -1909,6 +1909,10 @@ fn note_unweighted(
     request: &RequestRecord,
     attempts: &[AttemptRecord],
 ) {
+    // A classifier call prices at no share, so its model's weight is never read.
+    if request.classifier.as_deref() == Some(Classifier::Client.as_str()) {
+        return;
+    }
     let plan_funded = attempts.iter().any(|a| {
         a.has_usage()
             && funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()) == Funding::Plan

@@ -308,7 +308,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(40), Some(0), Some(4_096)),
+        (Some(41), Some(0), Some(4_096)),
         "the ledger schema is at the migration that adds the landing stamp"
     );
     assert_eq!(
@@ -1675,7 +1675,9 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 burn_at: None,
                 burn_banded: phoebis_store::PinBurn::default(),
                 burn_fast: phoebis_store::PinBurn::default(),
+                burn_unmetered: phoebis_store::PinBurn::default(),
                 last_input_tokens: 0,
+                last_classifier: false,
                 last_refresh_at: 0,
                 cache_ttl_ms: 300_000,
                 shed_from: None,
@@ -1770,7 +1772,9 @@ async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
             burn_at: None,
             burn_banded: phoebis_store::PinBurn::default(),
             burn_fast: phoebis_store::PinBurn::default(),
+            burn_unmetered: phoebis_store::PinBurn::default(),
             last_input_tokens: 0,
+            last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
             shed_from: None,
@@ -2178,7 +2182,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     assert_eq!(by_all.status(), 400, "the burn groups by no `all`");
     assert_eq!(
         json(by_all).await["error"],
-        "group_by is account, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent"
+        "group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent"
     );
     let by_pool = get(
         &parts.app,
@@ -4358,6 +4362,7 @@ fn select_request(
         held_out: false,
         lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
         fast: false,
+        classifier: false,
         body_tokens: 0,
     }
 }
@@ -4745,7 +4750,9 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
             burn_at: None,
             burn_banded: phoebis_store::PinBurn::default(),
             burn_fast: phoebis_store::PinBurn::default(),
+            burn_unmetered: phoebis_store::PinBurn::default(),
             last_input_tokens: 0,
+            last_classifier: false,
             last_refresh_at: now - 5,
             cache_ttl_ms: 300_000,
             shed_from: Some("business".into()),
@@ -4963,6 +4970,7 @@ async fn select_s1(
             held_out: false,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await

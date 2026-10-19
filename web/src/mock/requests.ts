@@ -5,8 +5,8 @@ import type {
 import type { GuardrailMatch } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
-import { equivalentOf, fundingOf, modelWeeks, shareOrFallback } from '@/lib/costs';
-import { NO_CLASS, NO_EFFORT, foldEffort, foldRequestClass } from '@/lib/dimensions';
+import { anchorTier, equivalentOf, fundingOf, modelWeeks, pricedWindow, shareOrFallback, tierCapacity } from '@/lib/costs';
+import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { endOf } from '@/lib/quota';
@@ -845,6 +845,10 @@ interface StorySeed {
   canonical?: string;
   /** Whether the bodies were captured, where it is not the laptop key's rule. */
   capturedBodies?: boolean;
+  /** The client's own auto-mode classifier call, which the class header and the beta mark. */
+  classifier?: 'client';
+  /** The item a contract refusal named. */
+  clientContract?: string;
   clientDrift?: string;
   contextCompacted?: string;
   errorCode?: string;
@@ -862,7 +866,8 @@ interface StorySeed {
   outcome?: RequestOutcome;
   /** The upstream's comparison was still running when its one attempt's answer went out. */
   pending?: true;
-  requestClass: string;
+  /** The class header as the client sent it, null for a request that sent none. */
+  requestClass: string | null;
   /** The client's session, a prefix of the story's own ids. */
   session: string;
   status?: number;
@@ -874,21 +879,24 @@ interface StorySeed {
 
 /**
  * The routing log's hand-written requests: the story hour, the morning's shedding round and its move, nightly's
- * Fable-week round, the least-bad move onto nightly and the wait for its head, the hold for nightly's reset, and
- * studio's slowed sessions in work with the round their stretch fires.
+ * Fable-week round, the least-bad move onto nightly and the wait for its head, the hold for nightly's reset,
+ * studio's slowed sessions in work with the round their stretch fires, and the client's two classifier calls.
  */
 export const STORY_IDS = new Set([
   'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2b9e4c7f-d36', 'req_2c7d9f15-b63', 'req_2e7c90a1-6d4',
   'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84',
   'req_4a9c3e7b-a27', 'req_4b0e9d17-c31',
+  'req_4d9a1e6b-c20',
   'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d1f8c3a-b27',
   'req_5d6f1b3a-e27', 'req_5e2f7a19-b03',
+  'req_63a8d2f5-b17',
   'req_69e30548-32e', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
   'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
   'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
   'req_b72e9d05-c14', 'req_b8c3e9d4-e61', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c90d3f61-a28', 'req_d2a8f6c1-d50',
   'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e2c7a4f9-d13', 'req_e5a1c093-4d7',
   'req_ef099b34-453',
+  'req_f1c8e3a5-29d',
   'req_f3b6d218-85a', 'req_f6a1d3e8-e47', 'req_f8085653-422',
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
@@ -974,7 +982,9 @@ function storyRow(seed: StorySeed): RequestLog {
     autoMode: null,
     canonicalModel: seed.canonical ?? seed.model,
     capturedBodies: seed.capturedBodies ?? seed.keyId === 'laptop',
+    classifier: seed.classifier ?? null,
     client: CLIENTS[seed.keyId] ?? null,
+    clientContract: seed.clientContract ?? null,
     clientDrift: seed.clientDrift ?? null,
     compaction: null,
     contextCompacted: seed.contextCompacted ?? null,
@@ -1072,6 +1082,8 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
+    // The same client's next request carried no class header, so the contract refused it before any account was chosen.
+    { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', requestClass: null, session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
@@ -1288,6 +1300,10 @@ function storyRequests(): RequestLog[] {
     // The failed-over session's next turn inside the window, which renews the pin the failover landed on primary and
     // reads the source the landing left on it.
     { agentId: 'main', at: t(14, 13, 5), attempts: [{ accountId: 'primary', at: t(14, 13, 5), ms: 6_100, status: 200 }], id: 'req_e2c7a4f9-d13', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheRead: 56_700, cacheWrite1h: 1_300, input: 1_500, output: 760 } },
+    // Two auto-mode classifier calls of the laptop session the summary forks run in, each judging a subagent's tool
+    // call on primary's plan. They read no cache, so the rollups' draws for the hour stay where they were.
+    { agentId: 'a5e1', at: t(12, 41, 8), attempts: [{ accountId: 'primary', at: t(12, 41, 8), ms: 1_100, status: 200 }], classifier: 'client', id: 'req_4d9a1e6b-c20', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_400, output: 14 } },
+    { agentId: 'd8f3', at: t(12, 41, 10), attempts: [{ accountId: 'primary', at: t(12, 41, 10), ms: 2_300, status: 200 }], classifier: 'client', id: 'req_63a8d2f5-b17', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_900, output: 260 } },
     ...guardrailSeeds(),
   ];
   return seeds.map(storyRow);
@@ -1850,17 +1866,28 @@ function seedHolds() {
  * request no subscription window paid, else each window the model applies to at the request's completion, the shares
  * under the account's tier and the equivalents under none, a window the cost model cannot price carried as null and
  * an account without a tier an empty share map. `estimated` is true where a window priced at the model tier's fallback
- * weight.
+ * weight. A client classifier call reads zero on each window the tier sizes, the equivalents under the anchor tier,
+ * with the share reason, and a classifier call billed in dollars carries no reason, as the route answers both.
  */
-function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'estimated'> {
+function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'estimated' | 'shareReason'> {
   const serving = r.attempts[r.attempts.length - 1] ?? null;
-  if (serving === null || fundingOf(serving) !== 'plan') return { costEquivalent: null, costShares: null, estimated: false };
+  if (serving === null || fundingOf(serving) !== 'plan') return { costEquivalent: null, costShares: null, estimated: false, shareReason: null };
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
   const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, r.canonicalModel)];
+  if (r.classifier !== null) {
+    const zeros = (sizing: string) =>
+      Object.fromEntries(
+        windows.filter((w) => {
+          const priced = pricedWindow(TABLES, w);
+          return priced !== null && tierCapacity(TABLES, sizing, priced.priced) !== null;
+        }).map((w) => [w, 0]),
+      );
+    return { costEquivalent: zeros(anchorTier(TABLES)), costShares: tier === undefined ? {} : zeros(tier), estimated: false, shareReason: 'client_classifier' };
+  }
   const equivalents = windows.map((w) => [w, equivalentOf(TABLES, w, r.canonicalModel, r.usage, finishedMs)] as const);
   const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, shareOrFallback(TABLES, w, tier, r.canonicalModel, r.usage, finishedMs)?.share ?? null]));
-  return { costEquivalent: Object.fromEntries(equivalents.map(([w, e]) => [w, e?.equivalent ?? null])), costShares: shares, estimated: equivalents.some(([, e]) => e?.estimated === true) };
+  return { costEquivalent: Object.fromEntries(equivalents.map(([w, e]) => [w, e?.equivalent ?? null])), costShares: shares, estimated: equivalents.some(([, e]) => e?.estimated === true), shareReason: null };
 }
 
 /**
@@ -2047,15 +2074,16 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
     // before any attempt files under the speed it asked for, as the ledger files the speed key alone.
     const speed = (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard';
-    // The rollups file each request under its effort and class as they fold them, and a probe under no class. The
-    // story files a probe under no effort either, so a lane hour's probes stay one row with the probe figures on it.
+    // The rollups file each request under its effort, its class and its classifier standing as they fold them, and a
+    // probe under no class. The story files a probe under no effort either, so a lane hour's probes stay one row with
+    // the probe figures on it.
     const parts = new Map<string, RequestLog[]>();
     for (const r of list) {
-      const part = isProbe ? `${NO_EFFORT}|${NO_CLASS}` : `${foldEffort(r.shape.effort)}|${foldRequestClass(r.requestClass)}`;
+      const part = isProbe ? `${NO_EFFORT}|${NO_CLASS}|${NO_CLASS}` : `${foldEffort(r.shape.effort)}|${foldRequestClass(r.requestClass)}|${foldClassifier(r.classifier)}`;
       parts.set(part, [...(parts.get(part) ?? []), r]);
     }
     for (const [part, partRows] of parts) {
-      const [effort, requestClass] = part.split('|');
+      const [effort, requestClass, classifier] = part.split('|');
       const ok = partRows.filter((r) => r.status === 200);
       const cacheMissReasons = emptyCacheMissReasons();
       for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
@@ -2071,6 +2099,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         accountId,
         model,
         requestClass,
+        classifier,
         sessionId,
         funding,
         speed,
@@ -2110,8 +2139,9 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: partRows.reduce((s, r) => s + r.costUsd, 0),
         cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at))),
-        // At each answer's completion, the instant its own shares price it at.
-        ...hourShares(accountId, partRows[0].canonicalModel, partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
+        // At each answer's completion, the instant its own shares price it at. A client classifier call takes no share
+        // of a plan window, so its part prices nothing and reads zero.
+        ...hourShares(accountId, partRows[0].canonicalModel, classifier === NO_CLASS ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
         tier: accountTier(accountId),
         histograms: histogramsOf(partRows),
         keptWarm: { requests: keptHere.length, tokens1h: keptHere.reduce((s, r) => s + keptOf(r).tokens1h, 0), tokens5m: keptHere.reduce((s, r) => s + keptOf(r).tokens5m, 0) },
@@ -2240,6 +2270,7 @@ function historicalRollups(): HourlyRollup[] {
         accountId,
         model,
         requestClass: classOfHour(`${t}|${lane.keyId}|${sessionId}`),
+        classifier: NO_CLASS,
         sessionId,
         funding: kindOf(accountId) === 'api_key' ? 'billed' : fast ? 'fast' : 'plan',
         speed: fast ? 'fast' : 'standard',
@@ -2295,6 +2326,7 @@ function historicalRollups(): HourlyRollup[] {
           accountId,
           model,
           requestClass: '-',
+          classifier: NO_CLASS,
           sessionId,
           funding: kindOf(accountId) === 'api_key' ? 'billed' : 'plan',
           speed: 'standard',
@@ -2355,6 +2387,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       accountId: r.accountId,
       model: r.model,
       requestClass: NO_CLASS,
+      classifier: NO_CLASS,
       sessionId: r.sessionId ?? '-',
       funding: kindOf(r.accountId) === 'api_key' ? 'billed' : 'plan',
       speed: 'standard',

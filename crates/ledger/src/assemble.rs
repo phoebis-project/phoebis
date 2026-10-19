@@ -611,9 +611,11 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         // stream end drawn after the finish would be a wrong figure.
         stream_end_at: stream_end_at.map(|at| at.min(complete.finished_at)),
         error_code: complete.error_code.clone(),
-        // Set here rather than only in the attempt loop above: a drift refusal answers before any account is
-        // selected, so it has no attempt row to carry the kind, and the request row is the one place left.
+        // Set here rather than only in the attempt loop above: a drift or a contract refusal answers before any
+        // account is selected, so it has no attempt row to carry the kind or the item, and the request row is the one
+        // place left.
         client_drift: complete.client_drift.clone(),
+        client_contract: complete.client_contract.clone(),
         kept_warm: false,
         bodies_captured: bodies.is_some(),
         request_truncated: false,
@@ -647,6 +649,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         prev_tool_ms: observed.client.prev_tool_ms,
         turn_origin: observed.client.turn_origin.clone(),
         request_class: observed.client.request_class.clone(),
+        classifier: observed.client.classifier.map(|c| c.as_str().to_string()),
         forked_from: observed.fork.forked_from.clone(),
         fork_depth: observed.fork.fork_depth,
         // A body refused for its shape before any dispatch never reached an upstream, whatever admission read of
@@ -867,6 +870,7 @@ mod tests {
             ttfc_ms: Some(200),
             error_code: code.map(String::from),
             client_drift: Some("version".into()),
+            client_contract: None,
             client_version: Some("2.1.300".into()),
             response_bytes: Some(20),
             response_chunks: None,
@@ -908,6 +912,7 @@ mod tests {
             ttfc_ms: None,
             error_code: None,
             client_drift: None,
+            client_contract: None,
             client_version: None,
             response_bytes,
             response_chunks,

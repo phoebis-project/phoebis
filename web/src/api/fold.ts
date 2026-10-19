@@ -2,7 +2,7 @@ import { savingRequired } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { foldEffort, foldRequestClass } from '@/lib/dimensions';
+import { foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { earlierHolderLabel } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -108,6 +108,7 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
   if (by === 'model') return r.canonicalModel;
   if (by === 'pool') return r.poolId ?? '-';
   if (by === 'request_class') return foldRequestClass(r.requestClass);
+  if (by === 'classifier') return foldClassifier(r.classifier);
   // A fast request refused before any attempt served still asked for fast, and the rollups file it so.
   if (by === 'speed') return r.attempts[r.attempts.length - 1]?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
   if (by === 'user_agent') {

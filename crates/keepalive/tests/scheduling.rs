@@ -453,6 +453,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             held_out: false,
             lane,
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await
@@ -728,6 +729,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             held_out: false,
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
             fast: false,
+            classifier: false,
             body_tokens: 0,
         })
         .await
@@ -1238,6 +1240,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 held_out: false,
                 lane: lane_key(&pin.model, "standard", "none", "-"),
                 fast: false,
+                classifier: false,
                 body_tokens: 0,
             })
             .await

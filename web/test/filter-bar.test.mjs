@@ -114,6 +114,16 @@ test('the_guardrail_dimension_sits_under_outcome_and_its_chip_reads_the_names', 
   assert.deepEqual(chip, { field: 'guardrails', label: 'guardrail', mono: false, text: `guardrail: ${words}`, title: words, values: words });
 });
 
+test('the_classifier_facet_chips_the_value_and_names_none_for_the_dash', () => {
+  const fields = d.REQUESTS_DIMENSIONS.map((x) => x.field);
+  assert.deepEqual(fields.slice(fields.indexOf('agentTypes'), fields.indexOf('client') + 1), ['agentTypes', 'classifiers', 'client'], 'between Agent type and Client');
+  const options = { classifiers: [{ label: 'client classifier', value: 'client' }, { label: 'none', value: '-' }] };
+  const chipOf = (classifiers) => d.chipsOf(d.REQUESTS_DIMENSIONS, { classifiers }, options)[0];
+  assert.deepEqual(chipOf(['client']), { field: 'classifiers', label: 'classifier', mono: false, text: 'classifier: client', title: 'client classifier', values: 'client' });
+  assert.deepEqual(chipOf(['-']), { field: 'classifiers', label: 'classifier', mono: false, text: 'classifier: none', title: 'none', values: 'none' });
+  assert.deepEqual(chipOf(['client', '-']), { field: 'classifiers', label: 'classifier', mono: false, text: 'classifier: client, none', title: 'client classifier, none', values: 'client, none' });
+});
+
 test("a dimension whose list did not load carries the failure's words, and a list that loaded or is on its way carries none", () => {
   assert.deepEqual(d.notLoadedReason('keys', 'key', { data: null, error: 'the store is unavailable' }), { keys: 'The key list did not load: the store is unavailable' });
   assert.deepEqual(d.notLoadedReason('keys', 'key', { data: null, error: null }), {});

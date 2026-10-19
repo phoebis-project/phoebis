@@ -580,8 +580,7 @@ unknown field, named in the error. How a cooldown and the failover use the timin
 
 Defaults whole. `expire_after_seconds` is how long a session may go without a request before it leaves the Sessions
 view, taking its pin and any keepalive recipe with it. The three `memory_` keys bound the relay's memory of a session's
-previous request id and prompt id, the record behind `cc_prev_req` and `cc_prompt_id`
-([client](client.md#the-environment-block)).
+previous request id and prompt id, the record behind `cc_prev_req` ([client](client.md#the-environment-block)).
 
 | Key | Default | Accepts |
 | --- | --- | --- |
@@ -763,16 +762,15 @@ credential in the database, so keep it outside any backup that carries the datab
 `phoebis backup` leaves the key out and says so.
 
 The registry file also holds the relay's session memory: for each key, conversation (the client's session id), and
-agent, the previous request id and the prompt id the
-relay restores into a Claude Code request's attribution line. The in-process copy is the one the relay reads. Changes
-reach the file every five seconds, at shutdown, and as soon as the records evicted from memory before they were written
-reach `sessions.memory_cap` (that overlay is bounded by the cap too, and a record it sheds because a write hung is
-counted in the log). A session missing from memory after a restart or past `sessions.memory_cap` is read back from the
-file on its next request, and rows older than `sessions.memory_retention_days` are dropped once an hour
-([sessions](#sessions)). A request takes its revision fence from the router's in-memory snapshot and its credential from
-a cache of each account's current credential. The cache reads the registry file again when an account is paired, a
-credential rotates, or the registry reloads, and a credential the cache serves never waits behind the session memory's
-writes.
+agent, the previous request id the relay restores into a Claude Code request's attribution line as `cc_prev_req`, and
+the prompt id the client's header last carried. The in-process copy is the one the relay reads. Changes reach the file
+every five seconds, at shutdown, and as soon as the records evicted from memory before they were written reach
+`sessions.memory_cap` (that overlay is bounded by the cap too, and a record it sheds because a write hung is counted in
+the log). A session missing from memory after a restart or past `sessions.memory_cap` is read back from the file on its
+next request, and rows older than `sessions.memory_retention_days` are dropped once an hour ([sessions](#sessions)). A
+request takes its revision fence from the router's in-memory snapshot and its credential from a cache of each account's
+current credential. The cache reads the registry file again when an account is paired, a credential rotates, or the
+registry reloads, and a credential the cache serves never waits behind the session memory's writes.
 
 `stats.ledger_path` names a second SQLite file, the statistics ledger, under the same rules: the name is used as given,
 the parent directory is created at mode 0700 and the file at 0600. It runs in WAL mode with `synchronous = NORMAL`, so

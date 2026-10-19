@@ -16,9 +16,9 @@ pub const MEMORY_IDLE_MS: i64 = 24 * 3_600_000;
 /// bounded by the same cap in every regime: while the store answers, it asks for a flush the moment it reaches
 /// the cap, so a shed there happens only when that flush does not land first; while the store is failing, it
 /// sheds its oldest at the cap. So the relay holds at most twice this many records in any regime. Every string
-/// an entry holds is bounded on the way in (the key's ids and the model by `identity`, the carried prompt id by
-/// `facts`, the upstream's own ids by the response limits), so an entry is a few hundred bytes and the cap
-/// bounds memory at a few tens of megabytes on a host that never restarts.
+/// an entry holds is bounded on the way in (the key's ids and the model by `identity`, the prompt id by the
+/// header's UUID check in `facts`, the upstream's own ids by the response limits), so an entry is a few hundred
+/// bytes and the cap bounds memory at a few tens of megabytes on a host that never restarts.
 pub const MEMORY_CAP: usize = 65_536;
 
 /// A minute between sweeps is often enough to keep the map from growing unbounded between requests, and rare
@@ -234,40 +234,20 @@ impl SessionMemory {
         self.idle_ms
     }
 
-    /// The prompt id this request carries: the one its own line already names, else inherited from
-    /// `parent_agent` on an agent's first request, minted on a fresh user turn, or the agent's current one
-    /// (minted when it has none). Only a client's own inference request reaches here: a probe replays the
-    /// request as the client sent it.
-    pub fn prompt_id(
-        &self,
-        key: &MemoryKey,
-        parent_agent: Option<&str>,
-        fresh_turn: bool,
-        carried: Option<&str>,
-        now: i64,
-    ) -> String {
+    /// The admission's one write of the entry: revives a pending record, evicts past the cap, inserts the entry,
+    /// raises `last_seen`, marks it dirty for the flush and keeps the prompt id the client's header named, for a
+    /// later reader. Nothing the restoration reads comes back: the id on the wire is the header's alone, since a
+    /// minted one would be a field the client did not write.
+    pub fn touch(&self, key: &MemoryKey, prompt_id: Option<&str>, now: i64) {
         self.purge(now);
         let mut inner = self.inner.lock().unwrap();
-        // A revived entry is not new, and keeps the prompt id its record carried; checked ahead of `is_new` so
-        // a write landing on a key evicted moments earlier continues that record rather than racing it to the
-        // store with a fresh one.
+        // A revived entry keeps the prompt id its record carried. The revival runs ahead of the eviction, so a
+        // write landing on a key evicted moments earlier continues that record rather than racing it to the store
+        // with a fresh one.
         if !inner.entries.contains_key(key) {
             revive_pending(&mut inner, key, now, self.cap, self.retention_ms);
         }
-        let is_new = !inner.entries.contains_key(key);
-        // Resolved before the entry is touched: a parent lookup and the child's own insertion must not borrow
-        // the map at once.
-        let inherited = is_new
-            .then(|| {
-                parent_agent.and_then(|agent| {
-                    inner
-                        .entries
-                        .get(&key.with_agent(agent))
-                        .and_then(|e| e.prompt_id.clone())
-                })
-            })
-            .flatten();
-        if is_new {
+        if !inner.entries.contains_key(key) {
             evict_if_full(&mut inner, self.cap);
         }
         let entry = inner.entries.entry(key.clone()).or_insert_with(|| Entry {
@@ -275,22 +255,18 @@ impl SessionMemory {
             prompt_id: None,
             accounts: HashMap::new(),
         });
-        // A hook stamped at the head can land after a later write; the newer time stands.
+        // A hook stamped at the head can land after a later write. The newer time stands.
         entry.last_seen = entry.last_seen.max(now);
-        if let Some(id) = carried {
-            // What the wire says wins: a full-shape turn sends its own id, and a mint recorded beside it
-            // would be the one a reduced-shape subagent of that turn inherited.
+        if let Some(id) = prompt_id {
             entry.prompt_id = Some(id.to_string());
-        } else if is_new && inherited.is_some() {
-            // The parent's id wins over a fresh-turn mint: a subagent's opening message reads as a fresh turn
-            // of its own, but it is still the parent's turn the subagent was spawned to help with.
-            entry.prompt_id = inherited;
-        } else if fresh_turn || entry.prompt_id.is_none() {
-            entry.prompt_id = Some(uuid_v4());
         }
-        let id = entry.prompt_id.clone().expect("just set above");
         self.mark_dirty(&mut inner, key);
-        id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stored_prompt_id(&self, key: &MemoryKey) -> Option<String> {
+        let inner = self.inner.lock().unwrap();
+        inner.entries.get(key).and_then(|e| e.prompt_id.clone())
     }
 
     pub fn previous(&self, key: &MemoryKey, account_id: &str, canonical_model: &str) -> Previous {
@@ -928,7 +904,7 @@ mod tests {
         }
     }
 
-    /// A version-1 record over one account, the shape `record_request_id` and `prompt_id` would have written.
+    /// A version-1 record over one account, the shape `record_request_id` and `touch` would have written.
     fn seeded(request_id: &str, prompt_id: Option<&str>, last_seen: i64) -> MemoryRecord {
         let v1 = RecordV1 {
             accounts: HashMap::from([(
@@ -977,14 +953,15 @@ mod tests {
     fn the_cap_evicts_the_least_recently_seen_entry() {
         let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
         let (a, b, c) = (key("a"), key("b"), key("c"));
-        let id_a = mem.prompt_id(&a, None, false, None, 1_000);
-        mem.prompt_id(&b, None, false, None, 2_000);
+        mem.touch(&a, Some("p-a"), 1_000);
+        mem.touch(&b, None, 2_000);
         // A third entry past the cap evicts `a`, the least recently seen of the two held.
-        mem.prompt_id(&c, None, false, None, 3_000);
-        let id_a_again = mem.prompt_id(&a, None, false, None, 4_000);
-        assert_ne!(
-            id_a, id_a_again,
-            "the evicted turn was forgotten, so a fresh id was minted"
+        mem.touch(&c, None, 3_000);
+        mem.touch(&a, None, 4_000);
+        assert_eq!(
+            mem.stored_prompt_id(&a),
+            None,
+            "the evicted turn was forgotten, so the id written before the eviction is gone"
         );
     }
 
@@ -992,23 +969,58 @@ mod tests {
     fn the_purge_drops_an_entry_idle_past_the_bound() {
         let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
         let a = key("a");
-        let id = mem.prompt_id(&a, None, false, None, 0);
+        mem.touch(&a, Some("p-a"), 0);
         // The second call must clear both gates: the idle bound itself, and PURGE_INTERVAL_MS since the
         // sweep only runs once a minute, so it lands at their sum rather than at the idle bound alone.
-        let id_after = mem.prompt_id(&a, None, false, None, MEMORY_IDLE_MS + PURGE_INTERVAL_MS);
-        assert_ne!(
-            id, id_after,
+        mem.touch(&a, None, MEMORY_IDLE_MS + PURGE_INTERVAL_MS);
+        assert_eq!(
+            mem.stored_prompt_id(&a),
+            None,
             "an entry idle the whole bound is purged once the once-a-minute sweep next runs"
         );
 
         // An idle bound far shorter than PURGE_INTERVAL_MS still waits on the sweep: the entry is stale
         // well before the sweep runs, but the sweep, not the bound, decides when it is dropped.
         let custom = SessionMemory::new(10, 1_000);
-        let id = custom.prompt_id(&a, None, false, None, 0);
-        let id_after = custom.prompt_id(&a, None, false, None, PURGE_INTERVAL_MS + 1_000);
-        assert_ne!(
-            id, id_after,
+        custom.touch(&a, Some("p-a"), 0);
+        custom.touch(&a, None, PURGE_INTERVAL_MS + 1_000);
+        assert_eq!(
+            custom.stored_prompt_id(&a),
+            None,
             "a 1-second bound is enforced only once the 60-second sweep gate opens, at 60_000 + 1_000"
+        );
+    }
+
+    #[test]
+    fn touch_writes_the_headers_prompt_id_onto_the_entry() {
+        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
+        let a = key("a");
+        mem.touch(&a, Some("p-1"), 1_000);
+        assert_eq!(mem.stored_prompt_id(&a).as_deref(), Some("p-1"));
+        mem.touch(&a, Some("p-2"), 2_000);
+        assert_eq!(
+            mem.stored_prompt_id(&a).as_deref(),
+            Some("p-2"),
+            "a later header names the turn that is current"
+        );
+    }
+
+    #[test]
+    fn touch_without_a_header_leaves_the_entrys_prompt_id_as_it_was_and_mints_nothing() {
+        let mem = SessionMemory::new(10, MEMORY_IDLE_MS);
+        let (a, b) = (key("a"), key("b"));
+        mem.touch(&a, None, 1_000);
+        assert!(
+            mem.inner.lock().unwrap().entries.contains_key(&a),
+            "the entry is written all the same"
+        );
+        assert_eq!(mem.stored_prompt_id(&a), None, "and holds no id");
+        mem.touch(&b, Some("p-1"), 1_000);
+        mem.touch(&b, None, 2_000);
+        assert_eq!(
+            mem.stored_prompt_id(&b).as_deref(),
+            Some("p-1"),
+            "a request without the header leaves the turn's id in place"
         );
     }
 
@@ -1082,7 +1094,7 @@ mod tests {
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b) = (key("a"), key("b"));
         mem.record_request_id(&a, "acct", "req_a", 1_000);
-        mem.prompt_id(&b, None, false, None, 2_000);
+        mem.touch(&b, None, 2_000);
         let keys: std::collections::HashSet<MemoryKey> = mem
             .snapshot_dirty(2_000)
             .into_iter()
@@ -1275,11 +1287,11 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b) = (key("a"), key("b"));
-        let prompt = mem.prompt_id(&a, None, true, None, 1_000);
+        mem.touch(&a, Some("p-1"), 1_000);
         mem.record_request_id(&a, "acct", "req_a", 1_000);
         // The one slot goes to another session while a's request is still upstream, and the flush saves what
         // the eviction left in the overlay.
-        mem.prompt_id(&b, None, true, None, 2_000);
+        mem.touch(&b, None, 2_000);
         mem.flush(2_000).await;
         // The order the response half writes in: the read-through first, the write after it.
         mem.restore(&a, 3_000).await;
@@ -1289,7 +1301,7 @@ mod tests {
         let v1: RecordV1 = serde_json::from_str(&rows.get(&a).unwrap().payload).unwrap();
         assert_eq!(
             v1.prompt_id.as_deref(),
-            Some(prompt.as_str()),
+            Some("p-1"),
             "the saved turn's prompt id survived the response-side write"
         );
         assert_eq!(
@@ -1366,7 +1378,7 @@ mod tests {
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let b = key("b");
         mem.record_request_id(&a, "acct", "req_new", 1_000);
-        mem.prompt_id(&b, None, false, None, 2_000);
+        mem.touch(&b, None, 2_000);
         mem.restore(&a, 3_000).await;
         assert_eq!(
             mem.previous(&a, "acct", "claude-sonnet-4-5")
@@ -1387,7 +1399,7 @@ mod tests {
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         let (a, b) = (key("a"), key("b"));
         mem.record_request_id(&a, "acct", "req_a", 1_000);
-        mem.prompt_id(&b, None, false, None, 2_000);
+        mem.touch(&b, None, 2_000);
         mem.flush(2_000).await;
         assert!(
             store.rows.lock().unwrap().is_empty(),
@@ -1462,7 +1474,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_restored_entry_keeps_its_prompt_id() {
+    async fn a_restored_entry_keeps_its_prompt_id_until_a_header_names_another() {
         let store = Arc::new(MapStore::default());
         let a = key("a");
         store
@@ -1473,11 +1485,13 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(10, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         mem.restore(&a, 1_000).await;
-        assert_eq!(mem.prompt_id(&a, None, false, None, 1_000), "p-old");
-        let minted = mem.prompt_id(&a, None, true, None, 2_000);
-        assert_ne!(
-            minted, "p-old",
-            "a fresh turn still mints over a restored id"
+        mem.touch(&a, None, 1_000);
+        assert_eq!(mem.stored_prompt_id(&a).as_deref(), Some("p-old"));
+        mem.touch(&a, Some("p-new"), 2_000);
+        assert_eq!(
+            mem.stored_prompt_id(&a).as_deref(),
+            Some("p-new"),
+            "a header's id replaces the restored one"
         );
     }
 
@@ -1694,7 +1708,7 @@ mod tests {
         let mem =
             Arc::new(SessionMemory::new(1, MEMORY_IDLE_MS).with_store(store.clone(), i64::MAX));
         assert!(mem.restore(&a, 1_000).await, "the row was read back");
-        mem.prompt_id(&key("b"), None, true, None, 2_000); // the one slot goes to b
+        mem.touch(&key("b"), None, 2_000); // the one slot goes to b
         mem.record_request_id(&a, "acct", "req_a2", 3_000);
         mem.flush(3_000).await;
         let rows = store.rows.lock().unwrap();
@@ -1837,14 +1851,14 @@ mod tests {
     fn an_eviction_skips_the_oldest_key_only_while_its_read_is_in_flight() {
         let mem = SessionMemory::new(2, MEMORY_IDLE_MS);
         let (a, b, c) = (key("a"), key("b"), key("c"));
-        mem.prompt_id(&a, None, false, None, 1_000);
-        mem.prompt_id(&b, None, false, None, 2_000);
+        mem.touch(&a, None, 1_000);
+        mem.touch(&b, None, 2_000);
         mem.inner
             .lock()
             .unwrap()
             .loading
             .insert(a.clone(), Arc::new(tokio::sync::Mutex::new(())));
-        mem.prompt_id(&c, None, false, None, 3_000);
+        mem.touch(&c, None, 3_000);
         let inner = mem.inner.lock().unwrap();
         assert!(inner.entries.contains_key(&a), "the loading key stayed");
         assert!(

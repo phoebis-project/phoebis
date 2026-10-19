@@ -55,6 +55,22 @@ impl AutoMode {
     }
 }
 
+/// The client's own auto-mode classifier call, marked by the class header `auxiliary` with the beta
+/// `auto-mode-classifier-2026-07-16` under the Claude Code client class. One word, so the row and the console
+/// spell the standing alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Classifier {
+    Client,
+}
+
+impl Classifier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Classifier::Client => "client",
+        }
+    }
+}
+
 /// Who put `diagnostics.previous_message_id` on the body the upstream compared: the client's own member, or the
 /// relay's insertion under the pool's `cache_diagnostics` switch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -291,6 +307,9 @@ pub struct ClientFacts {
     pub class: String,
     /// `x-claude-code-agent-type`, on a subagent's own turns.
     pub agent_type: Option<String>,
+    /// `Some(Classifier::Client)` for the client's own auto-mode classifier call, which takes no share of a plan
+    /// window. `None` otherwise, and for every client outside the Claude Code class.
+    pub classifier: Option<Classifier>,
     /// `x-claude-code-compaction`, on the summarization request.
     pub compaction: Option<String>,
     /// `x-claude-code-context-compacted`, once on the first request after a compaction.
@@ -309,6 +328,7 @@ impl Default for ClientFacts {
         ClientFacts {
             class: OTHER_CLIENT.into(),
             agent_type: None,
+            classifier: None,
             compaction: None,
             context_compacted: None,
             prev_tool_ms: None,
@@ -442,6 +462,8 @@ pub struct RequestComplete {
     pub ttfc_ms: Option<i64>,
     pub error_code: Option<String>,
     pub client_drift: Option<String>,
+    /// The item a `client_contract` refusal named, `None` for every other request.
+    pub client_contract: Option<String>,
     pub client_version: Option<String>,
     pub response_bytes: Option<u64>,
     /// How many `ResponseChunk` events the relay published for this request; `None` for a local answer with
@@ -675,5 +697,11 @@ mod tests {
         assert_eq!(user_agent_cut(&format!("{at}b")), at);
         // "é" is two bytes and starts at the last byte the bound keeps, so the cut lands before it.
         assert_eq!(user_agent_cut(&format!("{under}é")), under);
+    }
+
+    #[test]
+    fn the_classifier_word_is_client_and_the_default_facts_carry_none() {
+        assert_eq!(Classifier::Client.as_str(), "client");
+        assert!(ClientFacts::default().classifier.is_none());
     }
 }

@@ -49,14 +49,16 @@ fn count_rule() -> Rule {
     }
 }
 
-/// A JSON `POST` of `BODY` to `path` under the router key, from the Claude Code CLI's user agent, with its length
-/// declared as a socket would carry it.
+/// A JSON `POST` of `BODY` to `path` under the router key, from the Claude Code CLI's user agent with the session
+/// and class headers the client sends, with its length declared as a socket would carry it.
 fn request_to(path: &str) -> Request<Body> {
     Request::post(path)
         .header("authorization", format!("Bearer {KEY}"))
         .header("content-type", "application/json")
         .header("content-length", BODY.len())
         .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", "s-1")
+        .header("x-claude-code-request-class", "main")
         .body(Body::from(BODY))
         .unwrap()
 }
@@ -151,6 +153,12 @@ fn refusals() -> Vec<(&'static str, Request<Body>, u16, &'static str)> {
         (
             "inference",
             request_to("/v1/messages"),
+            503,
+            "ledger_behind",
+        ),
+        (
+            "missing class header",
+            without(request_to("/v1/messages"), "x-claude-code-request-class"),
             503,
             "ledger_behind",
         ),
@@ -279,6 +287,46 @@ async fn every_refusal_answers_within_the_deadline_while_the_writer_channel_and_
     up.shutdown().await;
 }
 
+/// The table above holds the ledger behind, where the missing class header answers `ledger_behind` first. On a
+/// current ledger the same request meets the contract.
+#[tokio::test]
+async fn a_claude_code_inference_request_without_the_class_header_is_refused_for_the_contract_on_a_current_ledger(
+) {
+    let up = FakeUpstream::start(vec![count_rule(), ok_rule()]).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let behind = Arc::new(AtomicBool::new(false));
+    let h = harness_with_bus_and_accounting(
+        &up,
+        &[oauth("a", A, 0)],
+        bus,
+        default_limits(),
+        reading(&behind),
+    )
+    .await;
+    let mut request = request_to("/v1/messages");
+    request.headers_mut().remove("x-claude-code-request-class");
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.headers()["x-phoebis-error-code"],
+        "client_contract"
+    );
+    let text = text_of(response).await;
+    assert!(text.contains("x-claude-code-request-class"), "{text}");
+    let complete = drain_until_complete(&mut sub)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(complete.client_contract.as_deref(), Some("class_header"));
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_key_moved_between_pools_mid_flight_is_refused_and_the_next_request_admits_under_the_new_pool(
 ) {
@@ -316,6 +364,8 @@ async fn a_key_moved_between_pools_mid_flight_is_refused_and_the_next_request_ad
         .header("content-type", "application/json")
         .header("content-length", BODY.len())
         .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", "s-1")
+        .header("x-claude-code-request-class", "main")
         .body(Body::from_stream(
             tokio_stream::wrappers::ReceiverStream::new(rx),
         ))

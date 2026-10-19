@@ -32,7 +32,7 @@ mod stream;
 pub use auth::{presented_key, AuthError};
 pub use body::{
     edit_body, BodyEdits, BodyMember, Markerless, NativeEdit, SafeguardsEdit, CACHE_DIAGNOSIS_BETA,
-    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
+    CLASSIFIER_BETA, DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
 pub use cache_ttl::{
     CacheTtl, CacheTtlError, CacheTtlPolicy, ModelTtl, PartialTtlRules, TtlBranch, TtlRules,
@@ -95,6 +95,10 @@ pub enum RelayError {
     BodyTooLarge,
     #[error("billing header: {0}")]
     Cch(#[from] phoebis_cch::CchError),
+    /// A Claude Code inference request lacks an item the router reads of every one: refused before an account is
+    /// chosen, since the fix is the client's environment and the body never decides a class.
+    #[error("the request lacks the {item} the router requires of a Claude Code client")]
+    ClientContract { item: &'static str },
     /// The client stamped a billing hash or a version suffix this build's rules do not reproduce. A stamp the
     /// router cannot verify never travels under an account's credential, edited or not: a wrong hash is
     /// indistinguishable from tampering and the cost falls on the account, not on the request. Relaying the

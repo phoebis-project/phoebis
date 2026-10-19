@@ -28,7 +28,7 @@ import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { planLabel } from '@/lib/quota';
-import { costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
+import { costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import type { UnitPosition } from '@/lib/unit';
@@ -192,14 +192,14 @@ function costRowValue(unit: CostUnit) {
 }
 
 /**
- * The drawer's cost value under one title: why a dollar figure or a dash stands where it does, the serving account's
- * tier by its plan, the price list and the cost model in force at the request's instant while the settings are at hand,
- * and the estimate of a figure. A title on an element inside the cell would hide the row's own wherever the figure is
- * hovered.
+ * The drawer's cost value under one title: why a dollar figure, a dash or a free call's zero shares stand where they
+ * do, the serving account's tier by its plan, the price list and the cost model in force at the request's instant while
+ * the settings are at hand, and the estimate of a figure. A title on an element inside the cell would hide the row's
+ * own wherever the figure is hovered.
  */
 function CostRowCell({ request: r, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const cost = costUnitOf(r, unit);
-  const why = cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
+  const why = (cost.kind === 'shares' || cost.kind === 'equivalent') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
   const title = withEstimate([why, r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated && cost.kind !== 'dash');
   return (
     <td className="right num" title={title || undefined}>
@@ -275,7 +275,7 @@ export function RequestsPage() {
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
     [filters, cursor, custom, span, pagedTo],
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
@@ -307,6 +307,10 @@ export function RequestsPage() {
     accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
     agentTypes: AGENT_TYPES.map((v) => ({ label: v, value: v })),
     cacheMissReasons: missReasonOptions(rows, filters.cacheMissReasons),
+    classifiers: [
+      { label: 'client classifier', value: 'client' },
+      { label: 'none', value: NO_CLASS },
+    ],
     efforts: [...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v })),
     guardrails: guardrailOptions(guardrails.data, rows, filters.guardrails),
     keys: keyOptions(keys.data, filters.keys),
@@ -603,6 +607,7 @@ function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, set
                 { label: 'Duration', value: fmtMs(r.durationMs) },
                 { label: 'Error', value: r.errorCode ?? <span className="muted">none</span>, mono: Boolean(r.errorCode) },
                 ...(r.clientDrift ? [{ label: 'Client drift', value: r.clientDrift, mono: true }] : []),
+                ...(r.clientContract ? [{ label: 'Client contract', value: r.clientContract, mono: true }] : []),
                 ...(serving
                   ? [
                       { label: 'Answer', value: answer.length ? <Chips chips={answer} /> : <span className="muted">none</span> },
@@ -721,6 +726,7 @@ function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, set
                 { label: 'Temperature', value: r.shape.temperature !== null ? String(r.shape.temperature) : <span className="muted">not sent</span> },
                 { label: 'Speed, service tier', value: `${r.shape.requestedSpeed ?? 'default'}, ${r.shape.requestedServiceTier ?? 'default'}` },
                 { label: 'Auto mode', value: autoModeLabel(r.autoMode), mono: false },
+                { label: 'Classifier', title: "The client's own auto-mode classifier call, which takes no share of a plan window", value: r.classifier ?? <span className="muted">none</span>, mono: r.classifier !== null },
               ]}
             />
           </section>

@@ -504,6 +504,7 @@ def _self_test_normalize_body() -> None:
         b"POST /v1/messages HTTP/1.1\r\nx-app: cli\r\n"
         b"x-client-request-id: 33333333-3333-4333-8333-333333333333\r\n\r\n"
     )
+    classed_head = b"POST /v1/messages HTTP/1.1\r\nx-app: cli\r\nx-claude-code-request-class: main\r\n\r\n"
     assert reduced_body != restored_body and reduced_head != restored_head, "self-test feeds identical fixtures"
     THROUGH_ROUTER = True
     try:
@@ -511,6 +512,8 @@ def _self_test_normalize_body() -> None:
             raise AssertionError("THROUGH_ROUTER left a restored billing field in the comparison")
         if normalize_head(reduced_head) != normalize_head(restored_head):
             raise AssertionError("THROUGH_ROUTER left x-client-request-id in the comparison")
+        if normalize_head(classed_head) != normalize_head(reduced_head):
+            raise AssertionError("THROUGH_ROUTER left x-claude-code-request-class in the comparison")
     finally:
         THROUGH_ROUTER = False
     if normalize_body(reduced_body) == normalize_body(restored_body):
@@ -528,6 +531,8 @@ def normalize_head(raw: bytes) -> bytes:
     body it edited (a change there is what the body comparison already covers). `x-client-request-id` is dropped
     outright rather than masked, since the relay generates one when the caller sent none: a line moving from
     absent to present is the point of restoration, and a placeholder value could not make the two compare equal.
+    `x-claude-code-request-class` is dropped the same way: the replay adds the header the recorded heads predate,
+    and a line moving from absent to present is no drift of the profile.
     """
     head_bytes, sep, rest = raw.partition(b"\r\n\r\n")
     lines = head_bytes.decode("latin1").split("\r\n")
@@ -535,7 +540,7 @@ def normalize_head(raw: bytes) -> bytes:
     for line in lines:
         name, colon, value = line.partition(":")
         key = name.strip().lower()
-        if THROUGH_ROUTER and key == "x-client-request-id":
+        if THROUGH_ROUTER and key in ("x-claude-code-request-class", "x-client-request-id"):
             continue
         if THROUGH_ROUTER and key in CREDENTIAL_HEADERS:
             placeholder = "CREDENTIAL-PLACEHOLDER"

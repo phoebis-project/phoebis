@@ -756,6 +756,24 @@ test('a refusal reads its words by code, and an unknown code reads through the f
   assert.deepEqual(answer({ code: 'later', kind: 'key', reason: 'a new reason' }), [['Answer', ['a new reason', 'key laptop']]]);
 });
 
+test('a_contract_refusal_reads_client_contract_with_the_items_word', () => {
+  const refusal = { code: 'contract', kind: 'client', reason: 'class_header' };
+  const summary = decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.271', 'text')], kind: 'refused', refusal });
+  assert.equal(read(summary).by, 'client contract', 'the row names the contract, not a drift');
+  const r = record({ outcome: { accountId: null, kind: 'refused', refusal, upstreamModel: null }, pin: null, pinReason: 'not_looked_up', request: { keyId: 'laptop' }, walk: [wstep('admission', 'refused', [wfact('reason', 'class_header')]), wstep('selection', 'not_run')] });
+  assert.deepEqual(
+    d.walkLines(r, summary).map((l) => [l.step, texts(l.chips)]),
+    [['Admission', ['contract class header']], ['Rest of the walk', ['moves', 'rungs', 'partitions']]],
+    "the admission's chip is the item's word, with no client version beside it",
+  );
+  assert.deepEqual(d.outcomeRows(r, NOW, summary).map((line) => [line.label, texts(line.chips)]), [['Answer', ['client contract', 'contract class header', 'key laptop']]]);
+  // A drift's words stand beside the contract's.
+  const drift = { code: 'drift', kind: 'client', reason: 'hash' };
+  const drifted = decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.271', 'text')], kind: 'refused', refusal: drift });
+  assert.equal(read(drifted).by, 'client drift');
+  assert.deepEqual(d.outcomeRows(record({ outcome: { accountId: null, kind: 'refused', refusal: drift, upstreamModel: null }, request: { keyId: 'laptop' } }), NOW, drifted).map((line) => [line.label, texts(line.chips)]), [['Answer', ['client drift', 'client 2.1.271', 'key laptop']]]);
+});
+
 test('an exhausted record after a run-out draws ran out on its hold and 429 on its answer', () => {
   const rows = (r) => d.outcomeRows(r, NOW).map((line) => [line.label, texts(line.chips)]);
   const exhausted = (holds) =>

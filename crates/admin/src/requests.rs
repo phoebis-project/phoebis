@@ -8,10 +8,12 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use phoebis_bus::Classifier;
 use phoebis_ledger::{
-    entrypoint_of_client, funding_of, list_request_page, price_equivalent, price_shares,
-    request_by_id, request_events, AttemptRecord, Funding, LiveKeys,
-    PlanTables, PriceRevisions, PricedShares, RequestFilter, RequestRecord, Speed,
+    entrypoint_of_client, free_equivalent, free_shares, funding_of, list_request_page,
+    price_equivalent, price_shares, request_by_id, request_events,
+    AttemptRecord, Funding, LiveKeys, PlanTables, PriceRevisions, PricedShares, RequestFilter,
+    RequestRecord, Speed, SHARE_REASON_CLIENT_CLASSIFIER,
 };
 use phoebis_routing::PinUsage;
 use serde_json::Value;
@@ -96,6 +98,10 @@ pub(crate) struct RequestSummary {
     /// that error code before it reached an upstream, whatever it asked for. Null otherwise.
     #[schema(example = "server")]
     pub auto_mode: Option<String>,
+    /// `client` for a request the class header `auxiliary` and the beta `auto-mode-classifier-2026-07-16` mark as
+    /// the client's own auto-mode classifier call, which takes no share of a plan window. Null otherwise.
+    #[schema(example = "client")]
+    pub classifier: Option<String>,
     /// A request that continued another conversation at depth 2 or deeper: that conversation's root.
     /// Null otherwise and always null on an auxiliary request.
     pub forked_from: Option<String>,
@@ -111,6 +117,10 @@ pub(crate) struct RequestSummary {
     #[schema(example = "stream_cut")]
     pub error_code: Option<String>,
     pub client_drift: Option<String>,
+    /// The item a `client_contract` refusal named: `session_header`, `class_header`, `attribution_line`,
+    /// `metadata_user_id`, `agent_id_header` or `compaction_header`. Null for every other request.
+    #[schema(example = "class_header")]
+    pub client_contract: Option<String>,
     pub ttfb_ms: Option<i64>,
     pub ttft_ms: Option<i64>,
     pub duration_ms: Option<i64>,
@@ -139,11 +149,15 @@ pub(crate) struct RequestSummary {
     /// has one, each the serving attempt's share of that window under the account tier the attempt recorded, priced
     /// at read time on the cost revision in force at the request's receipt with the peak band read at the attempt's
     /// finish, or null where the account tier has no capacity on that window or neither the model nor its model tier
-    /// has a weight there. An empty object for an attempt that recorded no account tier.
+    /// has a weight there. An empty object for an attempt that recorded no account tier. A free call under
+    /// `share_reason` lists the windows its account tier sizes alone, each at zero.
     pub cost_shares: Option<BTreeMap<String, Option<f64>>>,
     /// Null for a request billed in dollars, as `cost_shares`. Else the serving attempt's usage as the share of a
     /// Max 20x account's windows under the same keys, at the same revision and band, whatever account tier served it.
     pub cost_equivalent: Option<BTreeMap<String, Option<f64>>>,
+    /// `client_classifier` where `cost_shares` and `cost_equivalent` read zero by rule, for the client's own
+    /// classifier call under a subscription window. Null for a figure priced from the request's counts.
+    pub share_reason: Option<String>,
     /// Whether `cost_shares` or `cost_equivalent` priced a window at the weight of the model tier's latest weighted
     /// model, for a model the cost model does not weight.
     pub estimated: bool,
@@ -455,12 +469,14 @@ pub(crate) fn request_summary(
         transport: if r.stream { "sse" } else { "json" }.to_string(),
         request_class: r.request_class.clone(),
         auto_mode: r.auto_mode.clone(),
+        classifier: r.classifier.clone(),
         forked_from: r.forked_from.clone(),
         fork_depth: r.fork_depth,
         status: r.status,
         outcome: r.outcome.clone(),
         error_code: r.error_code.clone(),
         client_drift: r.client_drift.clone(),
+        client_contract: r.client_contract.clone(),
         ttfb_ms: r.ttfb_ms,
         ttft_ms: r.ttfc_ms,
         duration_ms: r.duration_ms,
@@ -487,6 +503,9 @@ pub(crate) fn request_summary(
             .fold(0.0, |a, b| a + b),
         cost_shares: plan.as_ref().map(cost_shares_json),
         cost_equivalent: plan.as_ref().map(|p| windows_json(&p.equivalent)),
+        share_reason: plan
+            .as_ref()
+            .and_then(|p| p.share_reason.map(str::to_string)),
         estimated: plan.as_ref().is_some_and(|p| {
             p.equivalent.any_estimated()
                 || p.shares.as_ref().is_some_and(PricedShares::any_estimated)
@@ -556,6 +575,7 @@ fn phases_json(r: &RequestRecord, attempts: &[AttemptRecord]) -> RequestPhases {
 struct PlanFigures {
     shares: Option<PricedShares>,
     equivalent: PricedShares,
+    share_reason: Option<&'static str>,
 }
 
 /// `None` for a request no subscription window paid: no attempt, or a serving attempt whose funding is not plan.
@@ -580,6 +600,20 @@ fn plan_figures(
     };
     let band_at = a.finished_at.or(r.finished_at).unwrap_or(a.started_at);
     let entrypoint = r.client.as_deref().and_then(entrypoint_of_client);
+    if r.classifier.as_deref() == Some(Classifier::Client.as_str()) {
+        // The admin prices through the share helpers and not price_row, so the free call's rule is taken here.
+        return Some(PlanFigures {
+            shares: a.tier.as_deref().map(|tier| PricedShares {
+                shares: free_shares(tables, entrypoint, tier, &r.canonical_model, r.received_at),
+                estimated: Default::default(),
+            }),
+            equivalent: PricedShares {
+                shares: free_equivalent(tables, entrypoint, &r.canonical_model, r.received_at),
+                estimated: Default::default(),
+            },
+            share_reason: Some(SHARE_REASON_CLIENT_CLASSIFIER),
+        });
+    }
     Some(PlanFigures {
         shares: a.tier.as_deref().map(|tier| {
             price_shares(
@@ -600,6 +634,7 @@ fn plan_figures(
             r.received_at,
             band_at,
         ),
+        share_reason: None,
     })
 }
 
@@ -786,6 +821,8 @@ pub(crate) struct RequestsQuery {
     pub efforts: Option<String>,
     /// A comma list of classes as the rollups fold them: the class, `-`, `other`.
     pub request_classes: Option<String>,
+    /// A comma list of `client`, `-` for a request the marker does not hold.
+    pub classifiers: Option<String>,
     /// A comma list of guardrail ids, `-` for a request no guardrail matched.
     pub guardrails: Option<String>,
     /// A comma list of `fast`, `standard`, read off the serving attempt, else `fast` for a request that asked for
@@ -866,6 +903,7 @@ pub(crate) async fn list(
         cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
         efforts: list_param(&q, "efforts"),
         request_classes: list_param(&q, "request_classes"),
+        classifiers: list_param(&q, "classifiers"),
         guardrails: list_param(&q, "guardrails"),
     };
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
@@ -1250,6 +1288,44 @@ revisions:
             ),
             Value::Null,
             "the kind decides whatever the speed or the overage flag says"
+        );
+    }
+
+    /// The ledger's readers take the free rule on the bus's word alone, so a row naming another word prices from its
+    /// counts here as it does in the analytics.
+    #[test]
+    fn a_classifier_word_other_than_client_prices_from_the_counts() {
+        let shares = shares_of();
+        let summary = |classifier: Option<&str>| {
+            let request = RequestRecord {
+                classifier: classifier.map(String::from),
+                ..request_of("claude-fable-5-1")
+            };
+            serde_json::to_value(request_summary(
+                &request,
+                &[attempt_of("oauth", None, None)],
+                &shares,
+            ))
+            .unwrap()
+        };
+        let (plain, other, client) = (
+            summary(None),
+            summary(Some("other")),
+            summary(Some("client")),
+        );
+        let figures = |summary: &Value| {
+            (
+                summary["cost_shares"].clone(),
+                summary["cost_equivalent"].clone(),
+                summary["share_reason"].clone(),
+            )
+        };
+        assert_eq!(figures(&other), figures(&plain));
+        assert_eq!(plain["share_reason"], Value::Null);
+        assert_eq!(client["share_reason"], "client_classifier");
+        assert_ne!(
+            client["cost_shares"], plain["cost_shares"],
+            "the counts price above the free call's zero"
         );
     }
 

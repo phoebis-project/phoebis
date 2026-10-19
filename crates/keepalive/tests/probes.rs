@@ -286,13 +286,13 @@ async fn a_probe_preserves_routing_and_constraints() {
     );
 }
 
-/// The rig's request with a reduced-shape billing line ahead of the system prompt, carrying the placeholder the
-/// client sends wherever its native patch does not run. `2.1.269.2b2` is the suffix the client computes for
-/// `hello` under 2.1.269 (units 4, 7 and 20: `o` and two padding zeros), so the version check passes.
+/// The rig's request with its billing line ahead of the system prompt carrying the placeholder the client sends
+/// wherever its native patch does not run. `2.1.269.2b2` is the suffix the client computes for `hello` under
+/// 2.1.269 (units 4, 7 and 20: `o` and two padding zeros), so the version check passes.
 fn placeholder_body() -> String {
     BODY.replacen(
-        r#""system":[{"type":"text","text":"private prompt""#,
-        r#""system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.2b2; cc_entrypoint=sdk-cli; cch=00000;"},{"type":"text","text":"private prompt""#,
+        r#"{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"}"#,
+        r#"{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.2b2; cc_entrypoint=sdk-cli; cch=00000;"}"#,
         1,
     )
 }

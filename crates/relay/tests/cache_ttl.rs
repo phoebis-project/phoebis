@@ -94,7 +94,7 @@ async fn a_marker_inside_a_tool_results_own_content_is_rewritten_like_every_othe
         policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
     )
     .await;
-    let native = br#"{"model":"claude-sonnet-4-5","max_tokens":8,"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"ok","cache_control":{"type":"ephemeral"}}]}]}],"stream":true}"#;
+    let native = br#"{"model":"claude-sonnet-4-5","max_tokens":8,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli;"},{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"ok","cache_control":{"type":"ephemeral"}}]}]}],"stream":true,"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#;
     let mut req = request_from_fixture(inference_head(FixtureKind::ApiKey), native, KEY);
     set_header(&mut req, "x-claude-code-session-id", "s1");
     let resp = h.app.clone().oneshot(req).await.unwrap();
@@ -211,9 +211,10 @@ async fn with_the_toggle_off_a_marker_less_body_goes_as_sent_and_asks_for_no_bet
         respond: json_200(),
     }])
     .await;
-    // An api_key account has no identity to splice, and a body carrying no attribution line and no `system`
+    // The api_key leg's blank finds the uuid already empty, and a body carrying no attribution line and no `system`
     // gives the restoration and diagnostics edits nothing to touch either, so a marker-less body's only
-    // possible edit is the one this test is proving does not run.
+    // possible edit is the one this test is proving does not run. The `metadata.user_id` member is there for the
+    // contract a Claude Code request meets, and nothing else is.
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
@@ -221,8 +222,7 @@ async fn with_the_toggle_off_a_marker_less_body_goes_as_sent_and_asks_for_no_bet
     )
     .await;
 
-    let native: &[u8] =
-        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#;
+    let native: &[u8] = br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#;
     let req = request_from_fixture(inference_head(FixtureKind::ApiKey), native, KEY);
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 200);
@@ -388,9 +388,10 @@ async fn with_the_toggle_on_a_marker_less_auxiliary_body_goes_as_sent() {
         respond: json_200(),
     }])
     .await;
-    // An api_key account has no identity to splice, and a body carrying no attribution line and no `system`
+    // The api_key leg's blank finds the uuid already empty, and a body carrying no attribution line and no `system`
     // gives the restoration and diagnostics edits nothing to touch either, so the policy's member is the one
-    // edit the relay could still make.
+    // edit the relay could still make. The `metadata.user_id` member is there for the contract a Claude Code
+    // request meets, and nothing else is.
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
@@ -398,8 +399,7 @@ async fn with_the_toggle_on_a_marker_less_auxiliary_body_goes_as_sent() {
     )
     .await;
 
-    let native: &[u8] =
-        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#;
+    let native: &[u8] = br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#;
     let mut req = request_from_fixture(inference_head(FixtureKind::ApiKey), native, KEY);
     set_header(&mut req, "x-claude-code-request-class", "auxiliary");
     let client_betas: Vec<String> = req
@@ -686,7 +686,7 @@ async fn under_when_cached_a_cache_control_object_in_a_tool_schema_pins_nothing_
     };
 
     send(
-        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"tools":[{"name":"t","input_schema":{"type":"object","properties":{"cache_control":{"type":"object"}}}}],"messages":[{"role":"user","content":"hi"}]}"#,
+        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"tools":[{"name":"t","input_schema":{"type":"object","properties":{"cache_control":{"type":"object"}}}}],"messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#,
         "schema-only",
     )
     .await;
@@ -696,7 +696,7 @@ async fn under_when_cached_a_cache_control_object_in_a_tool_schema_pins_nothing_
     );
 
     send(
-        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]}"#,
+        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}],"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#,
         "marked",
     )
     .await;

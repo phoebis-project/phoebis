@@ -10,10 +10,20 @@ use phoebis_routing::{ClientClass, ConversationLookup, ConversationQuery, REFRES
 use phoebis_store::ApiKeyRow;
 
 use crate::billing::entrypoint_of;
+use crate::facts::BodyFacts;
 use crate::RelayError;
 
 /// The agent a request without an agent header belongs to.
 const MAIN_AGENT: &str = "main";
+
+// The words of the contract's items, in the table's order: the refusal's reason, the request row's
+// `client_contract` column and the routing log carry them.
+pub(crate) const ITEM_SESSION_HEADER: &str = "session_header";
+pub(crate) const ITEM_CLASS_HEADER: &str = "class_header";
+pub(crate) const ITEM_ATTRIBUTION_LINE: &str = "attribution_line";
+pub(crate) const ITEM_METADATA_USER_ID: &str = "metadata_user_id";
+pub(crate) const ITEM_AGENT_ID_HEADER: &str = "agent_id_header";
+pub(crate) const ITEM_COMPACTION_HEADER: &str = "compaction_header";
 
 /// Marker a downstream client appends to ask for the long-context tier. It is a client-side routing hint, so
 /// it is folded out of the canonical model the registry resolves against.
@@ -55,6 +65,8 @@ pub struct RequestIdentity {
     /// identity. `None` for a session's own continuation, for a match at depth 1 and for an auxiliary request.
     pub forked_from: Option<String>,
     pub fork_depth: Option<u32>,
+    /// `metadata.user_id` is a string member of the body, read once here for the contract.
+    pub has_user_id: bool,
 }
 
 /// Reads what the request says about itself, which `climb` completes with the fork facts.
@@ -93,6 +105,7 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         client,
         forked_from: None,
         fork_depth: None,
+        has_user_id: string_member(body, &["metadata", "user_id"]).is_some(),
     })
 }
 
@@ -224,6 +237,52 @@ pub(crate) fn waits_on(identity: &RequestIdentity, message_boundaries: &[String]
 /// notion of auxiliary.
 pub(crate) fn is_auxiliary(request_class: Option<&str>) -> bool {
     request_class.is_some_and(|class| !REFRESHING_CLASSES.contains(&class))
+}
+
+/// The first item of the contract the request lacks, in the table's order, or `None`. The class header is judged
+/// before the two items that depend on it, so a request without it is never refused for them, and the line is
+/// required where `system` is an array alone, so the client's quota probe (no `system`) is outside the item.
+pub(crate) fn contract_gap(
+    headers: &HeaderMap,
+    identity: &RequestIdentity,
+    facts: &BodyFacts,
+    request_class: Option<&str>,
+) -> Option<&'static str> {
+    if header_id(headers, "x-claude-code-session-id").is_none() {
+        return Some(ITEM_SESSION_HEADER);
+    }
+    let Some(class) = request_class else {
+        return Some(ITEM_CLASS_HEADER);
+    };
+    if facts.system_is_array && !facts.carries_line {
+        return Some(ITEM_ATTRIBUTION_LINE);
+    }
+    if !identity.has_user_id {
+        return Some(ITEM_METADATA_USER_ID);
+    }
+    if matches!(class, "subagent" | "workflow")
+        && header_id(headers, "x-claude-code-agent-id").is_none()
+    {
+        return Some(ITEM_AGENT_ID_HEADER);
+    }
+    if class == "compaction" && header_id(headers, "x-claude-code-compaction").is_none() {
+        return Some(ITEM_COMPACTION_HEADER);
+    }
+    None
+}
+
+/// Whether the restoration fills `cc_prev_req`: on the conversation classes the client's own builder passes the
+/// previous request id, and on an `auxiliary` request that carries an agent id or a prompt id, the
+/// conversation-shaped forks. Never on a side query, whose native line carries none.
+pub(crate) fn restores_prev_req(request_class: Option<&str>, headers: &HeaderMap) -> bool {
+    match request_class {
+        Some("main" | "subagent" | "workflow" | "compaction") => true,
+        Some("auxiliary") => {
+            header_id(headers, "x-claude-code-agent-id").is_some()
+                || crate::facts::header_prompt_id(headers).is_some()
+        }
+        _ => false,
+    }
 }
 
 /// `claude-code/<entrypoint>` for a `claude-cli/` user agent (the token `entrypoint_of` reads, `cli` when it
@@ -434,6 +493,248 @@ mod tests {
         assert_eq!(identity.class, ClientClass::Other);
     }
 
+    // -- contract_gap: the items a Claude Code inference request carries --
+
+    const LINE: &str = "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli;";
+
+    /// A body that carries every item of the contract: the line at `system[0]` and `metadata.user_id`.
+    fn whole_body() -> serde_json::Value {
+        serde_json::json!({
+            "model": "claude-sonnet-5",
+            "system": [
+                {"type": "text", "text": LINE},
+                {"type": "text", "text": "You are Claude Code."}
+            ],
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"user_id": "{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}
+        })
+    }
+
+    fn without_line(mut body: serde_json::Value) -> serde_json::Value {
+        body["system"].as_array_mut().unwrap().remove(0);
+        body
+    }
+
+    fn without_metadata(mut body: serde_json::Value) -> serde_json::Value {
+        body.as_object_mut().unwrap().remove("metadata");
+        body
+    }
+
+    /// The session header and, where `class` names one, the class header, under a `claude-cli/` agent.
+    fn contract_headers(class: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::USER_AGENT,
+            "claude-cli/2.1.269 (external, cli)".parse().unwrap(),
+        );
+        headers.insert("x-claude-code-session-id", "s-1".parse().unwrap());
+        if let Some(class) = class {
+            headers.insert("x-claude-code-request-class", class.parse().unwrap());
+        }
+        headers
+    }
+
+    /// The gap as `handle` reads it: the identity and the body facts off the one body, the class through
+    /// `header_id`.
+    fn gap(headers: &HeaderMap, body: &serde_json::Value) -> Option<&'static str> {
+        let bytes = serde_json::to_vec(body).unwrap();
+        let identity = identify(headers, &bytes).expect("the body has a model");
+        let (facts, _) = crate::facts::BodyFacts::read_with_tree(&bytes);
+        let class = header_id(headers, "x-claude-code-request-class");
+        contract_gap(headers, &identity, &facts, class.as_deref())
+    }
+
+    #[test]
+    fn contract_gap_names_the_first_missing_item_in_the_tables_order() {
+        let main = contract_headers(Some("main"));
+        assert_eq!(gap(&main, &whole_body()), None, "every item is present");
+        let mut sessionless = main.clone();
+        sessionless.remove("x-claude-code-session-id");
+        assert_eq!(
+            gap(&sessionless, &whole_body()),
+            Some(ITEM_SESSION_HEADER),
+            "the body's session never stands in for the header"
+        );
+        assert_eq!(
+            gap(&contract_headers(None), &whole_body()),
+            Some(ITEM_CLASS_HEADER)
+        );
+        assert_eq!(
+            gap(&main, &without_line(whole_body())),
+            Some(ITEM_ATTRIBUTION_LINE)
+        );
+        assert_eq!(
+            gap(&main, &without_metadata(whole_body())),
+            Some(ITEM_METADATA_USER_ID)
+        );
+        let mut numbered = whole_body();
+        numbered["metadata"]["user_id"] = serde_json::json!(7);
+        assert_eq!(
+            gap(&main, &numbered),
+            Some(ITEM_METADATA_USER_ID),
+            "a member that is not a string is not the member"
+        );
+        let mut empty = whole_body();
+        empty["metadata"]["user_id"] = serde_json::json!("");
+        assert_eq!(gap(&main, &empty), None, "whatever the string holds");
+        assert_eq!(
+            gap(&contract_headers(Some("subagent")), &whole_body()),
+            Some(ITEM_AGENT_ID_HEADER)
+        );
+        assert_eq!(
+            gap(&contract_headers(Some("compaction")), &whole_body()),
+            Some(ITEM_COMPACTION_HEADER)
+        );
+        let mut bare = HeaderMap::new();
+        bare.insert(
+            axum::http::header::USER_AGENT,
+            "claude-cli/2.1.269 (external, cli)".parse().unwrap(),
+        );
+        assert_eq!(
+            gap(&bare, &without_metadata(without_line(whole_body()))),
+            Some(ITEM_SESSION_HEADER),
+            "two missing answer the lower-numbered"
+        );
+        assert_eq!(
+            gap(&contract_headers(None), &without_line(whole_body())),
+            Some(ITEM_CLASS_HEADER)
+        );
+        assert_eq!(
+            gap(&main, &without_metadata(without_line(whole_body()))),
+            Some(ITEM_ATTRIBUTION_LINE)
+        );
+        assert_eq!(
+            gap(
+                &contract_headers(Some("subagent")),
+                &without_metadata(whole_body())
+            ),
+            Some(ITEM_METADATA_USER_ID)
+        );
+    }
+
+    #[test]
+    fn contract_gap_requires_the_line_where_system_is_an_array_alone() {
+        let main = contract_headers(Some("auxiliary"));
+        let mut systemless = whole_body();
+        systemless.as_object_mut().unwrap().remove("system");
+        assert_eq!(
+            gap(&main, &systemless),
+            None,
+            "the quota probe's shape has no slot for the line"
+        );
+        let mut string = whole_body();
+        string["system"] = serde_json::json!("You are Claude Code.");
+        assert_eq!(gap(&main, &string), None, "a string carries no slot either");
+        assert_eq!(
+            gap(&main, &without_line(whole_body())),
+            Some(ITEM_ATTRIBUTION_LINE),
+            "the opt-out shape: the CLI prompt at system[0]"
+        );
+        let mut stamped = whole_body();
+        stamped["system"][0]["text"] = serde_json::json!(
+            "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli; cch=12345;"
+        );
+        assert_eq!(
+            gap(&main, &stamped),
+            None,
+            "a stamped line is the item, judged for its stamp afterward"
+        );
+    }
+
+    #[test]
+    fn contract_gap_judges_the_class_word_for_presence_alone() {
+        for class in ["auxiliary", "main", "side_reply", "something_new"] {
+            assert_eq!(
+                gap(&contract_headers(Some(class)), &whole_body()),
+                None,
+                "{class}"
+            );
+        }
+    }
+
+    #[test]
+    fn contract_gap_requires_the_agent_id_under_subagent_and_workflow_and_the_compaction_header_under_compaction(
+    ) {
+        for class in ["subagent", "workflow"] {
+            let mut headers = contract_headers(Some(class));
+            assert_eq!(
+                gap(&headers, &whole_body()),
+                Some(ITEM_AGENT_ID_HEADER),
+                "{class}"
+            );
+            headers.insert("x-claude-code-agent-id", "agent-1".parse().unwrap());
+            assert_eq!(gap(&headers, &whole_body()), None, "{class}");
+        }
+        let mut headers = contract_headers(Some("compaction"));
+        headers.insert("x-claude-code-agent-id", "agent-1".parse().unwrap());
+        assert_eq!(
+            gap(&headers, &whole_body()),
+            Some(ITEM_COMPACTION_HEADER),
+            "the agent id stands in for nothing"
+        );
+        headers.insert("x-claude-code-compaction", "1".parse().unwrap());
+        assert_eq!(gap(&headers, &whole_body()), None);
+        assert_eq!(
+            gap(&contract_headers(Some("main")), &whole_body()),
+            None,
+            "the main thread names no agent and no compaction"
+        );
+    }
+
+    #[test]
+    fn contract_gap_reads_a_malformed_session_header_as_absent() {
+        for malformed in ["bad id!".to_string(), "s".repeat(MAX_ID_LEN + 1)] {
+            let mut headers = contract_headers(Some("main"));
+            headers.insert("x-claude-code-session-id", malformed.parse().unwrap());
+            assert_eq!(
+                gap(&headers, &whole_body()),
+                Some(ITEM_SESSION_HEADER),
+                "{malformed}"
+            );
+        }
+    }
+
+    // -- restores_prev_req: cc_prev_req by class --
+
+    #[test]
+    fn restores_prev_req_answers_the_table_by_class() {
+        let headers = |agent_id: bool, prompt_id: bool| {
+            let mut headers = HeaderMap::new();
+            if agent_id {
+                headers.insert("x-claude-code-agent-id", "agent-1".parse().unwrap());
+            }
+            if prompt_id {
+                headers.insert(
+                    "x-claude-code-prompt-id",
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".parse().unwrap(),
+                );
+            }
+            headers
+        };
+        // The class, the agent-id header, the prompt-id header, and the answer.
+        let table = [
+            (Some("main"), false, false, true),
+            (Some("subagent"), false, false, true),
+            (Some("workflow"), false, false, true),
+            (Some("compaction"), false, false, true),
+            (Some("auxiliary"), false, false, false),
+            (Some("auxiliary"), true, false, true),
+            (Some("auxiliary"), false, true, true),
+            (Some("side_reply"), true, true, false),
+            (Some("something_new"), true, true, false),
+            (Some("side_reply"), true, false, false),
+            (Some("something_new"), false, true, false),
+            (None, true, true, false),
+        ];
+        for (class, agent_id, prompt_id, restored) in table {
+            assert_eq!(
+                restores_prev_req(class, &headers(agent_id, prompt_id)),
+                restored,
+                "{class:?}, agent id {agent_id}, prompt id {prompt_id}"
+            );
+        }
+    }
+
     // -- climb --
 
     use std::collections::HashMap;
@@ -481,6 +782,7 @@ mod tests {
             class: ClientClass::ClaudeCode,
             forked_from: None,
             fork_depth: None,
+            has_user_id: true,
         }
     }
 

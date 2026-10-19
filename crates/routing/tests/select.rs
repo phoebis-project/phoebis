@@ -431,6 +431,7 @@ fn select_request(
         held_out: false,
         lane: lane_key(model, "standard", "none", "-"),
         fast: false,
+        classifier: false,
         body_tokens: 0,
     }
 }
@@ -7901,7 +7902,9 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         burn_at: None,
         burn_banded: PinBurn::default(),
         burn_fast: PinBurn::default(),
+        burn_unmetered: PinBurn::default(),
         last_input_tokens: 0,
+        last_classifier: false,
         last_refresh_at: 0,
         cache_ttl_ms: 300_000,
         shed_from: None,
@@ -10678,7 +10681,9 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         burn_at: Some(now),
         burn_banded: PinBurn::default(),
         burn_fast: PinBurn::default(),
+        burn_unmetered: PinBurn::default(),
         last_input_tokens: 1_000,
+        last_classifier: false,
         last_refresh_at: now - 1_000,
         cache_ttl_ms: 300_000,
         shed_from: None,
@@ -16275,6 +16280,7 @@ fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
     let old = PinRow {
         last_input_tokens: 813_365,
         burn_fast: input_rate(5.0),
+        burn_unmetered: input_rate(3.0),
         ..burning("s1", "a", 40_000.0, true, T)
     };
     let mut st = loaded(vec![old.clone()]);
@@ -16293,6 +16299,7 @@ fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
             moved.burn_at,
             moved.burn_banded,
             moved.burn_fast,
+            moved.burn_unmetered,
             moved.last_input_tokens,
         ),
         (
@@ -16300,6 +16307,7 @@ fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
             old.burn_at,
             old.burn_banded,
             old.burn_fast,
+            old.burn_unmetered,
             old.last_input_tokens,
         ),
         "the new row carries the averages and the last prompt over"
@@ -16313,11 +16321,13 @@ fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
             placed.burn_at,
             placed.burn_banded,
             placed.burn_fast,
+            placed.burn_unmetered,
             placed.last_input_tokens,
         ),
         (
             PinBurn::default(),
             None,
+            PinBurn::default(),
             PinBurn::default(),
             PinBurn::default(),
             0,
@@ -16485,6 +16495,251 @@ fn a_fast_request_books_nothing_and_leaves_the_prediction_unchanged() {
         "a fast move books nothing on its destination"
     );
     assert!(close(five_hour(&st, "b", T), 0.5));
+}
+
+#[test]
+fn a_classifier_request_books_nothing_and_takes_the_none_verdict_a_fast_request_takes() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    let req = SelectRequest {
+        classifier: true,
+        ..placing(&s, "r-1", "s1", T)
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert!(
+        st.reservation("r-1").is_none(),
+        "a classifier call takes no plan window, so its selection books none"
+    );
+    assert!(
+        close(five_hour(&st, "a", T), 0.5),
+        "the prediction stands where the reading left it"
+    );
+    assert_eq!(
+        line(&d.record, "reserve")
+            .facts
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.account_id.as_deref()))
+            .collect::<Vec<_>>(),
+        [("account_id", FactValue::Text("a".into()), Some("a"))],
+        "the reserve step books nothing and names the account alone"
+    );
+    assert_eq!(line(&d.record, "reserve").verdict, "none");
+    assert_eq!(d.record.outcome.reservation, None);
+}
+
+#[test]
+fn a_classifier_request_with_a_nonzero_body_lands_on_the_account_its_body_would_not_fit() {
+    let s = tiered(Pool {
+        strategy: Strategy::Pace,
+        ..Pool::default()
+    });
+    // The 200 000 token body rewrites 0.02 of the 5-hour window on the ratio pricer, which a at 0.94 has no room for
+    // under the pool's 0.95 ceiling, while b and c fit with nothing burning. A classifier call takes no share of a
+    // plan window, so its body is no rewrite and a fits.
+    let mut st = priced(Vec::new());
+    st.record_sample("a", refreshing(0.94, HOUR, HOUR, 1));
+    st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1));
+    st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1));
+    let plain = SelectRequest {
+        request_id: "r-plain".into(),
+        body_tokens: 200_000,
+        ..request(&s, None, "claude-sonnet-5", true, &[], 1_000)
+    };
+    let classifier = SelectRequest {
+        request_id: "r-classifier".into(),
+        classifier: true,
+        ..plain.clone()
+    };
+    for seed in 0..8u64 {
+        let d = decide(&mut st, &s, &classifier, &mut StdRng::seed_from_u64(seed));
+        assert_eq!(
+            picked(&d.result),
+            "a",
+            "the account that refreshes first fits the classifier call"
+        );
+        assert_eq!(
+            fact(line(&d.record, "partitions"), "no_fit"),
+            &FactValue::Int(0)
+        );
+        let a = candidate(&d.record, "a");
+        assert_eq!(
+            (a.partition, a.fit, a.binding.as_deref()),
+            (None, Some("fits"), None)
+        );
+    }
+    for seed in 0..8u64 {
+        let d = decide(&mut st, &s, &plain, &mut StdRng::seed_from_u64(seed));
+        assert_ne!(
+            picked(&d.result),
+            "a",
+            "the same body on a request that is no classifier call is a rewrite a has no room for"
+        );
+        assert_eq!(
+            fact(line(&d.record, "partitions"), "no_fit"),
+            &FactValue::Int(1)
+        );
+        let a = candidate(&d.record, "a");
+        assert_eq!(
+            (a.partition, a.fit, a.binding.as_deref()),
+            (Some("no_fit"), Some("least_bad"), Some("five_hour"))
+        );
+    }
+}
+
+/// A cold pin of `session` on `a` whose last prompt of a million tokens rewrites a tenth of the 5-hour window on
+/// `TIER`, written by a classifier call when `classifier` is set.
+fn classified_pin(session: &str, classifier: bool) -> PinRow {
+    PinRow {
+        created_at: T - MINUTE,
+        last_input_tokens: 1_000_000,
+        last_classifier: classifier,
+        ..burning(session, "a", 0.0, false, T)
+    }
+}
+
+#[test]
+fn a_classifier_call_on_a_pin_a_classifier_call_renewed_last_prices_no_rewrite_for_its_move() {
+    let s = snapshot_with_terms(
+        b_outranks_c_pool(vec![("a", AccountKind::ApiKey)]),
+        tier_terms(&["b", "c"]),
+    );
+    let req = SelectRequest {
+        classifier: true,
+        ..auxiliary(&s, "cold", T)
+    };
+    // The stored prompt is a classifier body, which the plan windows never see, and the call's own body prices
+    // nothing, so b at 0.9 fits the move and outranks c.
+    let mut st = priced(vec![classified_pin("cold", true)]);
+    b_filled_c_free(&mut st, T - 500);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::ReturnToPlan)),
+        "a classifier body stored on the pin is no rewrite, so the move lands on the sibling that outranks"
+    );
+    assert_eq!(
+        fact_of(line(&d.record, "fit"), "verdict", "b"),
+        &FactValue::Text("fits".into())
+    );
+    let moved = pinned(&st, "cold");
+    assert_eq!(
+        (
+            moved.account_id.as_str(),
+            moved.last_input_tokens,
+            moved.last_classifier
+        ),
+        ("b", 1_000_000, true),
+        "the moved row carries the classifier body with its flag, so its next move prices it as nothing too"
+    );
+    // A pin whose last prompt is the session's own keeps it as the move's rewrite, whatever the request: b has no
+    // room for a tenth of the window and c takes the move.
+    let mut st = priced(vec![classified_pin("cold", false)]);
+    b_filled_c_free(&mut st, T - 500);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::ReturnToPlan))
+    );
+    assert_eq!(
+        fact_of(line(&d.record, "fit"), "verdict", "b"),
+        &FactValue::Text("least_bad".into())
+    );
+}
+
+#[test]
+fn a_plain_request_on_a_pin_a_classifier_call_renewed_last_prices_its_own_body_for_its_move() {
+    let s = snapshot_with_terms(
+        b_outranks_c_pool(vec![("a", AccountKind::ApiKey)]),
+        tier_terms(&["b", "c"]),
+    );
+    // The stored prompt is a classifier body, so the move of a request that is no classifier call prices the
+    // request's own body: a thousand tokens fit b at 0.9, while a million rewrite a tenth of the 5-hour window, which c
+    // alone has room for.
+    for (body, destination, b_verdict) in [(1_000, "b", "fits"), (1_000_000, "c", "least_bad")] {
+        let mut st = priced(vec![classified_pin("cold", true)]);
+        b_filled_c_free(&mut st, T - 500);
+        let req = SelectRequest {
+            body_tokens: body,
+            ..auxiliary(&s, "cold", T)
+        };
+        let d = decide(&mut st, &s, &req, &mut rng());
+        assert_eq!(
+            landed(d.result.clone()),
+            (destination.into(), Some(MigrateReason::ReturnToPlan)),
+            "a body of {body} tokens is the move's rewrite"
+        );
+        assert_eq!(
+            fact_of(line(&d.record, "fit"), "verdict", "b"),
+            &FactValue::Text(b_verdict.into()),
+            "a body of {body} tokens on b"
+        );
+    }
+}
+
+#[test]
+fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    // `heavy_light_small`'s round with heavy's last prompt a classifier body: heavy and light each cover the target,
+    // and heavy's move rewrites nothing the plan windows see, so its move costs nothing and the pick takes it over
+    // light, whose rewrite stands.
+    let mut st = rounding(vec![
+        PinRow {
+            last_input_tokens: 400_000,
+            last_classifier: true,
+            ..burning("heavy", "a", 20.0, true, T)
+        },
+        PinRow {
+            last_input_tokens: 10_000,
+            ..burning("light", "a", 0.4, true, T)
+        },
+        PinRow {
+            last_input_tokens: 10_000,
+            ..burning("small", "a", 0.1, true, T)
+        },
+    ]);
+    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    let read = |session: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session)
+            .unwrap_or_else(|| panic!("the round read {session}: {round:?}"))
+    };
+    assert_eq!(
+        read("heavy").rewrite,
+        None,
+        "the pick reads no rewrite for the pin a classifier call renewed last: {round:?}"
+    );
+    assert!(
+        read("light")
+            .rewrite
+            .is_some_and(|rewrite| close(rewrite, 10_000.0 / 60_000_000.0)),
+        "light's rewrite is its own last prompt's: {round:?}"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.planned.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("heavy", true, Some("b")),
+            ("light", false, None),
+            ("small", false, None),
+        ],
+        "heavy's move costs nothing, so the pick plans it on b over light"
+    );
+    assert!(marked(&st, "heavy") && !marked(&st, "light") && !marked(&st, "small"));
 }
 
 #[test]

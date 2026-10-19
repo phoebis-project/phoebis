@@ -5,9 +5,9 @@ use crate::body::BILLING_BLOCK;
 use crate::memory::Injected;
 use crate::RelayError;
 
-/// The fields of the attribution line in the client's own order; a restored field lands where this order puts it.
-/// `cc_turn_origin` closes the client's line and is never restored.
-pub const FIELD_ORDER: [&str; 8] = [
+/// The fields of the attribution line in the client's own order. A restored field lands where this order puts it,
+/// and `cc_turn_origin` and the five after it are never restored.
+pub const FIELD_ORDER: [&str; 13] = [
     "cc_version",
     "cc_entrypoint",
     "cch",
@@ -16,6 +16,11 @@ pub const FIELD_ORDER: [&str; 8] = [
     "cc_prev_req",
     "cc_prompt_id",
     "cc_turn_origin",
+    "cc_prompt_index",
+    "cc_turn_index",
+    "cc_gateway",
+    "cc_project",
+    "cc_project_src",
 ];
 
 pub struct Restore<'a> {
@@ -400,11 +405,13 @@ mod tests {
 
     #[test]
     fn each_absent_field_is_inserted_after_the_last_present_field_that_precedes_it() {
-        // Hand-built: no fixture carries cc_workload or cc_is_subagent, but FIELD_ORDER still has to seat cch
-        // ahead of them and cc_prev_req behind them once they are on the line.
+        // Hand-built: no fixture carries cc_workload, cc_is_subagent or the five fields after cc_turn_origin, but
+        // FIELD_ORDER still has to seat cch ahead of the first two, cc_prev_req behind them and both ids ahead of
+        // the five once they are on the line.
         let mut body = billing_body(
             "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; \
-             cc_workload=interactive; cc_is_subagent=false;",
+             cc_workload=interactive; cc_is_subagent=false; cc_prompt_index=0; cc_turn_index=3; \
+             cc_gateway=1; cc_project=p; cc_project_src=git;",
         );
         let restore = Restore {
             prompt_id: Some("11111111-1111-4111-8111-111111111111"),
@@ -422,7 +429,8 @@ mod tests {
             text_of(&body),
             "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch=00000; \
              cc_workload=interactive; cc_is_subagent=false; cc_prev_req=req_1; \
-             cc_prompt_id=11111111-1111-4111-8111-111111111111;"
+             cc_prompt_id=11111111-1111-4111-8111-111111111111; cc_prompt_index=0; cc_turn_index=3; \
+             cc_gateway=1; cc_project=p; cc_project_src=git;"
         );
     }
 
@@ -510,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn the_field_order_names_the_eight_fields_with_cc_turn_origin_last() {
+    fn the_field_order_names_the_clients_thirteen_fields_with_cc_turn_origin_eighth() {
         assert_eq!(
             FIELD_ORDER.as_slice(),
             [
@@ -522,6 +530,11 @@ mod tests {
                 "cc_prev_req",
                 "cc_prompt_id",
                 "cc_turn_origin",
+                "cc_prompt_index",
+                "cc_turn_index",
+                "cc_gateway",
+                "cc_project",
+                "cc_project_src",
             ]
         );
     }

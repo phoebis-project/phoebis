@@ -61,9 +61,11 @@ so the facts carry the matches, and an enforcing match then refuses the request 
 account is read ([Guardrails](guardrails.md)). A key with no guardrail pays one lookup here and nothing else.
 
 The candidates are resolved from the key's model rules (`model_not_allowed`).
-The drift checks judge the billing stamp and the version suffix once, before any account is
-selected (`client_drift`, [Client drift](#client-drift)), and the selection takes over: the session's pin or the pool's
-strategy, whose own refusals are on [When nothing can serve](routing.md#when-nothing-can-serve).
+A Claude Code inference request that lacks an item of [the required
+set](client.md#the-required-set) is then refused (`client_contract`), before any account is read. The drift checks judge
+the billing stamp and the version suffix once, before any account is selected (`client_drift`, [Client
+drift](#client-drift)), and the selection takes over: the session's pin or the pool's strategy, whose own refusals are
+on [When nothing can serve](routing.md#when-nothing-can-serve).
 
 ## The body edits
 
@@ -73,9 +75,9 @@ find or walk is refused rather than sent on under the account's credential ([ref
 | Edit | Purpose | Request kinds | Account kinds | Switch and its home |
 | --- | --- | --- | --- | --- |
 | Cut the top-level `safeguards` member | Keep the upstream's per-tool review off when the operator turned auto mode off | All three | Both | `auto_mode_server`, the key's field, else the pool's, on when the key has no pool |
-| Splice the account's uuid into `metadata.user_id` (`"account_uuid":"..."` inside the escaped string) | Bill the request to the selected account | Inference and probe (the `count_tokens` schema has no `metadata`) | OAuth only (an API key has no identity) | None |
+| Splice the account's uuid into `metadata.user_id` on an OAuth leg, or blank it on an API-key leg (the empty uuid the client itself writes on an API key) | Bill the request to the selected account, and send an API-key leg the shape the native client sends | Inference and probe (the `count_tokens` schema has no `metadata`) | Both | None |
 | Replace `model` with the folded spelling: the `[1m]` suffix removed, ASCII lowercased | The long-context marker is a client-side routing hint | All three | Both | None |
-| Restore the absent fields of the billing line at `system[0].text`: `cch=00000`, `cc_prev_req={id}` and `cc_prompt_id={id}`, each at its place in the client's own field order | Give a reduced-shape request the first-party fields, never rewriting a present one | Inference from a `claude-cli/` agent whose version the client itself would spell, when the line is there and `system` is an array | Both | None, but a field an account refused once is latched off for that account |
+| Restore the absent fields of the billing line at `system[0].text`: `cch=00000` on every line, `cc_prev_req={id}` on a conversation class and on a conversation-shaped fork, and `cc_prompt_id={id}` from the client's `x-claude-code-prompt-id` header, each at its place in the client's own field order | Give a reduced-shape request the first-party fields, never rewriting a present one | Inference from a `claude-cli/` agent whose version the client itself would spell, when the line is there and `system` is an array | Both | None, but a field an account refused once is latched off for that account |
 | Insert the top-level `diagnostics` member before `stream` (else last), naming the previous message id on this account or `null` | Ask the upstream for cache diagnostics, naming `null` on the first request after a move and on a probe | Inference and probe, where the client sent cache markers and at least one tool and no `diagnostics` of its own | Both | The pool's `cache_diagnostics` |
 | Set a present `diagnostics.previous_message_id` to `null` | Name no message the account cannot find | The first request a session sends to an account other than the one its previous request landed on (a move, a failover's leg or its landing, a pin released or passed over) and every probe | Both | None |
 | Rewrite every ephemeral `cache_control` marker to the policy's TTL (`1h` writes `"ttl":"1h"` after `"type":"ephemeral"`, `5m` removes `ttl`), and under `inject_when_absent` add a top-level marker to a body with none, never on an auxiliary request | Apply the pool's cache TTL policy | Inference and probe | Both: the `metered` rules for an API-key account or an account in overage, else the `plan` rules, per model and per main or subagent branch | The pool's cache TTL policy ([Cache TTL](routing.md#cache-ttl)), off by default |
@@ -90,8 +92,8 @@ whatever the switch says.
 A latched refusal: an upstream `400` naming a field or a beta this leg injected strips it for one more try on the same
 account and latches it off for that account ([How a head is classified](#how-a-head-is-classified)). The latch is keyed
 on the account row, so an edit of the account in the console clears it, and a restart forgets it. The session memory
-behind `cc_prev_req` and the prompt id holds what the router last saw for a key, a session and an agent, in process and
-written behind to the registry, and is kept for `sessions.memory_retention_days` ([sessions](installation.md#sessions)).
+behind `cc_prev_req` holds what the router last saw for a key, a session and an agent, in process and written behind to
+the registry, and is kept for `sessions.memory_retention_days` ([sessions](installation.md#sessions)).
 
 ## The header edits
 
@@ -123,6 +125,7 @@ router.
 | `cache-diagnosis-2026-04-07` | Injected with the `diagnostics` member, else passed through. A client-sent one is never reported as injected | Inference and probe | The pool's `cache_diagnostics` |
 | `dangerous-tool-use-2026-09-03` | Dropped when auto mode is off for the key, else passed through | All three | `auto_mode_server` on the key, else the pool |
 | `per-turn-control-2026-07-01` | Read for the cache lane key, passed through | All three | None |
+| `auto-mode-classifier-2026-07-16` | Read with the `auxiliary` class as the marker of a Claude Code client's own classifier call, passed through | All three | None |
 | Any other token | Passed through | All three | None |
 
 The OAuth claim is a claim about the credential rather than about the client's feature set, so it leads the list and the
@@ -138,25 +141,34 @@ Under `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` Claude Code sends the full firs
 every field and `x-client-request-id` among them, and the router restores nothing ([The client](client.md)). Without it
 the client sends the reduced shape, and the router restores toward `api.anthropic.com` the fields that line lacks: the
 `cch` billing hash as the placeholder `cch=00000`, `cc_prev_req`, `cc_prompt_id` and the `x-client-request-id` header,
-each only when absent, at the place the client's own field order gives it. A present field is never rewritten, and a
-request that carries no attribution line, as under `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the router
-never writes a line the client did not, so every restoration carries the client's own stamp.
+each only when absent and under the rules below, at the place the client's own field order gives it. A present field is
+never rewritten. A Claude Code request whose `system` is an array and carries no line, as under
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is refused `400` `client_contract` before the restoration reads it ([The required
+set](client.md#the-required-set)), and the router still writes no line the client did not, so every restoration carries
+the client's own stamp.
 
 The restoration applies to an inference request whose `User-Agent` is `claude-cli/` followed by a version the client
 itself would spell, digits and dots with at most one `-` and a prerelease suffix of letters, digits, dots and hyphens,
 as in `claude-cli/2.1.269 (external, cli)`. The version lands in a line this build signs, so a version spelled any
-other way restores nothing rather than a guessed one. A raw Messages client is relayed as it arrives, a token count has
-no line to fill, and a probe replays a request as the client sent it.
+other way restores nothing rather than a guessed one. A request without the class header is refused before the
+restoration reads it ([The required set](client.md#the-required-set)), so the restoration reads the class from every
+request and falls back on nothing. A token count has no line to fill,
+and a probe replays a request as the client sent it.
 
-The previous request id and the prompt id come from the router's session memory, keyed on the client's own session id
-or, for a request without one, on the conversation root the router resolves ([Clients](routing.md#clients)), and the
-memory survives a restart ([sessions](installation.md#sessions)). The auto mode classifier requests are the client's own
-and keep the attribution block, so the router fills them like any other line and records them as ordinary requests of
-their session ([Auto mode behind the router](#auto-mode-behind-the-router)). Three things are not restored, because the
-router cannot: the `advanced-tool-use-2025-11-20` beta, since the client has to run its tool search
-(`ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and `cc_turn_origin`, who
-started the turn, which closes the client's line and which the router records when the line carries it and never
-writes.
+The previous request id comes from the router's session memory, keyed on the client's own session id
+([Clients](routing.md#clients)), and the memory survives a
+restart ([sessions](installation.md#sessions)). It is filled on the conversation classes (`compaction`, `main`,
+`subagent`, `workflow`) and on a class `auxiliary` request that carries an agent id or a prompt id, the
+conversation-shaped forks, never on a side query, since the client's own builder writes the field on its conversation
+sites alone. The prompt id comes from the `x-claude-code-prompt-id` header, which the client sets from the same id it
+writes into the line, so a request without the header gets no `cc_prompt_id`, as the native client writes none. The auto
+mode classifier requests are side queries, so the restoration writes no line field on them beyond the `cch` placeholder
+where the line lacks it, and the router records the ones that carry the classifier marker as the client's classifier
+calls, which take no share of a plan window ([Auto mode behind the router](#auto-mode-behind-the-router)). Three things
+are not restored, because the router cannot: the `advanced-tool-use-2025-11-20` beta, since the client has to run its
+tool search (`ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and
+`cc_turn_origin` with the five fields after it in the client's order (the turn position, the gateway and the project
+fields), which the router never writes and whose turn origin it records when the line carries it.
 
 ## Client drift
 
@@ -166,7 +178,9 @@ inference request, a `cc_version` suffix that does not reproduce from the first 
 agent names. The hash goes first. A body carrying only the placeholder `cch=00000` passes, and a line with no
 `cc_version`, a bare version with no suffix, or a version other than the agent's is not the suffix drift: the first two
 carry nothing to check, and the third is the hash check's to judge. Both run once per request, after the key's client
-and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift.
+and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift. The
+contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request that
+fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
 
 Either refuses the request as `400` `invalid_request_error` with the code `client_drift`, the header
 `x-phoebis-error-code: client_drift` and the message of its kind ([refusal codes](client.md#refusal-codes)):
@@ -217,11 +231,16 @@ dialog's Access group ([Pools](routing.md#pools)).
 - Off, the router drops the member and the beta from every request of the key and restamps a first-party body's billing
   hash. The upstream then evaluates nothing, and one completed answer without a verdict latches the client for the rest
   of its process, subagents included, across `/clear` and `/compact`: from then on it sends one classifier request of
-  its own per reviewed tool use, on its Sonnet default rather than the session's model, billed to the account's windows
-  and absent from the client's own cost line, while the beta stays in its header and the router keeps dropping it. The
-  first session post under the off state still asks, so a session that starts there costs one asking round. The request
-  log records each request whose member the router dropped as `stripped`, and the client's classifier requests as
-  ordinary requests of their session ([The console](console.md)).
+  its own per reviewed tool use, on its Sonnet default rather than the session's model, which, where it carries the
+  classifier marker (the `auxiliary` class with the beta `auto-mode-classifier-2026-07-16` the client sends under the
+  first-party assumption with experimental betas allowed), the router records with the standing `client` under
+  Classifier and prices at no share of a plan window on a subscription account, as the client's documentation says a
+  Pro, Max or Team plan is never charged for them, and at its model's price in the account's overage and on an API-key
+  account ([Requests](console.md#requests), [Statistics](statistics.md#plan-meter)), while the
+  `dangerous-tool-use-2026-09-03` beta stays in its header and the router keeps dropping it. The first session post
+  under the off state still asks, so a session that starts there costs one asking round. The request log records each
+  request whose member the router dropped as `stripped`, and the client's marked classifier requests under Classifier
+  `client` ([The console](console.md)).
 
 `CLAUDE_CODE_AUTO_MODE_SERVER=0` in the client's environment is the client-side equivalent of the off state, with no
 first asking round, and `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` does the same in first-party mode.
@@ -229,10 +248,18 @@ first asking round, and `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` does the same
 The client's own classifier runs in two stages: a stage-1 request that stops at `</block>` and answers `<block>no` or
 `<block>yes`, and, after a `yes` or an unreadable answer, a stage-2 request with no stop sequence that reasons in
 `<thinking>` before its `<block>` answer, with an optional `<reason>` and `<category>`. A stage-1 block followed by a
-refused stage 2 stands as a block. These requests carry no beta of their own behind a plain base URL, and in
-first-party mode they add `auto-mode-classifier-2026-07-16` and the `auxiliary` request class. Their bodies carry no
-`stream` and no `tools`, a security-monitor system block, and `stop_sequences` at stage 1. They carry the session's own
-id and pin like any request, on the Sonnet default, so a session on another model takes a second pin beside its own.
+refused stage 2 stands as a block. On Sonnet 5 the first stage answers `<severity>N` under the stop sequence
+`</severity>`, where Sonnet 5.5 answers the older `<block>` shape, so a first-stage call ends after a few output tokens
+either way. Behind a plain base URL without the hint gate the classifier requests carry neither the beta nor the class
+header, and the router refuses them for the missing header. Under the first-party assumption with experimental betas
+allowed (`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` unset) they carry `auto-mode-classifier-2026-07-16` and the
+`auxiliary` request class on both stages, the pair the router reads as the marker. A call that carries the class without
+the beta, as under the hint gate alone or under `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, is an ordinary auxiliary
+request to the router and takes its model's share. The classifier bodies carry no `stream` and no `tools`, a
+security-monitor system block, and `stop_sequences` at stage 1. They carry the session's own id and pin like any
+request, on the Sonnet default, so a session on another model takes a second pin beside its own. The client also sends
+them under the on setting for a tool input a PreToolUse hook rewrote, since the server's verdict is bound to the input
+the model wrote.
 
 **The notice.** The client can show a one-line notice that its classifier requests are billed because the gateway does
 not support the server-side check. A Pro, Max or Team login never sees it. A key or token login sees it once per process

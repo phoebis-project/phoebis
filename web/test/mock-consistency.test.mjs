@@ -937,10 +937,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const summaries = (await logOf(s)).filter((x) => x.type === 'decision' && x.kind === 'refused');
     const refused = (await decisionsOf(s)).filter((r) => r.outcome.kind === 'refused');
-    assert.deepEqual(refused.map((r) => r.outcome.refusal.kind).sort(), ['client', 'key']);
+    assert.deepEqual(refused.map((r) => `${r.outcome.refusal.kind} ${r.outcome.refusal.code}`).sort(), ['client contract', 'client drift', 'key revoked']);
     for (const r of refused) {
       const id = `${r.requestId}/${r.seq}`;
-      assert.equal(r.outcome.refusal.code, r.outcome.refusal.kind === 'key' ? 'revoked' : 'drift', id);
       assert.equal(summaries.find((x) => x.requestId === r.requestId && x.seq === r.seq)?.refusal?.code, r.outcome.refusal.code, `${id}'s row`);
     }
   });
@@ -1716,6 +1715,33 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(estimated > 0, "the story's Sonnet 4.6 rows price an estimate");
   });
 
+  test(`the story's two classifier calls of one session read zero shares with the reason and book nothing, at ${at}`, async () => {
+    const s = await story;
+    const calls = s.requests.filter((r) => r.classifier === 'client');
+    assert.equal(calls.length, 2, "two rows are the client's classifier calls");
+    assert.equal(new Set(calls.map((r) => `${r.keyId}|${r.sessionId}`)).size, 1, 'of one session under one key');
+    for (const r of calls) {
+      assert.deepEqual([r.requestClass, r.shareReason, r.estimated, s.lib.fundingOf(r.attempts.at(-1))], ['auxiliary', 'client_classifier', false, 'plan'], r.id);
+      const figures = [...Object.values(r.costShares ?? {}), ...Object.values(r.costEquivalent ?? {})];
+      assert.ok(figures.length > 0 && figures.every((v) => v === 0), `${r.id} reads ${JSON.stringify([r.costShares, r.costEquivalent])}`);
+      assert.ok(r.costUsd > 0, `${r.id} keeps its dollar estimate`);
+    }
+    assert.deepEqual(s.requests.filter((r) => r.shareReason !== null).map((r) => r.id).sort(), calls.map((r) => r.id).sort(), 'the reason stands on the classifier calls alone');
+    // A classifier selection books nothing, as a fast one does, so its walk ends at a reserve station that booked none.
+    const records = (await decisionsOf(s)).filter((rec) => calls.some((r) => r.id === rec.requestId));
+    assert.equal(records.length, calls.length, 'each call has its decision');
+    for (const rec of records) assert.deepEqual([rec.outcome.kind, rec.outcome.reservation, rec.walk.at(-1)?.step, rec.walk.at(-1)?.verdict], ['placed', null, 'reserve', 'none'], rec.requestId);
+  });
+
+  test(`the story's contract refusal names the missing item on a Claude Code row no account served, at ${at}`, async () => {
+    const s = await story;
+    const refusals = s.requests.filter((r) => r.errorCode === 'client_contract');
+    assert.equal(refusals.length, 1, 'one row is a contract refusal');
+    const [refused] = refusals;
+    assert.deepEqual([refused.clientContract, refused.status, refused.outcome, refused.attempts.length, refused.requestClass, refused.userAgent?.startsWith('claude-cli/')], ['class_header', 400, 'rejected', 0, null, true]);
+    assert.deepEqual(s.requests.filter((r) => r.clientContract !== null).map((r) => r.id), [refused.id], 'the item stands on the refusal alone');
+  });
+
   test(`every story request's dollars are the cells of the wire's price entry in force at its instant, none on a model the entry lacks, and an hour before the entry in force reads the earlier entry's, at ${at}`, async () => {
     const s = await story;
     const revisions = s.settings.apiPrices.revisions ?? [];
@@ -2045,10 +2071,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`the default range's effort and request class breakdowns count the story's rows per folded value, at ${at}`, async () => {
+  test(`the default range's effort, request class and classifier breakdowns count the story's rows per folded value, at ${at}`, async () => {
     const s = await story;
     const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
-    const folds = { effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
+    const folds = { classifier: (r) => s.lib.foldClassifier(r.classifier), effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
     for (const [groupBy, fold] of Object.entries(folds)) {
       const want = {};
       for (const r of rows) want[fold(r)] = (want[fold(r)] ?? 0) + 1;
@@ -2056,6 +2082,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const groups = s.lib.groupsOf(defaultRange(s), { groupBy, includeProbes: false }).filter((g) => g.requests > 0);
       assert.deepEqual(Object.fromEntries(groups.map((g) => [g.key, g.requests]).sort()), Object.fromEntries(Object.entries(want).sort()), groupBy);
     }
+    // A client classifier call takes no plan share, so its group's cost, cache, saving and split figures read zero,
+    // its account's shares and the 20x equivalents alike.
+    const [free] = s.lib.groupsOf(defaultRange(s), { accountIds: ['primary'], groupBy: 'classifier', includeProbes: false }).filter((g) => g.key === 'client');
+    const pairs = (map) => Object.values(map ?? {}).flatMap((c) => [c.read, c.write]);
+    const figures = [
+      ...Object.values(free?.costEquivalent ?? {}), ...pairs(free?.cacheEquivalent), ...Object.values(free?.savingEquivalent ?? {}), ...Object.values(free?.equivalentSplit ?? {}),
+      ...Object.values(free?.costShares ?? {}), ...pairs(free?.cacheShares), ...Object.values(free?.savingShares ?? {}),
+    ];
+    assert.ok(free?.requests === 2 && figures.length > 0 && figures.every((v) => v === 0), `the client group reads ${JSON.stringify(free && { cacheEquivalent: free.cacheEquivalent, cacheShares: free.cacheShares, costEquivalent: free.costEquivalent, costShares: free.costShares, equivalentSplit: free.equivalentSplit, requests: free.requests, savingEquivalent: free.savingEquivalent, savingShares: free.savingShares })}`);
   });
 
   test(`the default range counts a stream the client closed as failed under the code the relay files it with, at ${at}`, async () => {

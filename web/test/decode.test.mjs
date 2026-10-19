@@ -1146,6 +1146,18 @@ test('a request reads its auto-mode standing, and a spelling the console does no
   assert.equal(d.decodeRequest({ attempts: [], auto_mode: 'unknown' }).autoMode, null);
 });
 
+test('a_request_decodes_its_classifier_standing_its_contract_item_and_its_share_reason', () => {
+  const read = (r) => [r.classifier, r.clientContract, r.shareReason];
+  assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: 'client', client_contract: 'class_header', share_reason: 'client_classifier' })), ['client', 'class_header', 'client_classifier'], 'the members set');
+  assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: null, client_contract: null, share_reason: null })), [null, null, null], 'the members null');
+  assert.deepEqual(read(d.decodeRequest({ attempts: [] })), [null, null, null], 'a row from before the members');
+  assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: 'server', share_reason: 'free' })), [null, null, null], 'a standing or a reason the console does not know reads as none');
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const byId = (id) => read(rows.find((r) => r.id === id));
+  assert.deepEqual(byId('r-classifier'), ['client', null, 'client_classifier'], "the route's classifier call");
+  assert.deepEqual(byId('r-contract'), [null, 'class_header', null], "the route's contract refusal");
+});
+
 test('a request reads who put the diagnostics member on its body, and any other value as none', () => {
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   assert.deepEqual(
@@ -1554,15 +1566,15 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 7);
-  assert.equal(all.succeeded, 4);
+  assert.equal(all.requests, 9);
+  assert.equal(all.succeeded, 5);
   assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
   assert.equal(all.incomplete, 1);
-  assert.equal(all.attempts, 7);
+  assert.equal(all.attempts, 8);
   assert.equal(all.failovers, 1);
-  assert.equal(all.tokens.cacheRead, 3000);
-  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 6);
-  assert.equal(all.cacheMissReasons.none, 5);
+  assert.equal(all.tokens.cacheRead, 3500);
+  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 7);
+  assert.equal(all.cacheMissReasons.none, 6);
   assert.equal(all.cacheMissReasons.pending, 1, 'a comparison still running counts under its own word');
   assert.equal(all.probes.ok, 0);
   assert.equal(all.probes.held, 0, 'a group folded from request rows counts no held probe');
@@ -1941,6 +1953,15 @@ test('a session fold groups on the request class each row sent, and a classless 
   assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'the label every route answers for the reserved value');
 });
 
+test('a session fold groups on the classifier standing, a request the marker does not hold under -', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const call = rows.find((r) => r.id === 'r-classifier');
+  const captured = rows.find((r) => r.id === 'r-captured');
+  const groups = d.foldGroups([call, captured, { ...captured, id: 'r-captured-2' }], 'classifier');
+  assert.deepEqual(groups.map((g) => [g.key, g.requests]).sort(), [['-', 2], ['client', 1]], 'the keys the Classifier facet filters on');
+  assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'the label every route answers for the reserved value');
+});
+
 test('a folded bucket carries one group per key the page groups on', () => {
   const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
   const rows = [captured, { ...failed, keyId: 'laptop' }];
@@ -1984,7 +2005,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 6], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 8], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -2010,12 +2031,12 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 7, 'both pages folded');
+    assert.equal(requests.length, 9, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 14);
+    assert.equal(requests.length, 18);
   });
 });
 

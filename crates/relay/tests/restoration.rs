@@ -4,12 +4,12 @@ use common::*;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::Request;
+use axum::http::{HeaderValue, Request};
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::MemoryKey;
-use phoebis_store::{AccountKind, ApiKeyRow, RulesMode, StorageKey, Store};
+use phoebis_relay::{MemoryKey, CLASSIFIER_BETA};
+use phoebis_store::{AccountKind, ApiKeyRow, MemoryStore, RulesMode, StorageKey, Store};
 use tower::ServiceExt;
 
 const UUID_RE_LEN: usize = 36;
@@ -113,10 +113,14 @@ fn carrying_prompt_id(session: &str, id: &str) -> Request<Body> {
     req
 }
 
+/// `req` with the turn's prompt id in the client's header, as its conversation sites send it.
+fn with_prompt_id(mut req: Request<Body>, id: &str) -> Request<Body> {
+    set_header(&mut req, "x-claude-code-prompt-id", id);
+    req
+}
+
 /// The opt-out shape: `CLAUDE_CODE_ATTRIBUTION_HEADER=false` drops the billing line but leaves the rest of
-/// `system` in place, so `system[0]` becomes whatever followed it. `metadata.user_id` is seeded with the
-/// account `relay_with` selects, so a test that wants the wire bytes untouched does not have `edit_body`'s own
-/// account-identity splice rewrite the fixture's empty one out from under it.
+/// `system` in place, so `system[0]` becomes whatever followed it.
 fn bytes_without_billing_line() -> Vec<u8> {
     let mut value: serde_json::Value =
         serde_json::from_slice(body(BodyFixture::Oauth)).expect("the fixture body is valid JSON");
@@ -124,9 +128,6 @@ fn bytes_without_billing_line() -> Vec<u8> {
         .as_array_mut()
         .expect("the fixture carries a system array")
         .remove(0);
-    value["metadata"]["user_id"] = serde_json::Value::String(format!(
-        r#"{{"account_uuid":"{ACCOUNT_UUID}","session_id":"s-1"}}"#
-    ));
     serde_json::to_vec(&value).expect("a Value always re-encodes")
 }
 
@@ -142,10 +143,11 @@ fn without_billing_line(session: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn absent_fields_are_restored_in_native_order_and_present_ones_are_left_alone() {
+    const PROMPT_ID: &str = "c3d1a4e2-5b6f-4a7c-8d9e-0f1a2b3c4d5e";
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     app.clone()
-        .oneshot(cli_request("s-1", None, None))
+        .oneshot(with_prompt_id(cli_request("s-1", None, None), PROMPT_ID))
         .await
         .unwrap();
     let sent = &up.requests()[0];
@@ -166,8 +168,9 @@ async fn absent_fields_are_restored_in_native_order_and_present_ones_are_left_al
         "the client's own value is untouched"
     );
     assert_eq!(
-        field(&line, "cc_prompt_id").map(str::len),
-        Some(UUID_RE_LEN)
+        field(&line, "cc_prompt_id"),
+        Some(PROMPT_ID),
+        "the id the client's header names"
     );
     assert_eq!(
         cch_digits(&sent.body),
@@ -274,37 +277,38 @@ async fn a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact() {
 }
 
 #[tokio::test]
-async fn a_turn_that_ends_with_a_control_entry_mints_its_own_prompt_id() {
+async fn a_turn_that_ends_with_a_control_entry_gets_the_headers_prompt_id_and_none_without_it() {
+    const PROMPT_ID: &str = "5f0c2a9e-7d41-4b8e-9c3a-1e2d4f6a8b0c";
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
-    let turn = |bytes: &[u8]| {
-        let mut req =
-            request_from_fixture(inference_head(FixtureKind::OauthNonFirstParty), bytes, KEY);
-        set_header(&mut req, "x-claude-code-session-id", "s-1");
-        req
-    };
-    app.clone()
-        .oneshot(turn(body(BodyFixture::Oauth)))
-        .await
-        .unwrap();
     let mut next: serde_json::Value = serde_json::from_slice(body(BodyFixture::Oauth)).unwrap();
     next["messages"]
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({"role": "user", "content": "say hi again"}));
     let next = with_control_entry(&serde_json::to_vec(&next).unwrap(), "high");
-    app.clone().oneshot(turn(&next)).await.unwrap();
-    let first = billing_line(&up.requests()[0].body);
-    let second = billing_line(&up.requests()[1].body);
-    let first_id = field(&first, "cc_prompt_id");
-    let second_id = field(&second, "cc_prompt_id");
-    assert!(first_id.is_some(), "the first wire carries a prompt id");
-    assert!(second_id.is_some(), "the second wire carries a prompt id");
-    assert_ne!(
-        second_id, first_id,
-        "the control entry after the user's message leaves the turn the user's, so it mints its own id"
+    let turn = || {
+        let mut req =
+            request_from_fixture(inference_head(FixtureKind::OauthNonFirstParty), &next, KEY);
+        set_header(&mut req, "x-claude-code-session-id", "s-1");
+        req
+    };
+    app.clone()
+        .oneshot(with_prompt_id(turn(), PROMPT_ID))
+        .await
+        .unwrap();
+    app.clone().oneshot(turn()).await.unwrap();
+    assert_eq!(
+        field(&billing_line(&up.requests()[0].body), "cc_prompt_id"),
+        Some(PROMPT_ID),
+        "the header names the turn whatever entry closes the messages"
     );
-    let sent: serde_json::Value = serde_json::from_slice(&up.requests()[1].body).unwrap();
+    assert_eq!(
+        field(&billing_line(&up.requests()[1].body), "cc_prompt_id"),
+        None,
+        "without the header the line carries none, though the memory holds the session's id"
+    );
+    let sent: serde_json::Value = serde_json::from_slice(&up.requests()[0].body).unwrap();
     let asked: serde_json::Value = serde_json::from_slice(&next).unwrap();
     assert_eq!(
         sent["messages"], asked["messages"],
@@ -343,13 +347,8 @@ async fn cc_prev_req_names_the_previous_request_id_on_the_same_session_agent_and
         .collect();
     assert_eq!(
         names,
-        [
-            "cc_version",
-            "cc_entrypoint",
-            "cch",
-            "cc_prev_req",
-            "cc_prompt_id"
-        ]
+        ["cc_version", "cc_entrypoint", "cch", "cc_prev_req"],
+        "a turn that sends no prompt-id header gets no cc_prompt_id"
     );
     app.clone()
         .oneshot(cli_request("s-1", Some("sub-1"), None))
@@ -373,56 +372,55 @@ async fn cc_prev_req_names_the_previous_request_id_on_the_same_session_agent_and
 }
 
 #[tokio::test]
-async fn the_prompt_id_is_reused_across_a_tool_loop_minted_on_a_fresh_turn_and_inherited_by_a_subagent(
+async fn a_request_without_the_prompt_id_header_gets_no_cc_prompt_id_on_a_tool_loop_a_fresh_turn_and_a_subagents_first_turn(
 ) {
+    const PROMPT_ID: &str = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
+    // The first turn names its id, so the memory holds one for the session from here on.
     app.clone()
-        .oneshot(cli_request("s-1", None, None))
+        .oneshot(with_prompt_id(cli_request("s-1", None, None), PROMPT_ID))
         .await
         .unwrap();
-    let first = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
-        .unwrap()
-        .to_string();
     // A tool loop: the last message is a user turn carrying a tool_result.
     app.clone().oneshot(tool_loop_request("s-1")).await.unwrap();
-    assert_eq!(
-        field(&billing_line(&up.requests()[1].body), "cc_prompt_id"),
-        Some(first.as_str()),
-        "a tool loop keeps the turn's id"
-    );
     app.clone()
         .oneshot(cli_request("s-1", Some("sub-1"), Some("main")))
         .await
         .unwrap();
-    assert_eq!(
-        field(&billing_line(&up.requests()[2].body), "cc_prompt_id"),
-        Some(first.as_str()),
-        "a subagent's first request inherits its parent's"
-    );
     app.clone()
         .oneshot(cli_request("s-1", None, None))
         .await
         .unwrap();
-    assert_ne!(
-        field(&billing_line(&up.requests()[3].body), "cc_prompt_id"),
-        Some(first.as_str()),
-        "a fresh user turn mints a new id"
-    );
+    for (at, request) in [
+        (1, "a tool loop"),
+        (2, "a subagent's first request"),
+        (3, "a fresh user turn"),
+    ] {
+        assert_eq!(
+            field(&billing_line(&up.requests()[at].body), "cc_prompt_id"),
+            None,
+            "{request} sends no header, so its line carries no id"
+        );
+    }
     up.shutdown().await;
 }
 
 #[tokio::test]
-async fn a_first_party_turns_own_prompt_id_is_what_its_subagent_inherits() {
+async fn a_subagents_first_request_takes_no_prompt_id_from_its_parent() {
     const SESSION: &str = "11111111-1111-4111-8111-111111111111";
     const SENT: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
+    // The parent's turn names its id in the header beside the line, so the memory holds it for the session.
     app.clone()
-        .oneshot(request_from_fixture(
-            inference_head(FixtureKind::OauthFirstParty),
-            body(BodyFixture::FirstParty9b244),
-            KEY,
+        .oneshot(with_prompt_id(
+            request_from_fixture(
+                inference_head(FixtureKind::OauthFirstParty),
+                body(BodyFixture::FirstParty9b244),
+                KEY,
+            ),
+            SENT,
         ))
         .await
         .unwrap();
@@ -437,14 +435,15 @@ async fn a_first_party_turns_own_prompt_id_is_what_its_subagent_inherits() {
         .unwrap();
     assert_eq!(
         field(&billing_line(&up.requests()[1].body), "cc_prompt_id"),
-        Some(SENT),
-        "a reduced-shape subagent inherits the id its parent put on the wire, not one minted beside it"
+        None,
+        "a reduced-shape subagent that sends no header gets none, whatever its parent's turn named"
     );
     up.shutdown().await;
 }
 
 #[tokio::test]
-async fn a_carried_prompt_id_past_the_bound_is_retained_by_nothing_and_travels_as_sent() {
+async fn a_carried_prompt_id_of_any_length_travels_as_sent_and_a_later_turn_without_the_header_gets_none(
+) {
     const SESSION: &str = "8f0d1f6e-9f7a-4f63-9e2d-2f8b1c5a7d31";
     let huge = "a".repeat(100_000);
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
@@ -464,17 +463,36 @@ async fn a_carried_prompt_id_past_the_bound_is_retained_by_nothing_and_travels_a
         .unwrap();
     let line = billing_line(&up.requests()[1].body);
     assert_eq!(
-        field(&line, "cc_prompt_id").map(str::len),
-        Some(UUID_RE_LEN),
-        "nothing was retained to inherit, so the subagent's turn carries a minted id"
+        field(&line, "cc_prompt_id"),
+        None,
+        "the subagent's turn sends no header, so its line carries no id"
     );
     up.shutdown().await;
 }
 
+/// The answer to a body that carries no attribution line under a `claude-cli/` agent: the contract's refusal for
+/// the line, naming its slot, with nothing sent upstream.
+async fn assert_refused_for_the_line(resp: axum::http::Response<Body>, up: &FakeUpstream) {
+    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.headers()["x-phoebis-error-code"], "client_contract");
+    assert_eq!(
+        outcome(&resp).client_contract.as_deref(),
+        Some("attribution_line")
+    );
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let refusal: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let message = refusal["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("system[0]") && !message.contains(';'),
+        "{message}"
+    );
+    assert!(up.requests().is_empty(), "nothing was sent upstream");
+}
+
 /// A forged `claude-cli/` agent buys nothing on a body that carries no attribution line: the relay never
-/// writes a line the client did not, so there is nothing for the agent to unlock.
+/// writes a line the client did not, and the contract refuses the body before any account is chosen.
 #[tokio::test]
-async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_restores_nothing() {
+async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_is_refused_for_the_contract() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     let mut req = without_billing_line("s-1");
@@ -483,18 +501,7 @@ async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_restores_no
         "user-agent",
         "claude-cli/2.1.269;cc_prev_req=forged (external, cli)",
     );
-    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), 200);
-    let sent = &up.requests()[0];
-    let line = billing_line(&sent.body);
-    assert!(
-        !line.starts_with("x-anthropic-billing-header:"),
-        "no line was inserted: {line}"
-    );
-    assert_eq!(
-        header(sent, "x-client-request-id"),
-        None,
-        "and nothing else of the first-party shape is presented either"
-    );
+    assert_refused_for_the_line(app.clone().oneshot(req).await.unwrap(), &up).await;
     up.shutdown().await;
 }
 
@@ -528,6 +535,7 @@ async fn a_version_spelled_any_other_way_than_the_clients_restores_nothing_on_a_
 /// as the client itself would write it.
 #[tokio::test]
 async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
+    const PROMPT_ID: &str = "0e1d2c3b-4a59-4687-9a5b-4c3d2e1f0a9b";
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     let mut req = request_from_fixture(
@@ -536,6 +544,7 @@ async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
         KEY,
     );
     set_header(&mut req, "x-claude-code-session-id", "s-1");
+    set_header(&mut req, "x-claude-code-prompt-id", PROMPT_ID);
     set_header(
         &mut req,
         "user-agent",
@@ -545,7 +554,7 @@ async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
     let sent = &up.requests()[0];
     let line = billing_line(&sent.body);
     assert!(field(&line, "cch").is_some());
-    assert!(field(&line, "cc_prompt_id").is_some());
+    assert_eq!(field(&line, "cc_prompt_id"), Some(PROMPT_ID));
     assert!(
         header(sent, "x-client-request-id").is_some(),
         "the rest of the first-party shape is presented too"
@@ -553,37 +562,24 @@ async fn a_prerelease_client_version_keeps_the_first_party_restoration() {
     up.shutdown().await;
 }
 
-/// With the account identity already the one `relay_with` seeds and the model already one the pool serves as
-/// it is, `edit_body` finds nothing else to write either, so the body a client without the block sends reaches
-/// the upstream byte for byte.
+/// The client's attribution opt-out under its own agent: the line the router requires of a Claude Code client is
+/// missing, so the body is refused rather than relayed as sent.
 #[tokio::test]
-async fn a_body_without_the_block_relays_byte_identical_under_a_claude_code_user_agent() {
+async fn a_body_without_the_block_under_a_claude_code_user_agent_is_refused_and_nothing_is_sent() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
-    let sent = bytes_without_billing_line();
     let resp = app
         .clone()
         .oneshot(without_billing_line("s-1"))
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
-    let recorded = &up.requests()[0];
-    assert_eq!(
-        recorded.body, sent,
-        "the body reaches the upstream exactly as sent"
-    );
-    assert!(
-        !String::from_utf8_lossy(&recorded.body).contains("x-anthropic-billing-header"),
-        "no line was inserted, the reason the bytes are identical: {}",
-        String::from_utf8_lossy(&recorded.body)
-    );
-    assert_eq!(header(recorded, "x-client-request-id"), None);
+    assert_refused_for_the_line(resp, &up).await;
     up.shutdown().await;
 }
 
-/// The wire-level characterization of `insert_if_absent`'s seating rule: a first-party line that already ends
-/// in `cc_turn_origin` still ends in it once a field is filled ahead of it, and the `cch` filled ahead of it is
-/// the client's own placeholder.
+/// The wire-level characterization of `insert_if_absent`'s seating rule: a first-party line that carries
+/// `cc_turn_origin` and two of the fields the client writes after it keeps all three in place once a field is
+/// filled ahead of them, and the `cch` filled ahead of it is the client's own placeholder.
 #[tokio::test]
 async fn a_first_party_line_carrying_cc_turn_origin_keeps_its_order_when_a_field_is_filled() {
     const SESSION: &str = "b2f7a3c1-9e44-4a3f-8b02-2a6a1e9c4f10";
@@ -595,7 +591,7 @@ async fn a_first_party_line_carrying_cc_turn_origin_keeps_its_order_when_a_field
         .await
         .unwrap();
     let native = format!(
-        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cc_prompt_id={PROMPT_ID}; cc_turn_origin=human;"}}],"metadata":{{"user_id":"{{\"account_uuid\":\"\",\"session_id\":\"s-1\"}}"}},"messages":[{{"role":"user","content":"hi"}}]}}"#
+        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cc_prompt_id={PROMPT_ID}; cc_turn_origin=human; cc_turn_index=3; cc_project=p;"}}],"metadata":{{"user_id":"{{\"account_uuid\":\"\",\"session_id\":\"s-1\"}}"}},"messages":[{{"role":"user","content":"hi"}}]}}"#
     );
     let mut req = request_from_fixture(
         inference_head(FixtureKind::OauthNonFirstParty),
@@ -619,9 +615,11 @@ async fn a_first_party_line_carrying_cc_turn_origin_keeps_its_order_when_a_field
             "cch",
             "cc_prev_req",
             "cc_prompt_id",
-            "cc_turn_origin"
+            "cc_turn_origin",
+            "cc_turn_index",
+            "cc_project"
         ],
-        "cc_prev_req lands ahead of cc_prompt_id, and cc_turn_origin still closes the line"
+        "cc_prev_req lands ahead of cc_prompt_id, and the fields after cc_turn_origin stay last"
     );
     assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
     assert_eq!(field(&line, "cc_prompt_id"), Some(PROMPT_ID));
@@ -682,6 +680,87 @@ async fn an_api_key_account_toward_api_anthropic_com_is_restored_too() {
         position(sent, "x-client-request-id"),
         position(sent, "x-app") + 1
     );
+    up.shutdown().await;
+}
+
+/// The stamped first-party body naming `u-1` in its identity slot and signed again, as a client signed in to an
+/// account sends it, so the admission's hash check reads a current stamp.
+fn naming_an_account() -> Vec<u8> {
+    let spliced = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen(r#"\"account_uuid\":\"\""#, r#"\"account_uuid\":\"u-1\""#, 1);
+    assert!(
+        spliced.contains(r#"\"account_uuid\":\"u-1\""#),
+        "the splice landed"
+    );
+    phoebis_cch::sign(spliced.as_bytes()).unwrap()
+}
+
+/// The members of `metadata.user_id`, decoded from the string the client escapes them in.
+fn user_id_of(wire: &[u8]) -> serde_json::Value {
+    let root: serde_json::Value = serde_json::from_slice(wire).expect("the body parses");
+    serde_json::from_str(
+        root["metadata"]["user_id"]
+            .as_str()
+            .expect("user_id is a string"),
+    )
+    .expect("user_id holds JSON")
+}
+
+/// The upstream saw the empty uuid with the client's other identity members, under a stamp current over the
+/// bytes it received.
+fn assert_blanked(sent: &fake_upstream::RecordedRequest, native: &[u8]) {
+    let (before, after) = (user_id_of(native), user_id_of(&sent.body));
+    assert_eq!(after["account_uuid"], "", "the uuid is blanked");
+    assert_eq!(after["device_id"], before["device_id"]);
+    assert_eq!(after["session_id"], before["session_id"]);
+    assert!(
+        phoebis_cch::sign(&sent.body).unwrap() == sent.body,
+        "the stamp is current over the sent bytes"
+    );
+}
+
+#[tokio::test]
+async fn an_api_key_leg_blanks_a_stamped_bodys_account_uuid_and_re_signs_it() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::ApiKey, &up).await;
+    let native = naming_an_account();
+    let resp = app
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::ApiKey),
+            &native,
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_blanked(&up.requests()[0], &native);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_probe_on_an_api_key_account_carries_the_empty_uuid_too() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let h = harness(
+        &up,
+        &[api_key("acct", "sk-ant-api03-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let native = naming_an_account();
+    let probe = phoebis_relay::Probe {
+        key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+    };
+    let resp = h
+        .relay
+        .probe(
+            probe,
+            request_from_fixture(inference_head(FixtureKind::ApiKey), &native, KEY),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_blanked(&up.requests()[0], &native);
     up.shutdown().await;
 }
 
@@ -789,7 +868,7 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
 }
 
 #[tokio::test]
-async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the_store() {
+async fn the_previous_request_id_survives_a_restart_through_the_store() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
@@ -808,9 +887,6 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
         .oneshot(cli_request("s-1", None, None))
         .await
         .unwrap();
-    let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
-        .unwrap()
-        .to_string();
     let key = MemoryKey::for_session(
         "desktop",
         h.store.api_key("desktop").unwrap().unwrap().created_at,
@@ -868,11 +944,6 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
         field(&second, "cc_prev_req"),
         Some("req_up_0001"),
         "restored across the restart"
-    );
-    assert_eq!(
-        field(&second, "cc_prompt_id"),
-        Some(prompt.as_str()),
-        "the tool loop keeps the turn's id"
     );
     assert_eq!(
         h.relay
@@ -968,10 +1039,12 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
     up.shutdown().await;
 }
 
-/// A subagent's first request after a restart inherits its parent's turn: the parent's own row is read back
-/// for the lookup, which reads what is in memory and nothing else.
+/// The session's prompt id rides the saved record through a restart, and no request takes it from there: the
+/// line's id is the request's own header, so a subagent asking first and the parent's next turn send none and get
+/// none.
 #[tokio::test]
-async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_id() {
+async fn a_restart_changes_no_prompt_id_since_the_memory_is_no_longer_its_source() {
+    const PROMPT_ID: &str = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a";
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
@@ -987,12 +1060,9 @@ async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_
     .await;
     h.app
         .clone()
-        .oneshot(cli_request("s-1", None, None))
+        .oneshot(with_prompt_id(cli_request("s-1", None, None), PROMPT_ID))
         .await
         .unwrap();
-    let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
-        .unwrap()
-        .to_string();
     h.relay.flush_memory().await;
     drop(h);
     drop(store);
@@ -1027,8 +1097,24 @@ async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_
         .unwrap();
     assert_eq!(
         field(&billing_line(&up.requests()[1].body), "cc_prompt_id"),
-        Some(prompt.as_str()),
-        "the subagent inherits the turn its parent left behind rather than minting one beside it"
+        None,
+        "the subagent takes nothing from the turn its parent left behind"
+    );
+    h.app
+        .clone()
+        .oneshot(tool_loop_request("s-1"))
+        .await
+        .unwrap();
+    let parent = billing_line(&up.requests()[2].body);
+    assert_eq!(
+        field(&parent, "cc_prev_req"),
+        Some("req_up_0001"),
+        "the parent's record came back from the store"
+    );
+    assert_eq!(
+        field(&parent, "cc_prompt_id"),
+        None,
+        "and its saved id stayed off the parent's next line"
     );
     up.shutdown().await;
 }
@@ -1037,6 +1123,7 @@ async fn a_subagent_that_asks_first_after_a_restart_inherits_the_parents_prompt_
 /// bare entry its own write would create.
 #[tokio::test]
 async fn a_commit_after_its_key_was_evicted_and_saved_keeps_the_sessions_turn() {
+    const PROMPT_ID: &str = "6d5c4b3a-2918-4f7e-8d6c-5b4a39281706";
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Gated(Box::new(Respond::Json {
@@ -1065,15 +1152,20 @@ async fn a_commit_after_its_key_was_evicted_and_saved_keeps_the_sessions_turn() 
     );
     let held = tokio::spawn({
         let app = h.app.clone();
-        async move { app.oneshot(cli_request("s-1", None, None)).await.unwrap() }
+        async move {
+            app.oneshot(with_prompt_id(cli_request("s-1", None, None), PROMPT_ID))
+                .await
+                .unwrap()
+        }
     });
     wait_for(std::time::Duration::from_secs(5), || {
         (up.requests().len() == 1).then_some(())
     })
     .await;
-    let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
-        .unwrap()
-        .to_string();
+    assert_eq!(
+        field(&billing_line(&up.requests()[0].body), "cc_prompt_id"),
+        Some(PROMPT_ID)
+    );
     // The one slot goes to another session while that request is still upstream, and the flush the periodic
     // task would run saves what the eviction left behind.
     h.app
@@ -1087,6 +1179,24 @@ async fn a_commit_after_its_key_was_evicted_and_saved_keeps_the_sessions_turn() 
     assert_eq!(resp.status(), 200);
     resp.into_body().collect().await.unwrap();
     h.relay.flush_memory().await;
+    // The commit writes the request id itself, so the record's prompt id alone tells the saved record from the
+    // bare entry the commit would otherwise have built.
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        "s-1",
+        "main",
+    );
+    let saved = h
+        .store
+        .load(&key)
+        .unwrap()
+        .expect("the session's record is saved");
+    let saved: serde_json::Value = serde_json::from_str(&saved.payload).unwrap();
+    assert_eq!(
+        saved["prompt_id"], PROMPT_ID,
+        "the commit read the saved record back rather than replacing it with a bare entry"
+    );
     up.set_rule_after(
         2,
         "/v1/messages",
@@ -1102,9 +1212,9 @@ async fn a_commit_after_its_key_was_evicted_and_saved_keeps_the_sessions_turn() 
         .await
         .unwrap();
     assert_eq!(
-        field(&billing_line(&up.requests()[2].body), "cc_prompt_id"),
-        Some(prompt.as_str()),
-        "the commit read the saved record back rather than replacing it with a bare entry"
+        field(&billing_line(&up.requests()[2].body), "cc_prev_req"),
+        Some("req_up_0001"),
+        "the next request names the answer the commit recorded"
     );
     up.shutdown().await;
 }
@@ -1114,9 +1224,37 @@ async fn a_commit_after_its_key_was_evicted_and_saved_keeps_the_sessions_turn() 
 /// streaming leaves the write to build a bare entry over the saved one.
 #[tokio::test]
 async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
+    const PROMPT_ID: &str = "8e7d6c5b-4a39-4281-9f0e-1d2c3b4a5968";
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
-        respond: Respond::SseGated {
+        respond: json_200_with_headers(&[("request-id", "req_up_0000")]),
+    }])
+    .await;
+    let h = harness_with_memory_cap(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+        1,
+    )
+    .await;
+    // The hook runs only for a request that carried or received the member, so every session here sends the
+    // client's own and each commit's hook joins the race below. The session's first answer leaves a request id
+    // in its record, which only the saved record carries once the key is evicted.
+    let resp = h
+        .app
+        .clone()
+        .oneshot(with_prompt_id(cli_request_with_member("s-1"), PROMPT_ID))
+        .await
+        .unwrap();
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        field(&billing_line(&up.requests()[0].body), "cc_prompt_id"),
+        Some(PROMPT_ID)
+    );
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::SseGated {
             status: 200,
             // No `request-id`: `record_request_id` is skipped, so the commit-time restore installs the entry
             // clean and nothing marks it dirty until the hook does, leaving the narrow window the hook's own
@@ -1133,30 +1271,17 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
                 },
             ],
         },
-    }])
-    .await;
-    let h = harness_with_memory_cap(
-        &up,
-        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
-        PoolSpec::default(),
-        1,
-    )
-    .await;
-    // The hook runs only for a request that carried or received the member, so every session here sends the
-    // client's own and each commit's hook joins the race below.
+    );
     let held = tokio::spawn({
         let app = h.app.clone();
         async move { app.oneshot(cli_request_with_member("s-1")).await.unwrap() }
     });
     wait_for(std::time::Duration::from_secs(5), || {
-        (up.requests().len() == 1).then_some(())
+        (up.requests().len() == 2).then_some(())
     })
     .await;
-    let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
-        .unwrap()
-        .to_string();
     up.set_rule_after(
-        1,
+        2,
         "/v1/messages",
         Respond::Json {
             status: 200,
@@ -1177,7 +1302,7 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
     // commits race the hook's own restore for the cap, so the eviction it has to survive can still land
     // between the restore and the write, whichever of them the scheduler runs last.
     up.set_rule_after(
-        2,
+        3,
         "/v1/messages",
         Respond::Gated(Box::new(Respond::Json {
             status: 200,
@@ -1195,7 +1320,7 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
         })
         .collect();
     wait_for(std::time::Duration::from_secs(5), || {
-        (up.requests().len() == 6).then_some(())
+        (up.requests().len() == 7).then_some(())
     })
     .await;
     up.release();
@@ -1213,9 +1338,9 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
         .unwrap();
     let last = up.requests().last().unwrap().body.clone();
     assert_eq!(
-        field(&billing_line(&last), "cc_prompt_id"),
-        Some(prompt.as_str()),
-        "the hook restored before it wrote, so the saved turn was not overwritten by a bare entry"
+        field(&billing_line(&last), "cc_prev_req"),
+        Some("req_up_0000"),
+        "the hook restored before it wrote, so the saved record was not overwritten by a bare entry"
     );
     up.shutdown().await;
 }
@@ -1424,6 +1549,187 @@ async fn a_stamped_body_with_a_lone_surrogate_keeps_its_restoration_its_session_
         credentials_seen(&up),
         [A, A, A],
         "no request reached the second account"
+    );
+    up.shutdown().await;
+}
+
+// The restoration by class: a headless Claude Code 2.1.302 session captured on the wire showed two of the six
+// requests below, a main turn and a classifier call. It sent no compaction request, subagent summary fork,
+// main-thread fork or side reply, so those four cases pin the table by class as read from the client's builder.
+
+/// A request of the reduced-shape fixture on `session` under `class`, with the contract's items in place: the
+/// session and class headers here, the line and `metadata.user_id` in the fixture's body.
+fn class_request(session: &str, class: &str) -> Request<Body> {
+    let mut req = cli_request(session, None, None);
+    set_header(&mut req, "x-claude-code-request-class", class);
+    req
+}
+
+/// `class_request` on a subagent's line, which names `cc_is_subagent`, under the agent-id header.
+fn subagent_class_request(session: &str, class: &str, agent: &str) -> Request<Body> {
+    let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
+        .unwrap()
+        .replacen(
+            "cc_entrypoint=sdk-cli;",
+            "cc_entrypoint=sdk-cli; cc_is_subagent=true;",
+            1,
+        );
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        native.as_bytes(),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", session);
+    set_header(&mut req, "x-claude-code-request-class", class);
+    set_header(&mut req, "x-claude-code-agent-id", agent);
+    req
+}
+
+fn field_names(line: &str) -> Vec<&str> {
+    line.trim_start_matches("x-anthropic-billing-header: ")
+        .split("; ")
+        .map(|f| f.split('=').next().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_main_turn_without_cc_prev_req_gets_the_memorys_previous_id() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(class_request("s-1", "main"))
+        .await
+        .unwrap();
+    app.clone()
+        .oneshot(class_request("s-1", "main"))
+        .await
+        .unwrap();
+    let line = billing_line(&up.requests()[1].body);
+    assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
+    assert_eq!(
+        field(&line, "cc_prompt_id"),
+        None,
+        "the turn sent no prompt-id header"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_compaction_request_gets_the_previous_id_too() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(class_request("s-1", "main"))
+        .await
+        .unwrap();
+    let mut compaction = class_request("s-1", "compaction");
+    set_header(&mut compaction, "x-claude-code-compaction", "auto");
+    let resp = app.clone().oneshot(compaction).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let line = billing_line(&up.requests()[1].body);
+    assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
+    assert_eq!(
+        field(&line, "cc_prompt_id"),
+        None,
+        "the request sent no prompt-id header"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_classifier_call_gets_cch_alone_though_the_memory_holds_a_previous_id_and_a_prompt_id_for_its_session(
+) {
+    const PROMPT_ID: &str = "1f2e3d4c-5b6a-4798-8a7b-6c5d4e3f2a1b";
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(with_prompt_id(class_request("s-1", "main"), PROMPT_ID))
+        .await
+        .unwrap();
+    let mut classifier = class_request("s-1", "auxiliary");
+    classifier
+        .headers_mut()
+        .append("anthropic-beta", HeaderValue::from_static(CLASSIFIER_BETA));
+    let resp = app.clone().oneshot(classifier).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        field_names(&billing_line(&up.requests()[1].body)),
+        ["cc_version", "cc_entrypoint", "cch"],
+        "a side query's native line carries neither id"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_subagent_summary_fork_with_the_agent_id_header_gets_its_cc_prev_req() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(subagent_class_request("s-1", "subagent", "sub-1"))
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(subagent_class_request("s-1", "auxiliary", "sub-1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let line = billing_line(&up.requests()[1].body);
+    assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
+    assert_eq!(
+        field_names(&line),
+        [
+            "cc_version",
+            "cc_entrypoint",
+            "cch",
+            "cc_is_subagent",
+            "cc_prev_req"
+        ],
+        "the fork sent no prompt-id header, so no cc_prompt_id joins the line"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_main_thread_fork_with_the_prompt_id_header_gets_its_cc_prev_req_and_its_cc_prompt_id() {
+    const PROMPT_ID: &str = "4d3c2b1a-0f9e-48d7-9c6b-5a4f3e2d1c0b";
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(class_request("s-1", "main"))
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(with_prompt_id(class_request("s-1", "auxiliary"), PROMPT_ID))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let line = billing_line(&up.requests()[1].body);
+    assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
+    assert_eq!(field(&line, "cc_prompt_id"), Some(PROMPT_ID));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_side_reply_gets_cch_alone() {
+    const PROMPT_ID: &str = "7b6a5f4e-3d2c-4b1a-8f9e-0d1c2b3a4f5e";
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    app.clone()
+        .oneshot(with_prompt_id(class_request("s-1", "main"), PROMPT_ID))
+        .await
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(class_request("s-1", "side_reply"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        field_names(&billing_line(&up.requests()[1].body)),
+        ["cc_version", "cc_entrypoint", "cch"],
+        "a side query's native line carries neither id"
     );
     up.shutdown().await;
 }

@@ -432,13 +432,15 @@ impl Default for BurnRates {
 }
 
 impl BurnRates {
-    /// One second of the pin's burn in `unit`, with the fast usage read from the row's own `burn_fast`. Under `Usd` the
-    /// row's plain copy at the set the pin's last prompt selects plus the fast usage through the fast table. On a row
-    /// with fast cells that table carries them whatever the prompt, so a prompt that crosses the threshold reprices the
-    /// ordinary usage alone, and on a row without them it carries the row's own sets, so the fast usage reprices with
-    /// the row, as the ledger prices a fast answer there. Under `WindowShare` the banded copy alone, through the table
-    /// of the pin's regime: fast usage draws usage credits, never the plan's window. `None` where a type the pin burns
-    /// has no rate.
+    /// One second of the pin's burn in `unit`, with the fast usage read from the row's own `burn_fast` and the usage
+    /// of the client's own classifier calls from the row's own `burn_unmetered`. Under `Usd` the row's plain copy at
+    /// the set the pin's last prompt selects plus the fast usage through the fast table plus the unmetered usage
+    /// through the dollar table at the set the last prompt selects. On a row with fast cells the fast table carries
+    /// them whatever the prompt, so a prompt that crosses the threshold reprices the ordinary usage alone, and on a row
+    /// without them it carries the row's own sets, so the fast usage reprices with the row, as the ledger prices a fast
+    /// answer there. Under `WindowShare` the banded copy alone, through the table of the pin's regime: fast usage draws
+    /// usage credits and a classifier call takes no share of a plan window, so neither reaches the plan's figure, while
+    /// an account in overage or on an API key pays the dollars of both. `None` where a type the pin burns has no rate.
     pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow) -> Option<f64> {
         let own = unit.table(self, entrypoint_of(pin)).price_burn(
             &pin.model,
@@ -449,7 +451,12 @@ impl BurnRates {
             BurnUnit::Usd => Some(
                 own + self
                     .fast
-                    .price_burn(&pin.model, &pin.burn_fast, pin.last_input_tokens)?,
+                    .price_burn(&pin.model, &pin.burn_fast, pin.last_input_tokens)?
+                    + self.dollars.price_burn(
+                        &pin.model,
+                        &pin.burn_unmetered,
+                        pin.last_input_tokens,
+                    )?,
             ),
             BurnUnit::WindowShare => Some(own),
         }
@@ -590,6 +597,9 @@ pub enum Report {
         cache_ttl_ms: i64,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
+        /// The request is the client's own classifier call, which charges no plan window and enters the pin's
+        /// unmetered copy alone.
+        classifier: bool,
     },
     Sample {
         account_id: String,
@@ -608,6 +618,9 @@ pub enum Report {
         usage: PinUsage,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
+        /// The request is the client's own classifier call, which charges no plan window, so the report only
+        /// releases its booking.
+        classifier: bool,
         /// The request whose booking the usage releases before it charges, and the wire attempt that answered.
         request_id: String,
         attempt: u32,
@@ -1083,7 +1096,7 @@ pub struct WindowProjection {
 /// the ceiling on the window that binds among those the pin's model draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinStanding {
-    /// The pin with its three burn copies decayed with its pool's burn average and `burn_at` the instant they are
+    /// The pin with its four burn copies decayed with its pool's burn average and `burn_at` the instant they are
     /// decayed to. A pin never folded keeps its burn and its `burn_at` as stored.
     pub pin: PinRow,
     pub runway_ms: Option<i64>,
@@ -2593,7 +2606,7 @@ fn pins_standing(state: &RoutingState, snapshot: &RegistrySnapshot, now: i64) ->
         .collect()
 }
 
-/// The pin's three burn copies decayed from their last fold to `now`. Every type decays by one factor, as
+/// The pin's four burn copies decayed from their last fold to `now`. Every type decays by one factor, as
 /// `burn_shares` decays the share, so pricing the decayed copy equals decaying the priced one.
 fn decayed(pin: PinRow, now: i64, average_ms: i64) -> PinRow {
     let Some(at) = pin.burn_at else {
@@ -2611,6 +2624,7 @@ fn decayed(pin: PinRow, now: i64, average_ms: i64) -> PinRow {
         burn: scale(pin.burn),
         burn_banded: scale(pin.burn_banded),
         burn_fast: scale(pin.burn_fast),
+        burn_unmetered: scale(pin.burn_unmetered),
         // A fold dated past `now` (two relays' clocks) decays nothing, so its burn stands at its own instant.
         burn_at: Some(now.max(at)),
         ..pin
@@ -3789,6 +3803,7 @@ impl Task {
                 origin,
                 cache_ttl_ms,
                 fast,
+                classifier,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
                 let key = PinKey {
@@ -3863,16 +3878,24 @@ impl Task {
                                 }
                             };
                             // A fast answer is usage credits: its tokens land in the row's fast copy, priced later
-                            // through the fast table (`BurnRates::fast`), while the row's two other copies only
-                            // decay. A standard answer folds into the plain and banded copies, the banded one
-                            // weighed by the band, and the fast copy only decays.
-                            let (plain, fast_weight) = if fast { (0.0, 1.0) } else { (1.0, 0.0) };
+                            // through the fast table (`BurnRates::fast`). The client's classifier call takes no
+                            // share of a plan window, so its tokens land in the unmetered copy alone, priced in
+                            // dollars and never under the window share. A standard answer folds into the plain and
+                            // banded copies, the banded one weighed by the band. Every copy an answer does not land
+                            // in only decays.
+                            let (plain, fast_weight, unmetered_weight) = match (classifier, fast) {
+                                (true, _) => (0.0, 0.0, 1.0),
+                                (false, true) => (0.0, 1.0, 0.0),
+                                (false, false) => (1.0, 0.0, 0.0),
+                            };
                             renewed.burn = folded(renewed.burn, plain);
-                            renewed.burn_banded =
-                                folded(renewed.burn_banded, if fast { 0.0 } else { band });
+                            renewed.burn_banded = folded(renewed.burn_banded, plain * band);
                             renewed.burn_fast = folded(renewed.burn_fast, fast_weight);
+                            renewed.burn_unmetered =
+                                folded(renewed.burn_unmetered, unmetered_weight);
                             renewed.burn_at = Some(now);
                             renewed.last_input_tokens = prompt;
+                            renewed.last_classifier = classifier;
                         }
                         self.state.put_pin(renewed.clone());
                         self.state.mark_renewed(&key);
@@ -3969,6 +3992,7 @@ impl Task {
                 incarnation,
                 usage,
                 fast,
+                classifier,
                 request_id,
                 attempt: _,
                 entrypoint,
@@ -3976,8 +4000,9 @@ impl Task {
                 // The usage replaces the booking, on every path below: a request that holds none (a renewal, a
                 // request from before a restart, one whose booking the purge expired) still charges its account.
                 self.state.release_reservation(&request_id);
-                // A fast completion draws usage credits and no plan window.
-                if self.moved_past(&account_id, incarnation) || fast {
+                // A fast completion draws usage credits, and the client's classifier call takes no share of a plan
+                // window, so neither charges one.
+                if self.moved_past(&account_id, incarnation) || fast || classifier {
                     return;
                 }
                 let snapshot = self
@@ -5212,7 +5237,9 @@ mod tests {
             burn_at: None,
             burn_banded: input(16.0),
             burn_fast: input(6.0),
+            burn_unmetered: PinBurn::default(),
             last_input_tokens: 0,
+            last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
             shed_from: None,

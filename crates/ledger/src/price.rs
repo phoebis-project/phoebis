@@ -8,11 +8,15 @@
 use phoebis_routing::PinUsage;
 
 use crate::plan::{
-    price_equivalent, price_shares, Funding, PlanTables, PricedShares, WindowShares,
+    free_equivalent, free_shares, price_equivalent, price_shares, Funding, PlanTables,
+    PricedShares, WindowShares,
 };
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::query::PROBE_KIND;
 use crate::rollup::CostSplit;
+
+/// The share reason of a plan row priced at no share by rule: the client's own classifier call.
+pub const SHARE_REASON_CLIENT_CLASSIFIER: &str = "client_classifier";
 
 /// What prices a row: its model, the cells its speed and band select, who paid, the rollup's `kind` word, the account
 /// tier the row carries (`None` for an api_key account, a profile not yet read, or the rollup's `-`), the entrypoint
@@ -30,6 +34,9 @@ pub struct RowKey<'a> {
     pub tier: Option<&'a str>,
     /// The request's entrypoint from its `client` label, `None` the base regime.
     pub entrypoint: Option<&'a str>,
+    /// The row is the client's own classifier call, which takes no share of a plan window and the normal dollars
+    /// elsewhere.
+    pub classifier: bool,
     pub at: i64,
     pub band_at: Option<i64>,
 }
@@ -48,6 +55,9 @@ pub struct Priced {
     pub equivalent: Option<WindowShares>,
     /// Whether any window of `shares` or `equivalent` priced at the weight of its model tier's latest weighted model.
     pub estimated: bool,
+    /// Why the shares read zero by rule rather than by usage: `client_classifier` under the plan for a classifier
+    /// call, `None` for a row priced from its counts.
+    pub share_reason: Option<&'static str>,
 }
 
 /// Every figure for one row, the probe rows' dearest-cell fallback inside it.
@@ -66,6 +76,20 @@ pub fn price_row(
         return Priced {
             usd,
             ..Priced::default()
+        };
+    }
+    if key.classifier {
+        // A free call spends no window, so the 20x equivalent is zero too, and the dollars stay for the cost views.
+        let shares = key
+            .tier
+            .filter(|tier| costs.revisions.in_force(key.at).sizes(key.entrypoint, tier))
+            .map(|tier| free_shares(costs, key.entrypoint, tier, key.model, key.at));
+        return Priced {
+            usd,
+            shares,
+            equivalent: Some(free_equivalent(costs, key.entrypoint, key.model, key.at)),
+            estimated: false,
+            share_reason: Some(SHARE_REASON_CLIENT_CLASSIFIER),
         };
     }
     let band_at = key.band_at.unwrap_or(key.at);
@@ -92,6 +116,7 @@ pub fn price_row(
             || shares.as_ref().is_some_and(PricedShares::any_estimated),
         shares: shares.map(|priced| priced.shares),
         equivalent: Some(equivalent.shares),
+        share_reason: None,
     }
 }
 
@@ -149,6 +174,7 @@ mod tests {
             kind: "inference",
             tier: Some(MAX_20X),
             entrypoint: None,
+            classifier: false,
             at: JANUARY_2026,
             band_at: None,
         }
@@ -225,6 +251,140 @@ mod tests {
                 (&priced.shares, &priced.equivalent, priced.estimated),
                 (&None, &None, false),
                 "{funding:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plan_row_of_a_classifier_call_answers_zero_on_every_window_with_the_reason_and_its_dollars(
+    ) {
+        let plain = price(&plan_row(), input(1_000));
+        let free = price(
+            &RowKey {
+                classifier: true,
+                ..plan_row()
+            },
+            input(1_000),
+        );
+        assert!(free.usd.is_some(), "Opus 5.5 is listed");
+        assert_eq!(free.usd, plain.usd, "the dollars stay for the cost views");
+        for (free_map, plain_map) in [
+            (&free.shares, &plain.shares),
+            (&free.equivalent, &plain.equivalent),
+        ] {
+            let plain_windows = windows(plain_map);
+            assert!(!plain_windows.is_empty(), "{plain:?}");
+            assert_eq!(
+                windows(free_map),
+                plain_windows
+                    .iter()
+                    .map(|(window, _)| (*window, Some(0.0)))
+                    .collect::<Vec<_>>(),
+                "every window the plain row prices reads zero: {free:?}"
+            );
+        }
+        assert!(!free.estimated);
+        assert_eq!(free.share_reason, Some("client_classifier"));
+        assert_eq!(plain.share_reason, None);
+    }
+
+    #[test]
+    fn an_overage_and_an_api_key_row_of_a_classifier_call_answer_their_dollars_and_no_reason() {
+        for funding in [Funding::Overage, Funding::ApiKey] {
+            let row = RowKey {
+                funding,
+                ..plan_row()
+            };
+            let plain = price(&row, input(1_000_000));
+            let marked = price(
+                &RowKey {
+                    classifier: true,
+                    ..row
+                },
+                input(1_000_000),
+            );
+            assert!(plain.usd.is_some(), "{funding:?}");
+            assert_eq!(marked, plain, "{funding:?}");
+            assert_eq!(marked.share_reason, None, "{funding:?}");
+        }
+    }
+
+    // Mystery 2 sits on a model tier with no weighted model, so a priced row reads both windows unpriced, while the
+    // marker's zero maps come from Max 20x's capacity alone.
+    #[test]
+    fn a_classifier_call_on_a_model_the_weight_table_lacks_answers_the_full_zero_maps() {
+        let row = RowKey {
+            model: "claude-mystery-2",
+            ..plan_row()
+        };
+        let free = price(
+            &RowKey {
+                classifier: true,
+                ..row
+            },
+            input(1_000),
+        );
+        for map in [&free.shares, &free.equivalent] {
+            assert_eq!(
+                windows(map),
+                [(FIVE_HOUR, Some(0.0)), (SEVEN_DAY, Some(0.0))],
+                "{free:?}"
+            );
+        }
+        assert!(!free.estimated);
+        assert_eq!(free.share_reason, Some("client_classifier"));
+        let plain = price(&row, input(1_000));
+        for map in [&plain.shares, &plain.equivalent] {
+            assert_eq!(
+                windows(map),
+                [(FIVE_HOUR, None), (SEVEN_DAY, None)],
+                "{plain:?}"
+            );
+        }
+    }
+
+    // With Sonnet 5.5's weight nulled its tier holds no weighted model, so no fallback prices it.
+    #[test]
+    fn a_classifier_call_on_a_model_with_a_null_weight_and_no_fallback_answers_the_full_zero_maps()
+    {
+        let text = first_entry_costs_text().replace(
+            "      claude-sonnet-5-5: 1\n",
+            "      claude-sonnet-5-5: null\n",
+        );
+        let costs = PlanTables {
+            revisions: CostRevisions::from_yaml(&text).expect("the edited model loads"),
+            path: None,
+            source: "test".to_string(),
+        };
+        let row = RowKey {
+            model: "claude-sonnet-5-5",
+            at: JANUARY_2026,
+            ..plan_row()
+        };
+        let free = price_row(
+            &api_prices(),
+            &costs,
+            &RowKey {
+                classifier: true,
+                ..row
+            },
+            input(1_000),
+        );
+        for map in [&free.shares, &free.equivalent] {
+            assert_eq!(
+                windows(map),
+                [(FIVE_HOUR, Some(0.0)), (SEVEN_DAY, Some(0.0))],
+                "{free:?}"
+            );
+        }
+        assert!(!free.estimated);
+        assert_eq!(free.share_reason, Some("client_classifier"));
+        let plain = price_row(&api_prices(), &costs, &row, input(1_000));
+        for map in [&plain.shares, &plain.equivalent] {
+            assert_eq!(
+                windows(map),
+                [(FIVE_HOUR, None), (SEVEN_DAY, None)],
+                "{plain:?}"
             );
         }
     }

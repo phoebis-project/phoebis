@@ -1,5 +1,6 @@
 // A type-only import, so the API bundle the unit tests load stays free of React.
 import type { Option } from '@/components/ui/OptionList';
+import { NO_CLASS } from './dimensions';
 import { kindsChipText } from './routingLog';
 
 export type DimensionKind = 'choice' | 'flag' | 'id' | 'list' | 'pattern';
@@ -168,6 +169,18 @@ export const REQUESTS_DIMENSIONS: Dimension[] = [
     word: 'status',
   },
   { field: 'agentTypes', group: 'Request', kind: 'list', label: 'Agent type', mono: true, word: 'agent type' },
+  {
+    field: 'classifiers',
+    group: 'Request',
+    kind: 'list',
+    label: 'Classifier',
+    // The option `client classifier` would read the word twice after `classifier:`, so the chip prints the standing.
+    text: (value, options) => {
+      const standings = value as string[];
+      return worded('classifier', listed(standings.map((v) => (v === NO_CLASS ? 'none' : v))), standings.map((v) => labelOf(v, options)).join(', '));
+    },
+    word: 'classifier',
+  },
   { field: 'client', group: 'Request', kind: 'pattern', label: 'Client', mono: true, word: 'client' },
   { field: 'efforts', group: 'Request', kind: 'list', label: 'Effort', mono: true, word: 'effort' },
   { anyLabel: 'Any kind', field: 'kind', group: 'Request', kind: 'choice', label: 'Kind', word: 'kind' },

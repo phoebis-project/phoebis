@@ -58,7 +58,7 @@
         "id": "subagent-status-summary",
         "version": 1,
         "name": "Subagent status summary",
-        "description": "Claude Code forks each running subagent's whole conversation every 30 seconds to ask for a status line of three to five words. Each fork reads the subagent's full cached context for about 24 output tokens, and no client setting turns it off. On one router the forks were 22 percent of every cached token read over three days. Blocking them leaves the Agent tool's status line static and changes nothing else.",
+        "description": "Claude Code forks each running subagent's whole conversation every 30 seconds to ask for a status line of three to five words. Each fork reads the subagent's full cached context for about 24 output tokens, and no client setting turns it off. Blocking the forks leaves the Agent tool's status line static and changes nothing else.",
         "measured_on": "Claude Code 2.1.296 to 2.1.302",
         "suggested_mode": "observe",
         "conditions": [

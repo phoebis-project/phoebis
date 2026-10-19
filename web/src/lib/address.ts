@@ -141,6 +141,8 @@ export interface RequestsAddress {
   agent: string;
   agentTypes: string[];
   cacheMissReasons: string[];
+  /** `client`, `-` for a request the marker does not hold. */
+  classifiers: string[];
   client: string;
   efforts: string[];
   /** Guardrail ids, `-` for a request no guardrail matched. */
@@ -175,6 +177,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   turnOrigins: list('turn_origins'),
   efforts: list('efforts'),
   requestClasses: list('request_classes'),
+  classifiers: list('classifiers'),
   speeds: list('speeds'),
   held: { kind: 'flag', name: 'held' },
   keys: list('keys'),
@@ -214,7 +217,7 @@ export interface AnalyticsAddress {
 
 // A key table rather than a list, so a grouping the burn route gains fails to compile until it is listed here. The
 // burn route's groupings are the breakdown's and its own `session`.
-const GROUP_BY_KEYS = { account: true, client: true, effort: true, key: true, kind: true, model: true, pool: true, request_class: true, session: true, speed: true, user_agent: true } satisfies Record<BurnGroup, true>;
+const GROUP_BY_KEYS = { account: true, classifier: true, client: true, effort: true, key: true, kind: true, model: true, pool: true, request_class: true, session: true, speed: true, user_agent: true } satisfies Record<BurnGroup, true>;
 const GROUP_BYS = Object.keys(GROUP_BY_KEYS) as BurnGroup[];
 
 export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({

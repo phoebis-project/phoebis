@@ -4,7 +4,7 @@ import * as d from './dist/api.js';
 
 const attempt = (accountKind, overageInUse, speed) => ({ accountKind, overageInUse, response: { speed } });
 const PLAN = attempt('oauth', false, 'standard');
-const request = (costShares, attempts = [PLAN], costUsd = 0.0048, more = {}) => ({ attempts, costEquivalent: null, costShares, costUsd, estimated: false, ...more });
+const request = (costShares, attempts = [PLAN], costUsd = 0.0048, more = {}) => ({ attempts, costEquivalent: null, costShares, costUsd, estimated: false, shareReason: null, ...more });
 /** The position under which a plan request reads its own window shares. */
 const SHARE_POSITIONS = ['share'];
 const POSITIONS = ['all', 'equivalent', 'native', 'share', 'usd'];
@@ -18,7 +18,7 @@ test('a plan request with shares reads the model week over the 5-hour share in t
     const unit = d.costUnitOf(request({ seven_day_fable: 0.0012, five_hour: 0.0042, seven_day: 0.00061 }), position);
     assert.deepEqual(
       unit,
-      { estimated: false, kind: 'shares', shares: [{ key: 'five_hour', share: 0.0042 }, { key: 'seven_day', share: 0.00061 }, { key: 'seven_day_fable', share: 0.0012 }], usd: 0.0048 },
+      { estimated: false, kind: 'shares', reason: null, shares: [{ key: 'five_hour', share: 0.0042 }, { key: 'seven_day', share: 0.00061 }, { key: 'seven_day_fable', share: 0.0012 }], usd: 0.0048 },
       `${position}: the shares read 5-hour, 7-day, then the model week, whatever order the route answered them in`,
     );
     assert.deepEqual(d.costCellOf(unit), { main: '0.12% Fable week', sub: '0.42% 5h', title: '0.42% of 5-hour, 0.061% of 7-day, 0.12% of 7-day Fable, $0.0048 equivalent' }, position);
@@ -126,6 +126,20 @@ test('a plan request the route priced no share for reads dollars over equivalent
   }
 });
 
+test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {
+  assert.equal(d.FREE_SHARE_TITLE, 'Free on the plan: a client classifier call takes no window share');
+  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: { five_hour: 0, seven_day: 0 }, shareReason: 'client_classifier' });
+  const zero = [{ key: 'five_hour', share: 0 }, { key: 'seven_day', share: 0 }];
+  for (const position of SHARE_POSITIONS) {
+    const unit = d.costUnitOf(free, position);
+    assert.deepEqual(unit, { estimated: false, kind: 'shares', reason: 'client_classifier', shares: zero, usd: 0.0012 }, position);
+    assert.deepEqual(d.costCellOf(unit), { main: '0% 7d', sub: '0% 5h', title: `${d.FREE_SHARE_TITLE}. 0% of 5-hour, 0% of 7-day, $0.0012 equivalent` }, `${position}: the zero shares read as figures, the title says why ahead of the estimate`);
+  }
+  const native = d.costUnitOf(free, 'native');
+  assert.deepEqual(native, { equivalents: zero, estimated: false, kind: 'equivalent', reason: 'client_classifier', usd: 0.0012 });
+  assert.deepEqual(d.costCellOf(native), { main: '0% 20x 5h', sub: '0% 20x 7d', title: `${d.FREE_SHARE_TITLE}. 0%, 0%, $0.0012 equivalent` }, 'native: the zero equivalents read as figures, the title says why ahead of the estimate');
+});
+
 test('a plan request priced on the 5-hour window alone reads it once, and one priced on its week alone reads the week', () => {
   for (const position of SHARE_POSITIONS) {
     const fiveHour = d.costUnitOf(request({ five_hour: 0.0042 }), position);
@@ -148,7 +162,7 @@ test('under native a plan request reads its 20x equivalents: the 5-hour one over
   const unit = d.costUnitOf(r, 'native');
   assert.deepEqual(
     unit,
-    { equivalents: [{ key: 'five_hour', share: 0.014667 }, { key: 'seven_day', share: 0.002444 }, { key: 'seven_day_fable', share: 0.02222 }], estimated: false, kind: 'equivalent', usd: 0.0048 },
+    { equivalents: [{ key: 'five_hour', share: 0.014667 }, { key: 'seven_day', share: 0.002444 }, { key: 'seven_day_fable', share: 0.02222 }], estimated: false, kind: 'equivalent', reason: null, usd: 0.0048 },
     'the equivalents read 5-hour, 7-day, then the model week, whatever order the route answered them in, and the own-window shares are not read',
   );
   assert.deepEqual(d.costCellOf(unit), { main: '1.47% 20x 5h', sub: '0.244% 20x 7d', title: '1.47% of 20x 5-hour, 0.244% of 20x 7-day, 2.22% of 20x Fable week, $0.0048 equivalent' });
@@ -156,7 +170,7 @@ test('under native a plan request reads its 20x equivalents: the 5-hour one over
 
 test('under native a plan request priced on the 5-hour window alone reads it once, with the null 7-day window left out', () => {
   const unit = d.costUnitOf(request(null, [PLAN], 0.0048, { costEquivalent: { five_hour: 0.01, seven_day: null } }), 'native');
-  assert.deepEqual(unit, { equivalents: [{ key: 'five_hour', share: 0.01 }], estimated: false, kind: 'equivalent', usd: 0.0048 });
+  assert.deepEqual(unit, { equivalents: [{ key: 'five_hour', share: 0.01 }], estimated: false, kind: 'equivalent', reason: null, usd: 0.0048 });
   assert.deepEqual(d.costCellOf(unit), { main: '1% 20x 5h', sub: '', title: '1% of 20x 5-hour, $0.0048 equivalent' });
 });
 
@@ -168,7 +182,7 @@ test('under native a plan request with no 5-hour equivalent leads with its 7-day
 
 test('under native a plan request of a model weighed on its week alone reads the week once', () => {
   const unit = d.costUnitOf(request(null, [PLAN], 0.0048, { costEquivalent: { seven_day_fable: 0.02222 } }), 'native');
-  assert.deepEqual(unit, { equivalents: [{ key: 'seven_day_fable', share: 0.02222 }], estimated: false, kind: 'equivalent', usd: 0.0048 });
+  assert.deepEqual(unit, { equivalents: [{ key: 'seven_day_fable', share: 0.02222 }], estimated: false, kind: 'equivalent', reason: null, usd: 0.0048 });
   assert.deepEqual(d.costCellOf(unit), { main: '2.22% 20x Fable week', sub: '', title: '2.22% of 20x Fable week, $0.0048 equivalent' });
 });
 

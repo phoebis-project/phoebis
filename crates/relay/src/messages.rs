@@ -18,9 +18,9 @@ use axum::{Json, Router};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, AutoMode, Bus, ClientFacts, CooldownSet, DiagnosticsSource,
-    Event, Fork, GuardrailMatch, Kind, Origin, Outcome, RequestComplete, RequestObserved,
-    RequestShape, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
+    AccountSelected, AttemptOutcome, AutoMode, Bus, Classifier, ClientFacts, CooldownSet,
+    DiagnosticsSource, Event, Fork, GuardrailMatch, Kind, Origin, Outcome, RequestComplete,
+    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
 };
 use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
@@ -48,7 +48,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
-use crate::body::{tier_ttls, uniform_ttl, VersionCheck, BILLING_LINE_PATH};
+use crate::body::{tier_ttls, uniform_ttl, AccountUuidEdit, VersionCheck, BILLING_LINE_PATH};
 use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
@@ -69,7 +69,8 @@ use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
-    client_class, climb, identify, waits_on, PendingReports, RequestIdentity, PENDING_REPORT_WAIT,
+    client_class, climb, contract_gap, identify, restores_prev_req, waits_on, PendingReports,
+    RequestIdentity, PENDING_REPORT_WAIT,
 };
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
@@ -178,6 +179,8 @@ pub struct RelayOutcome {
     /// `cc_version` suffix does not reproduce from the prompt and the user agent; in either case nothing was
     /// sent upstream.
     pub client_drift: Option<String>,
+    /// The item a `client_contract` refusal named, `None` for every other request.
+    pub client_contract: Option<String>,
     pub client_version: Option<String>,
     pub error_code: Option<String>,
     pub pin_epoch: Option<u64>,
@@ -750,6 +753,7 @@ impl Trace {
             ttfc_ms,
             error_code,
             client_drift: outcome.client_drift.clone(),
+            client_contract: outcome.client_contract.clone(),
             client_version: outcome.client_version.clone(),
             response_bytes,
             response_chunks,
@@ -820,6 +824,7 @@ impl Drop for CompletionGuard {
             ttfc_ms: None,
             error_code: Some("client_gone".into()),
             client_drift: None,
+            client_contract: None,
             client_version: None,
             response_bytes: None,
             response_chunks: None,
@@ -856,9 +861,17 @@ fn client_facts(
     facts: Option<&BodyFacts>,
 ) -> ClientFacts {
     let hints = ClientHints::read(headers);
+    let class = identity.map_or_else(|| client_class(headers), |i| i.client.clone());
+    // The pair marks under the Claude Code class alone: another client carrying it would hide its share from
+    // the prediction and the shedding, where the contract binds Claude Code alone.
+    let classifier = (ClientClass::of_label(&class) == ClientClass::ClaudeCode
+        && hints.request_class.as_deref() == Some("auxiliary")
+        && hints.classifier_beta)
+        .then_some(Classifier::Client);
     ClientFacts {
-        class: identity.map_or_else(|| client_class(headers), |i| i.client.clone()),
+        class,
         agent_type: hints.agent_type,
+        classifier,
         compaction: hints.compaction,
         context_compacted: hints.context_compacted,
         prev_tool_ms: hints.prev_tool_ms,
@@ -940,8 +953,9 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         // A key or policy refusal is conclusive whether it is caught at admission or at the reselect after an
         // attempt, so the ledger row reads rejected rather than failed. A guardrail's block is conclusive too: it
         // is answered at attempt 0, and naming it here keeps a later change to the attempt-count rule below from
-        // moving it.
+        // moving it. The contract's refusal is answered at attempt 0 and named here for the same reason.
         Some("auth_unknown")
+        | Some("client_contract")
         | Some("client_not_allowed")
         | Some("guardrail_blocked")
         | Some("model_not_allowed") => Outcome::Rejected,
@@ -999,7 +1013,10 @@ fn restore_with<'a>(
 ) -> Option<Restore<'a>> {
     restore.as_ref().map(|r| Restore {
         prompt_id: r.prompt_id.as_deref(),
-        prev_req: previous.request_id.as_deref(),
+        prev_req: r
+            .prev_req
+            .then_some(previous.request_id.as_deref())
+            .flatten(),
         restore_cch: true,
         skip: skip.iter().copied().collect(),
         system_is_array: r.system_is_array,
@@ -1655,6 +1672,8 @@ impl Relay {
             })
             .collect();
         let guardrail_id = evaluation.blocked.map(|i| guardrails[i].id.clone());
+        let client = client_facts(&parts.headers, Some(&identity), Some(&facts));
+        let classifier = client.classifier.is_some();
         trace
             .observed(
                 Some(&key),
@@ -1675,7 +1694,7 @@ impl Relay {
                     .as_ref()
                     .map(|c| c.message_boundaries.to_vec())
                     .unwrap_or_default(),
-                client_facts(&parts.headers, Some(&identity), Some(&facts)),
+                client,
                 auto_mode,
                 presented == Presented::Retired,
                 key.rotated_at,
@@ -1727,6 +1746,34 @@ impl Relay {
                     .await
             }
         };
+        // The contract: a Claude Code inference request carries what the router reads of it, or is refused before
+        // an account is chosen. After resolve, so a refused model is answered first, and
+        // before the drift checks, so a missing line is never a drift.
+        if identity.class == ClientClass::ClaudeCode && trace.kind == Kind::Inference {
+            if let Some(item) =
+                contract_gap(&parts.headers, &identity, &facts, request_class.as_deref())
+            {
+                let refusal = self.contract_refusal(
+                    item,
+                    &parts.headers,
+                    &trace,
+                    &key,
+                    &identity,
+                    request_class.as_deref(),
+                    client_version.as_deref(),
+                );
+                return self
+                    .refused(
+                        &trace,
+                        0,
+                        refusal,
+                        Some(&key),
+                        Some(&identity),
+                        client_version.as_deref(),
+                    )
+                    .await;
+            }
+        }
         // A separate field from `restore`: every client inference request of a conversation gets one,
         // because the diagnostics member the option forces names the previous answer in
         // that conversation whoever sent it. A probe reads under the same key, since it replays the session's own
@@ -1742,44 +1789,38 @@ impl Relay {
             }),
             _ => None,
         };
-        // The one store read of the request path, before either the prompt id or the previous request id is
-        // read: a miss after a restart or an eviction is filled from tier 2 here, on the blocking pool, so no
-        // worker blocks on SQLite for it. A probe and a token count restore nothing, since the prompt id is
-        // read for an inference alone.
+        // Read once, ahead of the restoration that takes its prompt id from the header, and reused on every
+        // attempt of this request.
+        let hints = ClientHints::read(&parts.headers);
+        // The one store read of the request path, ahead of the entry's write: a miss after a restart or an
+        // eviction is filled from tier 2 here, on the blocking pool, so no worker blocks on SQLite for it, and the
+        // write lands on the restored entry, so the leg's lookup of the previous request id finds it. A probe and
+        // a token count restore nothing here, since the entry is written for an inference alone.
         if let Some(key) = memory_key
             .as_ref()
             .filter(|_| trace.kind == Kind::Inference)
         {
-            let resident = self.memory.restore(key, received_at).await;
-            // The parent's row matters only when the child is new: `prompt_id` consults the parent for an
-            // agent's first request alone, so a resident child never pays a parent read.
-            if !resident {
-                if let Some(parent) = identity.parent_agent_id.as_deref() {
-                    self.memory
-                        .restore(&key.with_agent(parent), received_at)
-                        .await;
-                }
-            }
+            self.memory.restore(key, received_at).await;
         }
+        let prev_req = restores_prev_req(request_class.as_deref(), &parts.headers);
         // Claude Code's own inference requests alone: a probe replays what the client sent, a token count has no
         // line to fill, and a body without the block is relayed as sent and gets no client request id either.
         let restore = match (client_version.as_deref(), identity.session_id.as_deref()) {
             // The version lands in a line this build signs, so one spelled any other way than the client's
             // own restores nothing rather than a version guessed around whatever it carried.
             (Some(version), _) if trace.kind == Kind::Inference && facts.carries_line => {
-                restorable_version(version).map(|version| RestoreContext {
-                    cli_version: version.to_string(),
-                    prompt_units: facts.prompt_units.clone(),
-                    prompt_id: memory_key.as_ref().map(|key| {
-                        self.memory.prompt_id(
-                            key,
-                            identity.parent_agent_id.as_deref(),
-                            facts.fresh_user_turn,
-                            facts.prompt_id.as_deref(),
-                            received_at,
-                        )
-                    }),
-                    system_is_array: facts.system_is_array,
+                restorable_version(version).map(|version| {
+                    if let Some(key) = memory_key.as_ref() {
+                        self.memory
+                            .touch(key, hints.prompt_id.as_deref(), received_at);
+                    }
+                    RestoreContext {
+                        cli_version: version.to_string(),
+                        prompt_units: facts.prompt_units.clone(),
+                        prompt_id: hints.prompt_id.clone(),
+                        prev_req,
+                        system_is_array: facts.system_is_array,
+                    }
                 })
             }
             _ => None,
@@ -1877,8 +1918,7 @@ impl Relay {
             session = ?identity.session_id,
             "relaying a Messages request",
         );
-        // Read once and reused on every attempt of this request: neither fact changes across a failover.
-        let hints = ClientHints::read(&parts.headers);
+        // Read once and reused on every attempt of this request: the lane does not change across a failover.
         let lane = crate::lane::lane_of(&identity.canonical_model, &facts, hints.per_turn_effort);
         let admitted = Admitted {
             auto_mode_server,
@@ -1886,6 +1926,7 @@ impl Relay {
             cache_ttl_policy,
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
+            classifier,
             client_diagnostics,
             client_gzip,
             client_version,
@@ -2028,6 +2069,7 @@ impl Relay {
                     held_out,
                     lane: admitted.lane.clone(),
                     fast: admitted.fast,
+                    classifier: admitted.classifier,
                     body_tokens,
                 })
                 .await
@@ -2325,6 +2367,7 @@ impl Relay {
             attempt,
             false,
             None,
+            None,
             admitted.client_version.clone(),
             Some(code),
             None,
@@ -2406,6 +2449,7 @@ impl Relay {
                 *attempt,
                 false,
                 None,
+                None,
                 admitted.client_version.clone(),
                 Some("accounts_unavailable"),
                 None,
@@ -2445,11 +2489,22 @@ impl Relay {
         // Stable across a same-account replay: an OAuth refresh replaces the token, never the account identity
         // it names, so this is read once rather than through the closure below.
         let account_uuid = match admitted.trace.kind {
+            Kind::CountTokens => None,
+            Kind::Inference | Kind::Probe => credential.account_uuid.clone(),
+        };
+        let uuid_edit = match admitted.trace.kind {
             // The public `count_tokens` schema carries no `metadata` member and the upstream refuses unknown
             // top-level ones, so there is no slot the account identity could go in. It is not billed either, so
             // nothing is lost by leaving the body without it.
-            Kind::CountTokens => None,
-            Kind::Inference | Kind::Probe => credential.account_uuid.clone(),
+            Kind::CountTokens => AccountUuidEdit::Keep,
+            // An API-key leg carries the empty uuid the native client writes on an API key. An OAuth leg carries
+            // the account's own, and one whose credential names none leaves the member as sent.
+            Kind::Inference | Kind::Probe if account.kind == AccountKind::ApiKey => {
+                AccountUuidEdit::Blank
+            }
+            Kind::Inference | Kind::Probe => account_uuid
+                .as_deref()
+                .map_or(AccountUuidEdit::Keep, AccountUuidEdit::Splice),
         };
         let memory_key = admitted.memory_key.as_ref();
         let canonical_model = &admitted.identity.canonical_model;
@@ -2574,7 +2629,7 @@ impl Relay {
             let edits = edit_body(
                 &mut edited,
                 &NativeEdit {
-                    account_uuid: account_uuid.as_deref(),
+                    account_uuid: uuid_edit,
                     upstream_model: &selection.upstream_model,
                     restore: restore_with(&admitted.restore, &previous, skip),
                     diagnostics,
@@ -2593,6 +2648,7 @@ impl Relay {
                 tracing::debug!(
                     account = %account.id,
                     re_signed = edits.cch_restamped,
+                    blanked = matches!(uuid_edit, AccountUuidEdit::Blank),
                     "set the client's previous message id to null"
                 );
             }
@@ -2769,6 +2825,7 @@ impl Relay {
                 can_strip: !stripped_once,
                 cancel,
                 chains: admitted.chains,
+                classifier: admitted.classifier,
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
                 deadline: admitted.deadline,
@@ -2844,6 +2901,7 @@ impl Relay {
                         *attempt,
                         false,
                         None,
+                        None,
                         admitted.client_version.clone(),
                         Some("account_cancelled"),
                         pin_epoch,
@@ -2874,6 +2932,7 @@ impl Relay {
                         0,
                         *attempt,
                         written,
+                        None,
                         None,
                         admitted.client_version.clone(),
                         Some("upstream_unreachable"),
@@ -2929,6 +2988,7 @@ impl Relay {
                             0,
                             *attempt,
                             true,
+                            None,
                             None,
                             admitted.client_version.clone(),
                             Some("account_cancelled"),
@@ -3018,6 +3078,7 @@ impl Relay {
             head.status,
             ctx.attempt,
             true,
+            None,
             None,
             ctx.client_version.clone(),
             None,
@@ -3653,6 +3714,7 @@ impl Relay {
                 .or(ctx.markers_ttl_ms)
                 .unwrap_or(DEFAULT_CACHE_TTL_MS),
             fresh: ctx.fresh_pin,
+            classifier: ctx.classifier,
             renews: ctx.trace.kind != Kind::CountTokens,
             generations: (
                 ctx.account.incarnation,
@@ -3691,6 +3753,7 @@ impl Relay {
             key_generation: ctx.key.created_at,
             canonical_model: ctx.identity.canonical_model.clone(),
             entrypoint: ctx.identity.entrypoint.clone(),
+            classifier: ctx.classifier,
             lane: ctx.lane.to_string(),
             root,
             static_boundaries: ctx
@@ -3954,6 +4017,7 @@ impl Relay {
         let LocalRefusal {
             failure,
             client_drift,
+            client_contract,
         } = refusal.into();
         let outcome = self.outcome(
             trace,
@@ -3964,6 +4028,7 @@ impl Relay {
             attempt,
             false,
             client_drift.map(str::to_string),
+            client_contract.map(str::to_string),
             client_version.map(str::to_string),
             Some(failure.code),
             None,
@@ -4029,6 +4094,61 @@ impl Relay {
         LocalRefusal {
             failure: relay_failure(&RelayError::ClientDrift { kind }),
             client_drift: Some(kind),
+            client_contract: None,
+        }
+    }
+
+    /// A contract refusal with its item, the warn that tells the operator which environment line the client lacks,
+    /// and the refusal's record as the request's one decision. The record keeps the class the request named, so
+    /// the routing log shows it, and is try-sent as the drift's is.
+    #[allow(clippy::too_many_arguments)]
+    fn contract_refusal(
+        &self,
+        item: &'static str,
+        headers: &HeaderMap,
+        trace: &Trace,
+        key: &ApiKeyRow,
+        identity: &RequestIdentity,
+        request_class: Option<&str>,
+        client_version: Option<&str>,
+    ) -> LocalRefusal {
+        tracing::warn!(
+            item = %item,
+            user_agent = %user_agent(headers),
+            key = %key.id,
+            "a Claude Code client sent a request without the {item} the router requires. Read the client page for the environment block",
+        );
+        self.router.record_refusal(
+            RefusedRequest {
+                request_id: trace.request_id.clone(),
+                attempt: 1,
+                seq: 1,
+                at: (self.clock)(),
+                key_id: key.id.clone(),
+                key_generation: key.created_at,
+                agent_id: identity.agent_id.clone(),
+                parent_agent_id: None,
+                session_id: identity.session_id.clone(),
+                request_class: request_class.map(str::to_string),
+                canonical_model: identity.canonical_model.clone(),
+                lane: LaneFacts::default(),
+                flags: RequestFlags::default(),
+                chain: ChainFacts::default(),
+                attempted: Vec::new(),
+                holds: Vec::new(),
+                client: identity.class,
+                client_version: client_version.map(str::to_string),
+            },
+            RefusalFacts {
+                kind: "client",
+                code: "contract",
+                reason: item.to_string(),
+            },
+        );
+        LocalRefusal {
+            failure: relay_failure(&RelayError::ClientContract { item }),
+            client_drift: None,
+            client_contract: Some(item),
         }
     }
 
@@ -4164,6 +4284,7 @@ impl Relay {
             ctx.attempt,
             true,
             None,
+            None,
             ctx.client_version.clone(),
             Some("account_cancelled"),
             ctx.pin_epoch,
@@ -4196,6 +4317,7 @@ impl Relay {
         attempt: u8,
         written: bool,
         client_drift: Option<String>,
+        client_contract: Option<String>,
         client_version: Option<String>,
         error_code: Option<&str>,
         pin_epoch: Option<u64>,
@@ -4214,6 +4336,7 @@ impl Relay {
             attempt,
             written,
             client_drift,
+            client_contract,
             client_version,
             error_code: error_code.map(str::to_string),
             pin_epoch,
@@ -4610,6 +4733,8 @@ struct Responding<'a> {
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
     /// chain.
     chains: Option<&'a Chains>,
+    /// The request is the client's own classifier call, carried to its renewal and its affinity report.
+    classifier: bool,
     client_version: Option<String>,
     credential_generation: u64,
     /// `Admitted::deadline`, which ends the refresh ladder's wait.
@@ -4934,11 +5059,13 @@ enum Next {
     Strip(Vec<Injected>),
 }
 
-/// What a local refusal answers and files: the failure the caller is told, and the client-drift trigger the
-/// request row carries and the attention reader raises its condition from, `None` for every other refusal.
+/// What a local refusal answers and files: the failure the caller is told, the client-drift trigger the request row
+/// carries and the attention reader raises its condition from, and the contract's item the request row names, each
+/// `None` for every other refusal.
 struct LocalRefusal {
     failure: Failure,
     client_drift: Option<&'static str>,
+    client_contract: Option<&'static str>,
 }
 
 impl From<Failure> for LocalRefusal {
@@ -4946,18 +5073,22 @@ impl From<Failure> for LocalRefusal {
         LocalRefusal {
             failure,
             client_drift: None,
+            client_contract: None,
         }
     }
 }
 
 /// The restoration facts computed once at admission: the client version the wire already named, the
-/// version-suffix code units, the prompt id this turn carries, and whether `system` is an array. The previous
-/// request id is not here because it is per-account, looked up in the failover loop against the account each
-/// attempt actually tries.
+/// version-suffix code units, the prompt id the client's header names, and whether `system` is an array. The
+/// previous request id is not here because it is per-account, looked up in the failover loop against the account
+/// each attempt actually tries.
 struct RestoreContext {
     cli_version: String,
     prompt_units: Vec<[u16; 3]>,
     prompt_id: Option<String>,
+    /// `cc_prev_req` is filled on this request's class (the conversation classes and the conversation-shaped
+    /// forks), read once at admission.
+    prev_req: bool,
     system_is_array: bool,
 }
 
@@ -4978,6 +5109,9 @@ struct Admitted<'a> {
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
     /// chain.
     chains: Option<&'a Chains>,
+    /// The request is the client's own auto-mode classifier call (`ClientFacts.classifier`), read once at admission
+    /// and shared by every leg: its usage reports and its selection carry the flag.
+    classifier: bool,
     /// The client's body carries its own top-level `diagnostics` member, which the edit never rewrites.
     client_diagnostics: bool,
     /// The client sent its body gzip, which `upstream_gzip: auto` mirrors toward the upstream.
@@ -5366,6 +5500,7 @@ mod tests {
             attempt,
             written: false,
             client_drift: None,
+            client_contract: None,
             client_version: None,
             error_code: Some("guardrail_blocked".into()),
             pin_epoch: None,

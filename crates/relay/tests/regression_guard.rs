@@ -12,7 +12,8 @@ fn ok() -> Rule {
 }
 
 /// The fixture head with its `Content-Length` set to the
-/// edited body, and the body appended: the wire the base commit produced.
+/// edited body, an inference head ending in the class header the harness sends where the recorded head has none,
+/// and the body appended: the wire the base commit produced.
 fn expected_wire(
     head: &[u8],
     native_len: usize,
@@ -22,6 +23,10 @@ fn expected_wire(
         &format!("Content-Length: {native_len}"),
         &format!("Content-Length: {}", edited_body.len()),
     );
+    if text.starts_with("POST /v1/messages?") || text.starts_with("POST /v1/messages ") {
+        let end = text.rfind("\r\n\r\n").expect("a head ends in a blank line");
+        text.insert_str(end + 2, "x-claude-code-request-class: main\r\n");
+    }
     let mut wire = text.into_bytes();
     wire.extend_from_slice(edited_body);
     wire
