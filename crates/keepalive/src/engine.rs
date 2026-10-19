@@ -878,9 +878,9 @@ impl PriorCoverage {
         let ttl = self.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
         let gap_exceeded = arrived - self.real_at > ttl;
         // The entry the probe kept has to be there when this request arrives, on the boundary the settlement and the
-        // scheduler read (`arrived < entry_expires`, `now >= expires`): a request at or after the lapse read a cache
-        // nothing the probe paid for kept, so that probe settles as expired, and a credit here would contradict that
-        // settlement.
+        // scheduler read (`arrived` before its chain's last entry ends, `now >= expires`): a request at or after the
+        // lapse read a cache nothing the probe paid for kept, so that probe settles as expired, and a credit here would
+        // contradict that settlement.
         let entry_alive = self.until.is_some_and(|until| arrived < until);
         let same_model = self.model == model;
         // The upstream shares no cached prefix across speeds, so a probe on the other lane kept nothing this request
@@ -1164,11 +1164,11 @@ pub(crate) struct Kept {
     /// ceiling moved the probe here reads the evidence the unanswered list held.
     pub covered: bool,
     pub unit: Option<SavingsUnit>,
-    /// The label a probe written off at a ceiling settles under when its entry lapses with no turn: `idle_limit`
-    /// today. A turn that reads the probe leaves the label in place, so one that ends without deciding the probe
-    /// hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
-    /// request's completion. A failed completion hands such a probe back under `expired`, the label its recipe's
-    /// own lapse settles it under.
+    /// The label a probe written off at a ceiling settles under when its chain's last entry lapses with no turn:
+    /// `idle_limit` today. A turn that reads the probe leaves the label in place, so one that ends without deciding the
+    /// probe hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
+    /// request's completion. A failed completion hands such a probe back under `expired`, the label its recipe's own
+    /// lapse settles it under.
     pub pending: Option<Wasted>,
 }
 
@@ -1515,8 +1515,10 @@ impl Inner {
 
     /// The entry a kept probe is judged against: the greatest `entry_expires` among the probes of its chain. The chain
     /// is the probe and each later kept probe of its lineage (model, speed, account), in exchange order, up to the
-    /// first that read nothing: a probe that read the entry back extended it, while one that read nothing found it
-    /// gone and wrote a new entry, which starts a chain of its own.
+    /// first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
+    /// read nothing or only part of the prefix found the entry gone, whole or in part, and wrote a new one, which
+    /// starts a chain of its own. The read is tested beside `covered`, since the landing marks a cold complete rewrite
+    /// covered too.
     fn chain_expires(kept: &[Kept], probe: &Kept) -> i64 {
         let mut later: Vec<&Kept> = kept
             .iter()
@@ -1530,7 +1532,7 @@ impl Inner {
         later.sort_by_key(|other| other.at);
         later
             .into_iter()
-            .take_while(|other| other.usage.read > 0)
+            .take_while(|other| other.usage.read > 0 && other.covered)
             .map(|other| other.entry_expires)
             .fold(probe.entry_expires, i64::max)
     }
@@ -1677,7 +1679,10 @@ impl Inner {
             for (agent_id, agent) in session.agents.iter_mut() {
                 // An open turn's or compaction's completion decides the probes, as `lapse` waits for it. A request that
                 // fails, past a head or not, or ends at a bus gap decides nothing and leaves them here.
-                if request_open(open, agent) {
+                // The sweep settles labeled probes alone, so an agent holding none builds no chain.
+                if request_open(open, agent)
+                    || !agent.kept.iter().any(|kept| kept.pending.is_some())
+                {
                     continue;
                 }
                 let chain_ends: Vec<i64> = agent
@@ -2790,8 +2795,8 @@ impl Engine {
         if let Some(reason) = reason {
             // A failed turn is no evidence about the cache, past a head or not, so it decides none of the probes it
             // kept and hands them back for the next turn to read. A label the turn found stays, and a probe that
-            // carries none takes `expired`, which the lapse sweep settles it under at its entry's end if no turn
-            // reads it first, as its recipe's own lapse would have.
+            // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
+            // no turn reads it first, as its recipe's own lapse would have.
             if let Some(agent) = inner
                 .sessions
                 .get_mut(&key)

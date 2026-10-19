@@ -2317,7 +2317,6 @@ async fn a_chain_of_three_probes_answered_warm_inside_its_last_entry_settles_non
     })
     .await;
     a_chain_of_three_probes(&mut r).await;
-    // No tick past 810 s, so no fourth probe joins the chain.
     r.advance_attended(90_000);
     open_request(&r, "second", 2_000, 0);
     r.engine.observe(completed(&r, "second", 2_000));
@@ -2440,9 +2439,14 @@ async fn a_chain_the_idle_limit_wrote_off_waits_for_its_last_entry_and_a_turn_in
         (Reason::IdleLimit, 3),
         "the ceiling kept the chain's three probes pending"
     );
-    // The sweep's settlements reach the ledger with the save after them.
     r.advance(10_000);
     r.step().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        3,
+        "the tick 1,090 s in settled none of the chain's probes"
+    );
+    // The sweep's settlements reach the ledger with the save after them.
     r.engine.flush_persisted().await;
     r.advance(10_000);
     open_request(&r, "second", 2_000, 0);
@@ -2492,6 +2496,53 @@ async fn a_later_probe_that_did_not_cover_the_entry_leaves_the_credit_to_the_old
         ),
         (1, BTreeMap::new()),
         "the request inside the first probe's entry is credited on its coverage"
+    );
+}
+
+/// A later probe that read only part of the prefix found the entry gone in part and wrote a new one, so it starts a
+/// chain of its own. The first probe reads the entry back 270 s in and keeps it to 570 s, the second reads a hundred
+/// tokens of the prefix 540 s in and keeps its own entry to 840 s, and a request 600 s in that reads the cache arrives
+/// past the first probe's entry, which settles it as expired, and inside the second's, which answers it.
+#[tokio::test]
+async fn a_later_probe_that_read_part_of_the_prefix_starts_a_chain_of_its_own_so_the_probe_before_it_settles_by_its_own_entry(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    let first_cost =
+        probe_rows(&rollups(&r, |rows| tokens(probe_rows(rows).usage()) > 0).await).usage();
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(100, 1_900));
+    r.advance_attended(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.unanswered, status.reason),
+        (2, 2, Reason::PartialCacheCoverage),
+        "the second probe fell short of the entry 540 s in: {status:?}"
+    );
+    r.advance_attended(60_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    let rows = final_rollups(&r).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (0, 1, BTreeMap::from([("expired".to_string(), 1)])),
+        "the request arrived 600 s in, past 570 s and before 840 s"
+    );
+    assert!(
+        probe.wasted_usage() == first_cost,
+        "the first probe is the wasted one: {first_cost:?} against {probe:?}"
     );
 }
 
