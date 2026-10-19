@@ -280,18 +280,19 @@ window's factor is 1, so the week has no band. The interactive regime holds its 
 interactive request's 5-hour share does not move with it. The edges are steps, and Saturday and Sunday are outside the
 band. The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in
 force at its completion, and a session's burn, an average whose time constant is the pool's `burn_average_seconds`,
-keeps a copy weighed by the band at each renewal, which the shedding round prices on the anchor tier's 5-hour rates of
-the pin's regime on plan quota so its order reads what the meter charged. The projection reads the plain copy at the
-band in force when it reads, on every window the session's model draws, and carries it forward weighing the band's hours
-inside the horizon as the band weighs them. A projection, a runway and a stretch across a band edge weigh the in-band
-part of the horizon at one over the band factor and the rest at the plain rate. The analytics routes read the hourly
-rollups instead, which fold a request under the hour it arrived in, so their shares and 20x equivalents weigh it by that
-hour's band rather than by the band at its completion. The burn route groups by the analytics' ten dimensions, read from
-the rollups the same way, and by session, which reads the attempts, each weighed by the band at its completion. The
-shares answer under the account grouping, or under every grouping when the filter names exactly one account, since
-shares of different accounts' windows do not add, and the 20x equivalents answer under every grouping. The Tiers and
-peak band tab of the cost reference names this week's hours in your zone ([The cost
-reference](console.md#the-cost-reference)).
+keeps a copy weighed by the band at each renewal, which the sessions route's burn reads while the account runs on its
+plan, as the share the meter charged. The shedding round orders its pins by the plain copy: while the account runs on
+its plan by its average share of the window that fired over the span the round covers, on the account's tier, and in
+overage by its dollars. The projection reads the plain copy at the band in force when it reads, on every window the
+session's model draws, and carries it forward weighing the band's hours inside the horizon as the band weighs them. A
+projection, a runway and a stretch across a band edge weigh the in-band part of the horizon at one over the band factor
+and the rest at the plain rate. The analytics routes read the hourly rollups instead, which fold a request under the
+hour it arrived in, so their shares and 20x equivalents weigh it by that hour's band rather than by the band at its
+completion. The burn route groups by the analytics' ten dimensions, read from the rollups the same way, and by session,
+which reads the attempts, each weighed by the band at its completion. The shares answer under the account grouping, or
+under every grouping when the filter names exactly one account, since shares of different accounts' windows do not add,
+and the 20x equivalents answer under every grouping. The Tiers and peak band tab of the cost reference names this week's
+hours in your zone ([The cost reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window of the request's
 regime on every tier, so a Fable request's share of it is twice its 7-day share.
@@ -306,10 +307,10 @@ gauge, `GET /admin/attention` answers it, and the console lists it on the dashbo
 model tier with no weighed model, prices no share: the prediction adds no charge, the projection adds no burn, the
 shedding round ranks the pin after every priced one and never marks it, the analytics list the share under model
 unlisted and the cost reference shows a dash. An account tier without a capacity on a window prices no share there
-either, and the prediction adds no charge and the projection no burn on that window. The shedding round orders that
-tier's pins like any other, on the anchor tier's rates, and marks none of them for a round on that window, and in the
-analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier
-reads model unlisted. A dated model id reads the weight of its undated name.
+either, and the prediction adds no charge and the projection no burn on that window. While the account runs on its plan,
+a shedding round on that window reads that tier's pins as unpriced, after every priced pin, and marks none of them, and
+in the analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves `null` on a
+listed tier reads model unlisted. A dated model id reads the weight of its undated name.
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
