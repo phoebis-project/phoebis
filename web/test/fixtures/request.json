@@ -304,7 +304,34 @@
         "pool_id": null,
         "agent_id": null,
         "request_id": "r-failover"
+      },
+      {
+        "at": 1791717400900,
+        "kind": "stream_interrupted",
+        "account_id": "business",
+        "key_id": "desktop",
+        "session_id": "s1",
+        "model": "claude-sonnet-5-5",
+        "actor": null,
+        "detail": {
+          "code": "stream_cut",
+          "text": "malformed response: connection closed inside chunked body",
+          "bytes_relayed": 2048,
+          "upstream_request_id": "req_r-failover_2",
+          "attempt": 2
+        },
+        "pool_id": null,
+        "agent_id": null,
+        "request_id": "r-failover"
       }
-    ]
+    ],
+    "stream_cut": {
+      "at": 1791717400900,
+      "code": "stream_cut",
+      "text": "malformed response: connection closed inside chunked body",
+      "bytes_relayed": 2048,
+      "upstream_request_id": "req_r-failover_2",
+      "attempt": 2
+    }
   }
 }

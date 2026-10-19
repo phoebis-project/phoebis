@@ -704,6 +704,7 @@ impl Rig {
             diagnostics: None,
             message_id: None,
             skipped_events: 0,
+            interruption: None,
             finished_at: self.now(),
         })
     }

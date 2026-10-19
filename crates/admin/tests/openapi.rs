@@ -993,6 +993,34 @@ async fn a_model_rejection_and_a_model_permit_require_every_key_they_carry() {
 }
 
 #[tokio::test]
+async fn the_request_detail_answers_stream_cut_as_null_or_the_cuts_six_members() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    assert!(
+        admits_null(&schemas["RequestDetail"]["properties"]["stream_cut"]),
+        "a request without a cut answers null: {}",
+        schemas["RequestDetail"]
+    );
+    let properties: BTreeSet<&str> = schemas["StreamCut"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        properties,
+        BTreeSet::from([
+            "at",
+            "attempt",
+            "bytes_relayed",
+            "code",
+            "text",
+            "upstream_request_id"
+        ])
+    );
+}
+
+#[tokio::test]
 async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_field() {
     let (_app, _up, document) = document().await;
     for name in [

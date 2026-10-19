@@ -1342,6 +1342,7 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
         diagnostics: None,
         message_id: None,
         skipped_events: 0,
+        interruption: None,
         finished_at: now + 1_300,
     }));
     let all = wait_json(&parts.app, "/admin/requests?limit=500", &cookie, |v| {
@@ -2016,6 +2017,7 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
         diagnostics: None,
         message_id: None,
         skipped_events: 0,
+        interruption: None,
         finished_at: common::NOW + 900,
     }));
 }

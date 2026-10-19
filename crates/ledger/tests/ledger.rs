@@ -9,9 +9,9 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, AutoMode, Classifier, Event as BusEvent, Kind, Origin,
-    Outcome as BusOutcome, Phase, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
-    ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
+    AccountSelected, AttemptOutcome, AutoMode, Classifier, Event as BusEvent, Interruption, Kind,
+    Origin, Outcome as BusOutcome, Phase, RequestComplete, RequestObserved, RequestShape,
+    ResponseChunk, ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
@@ -1134,6 +1134,7 @@ fn complete_event(id: &str) -> BusEvent {
         diagnostics: None,
         message_id: None,
         skipped_events: 0,
+        interruption: None,
         finished_at: 1,
     })
 }
@@ -1512,6 +1513,125 @@ async fn a_client_gone_completion_lands_the_attempts_it_reached_and_no_gap() {
         gaps,
         ["silent"],
         "the sweep aged the silent request out and found nothing of the two that completed"
+    );
+    up.shutdown().await;
+}
+
+/// A completion whose body ended short after the head writes one `stream_interrupted` row at its finish: the serving
+/// attempt's account and upstream request id, the request's key, session and resolved model, and the cut's code,
+/// words, bytes and attempt. A clean completion writes none, and a request with no session finds its own row among
+/// the events its detail reads.
+#[tokio::test]
+async fn a_completion_cut_after_its_head_writes_one_stream_interrupted_row_its_request_reads() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let cut = |code: &str, text: &str| Interruption {
+        code: code.into(),
+        text: text.into(),
+        bytes_relayed: 42,
+    };
+    let requests = [
+        (
+            "cut-in-session",
+            Some("s1"),
+            Some(cut("stream_stalled", "no chunk for 20 s")),
+        ),
+        (
+            "cut-alone",
+            None,
+            Some(cut(
+                "stream_cut",
+                "malformed response: connection closed inside chunked body",
+            )),
+        ),
+        ("clean", Some("s1"), None),
+    ];
+    for (id, session, interruption) in requests.clone() {
+        let BusEvent::RequestObserved(mut observed) = observed_event(id) else {
+            unreachable!()
+        };
+        observed.key_id = Some("k1".into());
+        observed.session_id = session.map(str::to_string);
+        h.bus.publish(BusEvent::RequestObserved(observed));
+        h.bus.publish(selected_event(id, 1, "a", 10));
+        let BusEvent::ResponseHead(mut head) = head_event(id, 200, 20) else {
+            unreachable!()
+        };
+        head.headers = vec![("request-id".into(), format!("req_{id}"))];
+        h.bus.publish(BusEvent::ResponseHead(head));
+        let BusEvent::RequestComplete(mut complete) =
+            answered_event(id, 200, ResponseFacts::default())
+        else {
+            unreachable!()
+        };
+        if let Some(interruption) = &interruption {
+            complete.outcome = BusOutcome::Incomplete;
+            complete.error_code = Some(interruption.code.clone());
+            complete.response_bytes = Some(interruption.bytes_relayed);
+        }
+        complete.interruption = interruption;
+        complete.finished_at = 30;
+        h.bus.publish(BusEvent::RequestComplete(complete));
+    }
+    for (id, _, _) in requests {
+        ledgered(&h, id).await;
+    }
+    // The event goes to the writer ahead of its request row, so a landed request has its row written.
+    let mut rows =
+        h.db.read(|c| phoebis_ledger::recent_events_of_kind(c, "stream_interrupted", 5))
+            .await
+            .unwrap();
+    rows.sort_by(|a, b| a.request_id.cmp(&b.request_id));
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.request_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("cut-alone"), Some("cut-in-session")],
+        "one row per cut completion and none for the clean one"
+    );
+    let row = &rows[1];
+    assert_eq!(
+        (
+            row.at,
+            row.account_id.as_deref(),
+            row.key_id.as_deref(),
+            row.session_id.as_deref(),
+            row.model.as_deref(),
+        ),
+        (
+            30,
+            Some("a"),
+            Some("k1"),
+            Some("s1"),
+            Some("claude-sonnet-5")
+        )
+    );
+    let detail: serde_json::Value = serde_json::from_str(row.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        detail,
+        serde_json::json!({
+            "code": "stream_stalled",
+            "text": "no chunk for 20 s",
+            "bytes_relayed": 42,
+            "upstream_request_id": "req_cut-in-session",
+            "attempt": 1,
+        })
+    );
+    let own =
+        h.db.read(|c| {
+            let (request, _) =
+                phoebis_ledger::request_by_id(c, "cut-alone")?.expect("the request landed");
+            phoebis_ledger::request_events(c, &request)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        own.iter()
+            .filter(|e| e.kind == "stream_interrupted")
+            .map(|e| e.request_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("cut-alone")],
+        "a request with no session reads its own row by its id"
     );
     up.shutdown().await;
 }

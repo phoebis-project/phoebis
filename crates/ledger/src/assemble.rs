@@ -557,6 +557,33 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             }));
         }
     }
+    // Apart from the serving block: a completion whose trail lost its selection still lands its cut, under the
+    // completion's account and with no upstream request id.
+    if let Some(interruption) = &complete.interruption {
+        let serving = serving.map(|i| &attempts[i]);
+        records.push(Record::Event(EventRecord {
+            at: complete.finished_at,
+            kind: "stream_interrupted".into(),
+            account_id: serving
+                .map(|a| a.account_id.clone())
+                .or_else(|| complete.account_id.clone()),
+            key_id: observed.key_id.clone(),
+            session_id: observed.session_id.clone(),
+            model: Some(observed.canonical_model.clone()),
+            detail: Some(
+                json!({
+                    "code": interruption.code,
+                    "text": interruption.text,
+                    "bytes_relayed": interruption.bytes_relayed,
+                    "upstream_request_id": serving.and_then(|a| a.upstream_request_id.as_deref()),
+                    "attempt": complete.attempt,
+                })
+                .to_string(),
+            ),
+            request_id: Some(observed.request_id.clone()),
+            ..Default::default()
+        }));
+    }
     for attempt in &mut attempts {
         attempt.client_drift = complete.client_drift.clone();
     }
@@ -878,6 +905,7 @@ mod tests {
             diagnostics: None,
             message_id: None,
             skipped_events: 0,
+            interruption: None,
             finished_at: 1_500,
         })
     }
@@ -920,6 +948,7 @@ mod tests {
             diagnostics: None,
             message_id: None,
             skipped_events: 0,
+            interruption: None,
             finished_at: 1_500,
         }
     }

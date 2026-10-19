@@ -990,6 +990,34 @@ async fn a_stream_closed_cleanly_after_message_start_without_message_stop_reads_
     up.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_stream_closed_cleanly_before_its_stop_is_warned_of_nothing_and_carries_no_interruption()
+{
+    let captured = common::Captured::default();
+    let _log = captured.install();
+    let (status, cut, complete) = one_stream(
+        Respond::Sse {
+            status: 200,
+            headers: with_request_id(),
+            events: vec![message_start_event(), text_delta_event("hi")],
+            delay_between: Duration::from_millis(2),
+        },
+        common::default_limits(),
+    )
+    .await;
+    assert_eq!((status, cut), (200, false));
+    assert_eq!(
+        (complete.error_code.as_deref(), complete.interruption),
+        (Some("stream_incomplete"), None),
+        "a clean end has no error to name"
+    );
+    assert!(
+        !captured.text().contains(CUT_WARNING),
+        "{}",
+        captured.text()
+    );
+}
+
 /// One streamed request answered by `respond`: the status the client got, whether its body ended in an error, and
 /// the completion the bus carried.
 async fn one_stream(
@@ -1037,6 +1065,152 @@ async fn a_stream_cut_by_the_reader_mid_body_reads_stream_cut() {
         (phoebis_bus::Outcome::Incomplete, Some("stream_cut")),
         "the head committed, so the cut is no unreachable upstream"
     );
+}
+
+const CUT_WARNING: &str = "the upstream body ended short after the head";
+
+/// The `request-id` head the cut cases answer with, so the warning has an upstream request id to name.
+const UPSTREAM_REQUEST_ID: &str = "req_up_cut";
+
+fn with_request_id() -> Vec<(String, String)> {
+    vec![("request-id".into(), UPSTREAM_REQUEST_ID.into())]
+}
+
+/// The completion carries the cut as `code` and `text` name it with the bytes the client received, and `log` holds
+/// one warning for it with the six fields: the account, the request, the upstream's request id, those bytes, the code
+/// and the error's words.
+fn assert_cut_warned(log: &str, complete: &phoebis_bus::RequestComplete, code: &str, text: &str) {
+    let bytes_relayed = complete
+        .response_bytes
+        .expect("a relayed body counts its bytes");
+    assert_eq!(
+        complete.interruption,
+        Some(phoebis_bus::Interruption {
+            code: code.into(),
+            text: text.into(),
+            bytes_relayed,
+        }),
+        "the completion carries the cut"
+    );
+    let warnings: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains(CUT_WARNING))
+        .collect();
+    assert_eq!(warnings.len(), 1, "one warning for the attempt: {log}");
+    for field in [
+        " WARN ".to_string(),
+        " account=a ".to_string(),
+        format!(" request_id={} ", complete.request_id),
+        format!(" upstream_request_id={UPSTREAM_REQUEST_ID} "),
+        format!(" bytes_relayed={bytes_relayed} "),
+        format!(" code={code} "),
+        format!(" error={text}"),
+    ] {
+        assert!(warnings[0].contains(&field), "{field:?} in {}", warnings[0]);
+    }
+}
+
+#[tokio::test]
+async fn a_stream_cut_after_its_head_warns_once_and_carries_the_transport_errors_words() {
+    let captured = common::Captured::default();
+    let _log = captured.install();
+    let (status, cut, complete) = one_stream(
+        Respond::SseCut {
+            status: 200,
+            headers: with_request_id(),
+            events: vec![message_start_event(), text_delta_event("hi")],
+        },
+        common::default_limits(),
+    )
+    .await;
+    assert_eq!((status, cut), (200, true));
+    assert_eq!(complete.error_code.as_deref(), Some("stream_cut"));
+    assert_cut_warned(
+        &captured.text(),
+        &complete,
+        "stream_cut",
+        "malformed response: connection closed inside chunked body",
+    );
+}
+
+/// A stream whose `message_start` commits the head, after which the fake writes nothing until it is released.
+fn committed_then_gated() -> Respond {
+    Respond::SseGated {
+        status: 200,
+        headers: with_request_id(),
+        events: vec![message_start_event(), message_stop_event()],
+    }
+}
+
+#[tokio::test]
+async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_account_cancelled() {
+    let captured = common::Captured::default();
+    let _log = captured.install();
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: committed_then_gated(),
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the message_start committed the head");
+    h.store.delete_account("a", "test").unwrap();
+    h.router.reload().await.unwrap();
+    assert!(
+        resp.into_body().collect().await.is_err(),
+        "the body ends in the cancel's error"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Canceled, Some("account_cancelled"))
+    );
+    assert_cut_warned(
+        &captured.text(),
+        &complete,
+        "account_cancelled",
+        "io: the bound account was disconnected",
+    );
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_client_that_leaves_mid_stream_is_warned_of_nothing_and_carries_no_interruption() {
+    let captured = common::Captured::default();
+    let _log = captured.install();
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: committed_then_gated(),
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    drop(resp);
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.error_code.as_deref(), complete.interruption),
+        (Some("client_gone"), None),
+        "the client left, so nothing ended short"
+    );
+    assert!(
+        !captured.text().contains(CUT_WARNING),
+        "{}",
+        captured.text()
+    );
+    up.release();
+    up.shutdown().await;
 }
 
 #[tokio::test]
@@ -1139,6 +1313,33 @@ async fn a_stream_silent_past_the_idle_bound_reads_stream_stalled() {
     );
     up.release();
     up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stream_stalled_after_its_head_warns_once_with_no_chunk_for_the_idle_bound() {
+    let captured = common::Captured::default();
+    let _log = captured.install();
+    let (status, cut, complete) = one_stream(
+        Respond::Stall {
+            status: 200,
+            headers: with_request_id(),
+            events: vec![],
+        },
+        phoebis_relay::Limits {
+            hold_timeout: Duration::from_millis(100),
+            idle_timeout: Duration::from_millis(300),
+            ..common::default_limits()
+        },
+    )
+    .await;
+    assert_eq!((status, cut), (200, true));
+    assert_eq!(complete.error_code.as_deref(), Some("stream_stalled"));
+    assert_cut_warned(
+        &captured.text(),
+        &complete,
+        "stream_stalled",
+        "no chunk for 0.3 s",
+    );
 }
 
 #[tokio::test]
@@ -1440,6 +1641,43 @@ async fn a_streamed_answer_whose_gzip_does_not_inflate_ends_incomplete_with_stre
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
         (phoebis_bus::Outcome::Incomplete, Some("stream_undecodable"))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_streamed_answer_undecodable_after_its_head_warns_once_with_the_decoders_words() {
+    let captured = common::Captured::default();
+    let _log = captured.install();
+    let events = [
+        message_start_event(),
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Chunked {
+            status: 200,
+            headers: vec![
+                ("Content-Type".into(), "text/event-stream".into()),
+                ("Content-Encoding".into(), "gzip".into()),
+                ("request-id".into(), UPSTREAM_REQUEST_ID.into()),
+            ],
+            body: corrupt_gzip(rendered(&events).as_bytes()),
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h.app.clone().oneshot(identity_request()).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(resp.into_body().collect().await.is_err());
+    let complete = completion(&mut sub).await;
+    assert_eq!(complete.error_code.as_deref(), Some("stream_undecodable"));
+    assert_cut_warned(
+        &captured.text(),
+        &complete,
+        "stream_undecodable",
+        "undecodable response: corrupt deflate stream",
     );
     up.shutdown().await;
 }

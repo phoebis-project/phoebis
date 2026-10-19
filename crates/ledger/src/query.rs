@@ -753,16 +753,22 @@ pub fn request_body(conn: &Connection, id: &str, now: i64) -> Result<Option<Vec<
 }
 
 /// The events of the request's window under its own session, and
-/// every event that names the request itself.
+/// every event that names the request itself, by its `request_id` column or the `source_request_id` of its detail.
 pub fn request_events(
     conn: &Connection,
     request: &RequestRecord,
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let to = request.finished_at.unwrap_or(i64::MAX);
     let marker = format!("%\"source_request_id\":\"{}\"%", request.id);
-    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND ((session_id IS NOT NULL AND session_id = ?3) OR detail LIKE ?4) ORDER BY at, rowid")?;
+    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND (session_id = ?3 OR detail LIKE ?4 OR request_id = ?5) ORDER BY at, rowid")?;
     let rows = stmt.query_map(
-        params![request.received_at, to, request.session_id, marker],
+        params![
+            request.received_at,
+            to,
+            request.session_id,
+            marker,
+            request.id
+        ],
         |r| {
             Ok(EventRecord {
                 at: r.get(0)?,
@@ -868,6 +874,7 @@ pub const EVENT_KINDS: &[&str] = &[
     "shedding_round",
     "slow_down_ended",
     "slow_down_started",
+    "stream_interrupted",
     "warm_prefix_expired",
     "wind_down_started",
     "window_cleared",

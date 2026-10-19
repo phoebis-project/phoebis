@@ -296,8 +296,12 @@ verdict. Past the commit, the router's own reading of a stream, the copy the led
 phases and usage from, holds at most 512 KiB of one event while that event is still arriving. An event that outgrows
 the bound before its end is skipped in that copy and the events after it are still read, while one that arrives whole
 in one decoded piece is parsed whatever its size. The relay logs one warning at the end of a stream that had an event
-skipped, and the client receives every byte as sent either way. Every cooldown deadline carries a second of margin, so
-a request sent at the reset is not refused by a clock a hair behind.
+skipped, and the client receives every byte as sent either way. A stream the upstream cuts, stalls or sends undecodable
+after the head, and one the account's cancel ends, for an account disconnected, unpaired, deleted or re-created under
+its id, logs one warning with the account, the request id, the upstream request id, the bytes the client received, the
+cut's code and the error's words, and lands in the ledger as a `stream_interrupted` event the request's drawer shows.
+Every cooldown deadline carries a second of margin, so a request sent at the reset is not refused by a clock a hair
+behind.
 
 | Head | Verdict | What follows |
 | --- | --- | --- |

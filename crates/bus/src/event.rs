@@ -448,6 +448,15 @@ pub struct ResponseChunk {
     pub phase: Option<Phase>,
 }
 
+/// A body that ended short after the head: the code the request's `error_code` carries, the error's own words and
+/// the bytes the caller received before the end.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Interruption {
+    pub code: String,
+    pub text: String,
+    pub bytes_relayed: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct RequestComplete {
     pub request_id: String,
@@ -483,6 +492,9 @@ pub struct RequestComplete {
     /// Events the stream's parser skipped for passing its bound, 0 where none was: the relay logs them and the
     /// ledger reads nothing of it.
     pub skipped_events: u32,
+    /// `None` for a clean end, a client that left, a local answer, and an error stream the upstream sent whole (the
+    /// forwarded error's arm and an `error` event after the head).
+    pub interruption: Option<Interruption>,
     pub finished_at: i64,
 }
 

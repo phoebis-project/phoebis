@@ -863,6 +863,21 @@ async fn every_route_is_captured_and_holds_its_shape() {
         agent_id: None,
         request_id: Some("r-failover".into()),
     }));
+    // The serving attempt's stream was cut after its head, so the detail answers `stream_cut`. The row sits at the
+    // request's finish, where the ledger writes it, so the detail's read of the request's window holds it.
+    parts.ledger.record(Record::Event(EventRecord {
+        at: hour_ago + 900,
+        kind: "stream_interrupted".into(),
+        account_id: Some("business".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some("s1".into()),
+        model: Some("claude-sonnet-5-5".into()),
+        actor: None,
+        detail: Some(j!({ "code": "stream_cut", "text": "malformed response: connection closed inside chunked body", "bytes_relayed": 2_048, "upstream_request_id": "req_r-failover_2", "attempt": 2 }).to_string()),
+        pool_id: None,
+        agent_id: None,
+        request_id: Some("r-failover".into()),
+    }));
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
@@ -1134,6 +1149,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             diagnostics: None,
             message_id: Some("msg_k1_1".into()),
             skipped_events: 0,
+            interruption: None,
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
@@ -1237,6 +1253,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             diagnostics: None,
             message_id: None,
             skipped_events: 0,
+            interruption: None,
             finished_at: now,
         }));
     // The replay's counts while the parked table is still empty.

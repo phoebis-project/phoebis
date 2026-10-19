@@ -446,6 +446,7 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         diagnostics: None,
         message_id: None,
         skipped_events: 0,
+        interruption: None,
         finished_at: NOW + 5,
     }));
     let (row, attempts) = ledgered(&h, "blocked").await;

@@ -4766,6 +4766,165 @@ async fn a_request_row_answers_its_fork_fields() {
     );
 }
 
+/// A finished request of `session` on the `desktop` key, from `received_at` to `finished_at`.
+fn session_request(
+    id: &str,
+    session: &str,
+    received_at: i64,
+    finished_at: i64,
+) -> phoebis_ledger::Record {
+    phoebis_ledger::Record::Request {
+        request: phoebis_ledger::RequestRecord {
+            id: id.into(),
+            received_at,
+            finished_at: Some(finished_at),
+            key_id: Some("desktop".into()),
+            session_id: Some(session.into()),
+            agent_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "incomplete".into(),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    }
+}
+
+/// The `stream_interrupted` row the ledger writes for `request_id`'s cut on `attempt`.
+fn stream_interrupted(
+    request_id: &str,
+    session: &str,
+    at: i64,
+    code: &str,
+    text: &str,
+    attempt: u32,
+) -> phoebis_ledger::Record {
+    phoebis_ledger::Record::Event(phoebis_ledger::EventRecord {
+        at,
+        kind: "stream_interrupted".into(),
+        account_id: Some("business".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some(session.into()),
+        model: Some("claude-sonnet-5".into()),
+        detail: Some(
+            serde_json::json!({
+                "code": code,
+                "text": text,
+                "bytes_relayed": 42,
+                "upstream_request_id": format!("req_up_{attempt}"),
+                "attempt": attempt,
+            })
+            .to_string(),
+        ),
+        request_id: Some(request_id.into()),
+        ..Default::default()
+    })
+}
+
+#[tokio::test]
+async fn a_request_detail_answers_its_newest_stream_interrupted_row_as_stream_cut() {
+    use common::{login, wait_json, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .ledger
+        .record(session_request("r-cut", "s1", NOW - 2_000, NOW - 1_000));
+    parts.ledger.record(stream_interrupted(
+        "r-cut",
+        "s1",
+        NOW - 1_500,
+        "stream_stalled",
+        "no chunk for 20 s",
+        1,
+    ));
+    parts.ledger.record(stream_interrupted(
+        "r-cut",
+        "s1",
+        NOW - 1_000,
+        "stream_cut",
+        "malformed response: connection closed inside chunked body",
+        2,
+    ));
+    let detail = wait_json(&parts.app, "/admin/requests/r-cut", &cookie, |v| {
+        v["events"].as_array().is_some_and(|e| e.len() == 2)
+    })
+    .await;
+    assert_eq!(
+        detail["stream_cut"],
+        serde_json::json!({
+            "at": NOW - 1_000,
+            "code": "stream_cut",
+            "text": "malformed response: connection closed inside chunked body",
+            "bytes_relayed": 42,
+            "upstream_request_id": "req_up_2",
+            "attempt": 2,
+        }),
+        "the newest of the request's two rows, its six members"
+    );
+}
+
+#[tokio::test]
+async fn a_request_detail_without_a_stream_interrupted_row_answers_stream_cut_null() {
+    use common::{login, wait_json, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .ledger
+        .record(session_request("r-plain", "s1", NOW - 2_000, NOW - 1_000));
+    let detail = wait_json(&parts.app, "/admin/requests/r-plain", &cookie, |v| {
+        v["request"]["id"] == "r-plain"
+    })
+    .await;
+    assert_eq!(
+        detail.get("stream_cut"),
+        Some(&serde_json::Value::Null),
+        "the member is answered, as null: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn a_cut_of_another_request_of_the_session_inside_the_window_is_not_the_requests_stream_cut()
+{
+    use common::{login, wait_json, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // A long main turn, and a subagent's call of the same session that was cut inside the turn's window.
+    parts
+        .ledger
+        .record(session_request("r-main", "s1", NOW - 10_000, NOW - 1_000));
+    parts
+        .ledger
+        .record(session_request("r-sub", "s1", NOW - 6_000, NOW - 5_000));
+    parts.ledger.record(stream_interrupted(
+        "r-sub",
+        "s1",
+        NOW - 5_000,
+        "stream_cut",
+        "malformed response: connection closed inside chunked body",
+        1,
+    ));
+    let main = wait_json(&parts.app, "/admin/requests/r-main", &cookie, |v| {
+        v["events"]
+            .as_array()
+            .is_some_and(|e| e.iter().any(|e| e["kind"] == "stream_interrupted"))
+    })
+    .await;
+    assert_eq!(
+        main["stream_cut"],
+        serde_json::Value::Null,
+        "the session's row lists among the turn's events, and the cut is the subagent's: {main}"
+    );
+    let sub = wait_json(&parts.app, "/admin/requests/r-sub", &cookie, |v| {
+        v["request"]["id"] == "r-sub"
+    })
+    .await;
+    assert_eq!(sub["stream_cut"]["code"], "stream_cut");
+}
+
 #[tokio::test]
 async fn deleting_either_fast_cooldown_clears_its_own_row_and_leaves_the_others() {
     use common::{delete, get, json, login, NOW};

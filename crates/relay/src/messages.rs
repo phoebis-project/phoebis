@@ -19,8 +19,9 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, AutoMode, Bus, Classifier, ClientFacts, CooldownSet,
-    DiagnosticsSource, Event, Fork, GuardrailMatch, Kind, Origin, Outcome, RequestComplete,
-    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
+    DiagnosticsSource, Event, Fork, GuardrailMatch, Interruption, Kind, Origin, Outcome,
+    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
+    ResponseHead as BusHead, Usage,
 };
 use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
@@ -732,6 +733,7 @@ impl Trace {
         end: Option<(Outcome, Option<String>)>,
         message_id: Option<String>,
         skipped_events: u32,
+        interruption: Option<Interruption>,
         finished_at: i64,
     ) {
         // Held by value across the publish: a handler dropped while a durable slot is full drops the guard still
@@ -764,6 +766,7 @@ impl Trace {
             diagnostics: outcome.diagnostics,
             message_id,
             skipped_events,
+            interruption,
             finished_at,
         }))
         .await;
@@ -835,6 +838,7 @@ impl Drop for CompletionGuard {
             diagnostics: None,
             message_id: None,
             skipped_events: 0,
+            interruption: None,
             finished_at: (self.trace.clock)(),
         });
         // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
@@ -4176,6 +4180,7 @@ impl Relay {
                 None,
                 None,
                 0,
+                None,
                 (self.clock)(),
             )
             .await;
@@ -4658,6 +4663,7 @@ impl Relay {
                 // An error document carries no message `id`.
                 None,
                 0,
+                None,
                 (self.clock)(),
             )
             .await;
