@@ -93,6 +93,20 @@ impl Metrics {
             .key_id
             .clone()
             .unwrap_or_else(|| UNATTRIBUTED.into());
+        // A refused request asked no account, so it counts under the refusals family alone and the attempt and token
+        // counters below see none of it.
+        if request.refused {
+            self.add(
+                "phoebis_refusals_total",
+                vec![
+                    ("code", request.error_code.clone().unwrap_or_default()),
+                    ("key", key),
+                    ("kind", request.kind.clone()),
+                ],
+                1.0,
+            );
+            return;
+        }
         self.add(
             "phoebis_requests_total",
             vec![
@@ -201,6 +215,7 @@ impl Metrics {
                 | "phoebis_keepalive_probes_total"
                 | "phoebis_keepalive_skipped_total"
                 | "phoebis_ledger_dropped_total"
+                | "phoebis_refusals_total"
                 | "phoebis_requests_total"
                 | "phoebis_tokens_total" => {
                     if let Some(series) = inner.counters.get(name) {
@@ -434,6 +449,7 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_ledger_queued", "gauge"),
     ("phoebis_pins_active", "gauge"),
     ("phoebis_pricing_unknown_model_total", "counter"),
+    ("phoebis_refusals_total", "counter"),
     ("phoebis_requests_total", "counter"),
     ("phoebis_router_dropped_reports_total", "counter"),
     ("phoebis_router_writer_degraded", "gauge"),

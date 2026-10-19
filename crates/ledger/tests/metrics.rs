@@ -219,6 +219,7 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
     assert!(
         text.contains("# TYPE phoebis_pins_active gauge")
             && text.contains("# TYPE phoebis_requests_total counter")
+            && text.contains("# TYPE phoebis_refusals_total counter")
     );
 }
 
@@ -521,6 +522,70 @@ async fn a_landed_request_reaches_the_request_and_attempt_series() {
         "the shipped table does not price claude-sonnet-4-5, so the label is other:\n{text}"
     );
     up.shutdown().await;
+}
+
+/// The second request shares the refused one's key, kind and outcome, so the request counter's one series reads 1
+/// only where the refused request stayed out of it.
+#[test]
+fn a_refused_request_lands_in_the_refusals_counter_and_not_in_the_requests_counter() {
+    let metrics = Metrics::new();
+    let revisions = PriceRevisions::shipped();
+    let table = revisions.in_force(0);
+    let rejected = |id: &str, code: &str, attempts: u32, refused: bool| RequestRecord {
+        id: id.into(),
+        key_id: Some("desktop".into()),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(403),
+        outcome: "rejected".into(),
+        attempts,
+        error_code: Some(code.into()),
+        refused,
+        ..Default::default()
+    };
+    metrics.observe_request(
+        table,
+        &rejected("r-blocked", "guardrail_blocked", 0, true),
+        &[],
+    );
+    metrics.observe_request(
+        table,
+        &rejected("r-reselect", "client_not_allowed", 1, false),
+        &[AttemptRecord {
+            request_id: "r-reselect".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "rate_limited".into(),
+            ..Default::default()
+        }],
+    );
+    let text = metrics.render(&RoutingGauges::default(), &[], 0);
+    assert!(
+        text.contains(
+            r#"phoebis_refusals_total{code="guardrail_blocked",key="desktop",kind="inference"} 1"#
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains(r#"phoebis_refusals_total{code="client_not_allowed""#),
+        "a refusal after an attempt is a rejected request:\n{text}"
+    );
+    assert!(
+        text.contains(
+            r#"phoebis_requests_total{key="desktop",kind="inference",outcome="rejected"} 1"#
+        ),
+        "{text}"
+    );
+    let requests: Vec<String> = series_of(&text)
+        .into_iter()
+        .filter(|s| s.starts_with("phoebis_requests_total{"))
+        .collect();
+    assert_eq!(
+        requests,
+        [r#"phoebis_requests_total{key="desktop",kind="inference",outcome="rejected"}"#],
+        "{text}"
+    );
 }
 
 /// The routing loop counts its pins per pool, so a scrape copies one count per pool rather than the pin table; a
