@@ -8407,10 +8407,14 @@ const checkedNames = (box) =>
   // Two guardrails no list holds join the registry the dialog reads, so the box has two to pick in turn and shows what
   // it leaves out: the pool's.
   const { listGuardrails } = api;
-  const [first] = await listGuardrails.call(api);
+  const unstubbed = await listGuardrails.call(api);
+  const [first] = unstubbed;
   const extra = { ...first, id: 'smoke-extra', keys: [], name: 'Smoke extra', pools: [] };
   const spare = { ...first, id: 'smoke-spare', keys: [], name: 'Smoke spare', pools: [] };
   api.listGuardrails = async () => [...(await listGuardrails.call(api)), extra, spare];
+  // The box lists in the registry's order and the own rows run in the key's position order, so each is built apart.
+  const boxOrder = [...unstubbed.filter((g) => !(desktop?.poolGuardrails ?? []).some((r) => r.id === g.id)).map((g) => g.name), extra.name, spare.name];
+  const inBox = (names) => boxOrder.filter((n) => names.includes(n));
   const page = await mount('/keys?edit=desktop&group=guardrails');
   await page.settle(300);
   const dlg = openDialogs(page).pop() ?? null;
@@ -8439,8 +8443,8 @@ const checkedNames = (box) =>
       JSON.stringify(rows) === JSON.stringify([...guardrailRefRows(desktop?.poolGuardrails ?? [], true), ...guardrailRefRows(desktop?.guardrails ?? [], false)]) &&
       hint.startsWith("The pool's guardrails run first and cannot be dropped here. This key's own run after them. Manage guardrails") &&
       upHeld === true &&
-      JSON.stringify(offered) === JSON.stringify([...own, extra.name, spare.name]) &&
-      JSON.stringify(checked) === JSON.stringify(own),
+      JSON.stringify(offered) === JSON.stringify(boxOrder) &&
+      JSON.stringify(checked) === JSON.stringify(inBox(own)),
     missing: [shown, JSON.stringify(rows), hint, `first own row's Move up disabled ${upHeld}`, JSON.stringify(offered), JSON.stringify(checked)],
   });
   // The same key's box again, picked through: each pick attaches at once with the box open and its check drawn, an
@@ -8464,25 +8468,31 @@ const checkedNames = (box) =>
   await step('uncheck', optionNamed(pickBox, spare.name));
   await step('Select all', pickBox?.querySelector('.mselect__option--all'));
   await step('Select all unchecked', pickBox?.querySelector('.mselect__option--all'));
+  const focusInBox = pickBox?.contains(document.activeElement) === true;
   pressKey('Escape', pickBox);
   await picking.settle(150);
-  const closed = { focused: document.activeElement !== null && document.activeElement === buttonIn(pickSection, 'Attach guardrail'), open: pickBox?.isConnected === true };
+  const closed = { focusInBox, focused: document.activeElement !== null && document.activeElement === buttonIn(pickSection, 'Attach guardrail'), open: pickBox?.isConnected === true };
   picking.unmount();
   api.listGuardrails = listGuardrails;
-  const openWith = (label, list) => ({ checked: list, label, open: true, own: list });
+  const openWith = (label, checkedList, ownList) => ({ checked: checkedList, label, open: true, own: ownList });
+  const picked = [...own, extra.name];
+  const both = [...picked, spare.name];
+  // Select all appends the unattached ones in the box's order after the list as it stood.
+  const selected = [...picked, ...boxOrder.filter((n) => !picked.includes(n))];
   results.push({
     name: '/keys the Attach box stays open while the operator picks, each pick attaching at once, and Select all attaches every offered guardrail',
     ok:
       own.length > 0 &&
-      JSON.stringify(all) === JSON.stringify([...own, extra.name, spare.name]) &&
+      JSON.stringify(all) === JSON.stringify(boxOrder) &&
       JSON.stringify(steps) ===
         JSON.stringify([
-          openWith('first pick', [...own, extra.name]),
-          openWith('second pick', [...own, extra.name, spare.name]),
-          openWith('uncheck', [...own, extra.name]),
-          openWith('Select all', all),
-          openWith('Select all unchecked', []),
+          openWith('first pick', inBox(picked), picked),
+          openWith('second pick', inBox(both), both),
+          openWith('uncheck', inBox(picked), picked),
+          openWith('Select all', boxOrder, selected),
+          openWith('Select all unchecked', [], []),
         ]) &&
+      closed.focusInBox &&
       closed.open === false &&
       closed.focused,
     missing: [JSON.stringify(all), ...steps.map((s) => JSON.stringify(s)), JSON.stringify(closed)],
