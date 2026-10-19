@@ -4801,9 +4801,9 @@ fn shed_round(
         reads.insert(p.key(), read);
     }
     let (outcome, reason) = if marks.is_empty() {
-        // The deepest skip class any walked pin reached, in the order `no_runway`, `off_window`, `unpriced`,
-        // `last_pin`, `standing`. A round that walked no pin reads `off_window` where a pin it left out was off the
-        // window that fired, and `unpriced` otherwise, since no priced burn was there to remove.
+        // The deepest class in the order `no_runway`, `off_window`, `unpriced`, `last_pin`, `standing`: a walked pin's
+        // skip, or `off_window` where no pin was walked and a pin left out was off the window that fired. `unpriced`
+        // where neither names a class, since no priced burn was there to remove.
         let mut skips: Vec<&'static str> = reads.values().filter_map(|read| read.skip).collect();
         if reads.is_empty() && left_out.iter().any(|(_, word)| *word == "off_window") {
             skips.push("off_window");

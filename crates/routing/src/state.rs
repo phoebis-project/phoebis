@@ -2558,7 +2558,7 @@ impl RoutingState {
     }
 
     /// The pins of `account_id` that `keep` admits, each priced in `unit` through `rates` and decayed to `now`, and
-    /// the sum over the priced pins; `keep` is the account's current pool, built by the caller from the snapshot
+    /// the sum over the priced pins. `keep` is the account's current pool, built by the caller from the snapshot
     /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
     /// `WindowShare` a burn is the subscription cost model's anchor share per second, and under `Usd` the pin's fast
     /// usage and the usage of the client's own classifier calls count beside its row's copy, as

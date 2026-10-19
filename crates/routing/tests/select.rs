@@ -12231,25 +12231,27 @@ fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does
 #[test]
 fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leaving_overage_reads_the_window_share_back(
 ) {
+    // A cap of the whole sum makes the target the excess, which neither pin covers alone, so the walk marks the first
+    // pin of the order and keeps the other as the last.
     let s = tiered(Pool {
         policy: OveragePolicy::Allow,
-        ..shedding_pool(Shedding::default())
+        ..shedding_pool(Shedding {
+            shed_cap: 1.0,
+            ..Shedding::default()
+        })
     });
-    // Both pins burn the same tokens; the dollar table weighs Sonnet's nine times Opus's and the 5-hour share
-    // table the other way round, so the unit alone decides which pin is heavier.
+    // The Opus pin burns twice the Sonnet pin's tokens, so twice its share of the 5-hour window, while the dollar
+    // table weighs Sonnet's tokens nine times Opus's, so the Sonnet pin burns more dollars. The unit alone decides
+    // which pin is heavier.
     let opus = PinRow {
         model: "claude-opus-5".into(),
         ..burning("opus", "a", 10.0, false, T)
     };
-    let sonnet = burning("sonnet", "a", 10.0, false, T);
+    let sonnet = burning("sonnet", "a", 5.0, false, T);
     let mut st = rounding(vec![opus, sonnet]);
     st.set_rates(BurnRates {
         dollars: input_prices(&[("claude-opus-5", Some(1.0)), ("claude-sonnet-5", Some(9.0))]),
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-opus-5", Some(9.0)), ("claude-sonnet-5", Some(1.0))]),
-            ..RegimeRates::unit()
-        },
-        fast: RateTable::unit(),
+        ..BurnRates::default()
     });
     let opus_key = PinKey {
         model: "claude-opus-5".into(),
@@ -12293,12 +12295,12 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
     assert_eq!(
         landed(select(&mut st, &s, &opus_turn(later), &mut rng()).0),
         ("b".into(), Some(MigrateReason::Shed)),
-        "back on plan the round reads the 5-hour share and marks the Opus pin first"
+        "back on plan the round orders on the window share and marks the Opus pin first"
     );
     let untouched = pinned(&st, "sonnet");
     assert_eq!(
         (untouched.burn, untouched.burn_banded),
-        (input_rate(10.0), input_rate(10.0)),
+        (input_rate(5.0), input_rate(5.0)),
         "neither copy was reset by the switch"
     );
 }
@@ -26102,6 +26104,49 @@ fn a_rounds_desk_pin_reads_one_rate_over_the_span_beside_a_base_pin_whose_averag
 
 #[test]
 fn a_window_share_round_lists_its_pins_in_the_order_of_the_spans_average_it_prices_them_by() {
+    // Over the hour to the reset the band enters half an hour in for the base regime and never for `desk`. At T the
+    // desk pin's 20 tokens a second rank over the base pin's 8, and its 0.10 of the window an hour over the base pin's
+    // 0.08, while over the span the base pin averages 0.12 an hour, half an hour at 0.08 and half at 0.16, against the
+    // desk pin's flat 0.10.
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = rounding(vec![
+        PinRow {
+            entrypoint: "desk".into(),
+            ..burning("s0", "a", 20.0, false, T)
+        },
+        burning("s1", "a", 8.0, false, T),
+    ]);
+    st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
+    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.unit),
+        ("five_hour", "window_share")
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s1", "s0"],
+        "the card lists the base pin, whose average over the span is the higher, before the desk pin"
+    );
+    for (session, expected) in [("s1", 0.12), ("s0", 0.10)] {
+        let read = round_burn(&round, session);
+        assert!(
+            (read - expected).abs() < 1e-9,
+            "{session}: {read} against {expected}"
+        );
+    }
+}
+
+#[test]
+fn a_window_share_round_orders_its_pins_on_the_plain_copy_where_the_banded_copy_ranks_them_the_other_way(
+) {
     // Both pins run under the base regime over the hour to the reset, which the band enters half an hour in, so each
     // pin's average is one and a half times its plain rate at T. s1 was charged inside an earlier band, so its banded
     // copy reads twice its plain one: at T that copy ranks its 6 tokens a second over s2's 4, while over the span s2's
