@@ -93,30 +93,38 @@ lease and the four probe workers are fixed.
 ## Which requests re-arm a recipe
 
 A recipe's cache stays warm only for a request that continues the conversation it was built from. The engine reads the
-request's class first: `compaction`, `main` and `subagent` re-arm the recipe, and any other class, a title or a summary
-request among them, leaves the recipe, its schedule and its credit untouched, and shows as `last_guard: auxiliary`.
+request's class first: `main` and `subagent` re-arm the recipe, and a completed compaction stops it until the next main
+turn. Any other class, a title or a summary request among them, leaves the recipe, its schedule and its credit
+untouched, and shows as `last_guard: auxiliary`.
+
+A `compaction` request reads the conversation's old prefix to write the context the next turn starts from, so a recipe
+armed from it would keep warm a body no turn reads again. While the compaction runs, the recipe waits as it stood with
+no probe sent, and shows as `last_guard: compaction`. Once the compaction completes, it answers the probes before it as
+a turn does, and the recipe ends under `compacted`: no probe goes out until the next main turn arms a recipe for the
+new context. A compaction that failed or was canceled keeps the previous recipe, since the old context stays the live
+one, and the engine resumes its schedule on it.
 
 Without a class, the request's own two boundary-hash chains decide. A boundary that holds the recipe's last message hash
 re-arms it, since the request continues the same conversation. The same static prefix, the tools array and the system
-blocks, on the same model, with no continuation restarts the recipe, replacing its cached body the way a compaction
-does. A request matching neither the chain nor the prefix shows as `last_guard: foreign`, and its recipe is left alone
-the same way an auxiliary one is. A body carrying no chain at all re-arms on every request, the fallback the router's
-own warmth check applies for a client that sends none.
+blocks, on the same model, with no continuation restarts the recipe, replacing its cached body. A request matching
+neither the chain nor the prefix shows as `last_guard: foreign`, and its recipe is left alone the same way an auxiliary
+one is. A body carrying no chain at all re-arms on every request, the fallback the router's own warmth check applies for
+a client that sends none.
 
-The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it, and it goes to the probe
-whose entry that request read, a probe that rewrote the entry included, the newest probe that covered the entry taking
-it over a later one that did not cover it. An auxiliary or a foreign request may still read a warm cache, but it never
-resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no evidence about the cache, so
-a retry inside the probe's entry earns the credit the failed turn could not, its gap measured from the last turn that
-answered. Probes on one model, speed and account form a chain while each later probe reads the entry back, since that
-read extends the entry, and a probe that reads nothing starts a chain of its own. A request on that model, speed and
-account that reads the cache inside the chain's last entry answers every probe of the chain, and one that arrives past
-that entry settles them all `expired`.
+The kept-warm credit follows the same rule: only a request that re-armed the recipe or a completed compaction earns it,
+and it goes to the probe whose entry that request read, a probe that rewrote the entry included, the newest probe that
+covered the entry taking it over a later one that did not cover it. An auxiliary or a foreign request may still read a
+warm cache, but it never resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no
+evidence about the cache, so a retry inside the probe's entry earns the credit the failed turn could not, its gap
+measured from the last turn that answered. Probes on one model, speed and account form a chain while each later probe
+reads the entry back, since that read extends the entry, and a probe that reads nothing starts a chain of its own. A
+request on that model, speed and account that reads the cache inside the chain's last entry answers every probe of the
+chain, and one that arrives past that entry settles them all `expired`.
 
-A request a guardrail blocks is a refused request to the engine. A blocked `compaction`, `main` or `subagent` request,
-or one with no class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does, and a
-blocked auxiliary request leaves the recipe, its schedule and its credit untouched
-([Guardrails](guardrails.md#what-a-guardrail-is)).
+A request a guardrail blocks is a refused request to the engine. A blocked `main` or `subagent` request, or one with no
+class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does. A blocked `compaction`
+request is a compaction that did not complete, so it keeps the recipe as a failed one does, and a blocked auxiliary
+request leaves the recipe, its schedule and its credit untouched ([Guardrails](guardrails.md#what-a-guardrail-is)).
 
 ## The four fields
 
@@ -249,7 +257,7 @@ session leaves.
 | `held` | The prompt is kept and no probe is sent while a condition holds that clears by itself or by an operator. |
 | `paused` | The engine paused the recipe after a probe's answer or a failed request, until the next real request. |
 | `not_retained` | The last request was not kept, for its shape or size, the engine's limits, or no cache evidence. |
-| `ended` | The recipe was discarded: a ceiling, a lapse, an eviction, a release or an end. |
+| `ended` | The recipe was discarded: a ceiling, a completed compaction, an end, an eviction, a lapse or a release. |
 
 Each state reads these causes:
 
@@ -263,8 +271,8 @@ Each state reads these causes:
 - `not_retained`: `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`, `invalid_cache_control`,
   `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`, `request_too_large`,
   `storage_limit`, `structured_output`, `unsupported_shape`.
-- `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `evicted`, `expired`, `expired_at_restart`, `idle_limit`,
-  `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
+- `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `compacted`, `evicted`, `expired`, `expired_at_restart`,
+  `idle_limit`, `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
   `session_expired`.
 
 A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's error answer pauses the recipe
@@ -288,9 +296,10 @@ would travel with a stale stamp or a doubled member.
 ### The guard field
 
 Every request the recipe observes also updates `last_guard`, `null` before the first one: `rearm` or `restart` for a
-request that continued or restarted the conversation, `auxiliary` or `foreign` for one the guard set aside (see [Which
-requests re-arm a recipe](#which-requests-re-arm-a-recipe)). `last_guard` never holds the recipe by itself. An auxiliary
-or a foreign request leaves `state` and `cause` exactly as they were, so a recipe `held` under `cooled` with
+request that continued or restarted the conversation, `compaction` for a compaction request, which leaves the recipe as
+it stood and stops it at its completion, and `auxiliary` or `foreign` for one the guard set aside (see [Which requests
+re-arm a recipe](#which-requests-re-arm-a-recipe)). `last_guard` never holds the recipe by itself. An auxiliary or a
+foreign request leaves `state` and `cause` exactly as they were, so a recipe `held` under `cooled` with
 `last_guard: rearm` is a real request that re-armed it, followed later by a cooldown on its account, not a
 contradiction.
 

@@ -104,9 +104,10 @@ restoration and the record). The router reads them for the request log and the a
 sent, the tool durations as their sum, and the drawer shows them ([Requests](console.md#requests)).
 `x-claude-code-context-compacted` also reaches routing: the session's pin reads cold on the request that carries it, so
 a move that waits for a cold cache may take the session and a shedding round orders it first
-([Moves](routing.md#moves)). The router reads `x-claude-code-request-class` on every Claude Code request: a `main`,
-`subagent` or `compaction` class refreshes the session's pin and re-arms its keepalive recipe, and any other class does
-neither ([Which requests re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). The compaction header is
+([Moves](routing.md#moves)). The router reads `x-claude-code-request-class` on every Claude Code request: a `main` or
+`subagent` class refreshes the session's pin and re-arms its keepalive recipe, a `compaction` class refreshes the pin
+and stops the recipe at its completion instead of re-arming it, and any other class does neither ([Which requests
+re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). The compaction header is
 required on a request of the class `compaction`, and the other headers are optional, a request without one relayed the
 same way. `0` stops them on every connection, and the router then refuses every inference request for the missing class
 header.
