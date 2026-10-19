@@ -690,8 +690,8 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   request's dollars, or a dash under Dollar equivalent. Its hover names why a dollar figure or a dash stands, as the
   Cost cell's hover does, the serving account's tier (`Account tier {tier}`) and the price list and cost model in force
   when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`). A client classifier
-  call's row reads its zero figures under Native and Window shares with the hover "Free on the plan: a client classifier
-  call takes no window share".
+  call's row reads its zero figures under Native and Window shares and its dollar equivalent under All in dollars and
+  Dollar equivalent, with the hover "Free on the plan: a client classifier call takes no window share".
 - Request: Session, Agent, Client with the request class badge, User agent (such as
   `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row per attempt with the upstream's
   request id and, on the answer that served, its message id.

@@ -192,14 +192,14 @@ function costRowValue(unit: CostUnit) {
 }
 
 /**
- * The drawer's cost value under one title: why a dollar figure, a dash or a free call's zero shares stand where they
- * do, the serving account's tier by its plan, the price list and the cost model in force at the request's instant while
+ * The drawer's cost value under one title: why a dollar figure, a dash or a free call's figures stand where they do,
+ * the serving account's tier by its plan, the price list and the cost model in force at the request's instant while
  * the settings are at hand, and the estimate of a figure. A title on an element inside the cell would hide the row's
  * own wherever the figure is hovered.
  */
 function CostRowCell({ request: r, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const cost = costUnitOf(r, unit);
-  const why = (cost.kind === 'shares' || cost.kind === 'equivalent') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
+  const why = (cost.kind === 'shares' || cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
   const title = withEstimate([why, r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated && cost.kind !== 'dash');
   return (
     <td className="right num" title={title || undefined}>
