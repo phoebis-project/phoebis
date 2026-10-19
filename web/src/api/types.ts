@@ -956,7 +956,7 @@ export interface DecisionSummary {
   model: string | null;
   poolId: string | null;
   probe: boolean;
-  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
+  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its sentence. */
   refusal: { code: string; kind: string; reason: string } | null;
   requestId: string;
   rule: string | null;
@@ -1285,7 +1285,7 @@ export interface RecordOutcome {
   /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */
   pinEvents: { kind: string; reason: string | null }[];
   pinWritten: { action: string; epoch: number; hashesStamped: boolean; lane: string; refreshStamped: boolean } | null;
-  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift`) beside its sentence. */
+  /** The refusal's code (a key refusal's `revoked` and its siblings, a client's `drift` or `contract`) beside its sentence. */
   refusal: { code: string; kind: string; reason: string } | null;
   /** What the decision booked on the account until the usage replaces it: the rewrite and the burn per hour by plan window. */
   reservation: { accountId: string; burn: Record<string, number>; expiresAt: string; rewrite: Record<string, number> } | null;

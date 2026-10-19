@@ -631,10 +631,11 @@ positions it reads its account's own window shares, each with its window's short
 `0.42% 5h`, the full labels on hover). An overage, fast mode or API-key request reads dollars under every position, and
 a figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted model". A
 client classifier call on a subscription account reads `0%` with the hover "Free on the plan: a client classifier call
-takes no window share". The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next,
-holds the requests up to the moment you opened it so paging does not shift, and the split Refresh button's body brings
-it up to now. An empty table reads "No requests match" with "Widen the date range or clear a filter." and "Reset
-filters", which clears the filters, the search and the range. What each figure means is on [Statistics](statistics.md).
+takes no window share" ahead of the estimate. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First,
+Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split Refresh
+button's body brings it up to now. An empty table reads "No requests match" with "Widen the date range or clear a
+filter." and "Reset filters", which clears the filters, the search and the range. What each figure means is on
+[Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range

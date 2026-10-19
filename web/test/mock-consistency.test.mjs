@@ -1803,10 +1803,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`the default range's effort and request class breakdowns count the story's rows per folded value, at ${at}`, async () => {
+  test(`the default range's effort, request class and classifier breakdowns count the story's rows per folded value, at ${at}`, async () => {
     const s = await story;
     const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
-    const folds = { effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
+    const folds = { classifier: (r) => s.lib.foldClassifier(r.classifier), effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
     for (const [groupBy, fold] of Object.entries(folds)) {
       const want = {};
       for (const r of rows) want[fold(r)] = (want[fold(r)] ?? 0) + 1;
@@ -1814,6 +1814,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const groups = s.lib.groupsOf(defaultRange(s), { groupBy, includeProbes: false }).filter((g) => g.requests > 0);
       assert.deepEqual(Object.fromEntries(groups.map((g) => [g.key, g.requests]).sort()), Object.fromEntries(Object.entries(want).sort()), groupBy);
     }
+    // A client classifier call takes no plan share, so its group's cost, cache, saving and split figures read zero,
+    // its account's shares and the 20x equivalents alike.
+    const [free] = s.lib.groupsOf(defaultRange(s), { accountIds: ['primary'], groupBy: 'classifier', includeProbes: false }).filter((g) => g.key === 'client');
+    const pairs = (map) => Object.values(map ?? {}).flatMap((c) => [c.read, c.write]);
+    const figures = [
+      ...Object.values(free?.costEquivalent ?? {}), ...pairs(free?.cacheEquivalent), ...Object.values(free?.savingEquivalent ?? {}), ...Object.values(free?.equivalentSplit ?? {}),
+      ...Object.values(free?.costShares ?? {}), ...pairs(free?.cacheShares), ...Object.values(free?.savingShares ?? {}),
+    ];
+    assert.ok(free?.requests === 2 && figures.length > 0 && figures.every((v) => v === 0), `the client group reads ${JSON.stringify(free && { cacheEquivalent: free.cacheEquivalent, cacheShares: free.cacheShares, costEquivalent: free.costEquivalent, costShares: free.costShares, equivalentSplit: free.equivalentSplit, requests: free.requests, savingEquivalent: free.savingEquivalent, savingShares: free.savingShares })}`);
   });
 
   test(`the default range counts a stream the client closed as failed under the code the relay files it with, at ${at}`, async () => {

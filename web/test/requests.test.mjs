@@ -75,11 +75,11 @@ test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {
   for (const position of SHARE_POSITIONS) {
     const unit = d.costUnitOf(free, position);
     assert.deepEqual(unit, { estimated: false, kind: 'shares', reason: 'client_classifier', shares: zero, usd: 0.0012 }, position);
-    assert.deepEqual(d.costCellOf(unit), { main: '0% 7d', sub: '0% 5h', title: d.FREE_SHARE_TITLE }, `${position}: the zero shares read as figures, the title says why`);
+    assert.deepEqual(d.costCellOf(unit), { main: '0% 7d', sub: '0% 5h', title: `${d.FREE_SHARE_TITLE}. 0% of 5-hour, 0% of 7-day, $0.0012 equivalent` }, `${position}: the zero shares read as figures, the title says why ahead of the estimate`);
   }
   const native = d.costUnitOf(free, 'native');
   assert.deepEqual(native, { equivalents: zero, estimated: false, kind: 'equivalent', reason: 'client_classifier', usd: 0.0012 });
-  assert.deepEqual(d.costCellOf(native), { main: '0% 20x 5h', sub: '0% 20x 7d', title: d.FREE_SHARE_TITLE }, 'native: the zero equivalents read as figures, the title says why');
+  assert.deepEqual(d.costCellOf(native), { main: '0% 20x 5h', sub: '0% 20x 7d', title: `${d.FREE_SHARE_TITLE}. 0%, 0%, $0.0012 equivalent` }, 'native: the zero equivalents read as figures, the title says why ahead of the estimate');
 });
 
 test('a plan request priced on the 5-hour window alone reads it once, and one priced on its week alone reads the week', () => {

@@ -10622,7 +10622,7 @@ m.unmount();
   const freeCalls = requests.filter((r) => r.classifier === 'client');
   const contractRow = requests.find((r) => r.errorCode === 'client_contract');
   results.push({ name: 'fixture: two classifier calls and one contract refusal', ok: freeCalls.length === 2 && contractRow !== undefined, missing: [`${freeCalls.length} classifier calls`, String(contractRow?.id)] });
-  const classifierCheck = '/requests the Classifier filter stands in the Request group, offers client classifier and none, and choosing client classifier lists the two classifier calls under the chip classifier: client, their Cost cells 0% under the free sentence';
+  const classifierCheck = '/requests the Classifier filter stands in the Request group, offers client classifier and none, and choosing client classifier lists the two classifier calls under the chip classifier: client, their Cost cells 0% with the free sentence ahead of the estimate';
   const facet = await mount('/requests', { now: CLOCK_ORIGIN });
   const facetGroup = await groupOf(facet, 'Classifier');
   const facetOptions = (await openOptions(facet, 'Classifier')).map((o) => o.textContent?.trim() ?? '');
@@ -10644,7 +10644,7 @@ m.unmount();
       chosenCalls.rows.length === 2 &&
       chosenCalls.rows.every((r) => r !== null && r.classifier === 'client') &&
       costCells.length === 2 &&
-      costCells.every((c) => c.main.startsWith('0% ') && c.title === FREE),
+      costCells.every((c) => c.main.startsWith('0% ') && (c.title ?? '').startsWith(`${FREE}. `) && (c.title ?? '').endsWith(' equivalent')),
     missing: [String(facetGroup), JSON.stringify(facetOptions), JSON.stringify({ ...chosenCalls, rows: chosenCalls.rows.map((r) => r?.id ?? null) }), JSON.stringify(costCells)],
   });
   /** A drawer row by its section's title and its own label: the value's text, face and hover. */

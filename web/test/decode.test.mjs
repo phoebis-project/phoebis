@@ -1870,6 +1870,15 @@ test('a session fold groups on the request class each row sent, and a classless 
   assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'the label every route answers for the reserved value');
 });
 
+test('a session fold groups on the classifier standing, a request the marker does not hold under -', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const call = rows.find((r) => r.id === 'r-classifier');
+  const captured = rows.find((r) => r.id === 'r-captured');
+  const groups = d.foldGroups([call, captured, { ...captured, id: 'r-captured-2' }], 'classifier');
+  assert.deepEqual(groups.map((g) => [g.key, g.requests]).sort(), [['-', 2], ['client', 1]], 'the keys the Classifier facet filters on');
+  assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'the label every route answers for the reserved value');
+});
+
 test('a folded bucket carries one group per key the page groups on', () => {
   const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
   const rows = [captured, { ...failed, keyId: 'laptop' }];
