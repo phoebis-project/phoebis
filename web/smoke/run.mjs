@@ -22710,6 +22710,7 @@ m.unmount();
     const head = filter?.querySelector('.mselect__option--all');
     // A preset row sets its members, so the choices are the options alone.
     const choices = [...(filter?.querySelectorAll(`${CHOICE}:not(.mselect__option--preset)`) ?? [])];
+    const presets = [...(filter?.querySelectorAll('.mselect__option--preset') ?? [])];
     const chip = chipOf(page, label.toLowerCase());
     return {
       address: new URLSearchParams(page.location().search).get(key)?.split(',') ?? null,
@@ -22717,6 +22718,8 @@ m.unmount();
       choices: choices.map((o) => o.textContent?.trim() ?? ''),
       first: head != null && filter?.querySelector('[role="option"]') === head,
       head: head ? { checked: head.getAttribute('aria-checked'), selected: head.getAttribute('aria-selected'), text: head.textContent?.trim() } : null,
+      presets: presets.length,
+      presetsMarked: presets.filter((o) => o.getAttribute('aria-selected') === 'true' || o.getAttribute('aria-checked') === 'mixed' || o.querySelector('.mselect__check svg, .mselect__mixed') !== null).length,
       set: chip !== undefined,
       title: chip?.getAttribute('title') ?? null,
       trigger: chip?.textContent?.trim() ?? `no ${label} chip`,
@@ -22746,11 +22749,13 @@ m.unmount();
   // The routing log's rows by the page's own row key, so a narrowed table reads against the mock's answer.
   const logRows = (page) => [...page.container.querySelectorAll('.routing-log__table tbody tr')].filter((tr) => !tr.querySelector('.skeleton, .empty')).map((tr) => tr.getAttribute('data-row'));
   const logKey = (r) => (r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`);
-  // A kind the default hour holds, so the table its click narrows to lists rows.
+  // The story hour's keepalive probe, `req_c41d0311-200` at 14:06:30 in `web/src/mock/requests.ts`, is the default
+  // hour's probe decision, so the table this kind's click narrows to lists it.
   const ONE_KIND = 'Probe decisions';
   /**
-   * Kinds on from Select all's uncheck: the table that draw lists, Select all's check, the uncheck again, then a click
-   * on `ONE_KIND` with the query the page sent for it and the mock's answer to that query.
+   * The cleared draw's table, read against the rows at rest, proves the empty list still means every kind. Select all's
+   * check from that draw proves it returns every kind with no chip. The one kind's table, read against the mock's
+   * answer to the query the page sent, proves the kind's click wrote that kind alone.
    */
   const kindSteps = async (page, label, key) => {
     const cleared = logRows(page);
@@ -22796,7 +22801,7 @@ m.unmount();
       const none = read(page, label, key);
       const reopened = kinds ? await reopenCleared(page, label, key) : null;
       const everyKind = (r) => r.trigger === 'no Kinds chip' && !r.set && r.address === null && r.choices.length > 0 && r.checked.length === r.choices.length && r.head?.selected === 'true' && r.head.checked === null;
-      const noKind = (r) => r.trigger === 'no Kinds chip' && !r.set && r.address === null && r.choices.length > 0 && r.checked.length === 0 && r.head?.selected === 'false' && r.head.checked === null;
+      const noKind = (r) => r.trigger === 'no Kinds chip' && !r.set && r.address === null && r.choices.length > 0 && r.checked.length === 0 && r.presets > 0 && r.presetsMarked === 0 && r.head?.selected === 'false' && r.head.checked === null;
       const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
       const kindsHeld = () => {
         const { answer, back, cleared, narrowed, picked, sent } = steps;
@@ -22844,7 +22849,7 @@ m.unmount();
               none.checked.length === 0 &&
               none.head?.selected === 'false'),
         missing: steps
-          ? [`opened: ${brief(before)}, ${rest.length} rows`, `unchecked: ${brief(all)}, ${steps.cleared.length} rows, as at rest ${same(steps.cleared, rest)}`, `checked again: ${brief(steps.back)}`, `${ONE_KIND}: ${brief(steps.picked)}, sent ${JSON.stringify(steps.sent?.kinds)}, ${steps.narrowed.length} rows, as answered ${same(steps.narrowed, steps.answer)}`, `Select all: ${brief(none)}`, `reopened: ${brief(reopened)}`]
+          ? [`opened: ${brief(before)}, ${rest.length} rows`, `unchecked: ${brief(all)}, ${all.presetsMarked} of ${all.presets} presets marked, ${steps.cleared.length} rows, as at rest ${same(steps.cleared, rest)}`, `checked again: ${brief(steps.back)}`, `${ONE_KIND}: ${brief(steps.picked)}, sent ${JSON.stringify(steps.sent?.kinds)}, ${steps.narrowed.length} rows, as answered ${same(steps.narrowed, steps.answer)}`, `Select all: ${brief(none)}`, `reopened: ${brief(reopened)}`]
           : [`opened: ${brief(before)}`, `first click: ${brief(all)}`, `wanted: ${JSON.stringify(wanted)}`, `second click: ${brief(none)}`],
       });
       // A searchable list's row reaches the options its query leaves, and the hidden ones keep their state.

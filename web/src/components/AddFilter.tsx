@@ -48,7 +48,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
   const [draft, setDraft] = useState('');
   /**
    * The field whose Select all was unchecked while its empty value means every option. It draws with no check until the
-   * next write or the popover's close.
+   * next write of that field or the popover's close.
    */
   const [cleared, setCleared] = useState<string | null>(null);
   const textOf = (field: string) => {
@@ -193,7 +193,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
             label={d.label}
             mono={d.mono}
             onChange={(next, via) => {
-              setCleared(d.emptyMeansAll === true && via === 'all' && next.length === 0 ? d.field : null);
+              setCleared((c) => (d.emptyMeansAll === true && via === 'all' && next.length === 0 ? d.field : c === d.field ? null : c));
               update({ [d.field]: next });
             }}
             options={known}

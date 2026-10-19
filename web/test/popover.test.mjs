@@ -626,6 +626,9 @@ const listRead = () => {
     head: { checked: head?.getAttribute('aria-checked') ?? null, selected: head?.getAttribute('aria-selected') ?? null },
   };
 };
+/** Each preset row's state, and whether it draws its check or its mixed mark. */
+const presetRead = () =>
+  [...box().querySelectorAll('.mselect__option--preset')].map((o) => ({ checked: o.getAttribute('aria-checked'), mark: o.querySelector('.mselect__check svg, .mselect__check .mselect__mixed') !== null, selected: o.getAttribute('aria-selected') }));
 const openStep = (b, label) => {
   click(b.button());
   click(b.rowOf(label));
@@ -667,20 +670,28 @@ test('Select all on a list whose empty value is no filter checks every option, a
 });
 
 test("Select all's uncheck under emptyMeansAll keeps the value empty with no check drawn, and a kind's click then writes that kind alone", () => {
-  const b = bar({ kinds: [] }, { dimensions: [KINDS_LIST], options: { kinds: KINDS } });
+  const presets = {
+    kinds: [
+      { label: 'moves and holds', members: ['moved', 'held'] },
+      { label: 'cooldowns', members: ['cooldown_set'] },
+    ],
+  };
+  const b = bar({ kinds: [] }, { dimensions: [KINDS_LIST], options: { kinds: KINDS }, presets });
   openStep(b, 'Kinds');
-  assert.deepEqual(listRead(), EVERY_KIND, 'the empty value opens with every row checked');
+  const on = { checked: null, mark: true, selected: 'true' };
+  const off = { checked: null, mark: false, selected: 'false' };
+  assert.deepEqual([listRead(), presetRead()], [EVERY_KIND, [on, on]], 'the empty value opens with every row and every preset checked');
   selectAll();
   assert.deepEqual(
-    [b.writes, listRead(), b.chipBody('kinds'), box().querySelector('.popover__head .link-btn')],
-    [[{ kinds: [] }], NO_CHECK, undefined, null],
-    'the uncheck writes the empty list, which still means every kind, and draws no check, no chip and no Remove',
+    [b.writes, listRead(), presetRead(), b.chipBody('kinds'), box().querySelector('.popover__head .link-btn')],
+    [[{ kinds: [] }], NO_CHECK, [off, off], undefined, null],
+    'the uncheck writes the empty list, which still means every kind, and draws no check on a row or a preset, no chip and no Remove',
   );
   click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'Held'));
   assert.deepEqual([b.writes.at(-1), listRead()], [{ kinds: ['held'] }, { checked: ['Held'], head: { checked: 'mixed', selected: 'false' } }], "a kind's click from there writes that kind alone");
 });
 
-test('Back keeps the cleared draw of an unchecked Select all until the next write', () => {
+test("Back keeps the cleared draw of an unchecked Select all until the list's next write", () => {
   const b = bar({ kinds: [] }, { dimensions: [KINDS_LIST], options: { kinds: KINDS } });
   openStep(b, 'Kinds');
   selectAll();
@@ -690,6 +701,19 @@ test('Back keeps the cleared draw of an unchecked Select all until the next writ
   click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'Held'));
   click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'Held'));
   assert.deepEqual([b.writes, listRead()], [[{ kinds: [] }, { kinds: ['held'] }, { kinds: [] }], EVERY_KIND], 'a write drops the cleared draw, so unchecking the last kind returns to every kind');
+});
+
+test("another list's write leaves the cleared draw of an unchecked Select all standing", () => {
+  const account = DIMENSIONS.find((d) => d.field === 'accounts');
+  const b = bar({ kinds: [] }, { dimensions: [KINDS_LIST, account], options: { ...OPTIONS, kinds: KINDS } });
+  openStep(b, 'Kinds');
+  selectAll();
+  click(box().querySelector('[aria-label="Back to the filter list"]'));
+  click(b.rowOf('Account'));
+  click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'primary'));
+  click(box().querySelector('[aria-label="Back to the filter list"]'));
+  click(b.rowOf('Kinds'));
+  assert.deepEqual([b.writes, listRead()], [[{ kinds: [] }, { accounts: ['acc_1'] }], NO_CHECK], "the flag ends at the list's own next write or the close");
 });
 
 test("Select all's uncheck under a search that shows only the checked kinds writes the empty list and draws no check", () => {
