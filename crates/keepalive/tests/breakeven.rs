@@ -84,7 +84,7 @@ fn the_break_even_is_write_less_read_over_cadence_times_read() {
 }
 
 #[test]
-fn a_null_field_and_a_zero_idle_window_resolve_to_the_break_even_and_a_number_caps_below_it() {
+fn a_zero_idle_window_and_a_null_park_field_resolve_to_the_break_even_and_only_park_numbers_cap() {
     let timing = KeepaliveTiming::default();
     let dollars = factors(0.1, 1.25);
     let open = KeepalivePolicy {
@@ -111,9 +111,19 @@ fn a_null_field_and_a_zero_idle_window_resolve_to_the_break_even_and_a_number_ca
     };
     let resolved = resolve(&above, dollars, FIVE_MINUTES_MS, &timing).unwrap();
     assert_eq!(
-        (resolved.idle_ms, resolved.parked_ms, resolved.horizon_ms),
-        (2_760_000, 2_760_000, 2_760_000),
-        "a number above the break-even reads as the break-even"
+        (
+            resolved.idle_ms,
+            resolved.parked_ms,
+            resolved.horizon_ms,
+            resolved.break_even_ms
+        ),
+        (3_600_000, 2_760_000, 2_760_000, 2_760_000),
+        "an idle number above the break-even is taken as set, and a park number above it reads as the break-even"
+    );
+    assert!(
+        (resolved.idle_share - 1.2).abs() < 1e-9,
+        "the hour's 15 probes reading 0.1 each cost 1.2 re-writes of 1.25, a share above one: {}",
+        resolved.idle_share
     );
     let below = KeepalivePolicy {
         enabled: true,
@@ -130,7 +140,7 @@ fn a_null_field_and_a_zero_idle_window_resolve_to_the_break_even_and_a_number_ca
             resolved.break_even_ms
         ),
         (600_000, 1_800_000, 60_000, 2_760_000),
-        "a number below the break-even is the cap"
+        "a number below the break-even is taken as set on every field"
     );
     assert_eq!(
         resolve(&below, factors(0.0, 1.25), FIVE_MINUTES_MS, &timing),
@@ -373,7 +383,8 @@ fn a_model_priced_nowhere_takes_the_tightest_row_of_each_ttl() {
 }
 
 /// The rows `PRICES` and `COSTS` give at the production timing: every plan recipe reads 0.025 against 1.25 on either
-/// TTL whatever its model's weight, and Sonnet's dollar row is the tightest.
+/// TTL whatever its model's weight, and Sonnet's dollar row is the tightest. The policy keeps the default hour of idle
+/// window, which every combination takes as set, Sonnet's dollar row on five minutes breaking even before it.
 #[tokio::test]
 async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let rig = common::rig(common::RigSpec {
@@ -453,16 +464,17 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
         seconds,
         (
             between(2_760.0, 158_760.0),
-            between(2_760.0, 3_600.0),
+            one(3_600.0),
             between(2_760.0, 158_760.0),
             between(2_760.0, 158_760.0)
         ),
         "a mixed pool on two dollar models spans the plan's hour on Opus down to Sonnet's dollar row on five \
-         minutes, the tightest row, which also caps the idle window"
+         minutes, the tightest row, while the idle window reads the set hour on every combination"
     );
     assert!(
-        (share.min - 0.0222).abs() < 5e-5 && (share.max - 0.92).abs() < 1e-9,
-        "the plan's hour costs least, Sonnet's window as long as its break-even a re-write less one read: {share:?}"
+        (share.min - 0.0222).abs() < 5e-5 && (share.max - 1.2).abs() < 1e-9,
+        "the plan's hour costs least, and Sonnet's hour of 15 probes reading 0.2 against a re-write of 2.5 costs \
+         1.2 re-writes: {share:?}"
     );
 
     let (seconds, _) = figures(

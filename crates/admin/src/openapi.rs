@@ -292,8 +292,8 @@ impl From<&Condition> for ConditionView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeepalivePolicyView {
     pub enabled: bool,
-    /// The idle window of the main conversation. 0 resolves to the recipe's break-even, as does any value above
-    /// it.
+    /// The idle window of the main conversation, taken as set, above the recipe's break-even too. 0 resolves to the
+    /// break-even.
     pub max_idle_seconds: u64,
     /// How long a park on a background command or a subagent is probed. Null is the recipe's break-even.
     pub max_parked_seconds: Option<u64>,

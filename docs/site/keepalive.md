@@ -133,7 +133,7 @@ The pool's `keepalive` object carries four fields:
 | Field | Default | Bounds | Meaning |
 | --- | --- | --- | --- |
 | `enabled` | `false` | | Probing on for the pool's sessions, every member kind. |
-| `max_idle_seconds` | `3600` | 0 to 31536000 | The main conversation's idle window, at most the break-even. |
+| `max_idle_seconds` | `3600` | 0 to 31536000 | The main conversation's idle window, taken as set, 0 the break-even. |
 | `max_parked_seconds` | `null` | null or 60 to 604800 | Time a park on a background command or a subagent is probed. |
 | `scheduled_horizon_seconds` | `null` | null or 60 to 604800 | The farthest wakeup a scheduled park is probed toward. |
 
@@ -150,11 +150,12 @@ a plan-funded recipe breaks even after 44.1 hours on a one-hour entry and 3 hour
 Every tick reads the price table and the cost model at the revisions in force then, so an entry that takes effect moves
 the break-even from the next tick, without a restart.
 
-A `max_idle_seconds` of 0, a `null` ceiling and any number above the break-even resolve to the break-even, so a field's
-number takes effect only below the break-even. `GET /admin/pools` answers `null` where null was set. An out-of-range
-value is refused with `keepalive.{field} must be between {min} and {max}, not {value}`, for example
-`keepalive.max_parked_seconds must be between 60 and 604800, not 59`. A value that is not an object, or a field the
-policy does not hold, is refused with `keepalive is not a policy object: {detail}`, the detail naming the fault.
+A `max_idle_seconds` of 0 resolves to the break-even and any other number is taken as set, above the break-even too,
+where the pool dialog notes it. A `null` parked or horizon ceiling, and a parked or horizon number above the break-even,
+resolve to the break-even, so those two numbers take effect only below it. `GET /admin/pools` answers `null` where null
+was set. An out-of-range value is refused with `keepalive.{field} must be between {min} and {max}, not {value}`, for
+example `keepalive.max_parked_seconds must be between 60 and 604800, not 59`. A value that is not an object, or a field
+the policy does not hold, is refused with `keepalive is not a policy object: {detail}`, the detail naming the fault.
 
 For the console, `GET /admin/pools` also answers each pool's `keepalive_resolved`: the break-even and the three ceilings
 in seconds and the idle window's cost as a share of one re-write, each as the lowest and the highest figure over the
@@ -185,12 +186,13 @@ subagent completes. The two park rules are loss bounds. The idle window is the o
 the main conversation, because the user can type while a background command, a subagent or a cron is open.
 
 **The idle window.** The main conversation is probed until `max_idle_seconds` after the latest of its last real request,
-its last presence report and the end of a park without a request, a deadline or a wakeup that passed. The window never
-runs past the recipe's break-even. A wakeup is a real request, so a cron that fires or a command that exits restarts the
-window. A silent session, one whose lease lapsed, is probed under the window from its last real request for every agent,
-and the park rules do not apply to it. A session saved attended reads silent after a router restart but keeps its park
-rules until its registration arrives or one lease length passes, and the silent rule follows only when the lease length
-passes first.
+its last presence report and the end of a park without a request, a deadline or a wakeup that passed. The window runs to
+the set limit, above the recipe's break-even too, and a `max_idle_seconds` of 0 runs it to the break-even. The pool
+dialog notes a window set past the break-even, whose share of one re-write can read above one. A wakeup is a real
+request, so a cron that fires or a command that exits restarts the window. A silent session, one whose lease lapsed, is
+probed under the window from its last real request for every agent, and the park rules do not apply to it. A session
+saved attended reads silent after a router restart but keeps its park rules until its registration arrives or one lease
+length passes, and the silent rule follows only when the lease length passes first.
 
 **Parked on a background command or a subagent.** The main conversation or a subagent reported `parked` with kind
 `background` is probed until the return, at most `max_parked_seconds` after the park began. A real request or a state
@@ -238,8 +240,8 @@ only once its start moves past the one in force at that close, at a park's end, 
 or the session's revival. A busy report pauses the count without closing the window, and a subagent or a silent session
 opens none.
 
-No rule reads the counters: the idle window is the pool's `max_idle_seconds`, capped at the break-even. The pool dialog
-shows them by bucket.
+No rule reads the counters: the idle window is the pool's `max_idle_seconds`, taken as set. The pool dialog shows them
+by bucket.
 
 ## The five states
 

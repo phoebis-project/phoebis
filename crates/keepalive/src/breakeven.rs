@@ -1,5 +1,5 @@
 //! The break-even: the pause length at which a recipe's chain of probes costs one re-write of its prefix, the
-//! default every ceiling of the policy resolves to and the cap each of its numbers stays under.
+//! default every ceiling of the policy resolves to and the cap its parked and horizon numbers stay under.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -255,8 +255,10 @@ pub struct Ceilings {
     pub idle_share: f64,
 }
 
-/// Each field capped at the break-even, a null field and `max_idle_seconds` 0 resolving to it. `idle_share` is the
-/// idle window's cost as a share of one re-write: `cadence * idle_hours * read / write`.
+/// `max_idle_seconds` taken as set, above the break-even too, and the parked and horizon fields capped at the
+/// break-even, a null field and `max_idle_seconds` 0 resolving to it. `idle_share` is the idle window's cost as a share
+/// of one re-write, `cadence * idle_hours * read / write`, which a window set far enough past the break-even reads
+/// above one.
 pub fn resolve(
     policy: &KeepalivePolicy,
     factors: BreakEvenFactors,
@@ -264,15 +266,16 @@ pub fn resolve(
     timing: &KeepaliveTiming,
 ) -> Option<Ceilings> {
     let break_even = break_even_ms(factors, ttl_ms, timing)?;
-    let capped = |seconds: Option<u64>| {
-        seconds.map_or(break_even, |s| {
-            i64::try_from(s)
-                .unwrap_or(i64::MAX)
-                .saturating_mul(1_000)
-                .min(break_even)
-        })
+    let ms = |seconds: u64| {
+        i64::try_from(seconds)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(1_000)
     };
-    let idle_ms = capped((policy.max_idle_seconds > 0).then_some(policy.max_idle_seconds));
+    let capped = |seconds: Option<u64>| seconds.map_or(break_even, |s| ms(s).min(break_even));
+    let idle_ms = match policy.max_idle_seconds {
+        0 => break_even,
+        seconds => ms(seconds),
+    };
     let idle_share =
         timing.cadence_per_hour(ttl_ms) * (idle_ms as f64 / ONE_HOUR_MS as f64) * factors.read
             / factors.write(ttl_ms);

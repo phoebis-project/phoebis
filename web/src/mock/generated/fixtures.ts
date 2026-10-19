@@ -12089,12 +12089,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "max": 255960
             },
             "idle_seconds": {
-              "min": 2760,
+              "min": 3600,
               "max": 3600
             },
             "idle_share": {
               "min": 0.013888888888888886,
-              "max": 0.9199999999999999
+              "max": 1.2
             },
             "parked_seconds": {
               "min": 2760,
