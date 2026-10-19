@@ -446,6 +446,91 @@ async fn a_count_tokens_request_is_evaluated() {
     up.shutdown().await;
 }
 
+/// The fork and its body with a `deep` member last, `arrays` nested arrays around one number, so every member the
+/// relay reads comes before it.
+async fn fork_nested(arrays: usize) -> (Request<Body>, String) {
+    let (req, body) = with_bytes(fork()).await;
+    let body = String::from_utf8(body.to_vec()).expect("the fork's body is text");
+    let close = body.rfind('}').expect("the fork's body is an object");
+    let nested = format!(
+        r#"{},"deep":{}1{}}}"#,
+        &body[..close],
+        "[".repeat(arrays),
+        "]".repeat(arrays)
+    );
+    let (parts, _) = req.into_parts();
+    (
+        Request::from_parts(parts, Body::from(nested.clone())),
+        nested,
+    )
+}
+
+/// serde's recursion limit of 128 counts the root, so 127 arrays under it are the shallowest nesting the
+/// guardrails' parse refuses, and a `body` condition would read such a body as no body at all. The shallower body
+/// meets an enforcing guardrail, whose 403 shows the parse read the tools: `tools present` is false on a body the
+/// parse cannot read.
+#[tokio::test]
+async fn a_body_at_serdes_limit_is_refused_invalid_body_under_a_tools_present_guardrail_and_one_level_shallower_is_evaluated(
+) {
+    const REFUSED: usize = 127;
+    let up = upstream().await;
+    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
+    let tools_present = Condition {
+        subject: Subject::Body,
+        operator: Operator::Present,
+        value: None,
+        name: None,
+        path: Some("tools".into()),
+        selector: None,
+    };
+    let row = guardrail(
+        "tools",
+        "Tools present",
+        GuardrailMode::Enforce,
+        vec![tools_present],
+    );
+    guarded(&h, &row, &["main"], &[]).await;
+
+    let (deep, body) = fork_nested(REFUSED).await;
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_err(),
+        "serde refuses {REFUSED} arrays under the root"
+    );
+    let answer = send(&h, &mut sub, deep).await;
+    assert_eq!(
+        (
+            answer.status,
+            answer.header("x-phoebis-error-code"),
+            answer.error_type.as_str(),
+            answer.message.as_str()
+        ),
+        (
+            400,
+            Some("invalid_body"),
+            "invalid_request_error",
+            "the request body nests deeper than the relay reads"
+        )
+    );
+    assert!(
+        up.requests().is_empty(),
+        "admission refused the body, so nothing went upstream"
+    );
+
+    let (shallow, body) = fork_nested(REFUSED - 1).await;
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_ok(),
+        "serde reads one level shallower"
+    );
+    let answer = send(&h, &mut sub, shallow).await;
+    assert_eq!(
+        (answer.status, answer.header("x-phoebis-error-code")),
+        (403, Some("guardrail_blocked"))
+    );
+    assert_eq!(answer.observed().guardrail_id.as_deref(), Some("tools"));
+    assert!(up.requests().is_empty());
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_header_condition_reads_a_sent_headers_value_and_a_header_the_request_does_not_send_as_absent(
 ) {
