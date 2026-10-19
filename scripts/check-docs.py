@@ -496,7 +496,8 @@ def check_check_config(main_rs, installation_md):
 # code, so a value opening with `&` is passed by. The lookahead spans the whitespace itself, since a `\s*` before
 # it would backtrack to zero width and test the space ahead of the `&`. `self.code` in `Failure::response` forwards
 # a `code:` field the check has read, so it is passed by too.
-CODE_FIELD = re.compile(r"\bcode:(?!\s*&)\s*")
+# A `pub code:` is a member's declaration, never a value, so a `code:` after `pub` is passed by.
+CODE_FIELD = re.compile(r"(?<!pub )\bcode:(?!\s*&)\s*")
 ERROR_CALL = re.compile(r"(?<!fn )\banthropic_error\(")
 CODE_LITERAL = re.compile(r'^r?(#*)"([a-z_]+)"\1$')
 CODE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
