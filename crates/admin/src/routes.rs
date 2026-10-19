@@ -2789,8 +2789,9 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
 }
 
 /// A JSON array deserializes into a struct whose members all default, so a route would answer `id is required` to
-/// `[]` in place of the sentence every route gives a body that is no object. The value is read once and checked
-/// before any member check.
+/// `[]` in place of the sentence every route gives a body that is no object. The shape is checked on the parsed value
+/// before any member check, and the struct is read from the bytes, where the derive refuses a repeated member that a
+/// value would keep at its last occurrence.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
@@ -2803,7 +2804,7 @@ pub(crate) fn parse_object<T: serde::de::DeserializeOwned>(body: &Bytes) -> Resu
             "body must be a JSON object",
         ));
     }
-    serde_json::from_value(value)
+    serde_json::from_slice(body)
         .map_err(|_| failure(StatusCode::BAD_REQUEST, "body must be a JSON object"))
 }
 
@@ -3030,6 +3031,31 @@ mod tests {
                 String::from_utf8_lossy(body)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn parse_object_refuses_a_body_that_repeats_a_member() {
+        #[derive(Debug, Default, Deserialize, PartialEq)]
+        #[serde(default)]
+        struct Pair {
+            a: u32,
+            b: u32,
+        }
+        let body = br#"{"a": 1, "a": 2}"#;
+        let Err(response) = parse_object::<Pair>(&Bytes::from_static(body)) else {
+            panic!("a repeated member read as an object");
+        };
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap()),
+            (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "body must be a JSON object"})
+            )
+        );
     }
 
     #[test]
