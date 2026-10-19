@@ -364,6 +364,8 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
             req = req
                 .header("User-Agent", user_agent)
                 .header("X-Stainless-Lang", lang);
+        } else {
+            req = req.header("x-claude-code-request-class", "main");
         }
         req.header("x-claude-code-session-id", session)
             .body(axum::body::Body::from(body.into_bytes()))
@@ -843,6 +845,7 @@ fn request_with_native_body(
         }
     }
     req.header("x-claude-code-session-id", session)
+        .header("x-claude-code-request-class", "main")
         .body(axum::body::Body::from(native.into_bytes()))
         .unwrap()
 }

@@ -421,9 +421,26 @@ pub fn request_for_fixture(
             _ => req = req.header(n, v),
         }
     }
-    req.header("x-claude-code-session-id", session)
+    let mut req = req
+        .header("x-claude-code-session-id", session)
         .body(Body::from(native.into_bytes()))
-        .unwrap()
+        .unwrap();
+    // The recorded heads predate the hint gate, so a fixture request carries the class header as the client would.
+    let claude_code = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|agent| agent.starts_with("claude-cli/"));
+    if claude_code
+        && target.split('?').next() == Some("/v1/messages")
+        && !req.headers().contains_key("x-claude-code-request-class")
+    {
+        req.headers_mut().insert(
+            "x-claude-code-request-class",
+            axum::http::HeaderValue::from_static("main"),
+        );
+    }
+    req
 }
 
 /// The ledger row for a request, once the writer has landed it.
