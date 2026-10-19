@@ -20,7 +20,8 @@ use crate::AdminState;
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Dashboard {
-    /// The requests of the window.
+    /// The requests of the window, not counting the ones the router refused before any account was asked, which
+    /// `refused_24h` counts.
     pub requests_24h: u64,
     /// The window's tokens of the five types: uncached input, cache reads, both cache writes and output.
     pub tokens_24h: u64,

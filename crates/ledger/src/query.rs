@@ -2921,7 +2921,6 @@ pub async fn dashboard(
         .collect();
     let mut tokens_cached = 0;
     let mut estimated = false;
-    let mut rated: u64 = 0;
     read_rollups_paged(db, &RollupSelect::default(), from_hour, to_hour, |r| {
         if r.kind == "probe" {
             return;
@@ -2930,7 +2929,6 @@ pub async fn dashboard(
             let (usd, billed, equivalent, fallback) = shared_figures(r, prices, costs);
             point.requests += r.requests;
             point.errors += r.requests.saturating_sub(r.succeeded);
-            rated += r.requests;
             point.refused += r.refusals.values().sum::<u64>();
             point.cost += usd;
             point.billed += billed;
@@ -2961,7 +2959,7 @@ pub async fn dashboard(
         tokens_24h: hourly.iter().map(|h| h.tokens).sum(),
         tokens_cached_24h: tokens_cached,
         cost_24h: hourly.iter().map(|h| h.cost).sum(),
-        error_rate_24h: (rated > 0).then(|| failed as f64 / rated as f64),
+        error_rate_24h: (requests > 0).then(|| failed as f64 / requests as f64),
         top_error_code: errors
             .iter()
             .max_by_key(|(_, n)| **n)

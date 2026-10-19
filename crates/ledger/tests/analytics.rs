@@ -6899,6 +6899,7 @@ async fn the_dashboard_leaves_the_refused_requests_out_of_its_counts_and_reads_t
     );
 }
 
+/// A group reads its refused requests in its refused count and its refusals by code, apart from its requests.
 #[test]
 fn the_breakdown_answers_refused_and_refusals_per_group() {
     let db = LedgerDb::open_in_memory().unwrap();
