@@ -134,6 +134,8 @@ impl Engine {
     /// Every probe the upstream served lands here, landed on its recipe or not: the probe is the pool's whatever
     /// happened to the recipe while it was in flight. A probe that migrated its session counts on its key. The delta
     /// carries no dollar and no token, since the probe's own request row carries its counts, which a reader prices.
+    /// The mark files at `now`, the probe's completion, while that request row files at the probe's receipt, so a probe
+    /// answered past an hour's end leaves the two in different hours.
     pub(crate) fn record_probe(&self, record: &ProbeRecord, _applied: Applied, now: i64) {
         // The migration is all the delta carries, so any other probe's would fold a row of zeros under the credit key,
         // which reads as an empty group of its own.

@@ -492,6 +492,86 @@ async fn a_migrated_probe_is_priced_and_the_next_request_counts_as_kept_warm() {
     );
 }
 
+/// A migrated probe's mark files under the funding and the speed its own answer was served at, as the probe's request
+/// row does: `billed` on the api_key account it moved to whatever overage the answer reported, and `overage` on a
+/// subscription account in overage whose answer reported it.
+#[tokio::test]
+async fn a_migrated_probes_mark_files_under_the_funding_and_the_speed_its_answer_was_served_at() {
+    for (target, funding) in [
+        (api_key("b", B, 1), "billed"),
+        (oauth("o", OAUTH_SECRET, 1), "overage"),
+    ] {
+        let (target_id, secret) = (target.id, target.secret);
+        let subscription = target.kind == phoebis_store::AccountKind::Oauth;
+        let mut r = rig(RigSpec {
+            accounts: vec![api_key("a", A, 0), target],
+            pool: PoolSpec {
+                overage_policy: phoebis_store::OveragePolicy::Allow,
+                ..PoolSpec::default()
+            },
+            ..RigSpec::default()
+        })
+        .await;
+        if subscription {
+            r.enter_overage(target_id, r.now() + 10_000_000).await;
+            settled(&r, |r| async move {
+                r.h.router
+                    .overage(target_id)
+                    .await
+                    .unwrap()
+                    .is_some_and(|e| e.in_use)
+            })
+            .await;
+        }
+        r.observe_with("main", &priced_body()).await;
+        assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
+        r.up.push_credential_rule(
+            A,
+            "/v1/messages",
+            relay_common::json_429_unified(4_600, "five_hour"),
+        );
+        let Respond::Json { body: written, .. } = probe_answer(0, 2_000) else {
+            unreachable!("the standing probe answer is a JSON body")
+        };
+        r.up.push_credential_rule(
+            secret,
+            "/v1/messages",
+            Respond::Json {
+                status: 200,
+                headers: vec![(
+                    "anthropic-ratelimit-unified-overage-in-use".into(),
+                    "true".into(),
+                )],
+                body: written,
+            },
+        );
+        r.advance(270_000);
+        r.step().await;
+        assert_eq!(
+            (r.status("main").migrations, r.status("main").account_id),
+            (1, Some(target_id.to_string())),
+            "{target_id}: the probe migrated"
+        );
+        let rows = rollups(&r, |rows| rows.iter().any(|row| row.probe_migrated > 0)).await;
+        let marks: Vec<(&str, &str, &str)> = rows
+            .iter()
+            .filter(|row| row.probe_migrated > 0)
+            .map(|row| {
+                (
+                    row.account_id.as_str(),
+                    row.funding.as_str(),
+                    row.speed.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            marks,
+            [(target_id, funding, "standard")],
+            "{target_id}: the mark files under its probe's funding: {rows:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     // The probes land at 270, 540 and 810 s and the window closes before the fourth at 1,080 s.
@@ -842,6 +922,75 @@ fn open_request_with(r: &Rig, id: &str, body: &str, read: u64, write: u64) {
             ..Default::default()
         },
     ));
+}
+
+/// A probe sent while a request streams can pause the agent on its answer, and a later attempt of that request then
+/// reports its usage under the pause. The observation records the TTL that usage settled on all the same, so the
+/// request's credit books an hour recipe's count under the hour, where a TTL of zero would file it under five minutes.
+#[tokio::test]
+async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credit_at_the_ttl_it_settled_on(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let hour = priced_body().replace(
+        r#""cache_control":{"type":"ephemeral"}"#,
+        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+    );
+    open_request_with(&r, "first", &hour, 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000);
+    r.advance_attended(3_600_000 - 360_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+    // Past the hour the first request's entry lived, and inside the hour the probe refreshed.
+    r.advance_attended(420_000);
+    open_request_with(&r, "second", &hour, 2_000, 0);
+    // The probe due while the second request streams reads half the prefix back, which pauses the agent.
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(1_000, 1_000));
+    r.advance_attended(3_600_000 - 360_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").paused),
+        (2, true),
+        "the probe sent while the second request streamed paused the agent"
+    );
+    // A later attempt of the same request starts its observation's TTL over, and its usage arrives under the pause.
+    let mut retry = r.selected("second", "a");
+    if let phoebis_bus::Event::AccountSelected(selected) = &mut retry {
+        selected.attempt = 2;
+    }
+    r.engine.observe(retry);
+    let mut start = message_start(
+        "second",
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(2_000),
+            ..Default::default()
+        },
+    );
+    if let phoebis_bus::Event::ResponseChunk(chunk) = &mut start {
+        chunk.attempt = 2;
+    }
+    r.engine.observe(start);
+    assert!(r.status("main").paused, "the usage arrived under the pause");
+    let mut done = completed(&r, "second", 2_000);
+    if let phoebis_bus::Event::RequestComplete(complete) = &mut done {
+        complete.attempt = 2;
+    }
+    r.engine.observe(done);
+    let rows = final_rollups(&r).await;
+    let credit = inference_rows(&rows);
+    assert_eq!(
+        (
+            credit.kept_warm_requests,
+            credit.kept_warm_5m_tokens,
+            credit.kept_warm_1h_tokens
+        ),
+        (1, 0, 2_000),
+        "the credit books the hour the request's usage settled on"
+    );
 }
 
 /// The probes a bus gap leaves keep the speed of the recipe that sent them: a fast recipe's warm return reads them

@@ -864,24 +864,24 @@ pub(crate) struct PriorCoverage {
 }
 
 impl PriorCoverage {
-    /// The kept-warm credit's test for a request that arrived at `arrived` on `model` at the speed `fast`, was served
-    /// by `account` and read `read` from the cache: it arrived after the previous turn's own entry would have lapsed
-    /// and read the entry the covering probe kept.
+    /// The kept-warm credit's test for a request that started at `request_started` on `model` at the speed `fast`, was
+    /// served by `account` and read `read` from the cache: it arrived after the previous turn's own entry would have
+    /// lapsed and read the entry the covering probe kept.
     pub(crate) fn credits(
         &self,
-        arrived: i64,
+        request_started: i64,
         model: &str,
         fast: bool,
         account: Option<&str>,
         read: u64,
     ) -> bool {
         let ttl = self.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
-        let gap_exceeded = arrived - self.real_at > ttl;
+        let gap_exceeded = request_started - self.real_at > ttl;
         // The entry the probe kept has to be there when this request arrives, on the boundary the settlement and the
-        // scheduler read (`arrived` before its chain's last entry ends, `now >= expires`): a request at or after the
-        // lapse read a cache nothing the probe paid for kept, so that probe settles as expired, and a credit here would
-        // contradict that settlement.
-        let entry_alive = self.until.is_some_and(|until| arrived < until);
+        // scheduler read (`answer.started` before `chain_end`, `now >= expires`): a request at or after the lapse read
+        // a cache nothing the probe paid for kept, so that probe settles as expired, and a credit here would contradict
+        // that settlement.
+        let entry_alive = self.until.is_some_and(|until| request_started < until);
         let same_model = self.model == model;
         // The upstream shares no cached prefix across speeds, so a probe on the other lane kept nothing this request
         // read.
@@ -931,7 +931,7 @@ pub(crate) struct OpenCompaction {
 /// What a request that completed answers the probes before it with: when it reached the cache, the lineage it read on
 /// and what it read.
 struct Answer {
-    arrived: Option<i64>,
+    started: Option<i64>,
     account: Option<String>,
     model: String,
     fast: bool,
@@ -1555,7 +1555,7 @@ impl Inner {
         };
         let answer = Answer {
             // The read happened when the request reached the cache, so a stream that outlives the entry still read it.
-            arrived: agent.current.as_ref().map(|o| o.started),
+            started: agent.current.as_ref().map(|o| o.started),
             account: agent.account.clone(),
             model: agent.canonical_model.clone(),
             fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
@@ -1587,7 +1587,7 @@ impl Inner {
             // A probe whose chain's last entry was gone when the request arrived kept nothing the request could read,
             // whatever it read: `expired` is its own label, so a credited request never sits beside a cold return it
             // contradicts.
-            let label = match answer.arrived {
+            let label = match answer.started {
                 Some(at) if at >= chain_end => Some(Wasted::Expired),
                 Some(_) if answer.read > 0 && lineage => None,
                 _ => Some(Wasted::ColdReturn),
@@ -2857,8 +2857,8 @@ impl Engine {
                 .get_mut(&key)
                 .and_then(|s| s.agents.get_mut(&agent_id))
             {
-                if let Some(arrived) = agent.current.as_ref().map(|o| o.started) {
-                    agent.last_answered_at = Some(arrived);
+                if let Some(request_started) = agent.current.as_ref().map(|o| o.started) {
+                    agent.last_answered_at = Some(request_started);
                 }
             }
         }
@@ -2887,7 +2887,7 @@ impl Engine {
         // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
         // below clears the observation. Its receipt picks the hour the credit files in and the revision its band and
         // its saving price at, as its own request row's does, though the answer may land past either boundary.
-        let (observed_ttl, arrived) = inner.sessions[&key]
+        let (observed_ttl, request_received) = inner.sessions[&key]
             .agents
             .get(&agent_id)
             .and_then(|a| a.current.as_ref())
@@ -2926,7 +2926,7 @@ impl Engine {
         }
         let credit = credited.map(
             |(read, key_generation, pool_id, account, model, fast, kind, in_overage)| Credit {
-                at: arrived,
+                at: request_received,
                 key,
                 key_generation,
                 pool_id,
@@ -3083,7 +3083,7 @@ impl Inner {
             &agent_id,
             probes,
             Answer {
-                arrived: Some(compaction.started),
+                started: Some(compaction.started),
                 account: compaction.account,
                 model: compaction.canonical_model,
                 fast: compaction.fast,
@@ -3132,18 +3132,25 @@ impl Inner {
         let Some(observation) = agent.current.as_mut() else {
             return;
         };
-        if !observation.ready || agent.paused || usage.evidence() == 0 {
+        if !observation.ready || usage.evidence() == 0 {
             return;
         }
-        observation.expected = usage.evidence();
         let previous_ms = agent.ttl_ms;
         let requested_ms = observation
             .dispatched_ms
             .unwrap_or(observation.recipe.ttl_ms);
-        agent.ttl_ms = usage.ttl_ms(previous_ms, requested_ms);
-        if observation.ttl_ms > 0 && observation.ttl_ms < agent.ttl_ms {
-            agent.ttl_ms = observation.ttl_ms;
+        let mut ttl_ms = usage.ttl_ms(previous_ms, requested_ms);
+        if observation.ttl_ms > 0 && observation.ttl_ms < ttl_ms {
+            ttl_ms = observation.ttl_ms;
         }
+        // A paused recipe takes nothing from this usage, but the request's credit from a probe sent before the pause
+        // still files under the TTL its own write would have taken, so the observation keeps that TTL.
+        if agent.paused {
+            observation.ttl_ms = ttl_ms;
+            return;
+        }
+        observation.expected = usage.evidence();
+        agent.ttl_ms = ttl_ms;
         note_ttl_change(
             key,
             agent_id,
