@@ -27234,6 +27234,61 @@ fn an_auxiliary_call_on_another_model_that_landed_elsewhere_is_no_previous_landi
 }
 
 #[test]
+fn a_failovers_landing_after_a_model_switch_names_the_failovers_source_over_an_older_row_of_another_model(
+) {
+    let (s, mut st) = sonnet_on_a();
+    // a refuses opus until just before the failover, so the opus turn lands on b and the failover's landing on a.
+    let failed_at = T + MINUTE + 1_000;
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-opus-5",
+        failed_at - 500,
+        "retry_after",
+        "rate_limit",
+    ));
+    let switch = turn_on(&s, "claude-opus-5", "r-2", T + MINUTE);
+    let (switched, _) = select(&mut st, &s, &switch, &mut rng());
+    let SelectResult::Selected(ref sel) = switched else {
+        panic!("the opus turn lands, got {switched:?}")
+    };
+    assert_eq!(picked(&switched), "b");
+    let pin = sel.pin.clone().expect("the opus turn pins");
+    let row = st
+        .invalidate_pin(&pin, "b")
+        .expect("the failover takes the opus row off b");
+    let landing = SelectRequest {
+        attempt: 2,
+        seq: 2,
+        attempted: vec!["b".into()],
+        failed_over: Some(FailedOver {
+            from_account_id: "b".into(),
+            reason: "cooldown",
+            row,
+            cause: None,
+        }),
+        now: failed_at,
+        received_at: failed_at,
+        ..switch
+    };
+    let (landed, _) = select(&mut st, &s, &landing, &mut rng());
+    assert_eq!(
+        (picked(&landed), left_of(&landed)),
+        ("a", Some("b")),
+        "the landing names b, the failover's source, over the older sonnet row on a"
+    );
+    let opus = PinKey {
+        model: "claude-opus-5".into(),
+        ..pin_key("s1")
+    };
+    assert_eq!(
+        st.head_mark(&opus)
+            .map(|mark| (mark.request_id.as_str(), mark.attempt)),
+        Some(("r-2", 2)),
+        "the landing's write holds the opus pin's next request for its head"
+    );
+}
+
+#[test]
 fn a_renewal_after_a_hold_carries_the_wait_it_followed_in_its_trace_and_outcome() {
     let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
     let req = turn_of(&s, "r-2", moved_at + 200);

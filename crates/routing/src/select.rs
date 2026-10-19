@@ -488,11 +488,11 @@ pub struct Selection {
     /// policy on another's member.
     pub pool_id: String,
     /// The account the session's previous request landed on, where this selection lands elsewhere: the pin row
-    /// step 1 read, live, idle past the TTL or left behind by its pool, the newest across the session's models
-    /// unless the request is an auxiliary call, else the landing a failover carried to this request. A renewal names
-    /// it too, after a turn of the session on another account. `None` on a count's bound and a placement the routing
-    /// holds no previous landing for. The relay names no previous message on a request that carries it, since the
-    /// account cannot find one.
+    /// step 1 read, live, idle past the TTL or left behind by its pool, the newest across the session's models,
+    /// leaving out a pin only auxiliary calls used, unless the request is an auxiliary call, else the landing a
+    /// failover carried to this request. A renewal names it too, after a turn of the session on another account.
+    /// `None` on a count's bound and a placement the routing holds no previous landing for. The relay names no
+    /// previous message on a request that carries it, since the account cannot find one.
     pub left: Option<String>,
 }
 
@@ -1294,9 +1294,14 @@ fn run(
         let own_row = state.pin(&key).cloned();
         // A turn after one on another of the session's models follows that turn's landing, which the own key's row
         // does not know. An auxiliary call keeps the own key's read, and the reader leaves out the pins only such
-        // calls use, so an auxiliary call on another model is never a turn's previous landing.
+        // calls use, so an auxiliary call on another model is never a turn's previous landing. A failover's landing
+        // finds no own row, since the failover took it, so the row it took stands in for it: an older row of another
+        // model must not hide the failover's source.
         if !placed_auxiliary_only(request) {
-            let own = own_row.as_ref().map(|p| (p.last_used_at, p.created_at));
+            let own = own_row
+                .as_ref()
+                .or(request.failed_over.as_ref().map(|f| &f.row))
+                .map(|p| (p.last_used_at, p.created_at));
             previous_account = state
                 .session_latest_pin(
                     &request.key_id,
