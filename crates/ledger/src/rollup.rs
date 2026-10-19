@@ -4066,6 +4066,7 @@ mod tests {
         old.wasted_cache_write_1h_tokens = 0;
         old.wasted_output_tokens = 0;
         old.kept_warm_1h_tokens = 0;
+        old.refusals = BTreeMap::new();
         {
             let mut conn = Connection::open(&path).unwrap();
             conn.execute_batch(crate::schema::SCHEMA).unwrap();
