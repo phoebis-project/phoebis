@@ -562,9 +562,10 @@ fn a_refused_request_lands_in_the_refusals_counter_and_not_in_the_requests_count
     );
     let text = metrics.render(&RoutingGauges::default(), &[], 0);
     assert!(
-        text.contains(
-            r#"phoebis_refusals_total{code="guardrail_blocked",key="desktop",kind="inference"} 1"#
-        ),
+        text.contains(concat!(
+            r#"phoebis_refusals_total{code="guardrail_blocked",key="desktop",kind="inference"} 1"#,
+            "\n"
+        )),
         "{text}"
     );
     assert!(
@@ -572,9 +573,10 @@ fn a_refused_request_lands_in_the_refusals_counter_and_not_in_the_requests_count
         "a refusal after an attempt is a rejected request:\n{text}"
     );
     assert!(
-        text.contains(
-            r#"phoebis_requests_total{key="desktop",kind="inference",outcome="rejected"} 1"#
-        ),
+        text.contains(concat!(
+            r#"phoebis_requests_total{key="desktop",kind="inference",outcome="rejected"} 1"#,
+            "\n"
+        )),
         "{text}"
     );
     let requests: Vec<String> = series_of(&text)

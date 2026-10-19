@@ -93,8 +93,8 @@ impl Metrics {
             .key_id
             .clone()
             .unwrap_or_else(|| UNATTRIBUTED.into());
-        // A refused request asked no account, so it counts under the refusals family alone and the attempt and token
-        // counters below see none of it.
+        // A refused request asked no account and has no attempt row, so it counts under the refusals family alone
+        // and the attempt loop below sees none of it.
         if request.refused {
             self.add(
                 "phoebis_refusals_total",
