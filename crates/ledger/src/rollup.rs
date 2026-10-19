@@ -965,10 +965,11 @@ fn reread_utilization(
 }
 
 /// The keepalive engine's own delta: one row of its key, holding a kept-warm request's credit, a probe's migration
-/// mark, a skip, and the counts a stopped recipe wasted. The user agent and the client are both the reserved id,
-/// since a probe's own request row carries the agent and class the recipe replays and a credit belongs to the key
-/// rather than to one caller. The row keys the delta's own instant, band and account tier, so a settlement filed after
-/// its probe sits in the probe's hour and prices at the cells and the revision the probe ran at.
+/// mark, a skip, and the counts a stopped recipe wasted. The user agent is the reserved id, since a probe's own request
+/// row carries the agent the recipe replays. A credit keys its request's client, so its saving prices under that
+/// client's regime, and every other delta keys the reserved id. The row keys the delta's own instant, band and account
+/// tier, so a settlement filed after its probe sits in the probe's hour and prices at the cells and the revision the
+/// probe ran at.
 pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<(), LedgerError> {
     let key = RollupRow::key(
         hour_of(delta.at),
@@ -979,7 +980,13 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         &delta.canonical_model,
         &delta.kind,
         UNATTRIBUTED,
-        UNATTRIBUTED,
+        // Folded as `deltas_of` folds the request row's, so a credit lands on the label its request's row keys, and an
+        // empty client, a default-built delta's, where an unlabeled request does.
+        &if delta.client.is_empty() {
+            UNATTRIBUTED.into()
+        } else {
+            fold_identifier(&delta.client)
+        },
         NO_EFFORT,
         NO_CLASS,
         if delta.speed == Some(Speed::Fast) {
@@ -3874,6 +3881,50 @@ mod tests {
                     (0, 1),
                     PinUsage::default()
                 ),
+            ]
+        );
+    }
+
+    /// A credit keys its request's client folded as the request row folds it, a label past the bound under
+    /// `OTHER_DIMENSION`, and a delta whose client is empty, as a default-built one leaves it, keys the reserved id an
+    /// unlabeled request folds under rather than an empty label of its own.
+    #[test]
+    fn a_keepalive_deltas_client_folds_as_a_request_rows_and_an_empty_one_under_the_reserved_id() {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let long = format!("claude-code/{}", "x".repeat(DIMENSION_MAX_BYTES));
+        let credit = |client: &str| KeepaliveDelta {
+            at: 7_300_000,
+            key_id: "k".into(),
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            canonical_model: HAIKU.into(),
+            kind: "inference".into(),
+            client: client.into(),
+            kept_warm_requests: 1,
+            ..Default::default()
+        };
+        db.write(|c| {
+            let tx = c.transaction()?;
+            for client in ["", "claude-code/cli", &long] {
+                fold_keepalive(&tx, &credit(client))?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let mut clients: Vec<_> = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.client, r.kept_warm_requests))
+            .collect();
+        clients.sort();
+        assert_eq!(
+            clients,
+            [
+                (UNATTRIBUTED.to_string(), 1),
+                ("claude-code/cli".to_string(), 1),
+                (OTHER_DIMENSION.to_string(), 1),
             ]
         );
     }

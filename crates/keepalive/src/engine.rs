@@ -584,6 +584,9 @@ pub(crate) struct Agent {
     /// The entrypoint of the observed request's `client` label, what its probes price under, and `None` for a label
     /// that names none.
     pub entrypoint: Option<String>,
+    /// The client label of the last turn admitted, whole, which that turn's kept-warm credit keys. Never saved: only a
+    /// request admitted in this process earns a credit.
+    pub client_label: Option<String>,
     pub reason: Reason,
     /// The guard's verdict on the last request the agent observed, `None` before the first one. Never `reason`
     /// itself: an auxiliary or a foreign request never reaches `reason`, which stays the recipe's own gating
@@ -667,6 +670,7 @@ impl Agent {
             pool_id: String::new(),
             canonical_model: String::new(),
             entrypoint: None,
+            client_label: None,
             reason: Reason::AwaitingRequest,
             last_guard: None,
             hold_counted: false,
@@ -926,6 +930,8 @@ pub(crate) struct OpenCompaction {
     pub ttl_ms: i64,
     /// What the previous recipe had proved at the admission, as a turn's observation takes it.
     pub prior: Option<PriorCoverage>,
+    /// The compaction request's own client label, the one its kept-warm credit keys.
+    pub client_label: String,
 }
 
 /// What a request that completed answers the probes before it with: when it reached the cache, the lineage it read on
@@ -952,6 +958,7 @@ struct Credit {
     fast: bool,
     kind: Option<AccountKind>,
     in_overage: bool,
+    client: Option<String>,
 }
 
 /// Whether a request the engine follows is open on `agent`: the turn its observation follows, while `pending` holds
@@ -2426,6 +2433,7 @@ impl Engine {
                 read: 0,
                 ttl_ms: 0,
                 prior: prior_coverage(agent, now),
+                client_label: observed.client.class.clone(),
             };
             inner
                 .sessions
@@ -2541,6 +2549,7 @@ impl Engine {
         // The probe replays this request's headers, so it meters under the entrypoint they carry.
         agent.entrypoint =
             phoebis_ledger::entrypoint_of_client(&observed.client.class).map(String::from);
+        agent.client_label = Some(observed.client.class.clone());
         agent.current = Some(Observation {
             id: observed.request_id.clone(),
             attempt: 0,
@@ -2847,6 +2856,7 @@ impl Engine {
                         fast,
                         served.and_then(|o| o.kind),
                         served.is_some_and(|o| o.in_overage),
+                        agent.client_label.clone(),
                     )
                 })
         };
@@ -2925,18 +2935,21 @@ impl Engine {
             }
         }
         let credit = credited.map(
-            |(read, key_generation, pool_id, account, model, fast, kind, in_overage)| Credit {
-                at: request_received,
-                key,
-                key_generation,
-                pool_id,
-                account,
-                model,
-                read,
-                ttl_ms: observed_ttl,
-                fast,
-                kind,
-                in_overage,
+            |(read, key_generation, pool_id, account, model, fast, kind, in_overage, client)| {
+                Credit {
+                    at: request_received,
+                    key,
+                    key_generation,
+                    pool_id,
+                    account,
+                    model,
+                    read,
+                    ttl_ms: observed_ttl,
+                    fast,
+                    kind,
+                    in_overage,
+                    client,
+                }
             },
         );
         self.book_credit(inner, credit, &complete);
@@ -3002,6 +3015,7 @@ impl Engine {
             credit.fast,
             credit.kind,
             credit.in_overage,
+            credit.client.as_deref(),
         );
     }
 }
@@ -3074,6 +3088,7 @@ impl Inner {
                 fast: compaction.fast,
                 kind: compaction.kind,
                 in_overage: compaction.in_overage,
+                client: Some(compaction.client_label.clone()),
             });
         if credit.is_some() {
             agent.count_credit(now);

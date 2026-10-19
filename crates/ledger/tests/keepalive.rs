@@ -7,9 +7,11 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::FakeUpstream;
 use phoebis_ledger::{
-    fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig, LedgerDb,
-    LiveKeys, PlanTables, PriceRevisions, Record, RequestRecord, RollupSelect, Speed,
+    breakdown, fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig,
+    LedgerDb, LiveKeys, PlanTables, PriceRevisions, Record, RequestRecord, RollupSelect, Speed,
+    UNATTRIBUTED,
 };
+use phoebis_routing::FIVE_HOUR;
 
 /// The dollars of `counts` on Sonnet 5 at the shipped revision in force at `at`, the list `insert_request` folds with
 /// and the readers here price at.
@@ -431,6 +433,122 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
             .map(|r| r.requests),
         Some(1),
         "the request moved to its serving account"
+    );
+}
+
+/// A kept-warm credit keys the client of the request it credits, so the analytics read prices its saving under that
+/// client's regime as the request's own row does. The test cost model doubles the 20x tier's 5-hour capacity under
+/// `desk`, and `JANUARY_2026` falls at 04:00 in Los Angeles, before the base regime's peak: ten tokens read on Opus 5.5
+/// (weight 2) save ten writes at the five-minute multiplier 2 less ten reads at 0.1, 38 units, 0.19 of the desk's 200
+/// and 0.38 of the base's 100.
+#[test]
+fn a_kept_warm_credit_folds_under_its_requests_client_and_prices_its_saving_under_that_clients_regime(
+) {
+    let costs = phoebis_ledger::test_tables::subscription_costs();
+    let prices = phoebis_ledger::test_tables::api_prices();
+    let at = phoebis_ledger::test_tables::JANUARY_2026;
+    let credit = |client: &str| KeepaliveDelta {
+        canonical_model: "claude-opus-5-5".into(),
+        client: client.into(),
+        tier: Some("default_claude_max_20x".into()),
+        kept_warm_requests: 1,
+        kept_warm_5m_tokens: 10,
+        ..delta(at, "inference")
+    };
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(&tx, &credit("claude-code/desk"))?;
+        fold_keepalive(&tx, &credit("claude-code/sdk-cli"))?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let savings: Vec<(String, f64)> = breakdown(
+        &rows,
+        "client",
+        false,
+        &LiveKeys::default(),
+        &[],
+        None,
+        &prices,
+        &costs,
+    )
+    .into_iter()
+    .map(|group| {
+        let five_hour = group.saving_equivalent.get(FIVE_HOUR).copied();
+        (group.key, five_hour.unwrap_or(f64::NAN))
+    })
+    .collect();
+    let want = [("claude-code/desk", 0.19), ("claude-code/sdk-cli", 0.38)];
+    assert!(
+        savings.len() == want.len()
+            && savings
+                .iter()
+                .zip(want)
+                .all(|((key, got), (client, saving))| key == client
+                    && (got - saving).abs() < 1e-12),
+        "each credit under its own client and regime: {savings:?}"
+    );
+}
+
+/// A settlement, a skip and a migration mark belong to the key rather than to one caller, so each folds under the
+/// reserved client the savings code hands it.
+#[test]
+fn a_settlement_a_skip_and_a_migration_mark_fold_under_the_reserved_client() {
+    let at = 1_700_000_000_000;
+    let reserved = |delta: KeepaliveDelta| KeepaliveDelta {
+        client: UNATTRIBUTED.into(),
+        ..delta
+    };
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &reserved(KeepaliveDelta {
+                wasted_probes: 1,
+                wasted_input_tokens: 10,
+                wasted_probe_reasons: BTreeMap::from([("idle_limit".to_string(), 1)]),
+                ..delta(at, "probe")
+            }),
+        )?;
+        fold_keepalive(
+            &tx,
+            &reserved(KeepaliveDelta {
+                probes_skipped: 1,
+                ..delta(at, "probe")
+            }),
+        )?;
+        fold_keepalive(
+            &tx,
+            &reserved(KeepaliveDelta {
+                probe_migrated: 1,
+                ..delta(at, "probe")
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows: Vec<(String, (u64, u64, u64))> = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.client.clone(),
+                (row.wasted_probes, row.probes_skipped, row.probe_migrated),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [(UNATTRIBUTED.to_string(), (1, 1, 1))],
+        "the three deltas share the reserved client's row"
     );
 }
 

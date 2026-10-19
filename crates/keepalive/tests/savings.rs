@@ -2554,6 +2554,93 @@ async fn a_compaction_request_inside_the_chains_last_entry_answers_every_probe_o
     );
 }
 
+/// `event`, a request's observation, as sent by the client the relay classed `class`.
+fn sent_by(mut event: phoebis_bus::Event, class: &str) -> phoebis_bus::Event {
+    if let phoebis_bus::Event::RequestObserved(observed) = &mut event {
+        observed.client.class = class.into();
+    }
+    event
+}
+
+/// `open_request` for a turn the client `class` sent.
+fn open_request_from(r: &Rig, id: &str, class: &str, read: u64, write: u64) {
+    r.engine
+        .observe(sent_by(r.observed(id, "main", BODY), class));
+    r.engine.observe(r.selected(id, "a"));
+    r.engine.observe(message_start(
+        id,
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(read),
+            cache_write_5m_tokens: Some(write),
+            ..Default::default()
+        },
+    ));
+}
+
+/// A kept-warm credit keys the client of the request it credits, so its saving prices under that client's regime as
+/// the request's own row does: a turn's credit takes the turn's own client over the one the turn before it named, and
+/// a compaction's credit takes the compaction's own.
+#[tokio::test]
+async fn a_kept_warm_credit_keys_the_client_of_the_request_it_credits() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request_from(&r, "first", "claude-code/desk", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    // Past each request's five minutes and inside the entry the probe after it kept.
+    r.advance_attended(60_000);
+    open_request_from(&r, "second", "claude-code/cli", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").probes,
+        2,
+        "a probe kept the second request's entry"
+    );
+    r.advance_attended(60_000);
+    r.engine.observe(sent_by(
+        r.observed_with(
+            "compaction",
+            "main",
+            Some("compaction"),
+            None,
+            &[],
+            BODY.as_bytes(),
+            "claude-sonnet-4-5",
+        ),
+        "claude-code/pane",
+    ));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(message_start(
+        "compaction",
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(2_000),
+            ..Default::default()
+        },
+    ));
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    let rows = final_rollups(&r).await;
+    let mut credits: Vec<(String, u64)> = rows
+        .iter()
+        .filter(|row| row.kept_warm_requests > 0)
+        .map(|row| (row.client.clone(), row.kept_warm_requests))
+        .collect();
+    credits.sort();
+    assert_eq!(
+        credits,
+        [
+            ("claude-code/cli".to_string(), 1),
+            ("claude-code/pane".to_string(), 1)
+        ],
+        "each credit keys the client of the request it credits"
+    );
+}
+
 /// A chain the idle limit wrote off stays pending until its last entry lapses: the ceiling ends the recipe 1,080 s in
 /// with three probes pending, a tick 1,090 s in, past the first two probes' own entries, settles none of them, and a
 /// turn 1,100 s in, inside the last probe's entry, that reads the cache answers all three.
