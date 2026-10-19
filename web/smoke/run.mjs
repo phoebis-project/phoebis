@@ -19824,7 +19824,7 @@ const CARD_VIEWS = [
 }
 
 m = await mount('/sessions');
-expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
+expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Context', 'Account', 'Last used', 'expires in', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
   const lead = m.container.querySelector('.page-head__lead');
   const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
