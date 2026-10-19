@@ -44,13 +44,13 @@ const SHARED_WINDOWS = ['five_hour', 'seven_day'];
  *  dollars carries the dollars with the funding word, and a dash under Dollar equivalent. One the route priced no
  *  window for carries the dollar equivalent alone, and a request no account served the zero dollars, with no funding
  *  to name. Every variant carries `estimated`, the route's flag, so the mark follows a figure under every position. A
- *  dash keeps the flag but draws no mark, since it shows no figure to estimate. A unit of 20x equivalents or of shares
- *  carries the route's `reason` where its figures read zero by rule. */
+ *  dash keeps the flag but draws no mark, since it shows no figure to estimate. A unit of 20x equivalents, of the
+ *  dollar equivalent or of shares carries the route's `reason` where its figures read zero by rule. */
 export type CostUnit =
   | { kind: 'dash'; estimated: boolean; title: string; usd: number }
   | { kind: 'dollars'; estimated: boolean; funding: Exclude<Funding, 'plan'>; usd: number }
   | { kind: 'equivalent'; equivalents: { key: string; share: number }[]; estimated: boolean; reason: 'client_classifier' | null; usd: number }
-  | { kind: 'equivalent_dollars'; equivalents: { key: string; share: number }[]; estimated: boolean; usd: number }
+  | { kind: 'equivalent_dollars'; equivalents: { key: string; share: number }[]; estimated: boolean; reason: 'client_classifier' | null; usd: number }
   | { kind: 'shares'; estimated: boolean; reason: 'client_classifier' | null; shares: { key: string; share: number }[]; usd: number }
   | { kind: 'unpriced'; estimated: boolean; usd: number }
   | { kind: 'unserved'; estimated: boolean; usd: number };
@@ -92,7 +92,7 @@ export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | '
   // A billed request has no subscription equivalent to read, and a subscription request bills no dollars.
   if (funding !== 'plan') return unit === 'equivalent' ? { estimated, kind: 'dash', title: NO_EQUIVALENT_TITLE, usd } : { estimated, funding, kind: 'dollars', usd };
   if (unit === 'usd') return { estimated, kind: 'dash', title: NOTHING_BILLED_TITLE, usd };
-  if (unit === 'all' || unit === 'equivalent') return { equivalents: pricedWindows(r.costEquivalent), estimated, kind: 'equivalent_dollars', usd };
+  if (unit === 'all' || unit === 'equivalent') return { equivalents: pricedWindows(r.costEquivalent), estimated, kind: 'equivalent_dollars', reason, usd };
   const shares = pricedWindows(r.costShares);
   return shares.length === 0 ? { estimated, kind: 'unpriced', usd } : { estimated, kind: 'shares', reason, shares, usd };
 }
@@ -108,7 +108,7 @@ const freeLed = (reason: 'client_classifier' | null, reading: string): string =>
 function plainCell(unit: CostUnit): { main: string; sub: string; title: string } {
   if (unit.kind === 'dash') return { main: '-', sub: '', title: unit.title };
   if (unit.kind === 'dollars') return { main: fmtUsd(unit.usd), sub: FUNDING_WORD[unit.funding], title: `Billed in dollars: ${FUNDING_WORD[unit.funding]}` };
-  if (unit.kind === 'equivalent_dollars') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: equivalentReading(unit) };
+  if (unit.kind === 'equivalent_dollars') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: freeLed(unit.reason, equivalentReading(unit)) };
   if (unit.kind === 'unpriced') return { main: fmtUsd(unit.usd), sub: 'equivalent', title: NO_SHARE_TITLE };
   if (unit.kind === 'unserved') return { main: fmtUsd(unit.usd), sub: '', title: '' };
   if (unit.kind === 'equivalent') {
@@ -135,9 +135,9 @@ function plainCell(unit: CostUnit): { main: string; sub: string; title: string }
  *  unit the model week's share where there is one, else the 7-day's, over the 5-hour share, each in its window's short
  *  word, with every figure in full and the dollar equivalent on the title, the free sentence ahead of them where the
  *  route gave a reason for zero figures. A dollar equivalent draws the dollars over `equivalent` with every equivalent
- *  in full and the dollars on the title, a dollar unit the dollars over the funding word or `equivalent`, a dash its
- *  title alone, and an unserved request's dollars alone, with no second line and no title. A figure the route marked
- *  estimated reads a tilde before its main line and the estimate after its title. */
+ *  in full and the dollars on the title, behind the same free sentence, a dollar unit the dollars over the funding word
+ *  or `equivalent`, a dash its title alone, and an unserved request's dollars alone, with no second line and no title.
+ *  A figure the route marked estimated reads a tilde before its main line and the estimate after its title. */
 export function costCellOf(unit: CostUnit): { main: string; sub: string; title: string } {
   const cell = plainCell(unit);
   return unit.estimated && unit.kind !== 'dash' ? { main: `~${cell.main}`, sub: cell.sub, title: withEstimate(cell.title, true) } : cell;
