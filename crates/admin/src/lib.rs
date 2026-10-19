@@ -42,6 +42,7 @@ use phoebis_routing::RouterHandle;
 use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
+pub use guardrails::SAMPLE_PAGE;
 pub use pricing::table_envelopes;
 pub use readiness::{Readiness, ReadinessSource};
 pub use routes::router;

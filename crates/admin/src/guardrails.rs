@@ -206,7 +206,22 @@ pub(crate) struct PresetList {
 }
 
 /// Rows per `read` call, so a console read waits for at most one page of the dry run.
-const SAMPLE_PAGE: usize = 50;
+pub const SAMPLE_PAGE: usize = 50;
+
+/// The cursor the next read starts after: the last row this read consumed where it stopped early with its room
+/// filled, else the page's own next cursor, so a read past a full page skips none of its unconsumed rows. A read
+/// stops early only once the sample is full and the loop then ends, so this guards a later read the loop does not
+/// issue.
+fn sample_cursor(
+    last_consumed: Option<(i64, &str)>,
+    next: Option<String>,
+    stopped_early: bool,
+) -> Option<String> {
+    match last_consumed {
+        Some((received_at, id)) if stopped_early => Some(format!("{received_at}:{id}")),
+        _ => next,
+    }
+}
 
 /// A definition and the requests to test it on: `guardrail` or `conditions`, and `pool_id` or `key_id`. The mode and
 /// the action play no part, since the test answers whether the definition matches. An unknown field in the body is
@@ -808,10 +823,12 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
     let mut sampled: Vec<(String, i64, Verdict)> = Vec::new();
     let mut cursor: Option<String> = None;
     // One `read` per page, so the reader mutex is released between pages and a console read waits for one page at
-    // most. A page asks for no more rows than the sample still has room for, and each body is parsed and dropped
-    // inside the closure, so no body outlives its row.
+    // most. A page stays full rather than sized to the room left, since a row whose body aged out takes no room and a
+    // page sized to the room would walk the rest of the window in pages of one. Each body is parsed and dropped inside
+    // the closure, so no body outlives its row.
     loop {
-        let page = SAMPLE_PAGE.min(limit_rows - sampled.len());
+        let page = SAMPLE_PAGE;
+        let room = limit_rows - sampled.len();
         let compiled = Arc::clone(&compiled);
         let subject_id = subject_id.clone();
         let after = cursor.take();
@@ -826,8 +843,13 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                     after.as_deref(),
                     page,
                 )?;
-                let mut out = Vec::with_capacity(rows.len());
-                for row in rows {
+                let mut out = Vec::with_capacity(rows.len().min(room));
+                let mut consumed = 0;
+                for row in &rows {
+                    if out.len() == room {
+                        break;
+                    }
+                    consumed += 1;
                     // The body aged out, or its own key's capture window ended before the purge reached it, so the
                     // row answers nothing and takes no place in the sample.
                     let Some(body) = request_body(c, &row.id, now)? else {
@@ -852,9 +874,13 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                         body: tree.as_ref(),
                     };
                     let verdict = evaluate(&compiled, &facts);
-                    out.push((row.id, row.received_at, verdict));
+                    out.push((row.id.clone(), row.received_at, verdict));
                 }
-                Ok((out, next))
+                let last_consumed = rows[..consumed]
+                    .last()
+                    .map(|row| (row.received_at, row.id.as_str()));
+                let stopped_early = consumed < rows.len();
+                Ok((out, sample_cursor(last_consumed, next, stopped_early)))
             })
             .await;
         let (verdicts, next) = match read {
@@ -1088,5 +1114,24 @@ pub(crate) async fn remove(
             failure(StatusCode::NOT_FOUND, "guardrail not found")
         }
         Err(error) => store_failure(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_cursor_names_the_last_consumed_row_where_the_read_stopped_early_and_the_pages_next_otherwise(
+    ) {
+        assert_eq!(
+            sample_cursor(Some((5, "r5")), Some("1:r1".to_string()), true),
+            Some("5:r5".to_string())
+        );
+        assert_eq!(
+            sample_cursor(Some((5, "r5")), Some("1:r1".to_string()), false),
+            Some("1:r1".to_string())
+        );
+        assert_eq!(sample_cursor(None, None, false), None);
     }
 }

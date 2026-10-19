@@ -1774,6 +1774,48 @@ async fn an_uncaptured_row_a_probe_and_a_row_whose_body_is_gone_are_skipped_with
 }
 
 #[tokio::test]
+async fn a_sample_one_short_of_its_limit_answers_its_bodied_rows_in_order() {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    let response = post(
+        app,
+        "/admin/keys",
+        r#"{"id":"ci","label":"CI","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    // The two newest rows leave the sample one short of its limit, and the captured rows after them have no body to
+    // read until the last, the first row past a full page.
+    let rows = phoebis_admin::SAMPLE_PAGE + 1;
+    let id = |n: usize| format!("ci-{n:02}");
+    for n in 1..=rows {
+        let row = fork_row(&id(n), n as i64, "ci");
+        if n <= 2 || n == rows {
+            write_row(&parts, row, Some(FORK));
+        } else {
+            write_row(
+                &parts,
+                RequestRecord {
+                    bodies_captured: true,
+                    ..row
+                },
+                None,
+            );
+        }
+    }
+    let (status, answer) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "key_id": "ci", "limit": 3}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(sample_ids(&answer), [id(1), id(2), id(rows)]);
+    assert_eq!(answer["totals"]["sampled"], 3);
+}
+
+#[tokio::test]
 async fn the_verdicts_carry_the_failing_index_in_the_written_order() {
     let (parts, cookie) = seeded_sample().await;
     // Every condition fails on a classifier call, and the class runs first whatever the order, so the index names the

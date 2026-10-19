@@ -610,6 +610,17 @@ pub struct SampleRow {
     pub context_compacted: Option<String>,
 }
 
+/// The pool's sample page before its cursor clause and its order, walked on `requests_received`, exported so a test
+/// pins the plan.
+pub const GUARDRAIL_SAMPLE_POOL_SQL: &str = "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE r.pool_id = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2";
+/// The key's, seeking `requests_key`.
+pub const GUARDRAIL_SAMPLE_KEY_SQL: &str = "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE r.key_id = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2";
+/// The clause a page past the first appends, its two binds after the subject's and the window's.
+pub const GUARDRAIL_SAMPLE_CURSOR_SQL: &str =
+    " AND (r.received_at < ?3 OR (r.received_at = ?3 AND r.id < ?4))";
+/// The order and the limit every page appends last, the limit's bind index written by the caller.
+pub const GUARDRAIL_SAMPLE_ORDER_SQL: &str = " ORDER BY r.received_at DESC, r.id DESC LIMIT ?";
+
 /// The newest captured, non-probe rows of the subject since `since`, newest first, at most `limit`, with the next
 /// cursor in `list_requests`'s spelling where more exist. Walks `requests_received` for a pool and `requests_key`
 /// for a key.
@@ -620,16 +631,14 @@ pub fn guardrail_sample_page(
     cursor: Option<&str>,
     limit: usize,
 ) -> Result<(Vec<SampleRow>, Option<String>), LedgerError> {
-    let (column, id) = match subject {
-        SampleSubject::Key(id) => ("key_id", id),
-        SampleSubject::Pool(id) => ("pool_id", id),
-    };
-    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(id.to_string()), Box::new(since)];
     // The pool's walk takes `requests_received` and the key's `requests_key`, both bounded below by the capture
     // window, so a pool or a key whose capture is off scans no months of rows before it answers an empty page.
-    let mut clauses = format!(
-        "r.{column} = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2"
-    );
+    let (base, id) = match subject {
+        SampleSubject::Key(id) => (GUARDRAIL_SAMPLE_KEY_SQL, id),
+        SampleSubject::Pool(id) => (GUARDRAIL_SAMPLE_POOL_SQL, id),
+    };
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(id.to_string()), Box::new(since)];
+    let mut after = "";
     if let Some(cursor) = cursor {
         let (at, id) = cursor
             .split_once(':')
@@ -639,16 +648,11 @@ pub fn guardrail_sample_page(
             .map_err(|_| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
         args.push(Box::new(at));
         args.push(Box::new(id.to_string()));
-        clauses.push_str(" AND (r.received_at < ?3 OR (r.received_at = ?3 AND r.id < ?4))");
+        after = GUARDRAIL_SAMPLE_CURSOR_SQL;
     }
     // One row past the page says whether a next page exists, as `list_requests` reads it.
     args.push(Box::new((limit + 1) as i64));
-    let sql = format!(
-        "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, \
-         r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE {clauses} \
-         ORDER BY r.received_at DESC, r.id DESC LIMIT ?{}",
-        args.len()
-    );
+    let sql = format!("{base}{after}{GUARDRAIL_SAMPLE_ORDER_SQL}{}", args.len());
     let mut rows = conn
         .prepare(&sql)?
         .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
@@ -4678,6 +4682,54 @@ mod tests {
             !plan.iter().any(|step| step.starts_with("SCAN")),
             "a poll never walks the whole history: {plan:?}"
         );
+    }
+
+    /// The plans of a dry run's sample page for `subject`, on the first page and on a page past its cursor.
+    fn sample_page_plans(base: &str, subject: &str) -> [Vec<String>; 2] {
+        use rusqlite::types::Value;
+        let first = plan_of(
+            &format!("{base}{GUARDRAIL_SAMPLE_ORDER_SQL}3"),
+            vec![
+                Value::from(subject.to_string()),
+                Value::from(0_i64),
+                Value::from(50_i64),
+            ],
+        );
+        let later = plan_of(
+            &format!("{base}{GUARDRAIL_SAMPLE_CURSOR_SQL}{GUARDRAIL_SAMPLE_ORDER_SQL}5"),
+            vec![
+                Value::from(subject.to_string()),
+                Value::from(0_i64),
+                Value::from(3_600_000_i64),
+                Value::from("r1".to_string()),
+                Value::from(50_i64),
+            ],
+        );
+        [first, later]
+    }
+
+    /// Whether the plan's first seek goes through `index` and no step walks a whole table.
+    fn seeks_through(plan: &[String], index: &str) -> bool {
+        plan.iter()
+            .find(|step| step.starts_with("SEARCH"))
+            .is_some_and(|step| step.starts_with(&format!("SEARCH r USING INDEX {index} ")))
+            && !plan.iter().any(|step| step.starts_with("SCAN"))
+    }
+
+    /// No index leads with `pool_id`, so a pool's page ranges over the received times from the window's start and
+    /// checks the pool row by row, and a rewritten predicate that lost the range would walk every request.
+    #[test]
+    fn the_pool_sample_page_walks_requests_received() {
+        for plan in sample_page_plans(GUARDRAIL_SAMPLE_POOL_SQL, "main") {
+            assert!(seeks_through(&plan, "requests_received"), "{plan:?}");
+        }
+    }
+
+    #[test]
+    fn the_key_sample_page_seeks_requests_key() {
+        for plan in sample_page_plans(GUARDRAIL_SAMPLE_KEY_SQL, "k1") {
+            assert!(seeks_through(&plan, "requests_key"), "{plan:?}");
+        }
     }
 
     /// 2026-01-15 00:00 UTC in seconds, inside the test cost model's effective range.
