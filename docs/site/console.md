@@ -103,10 +103,13 @@ with the Burn section in view. A parked ledger record adds "Replay parked record
 `Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
 answer together, the button and its answer take a second row.
 
-Four tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
-with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, and "Error rate, 24h" with "No requests",
-`Most common: {code}` or "No errors". The error rate and `Most common` leave out the requests a guardrail blocked, since
-a block is a refusal the operator asked for. Under Native the cost tile reads the subscription traffic's 20x 5-hour
+Five tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
+with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate, 24h" with "No requests",
+`Most common: {code}` or "No errors", and "Refused, 24h" with `Most common: {code}` or "None", which counts the
+requests the router refused before any account was asked. "Requests, 24h" and the error rate leave those out and say
+so on hover, "Requests the router asked an account for. The refused requests are in the Refused tile." on the first and
+"Errors among the requests the router asked an account for, the refused requests left out" on the second.
+Under Native the cost tile reads the subscription traffic's 20x 5-hour
 equivalent over the billed dollars, a side with no traffic left out, with `{usd} billed per hour` under them, or the
 equivalent per hour while no request was billed. Under All in dollars and Billed dollars it reads those dollars with
 `{usd} per hour`, under Dollar equivalent the subscription traffic's dollars at the API price list, and under Window
@@ -323,6 +326,8 @@ subscription accounts, and its hover notes "A request for a Fable model is place
 this card does not draw." Pins reads the member's active pins, one per agent and model as the card's Active pins fact
 counts them, a muted `0` for none. Then "Traffic, 24h" draws requests per hour with a 3-hour average, or "No traffic in
 the last 24h", and the facts Members, Keys, Requests 24h, Cost 24h, Active pins, Warnings and Moves in the last hour.
+The card's request figures, the count in the chart's head, the bars per hour and Requests 24h, leave out the requests
+the router refused before any account was asked.
 Warnings counts the pool's warnings with their sentences on hover, and its figure opens the dialog on the group of the
 first warning's first field. The figure of Moves in the last hour opens the routing log on the pool's moved decisions,
 and its hover lists the moves by reason. "Delete" asks `Delete pool {name}`: "Deletes the pool and its memberships. Its
@@ -448,8 +453,12 @@ the destination Pool, and "Revoke" asks `Revoke {name}`:
 `Requests with {name} are rejected immediately. The key stays in this pool and its history stays in the ledger.` A key
 created from here opens "Key created", the dialog the Keys section describes. Guardrails lists the pool's guardrails in
 the order they run, each with its name, its mode as a badge (enforce in the warning tone, observe muted), `off` on a
-disabled one, move up, move down and remove, then "Attach guardrail" over the guardrails of the registry not yet
-attached, the hint "Top to bottom. A pool's guardrails run before a key's own." and the link "Manage guardrails" to the
+disabled one, move up, move down and remove, then "Attach guardrail", a box over every guardrail of the registry with
+the pool's own ones checked, which stays open while the operator picks: a check adds its guardrail to the end of the
+list at once and an uncheck removes it, "Select all" adds every guardrail the box lists and its uncheck removes them
+all, and Escape or a click outside closes the box, the save writing the list as it stands. While the registry holds no
+guardrail the control is disabled with "No other guardrail is left to attach" on hover. Under the list the hint reads
+"Top to bottom. A pool's guardrails run before a key's own." and the link "Manage guardrails" opens the
 [Guardrails](#guardrails) view. On create the group reads "Guardrails can be attached once the pool is saved." and no
 control. Keepalive holds the switch "Keep prompt caches warm", the three ceilings and the return rate: a ceiling left
 off reads the break-even it resolves to, `Break-even: {range}`, one switched on past the break-even reads `Capped at the
@@ -492,9 +501,14 @@ The key dialog, "Create key" or `Edit {name}`, is grouped like the pool dialog, 
 groups Key (Name, Pool, Notes), Access (Enabled on an existing key, Expiry,
 and Server-side auto mode with Inherit, On or Off), Models (Model rules, with Pool rules as Extend pool rules or
 Replace pool rules, and List [1m] twins in the models listing), Guardrails (the pool's guardrails first in gray, each
-marked "inherited", then the key's own in their order with move up, move down, remove and "Attach guardrail", under the
-hint "The pool's guardrails run first and cannot be dropped here. This key's own run after them." and the link "Manage
-guardrails", reading "Guardrails can be attached once the key is saved." on create), Sessions (Cache warming opt-out)
+marked "inherited", then the key's own in their order with move up, move down, remove and "Attach guardrail", a box
+over every guardrail of the registry the pool does not attach with the key's own ones checked, which stays open while
+the operator picks: a check adds its guardrail to the end of the list at once and an uncheck removes it, "Select all"
+adds every guardrail the box lists and its uncheck removes them all, and Escape or a click outside closes the box, the
+save writing the list as it stands, the control disabled with "No other guardrail is left to attach" on hover while
+the registry holds nothing beyond the pool's, under the hint "The pool's guardrails run first and cannot be dropped
+here. This key's own run after them." and the link "Manage guardrails", reading "Guardrails can be attached once the
+key is saved." on create), Sessions (Cache warming opt-out)
 and Capture (Capture request and response bodies as Inherit from pool, an override in hours or off for this key).
 Server-side auto mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group
 warns what the bodies hold, the warning [Keys](routing.md#keys) quotes.
@@ -508,7 +522,7 @@ The view opens on its bar: "Create guardrail", whose menu offers "Blank guardrai
 preset", one row per preset the build ships, three rows in the order of their ids (Away recap, Prompt suggestion,
 Subagent status summary), then at the right edge the split Refresh button and the count `{n} guardrails` (`1 guardrail`
 for one). Under it one sentence: "A guardrail checks each request against its conditions before any account is selected.
-Observe records the matches, enforce refuses them with a 400." Auto reload starts at 5 s and waits while a dialog or a
+Observe records the matches, enforce refuses them with a 403." Auto reload starts at 5 s and waits while a dialog or a
 row's menu is open. The columns are Name (the description muted beneath), Mode (a badge `observe` or `enforce`), Enabled
 (`on`, or `off` muted), "Applies to" (`{n} pools, {m} keys`, `1 pool, 0 keys` in the singular, the names on hover,
 `nowhere` muted when none), "Matches, 24h" (`{observed} observed` over `{blocked} blocked` from the last day's counts, a
@@ -527,7 +541,7 @@ together." or `Save is held: {reason}` with "Reload" on a stale save, and Cancel
 guardrail". No group is expert-only. Identity holds Name (the hint "The guardrail's id is made from this name when the
 guardrail is created." with the derived id on a create), Description, Enabled (the hint "A disabled guardrail stays
 attached and is skipped.") and Mode as Observe or Enforce (the hint "Observe records each match on the request. Enforce
-refuses a matching request with a 400 before any account is selected."). A guardrail created from a preset copies the
+refuses a matching request with a 403 before any account is selected."). A guardrail created from a preset copies the
 preset's name, mode and conditions and leaves Description empty for your own words, and its Identity group opens on the
 line `From the preset {name} v{n}` with the preset's explanation muted under it and the badges `customized` and `update
 available` where they apply. Where the build ships a newer version, a notice reads "This build ships version {m} of the
@@ -731,8 +745,10 @@ Cost, Cache warming or Accounts, and a range with nothing reads "No traffic in t
 [Statistics](statistics.md).
 
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
-Exhausted), Errors by code, Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the
-destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
+Exhausted), Errors by code ("Non-200 responses in range, the refused requests left out"), Refusals by code ("Requests
+the router refused before any account was asked, not in the counts", or "No request was refused in this range." where
+none was), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the destination's fit,
+`fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
 with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
 requests in the warning tone, its hover `12 requests held 14 min in all`, `no request held` on a bucket that held none,
 and its legend line the range's sum, or `none in range` with no chart), Requests by speed, Effort levels, then at full
@@ -740,11 +756,12 @@ width the card "Guardrails" ("Matches by guardrail in range, every key") with on
 range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alone and no other filter, a guardrail the
 registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range." where none did
 ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited, Failed,
-Incomplete, Exhausted, Rejected, Error rate, Failovers, Search and Fetch. Under the model grouping the requests the
-router rejected before routing group under "no model", which the Cache by model table leaves out. The `{pct} errors`
-figure, the "Error rate" column and the "Errors by code" card leave out the requests a guardrail blocked, since a block
-is a refusal the operator asked for. The `{n} requests` count, the "Requests" and "Rejected" columns and the Guardrails
-card keep counting them.
+Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the Requests and Error rate headers
+reading "The refused requests are left out, see the Refused column" on hover. Under the model grouping the requests the
+router rejected before routing group under "no model", which the Cache by model table leaves out. A request the router
+refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card, a
+guardrail's block on the Guardrails card as well, and never in the request count, the outcome columns, the error rate,
+the cache figures or the latency.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply
@@ -857,9 +874,12 @@ mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepa
 The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
 all" or "Collapse all". The Session column is always drawn, and the eleven others, which the bar's Columns control shows
 or hides, are Key, Model, Account, Runway, Last used, Requests, Last request, Agents, Companion, Cache
-warming and Next probe, with Agents, Last request and Next probe hidden by default. Session
-takes the card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls
-inside it. Runway reads the time until the projection of the pin's account reaches the ceiling on the window that binds,
+warming and Next probe, with Agents, Last request and Next probe hidden by default.
+Requests counts the session's requests, the ones the router refused before any account was asked left out, and "View in
+requests" lists those with the rest.
+Session takes the card's free width and keeps at least 74 px, and a set of columns wider than the
+card scrolls inside it.
+Runway reads the time until the projection of the pin's account reaches the ceiling on the window that binds,
 among those the pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where
 nothing burns, and a dash for an unpinned row or a pinned row with no projection. On a pinned row whose pin carries a
 cycle its hover reads `cycle 20 s`, the gap between the session's requests the slow-down's hold is sized from. Account
