@@ -572,7 +572,8 @@ event, every pin the pick read carries the runway the gate read for it and its r
 that finds no covering pin with a destination leaves the walk to the order. A pin whose burn carries the removed burn
 past the target stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no
 priced pin had a destination, `last_pin` when the account had one pin on the window, `standing` when every pin walked
-was a pending move, and `unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
+was a pending move, `off_window` when it walked no pin and a pin it left out was off the window that fired, and
+`unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
 
 A marked session moves at its next request, the request that ran the round included, since the mark check follows the
 round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
@@ -615,16 +616,17 @@ writes, output) for the pin's one model, decayed with the pool's `burn_average_s
 constant, in three copies: one plain and one weighed by the peak band at each renewal for its standard answers, and a
 third for its fast answers, priced at the fast cells where the model has them. The registry keeps all three on the pin's
 row, so a restart reads each as saved, and a move carries them onto the pin's new row, so its destination counts the
-session's burn from the moment it lands. Nothing is priced until it is read: the round orders its pins by the banded
-copy as a share of the anchor tier's 5-hour window under the pin's regime while a subscription account runs on its plan,
-and by the plain copy in dollars, at the set the pin's last prompt selects on a model priced by prompt length
-([Pricing](statistics.md#pricing)), with the fast copy added in, on an API-key account or a subscription account in
-overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads the right
-share on both. The projection, the round's walk and the spare rate price the plain copy on the account's tier under the
-regime of the pin's entrypoint ([Plan meter](statistics.md#plan-meter)), on every window the pin's model draws, the
-spare rate at the band in force when it reads, and the projection and the walk weighing the band's hours inside the
-horizon as the band weighs them, the walk over the span its excess covers. A keepalive probe's usage never counts. A
-burn the model cannot price, for a model it has no weight for or a tier it has no capacity for, reads as none.
+session's burn from the moment it lands. Nothing is priced until it is read: while a subscription account runs on its
+plan the round orders its pins by their average share of the window that fired over the span the round covers, the
+figure the walk prices and the round card shows, and by the plain copy in dollars, at the set the pin's last prompt
+selects on a model priced by prompt length ([Pricing](statistics.md#pricing)), with the fast copy added in, on an
+API-key account or a subscription account in overage, so leaving overage switches the reading without a reset and a
+session that moves between tiers reads the right share on both. The projection, the round's walk and the spare rate
+price the plain copy on the account's tier under the regime of the pin's entrypoint ([Plan
+meter](statistics.md#plan-meter)), on every window the pin's model draws, the spare rate at the band in force when it
+reads, and the projection and the walk weighing the band's hours inside the horizon as the band weighs them, the walk
+over the span its excess covers. A keepalive probe's usage never counts. A burn the model cannot price, for a model it
+has no weight for or a tier it has no capacity for, reads as none.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed` or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,

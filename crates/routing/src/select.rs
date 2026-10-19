@@ -2734,21 +2734,23 @@ pub(crate) fn slow_down_of(
     let limit = ceiling(pool, FIVE_HOUR);
     let to_horizon = seconds(horizon - now);
     let at_ceiling = utilization >= limit;
-    let (stretch, factor) = if at_ceiling {
+    // The stretch in whole milliseconds, taken from the reach `time_to` already rounded, so the figure is rounded once
+    // and agrees with the reach to the millisecond.
+    let (stretch_ms, factor) = if at_ceiling {
         let overrun = if demand > 0.0 {
             (utilization - limit) / demand
         } else {
             0.0
         };
-        (to_horizon + overrun, 0.0)
+        (((to_horizon + overrun) * 1_000.0).round() as i64, 0.0)
     } else if demand <= 0.0 || to_horizon <= 0.0 {
-        (0.0, 1.0)
+        (0, 1.0)
     } else {
         let room = limit - utilization;
         (
             banded
                 .time_to(room)
-                .map_or(0.0, |reached| (to_horizon - seconds(reached)).max(0.0)),
+                .map_or(0, |reached| (horizon - now - reached).max(0)),
             (room / banded.increase()).clamp(0.0, 1.0),
         )
     };
@@ -2795,7 +2797,7 @@ pub(crate) fn slow_down_of(
         reset: reading.reset,
         demand,
         banded,
-        stretch_ms: (stretch * 1_000.0).round() as i64,
+        stretch_ms,
         threshold_ms: slow_down_stretch_ms(pool),
         factor,
         ramp,
@@ -4516,8 +4518,9 @@ fn destination_of(
 }
 
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
-/// keys, ordered as the anchor table prices them (cold first by burn, then warm by burn over rewrite cost, bounded by
-/// `warm_sessions`, a fast-lane pin out of a window-share round and a pin whose model does not draw the trigger's
+/// keys, ordered in a window-share round by the span's average share of the trigger's window the walk prices them by,
+/// and in a `usd` round by the dollar burn at `now` (cold first by burn, then warm by burn over rewrite cost, bounded
+/// by `warm_sessions`, a fast-lane pin out of a window-share round and a pin whose model does not draw the trigger's
 /// window out of any round, since neither burns a share of it), then walked while the removed burn is under the
 /// target, `min(excess, shed_cap x burn_sum)` on the trigger's window. Once one pin's burn covers what the target still
 /// asks, the walk marks the covering pin whose move costs the least, `cheapest` on the record, rather than the next in
@@ -4574,6 +4577,57 @@ fn shed_round(
     let (off, kept): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| off_window(p));
     left_out.extend(off.into_iter().map(|(p, _)| (p, "off_window")));
     pins = kept;
+
+    // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
+    // does not weight, the one case left once the partition above took the pins whose model does not draw the window,
+    // and the record's figures per hour. The excess is the average rate to remove over `[now, horizon)` as the band
+    // weighs it, so each pin's rate is its own average over that span under its regime's band: a rate at `now` would
+    // over-read or under-read the pin's relief by the band's factor on a span the band crosses. The span is at least
+    // the one second the excess divides by. Under the stretch the excess is the demand's, so each pin's rate reads over
+    // the speed that demand was read at and the round removes what the slow-down cannot cover in the excess's own
+    // units. Each pin's figure is computed once before the order, which reads it in a window-share round, and the
+    // pick's loop reads every covering candidate at every position.
+    let tier = snapshot.tier(account_id).unwrap_or_default();
+    let speed = trigger
+        .speed
+        .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
+        .unwrap_or(1.0);
+    let horizon = trigger.horizon.max(now.saturating_add(1_000));
+    let shares: HashMap<PinKey, Option<f64>> = pins
+        .iter()
+        .map(|(p, _)| {
+            let share = state
+                .share()
+                .rate(
+                    trigger.window,
+                    entrypoint_of(p),
+                    tier,
+                    &p.model,
+                    &p.burn,
+                    now,
+                )
+                .map(|rate| {
+                    let segments =
+                        state
+                            .share()
+                            .band_segments(trigger.window, entrypoint_of(p), now, horizon);
+                    Banded::of(burn_decayed(rate, p.burn_at, now, average_ms), &segments)
+                        .divided(speed)
+                        .increase()
+                        / seconds(horizon - now)
+                });
+            (p.key(), share)
+        })
+        .collect();
+    let share_of = |p: &PinRow| shares.get(&p.key()).copied().flatten();
+    // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the record
+    // lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at `now`, which counts
+    // the fast and classifier usage the account pays for beside the row's copy.
+    if unit == BurnUnit::WindowShare {
+        for (p, burn) in &mut pins {
+            *burn = share_of(p);
+        }
+    }
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) =
         pins.into_iter().partition(|(p, _)| is_cold(p));
     // A pin whose burn cannot be priced ranks after every priced pin of its group: a guess never orders a shed.
@@ -4599,49 +4653,6 @@ fn shed_round(
         ordered.sort_by(by_rewrite);
     }
     let ordered: Vec<PinRow> = ordered.into_iter().map(|(p, _)| p).collect();
-
-    // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
-    // does not weight, the one case left once the partition above took the pins whose model does not draw the window,
-    // and the record's figures per hour. The excess is the average rate to remove over `[now, horizon)` as the band
-    // weighs it, so each pin's rate is its own average over that span under its regime's band: a rate at `now` would
-    // over-read or under-read the pin's relief by the band's factor on a span the band crosses. The span is at least
-    // the one second the excess divides by. Under the stretch the excess is the demand's, so each pin's rate reads over
-    // the speed that demand was read at and the round removes what the slow-down cannot cover in the excess's own
-    // units. Each pin's figure is computed once before the walk, since the pick's loop reads every covering candidate
-    // at every position.
-    let tier = snapshot.tier(account_id).unwrap_or_default();
-    let speed = trigger
-        .speed
-        .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
-        .unwrap_or(1.0);
-    let horizon = trigger.horizon.max(now.saturating_add(1_000));
-    let shares: HashMap<PinKey, Option<f64>> = ordered
-        .iter()
-        .map(|p| {
-            let share = state
-                .share()
-                .rate(
-                    trigger.window,
-                    entrypoint_of(p),
-                    tier,
-                    &p.model,
-                    &p.burn,
-                    now,
-                )
-                .map(|rate| {
-                    let segments =
-                        state
-                            .share()
-                            .band_segments(trigger.window, entrypoint_of(p), now, horizon);
-                    Banded::of(burn_decayed(rate, p.burn_at, now, average_ms), &segments)
-                        .divided(speed)
-                        .increase()
-                        / seconds(horizon - now)
-                });
-            (p.key(), share)
-        })
-        .collect();
-    let share_of = |p: &PinRow| shares.get(&p.key()).copied().flatten();
     let per_hour = |share: f64| share * 3_600.0;
     let burn_sum: f64 = ordered.iter().filter_map(share_of).sum();
     let cap = shed_cap(pool);
@@ -4790,13 +4801,23 @@ fn shed_round(
         reads.insert(p.key(), read);
     }
     let (outcome, reason) = if marks.is_empty() {
-        // The deepest skip class any eligible pin reached, in the order `no_runway`, `unpriced`, `last_pin`,
-        // `standing`, and `unpriced` where no pin was walked because no priced burn was there to remove.
-        let skips: Vec<&'static str> = reads.values().filter_map(|read| read.skip).collect();
-        let reason = ["no_runway", "unpriced", "last_pin", "standing"]
-            .into_iter()
-            .find(|word| skips.contains(word))
-            .unwrap_or("unpriced");
+        // The deepest skip class any walked pin reached, in the order `no_runway`, `off_window`, `unpriced`,
+        // `last_pin`, `standing`. A round that walked no pin reads `off_window` where a pin it left out was off the
+        // window that fired, and `unpriced` otherwise, since no priced burn was there to remove.
+        let mut skips: Vec<&'static str> = reads.values().filter_map(|read| read.skip).collect();
+        if reads.is_empty() && left_out.iter().any(|(_, word)| *word == "off_window") {
+            skips.push("off_window");
+        }
+        let reason = [
+            "no_runway",
+            "off_window",
+            "unpriced",
+            "last_pin",
+            "standing",
+        ]
+        .into_iter()
+        .find(|word| skips.contains(word))
+        .unwrap_or("unpriced");
         ("nothing_to_mark".to_string(), Some(reason))
     } else {
         (format!("marked {}", marks.len()), None)

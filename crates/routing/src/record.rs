@@ -644,7 +644,8 @@ pub struct ShedRoundFacts {
     pub threshold_ms: Option<i64>,
     /// The account's factor at the round, `None` where the account has no slow-down read.
     pub factor: Option<f64>,
-    /// `window_share` or `usd`, the unit the round's order read the anchor table in.
+    /// `window_share` or `usd`, the unit the round read its pins in: the span's average share of the window that fired,
+    /// or the plain copy in dollars at `now`.
     pub unit: &'static str,
     pub burn_average_seconds: u64,
     pub shed_cap: f64,
@@ -657,8 +658,8 @@ pub struct ShedRoundFacts {
     pub marks: Vec<PinKeyFacts>,
     /// `marked N` or `nothing_to_mark`.
     pub outcome: String,
-    /// `None` after marks, else the deepest skip class any pin reached: `last_pin`, `no_runway`, `standing` or
-    /// `unpriced`.
+    /// `None` after marks, else the deepest skip class any walked pin reached (`last_pin`, `no_runway`, `standing` or
+    /// `unpriced`), or `off_window` where no pin was walked and a pin left out was off the window that fired.
     pub reason: Option<&'static str>,
     pub dwell_seconds: u64,
     pub dwell_until: i64,

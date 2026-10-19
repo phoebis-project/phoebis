@@ -12764,7 +12764,7 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
     );
 
     // An unpriced pin is never marked and still counts as one of the account's pins: last in the order, since the
-    // anchor table prices the guess model at nothing, it is the last unmarked one, so the priced pin before it can be
+    // round's pricer prices the guess model at nothing, it is the last unmarked one, so the priced pin before it can be
     // marked. A fast pin leaves the window-share round before the order, so the unpriced pin lists among the walked
     // pins ahead of it.
     let mut st = rounding(vec![
@@ -14229,6 +14229,90 @@ fn a_fable_week_round_over_one_fable_pin_and_opus_pins_reads_last_pin_and_never_
         model: "claude-fable-5".into(),
         ..pin_key("f1")
     }));
+}
+
+#[test]
+fn a_round_that_walks_no_pin_reads_off_window_where_a_pin_it_left_out_is_off_the_window_that_fired()
+{
+    let s = tiered(shedding_pool(Shedding::default()));
+    let model_pin = |session: &str, model: &str, speed: &str, burn: f64, warm: bool| PinRow {
+        model: model.into(),
+        lane: lane_key(model, speed, "none", "-"),
+        ..burning(session, "a", burn, warm, T)
+    };
+    // The account's one Fable pin runs on the fast lane: its burn takes the Fable week over the ceiling, and the
+    // window-share round leaves it out before the window's partition takes the two Opus pins, so no pin is walked.
+    let mut st = rounding(vec![
+        model_pin("f1", "claude-fable-5", "fast", 4.0, true),
+        model_pin("o1", "claude-opus-5", "standard", 2.0, false),
+        model_pin("o2", "claude-opus-5", "standard", 1.0, false),
+    ]);
+    st.record_sample(
+        "a",
+        with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.1, 0.1, T - 500), 0.1, Some(T + 96 * HOUR)),
+    );
+    let req = with_facts(
+        request(&s, Some("o1"), "claude-opus-5", true, &[], T),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    );
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (
+            round.window.as_str(),
+            round.unit,
+            round.outcome.as_str(),
+            round.reason
+        ),
+        (
+            "seven_day_fable",
+            "window_share",
+            "nothing_to_mark",
+            Some("off_window")
+        ),
+        "the round walked no pin and left the Opus pins out off the Fable week"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("f1", Some("fast_lane")),
+            ("o1", Some("off_window")),
+            ("o2", Some("off_window"))
+        ]
+    );
+
+    // Every pin of this round is on the fast lane, so none it left out is off the window, and the round that found no
+    // priced burn to remove reads `unpriced`.
+    let mut st = rounding(vec![
+        model_pin("fast-4", "claude-sonnet-5", "fast", 4.0, false),
+        model_pin("fast-2", "claude-sonnet-5", "fast", 2.0, false),
+    ]);
+    over_a_fitting_b(&mut st, T - 500);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "fast-4", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.outcome.as_str(), round.reason),
+        ("five_hour", "nothing_to_mark", Some("unpriced"))
+    );
+    assert!(
+        round.pins.iter().all(|p| p.skip == Some("fast_lane")),
+        "{:?}",
+        round.pins
+    );
 }
 
 #[test]
@@ -20601,6 +20685,29 @@ fn the_stretch_is_the_time_the_unslowed_demand_passes_the_ceiling_before_the_res
 }
 
 #[test]
+fn the_stretch_is_the_time_to_the_horizon_less_the_reach_rounded_once_to_the_millisecond() {
+    let s = slowed_pool();
+    // One pin burns 0.07 of the 5-hour window an hour on a at 0.80 with its reset three hours out: the 0.15 of room
+    // lasts 54,000 / 7 seconds, 7,714,285.71 milliseconds, which the reach rounds to 7,714,286. A reach cut short of
+    // its fraction would read a stretch one millisecond longer.
+    let mut st = rounding(vec![burning("s1", "a", 7.0, true, T)]);
+    st.record_sample("a", refreshing(0.80, T + 3 * HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T));
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    let stretch_ms = 3 * HOUR - 7_714_286;
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "stretch_ms"),
+        &FactValue::Int(stretch_ms)
+    );
+    assert_eq!(
+        st.slow_down_state("p", "a")
+            .expect("the read wrote a's entry")
+            .stretch_ms,
+        stretch_ms
+    );
+}
+
+#[test]
 fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and_a_factor_of_zero()
 {
     // A cap of 150 seconds, apart from the shipped 120, so the held turn below waits the pool's own cap.
@@ -25990,6 +26097,48 @@ fn a_rounds_desk_pin_reads_one_rate_over_the_span_beside_a_base_pin_whose_averag
         (round.removed, 0.30),
     ] {
         assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
+    }
+}
+
+#[test]
+fn a_window_share_round_lists_its_pins_in_the_order_of_the_spans_average_it_prices_them_by() {
+    // Both pins run under the base regime over the hour to the reset, which the band enters half an hour in, so each
+    // pin's average is one and a half times its plain rate at T. s1 was charged inside an earlier band, so its banded
+    // copy reads twice its plain one: at T that copy ranks its 6 tokens a second over s2's 4, while over the span s2's
+    // plain 4 burns more than s1's 3.
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = rounding(vec![
+        PinRow {
+            burn_banded: input_rate(6.0),
+            ..burning("s1", "a", 3.0, false, T)
+        },
+        burning("s2", "a", 4.0, false, T),
+    ]);
+    st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
+    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.unit),
+        ("five_hour", "window_share")
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s2", "s1"],
+        "the card lists the two cold pins in the order of the figures it shows"
+    );
+    for (session, expected) in [("s2", 0.04 * 1.5), ("s1", 0.03 * 1.5)] {
+        let read = round_burn(&round, session);
+        assert!(
+            (read - expected).abs() < 1e-9,
+            "{session}: {read} against {expected}"
+        );
     }
 }
 

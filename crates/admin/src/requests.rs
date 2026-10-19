@@ -399,9 +399,8 @@ pub(crate) struct Event {
     ///   prompt, their rewrite as the Max 20x equivalent of the pin's weekly window with that window named, their
     ///   planned destination and their mark, then the pins it left out, each pin's skip word among `fast_lane`,
     ///   `last_pin`, `no_runway`, `off_window`, `standing` and `unpriced` and its note among `cheapest` and `current`,
-    ///   and the outcome with its reason among `last_pin`, `no_runway`, `standing` and `unpriced`. The marks and the
-    ///   dwell are the pool's on that account, while a move's cool reading counts a round any pool ran on its
-    ///   destination.
+    ///   and the outcome with its reason among `last_pin`, `no_runway`, `off_window`, `standing` and `unpriced`. The
+    ///   marks and the dwell are the pool's on that account.
     /// - `slow_down_ended`: the account's slow-down on the pool ended, its factor back at 1 for the safety wait or
     ///   its entry dropped at the purge, with the span's `since`, `duration_ms` (to the factor's return, or to the
     ///   entry's last read where it never returned), `factor_min`, the lowest factor of the span, and `held_ms`, the
