@@ -1046,7 +1046,6 @@ fn refusal(id: &str, key: &str) -> RequestRecord {
     }
 }
 
-/// Every rollup row the ledger holds.
 fn all_rows(db: &LedgerDb) -> Vec<RollupRow> {
     db.read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
         .unwrap()
@@ -1154,6 +1153,14 @@ fn a_replaced_flagged_request_leaves_its_old_row_and_a_row_of_refusals_alone_is_
     // a request with an attempt files under that attempt's account, a row of its own.
     db.insert_request(&replaced("s1"), &[], None).unwrap();
     db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
+    assert_eq!(
+        all_rows(&db)
+            .iter()
+            .map(|r| (r.key_id.as_str(), r.requests, r.refusals.clone()))
+            .collect::<Vec<_>>(),
+        [("k", 1, blocked(1))],
+        "the served request and the refusal share the row before the replace"
+    );
     db.insert_request(&refusal("r1", "k2"), &[], None).unwrap();
     let rows = all_rows(&db);
     let row = |key: &str| {

@@ -3943,6 +3943,7 @@ mod tests {
         r.duration_hist.record(44.0);
         r.output_tps_hist.record(45.0);
         r.errors = BTreeMap::from([("overloaded".to_string(), 46)]);
+        r.refusals = BTreeMap::from([("guardrail_blocked".to_string(), 57)]);
         r.cache_miss_reasons = BTreeMap::from([("none".to_string(), 47)]);
         r
     }
