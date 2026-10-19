@@ -20,8 +20,9 @@ use crate::LedgerError;
 /// and wide enough for one reading step on a rise of `MIN_RISE`.
 pub const RATIO_LOW: f64 = 0.8;
 pub const RATIO_HIGH: f64 = 1.25;
-/// The least rise a window must show before its ratio counts, since the readings come in whole percents and a smaller
-/// rise is a few of the meter's quanta.
+/// The least rise a window must show, and the least share the router must have priced in it, before its ratio counts:
+/// the readings come in whole percents, so a smaller rise is a few of the meter's quanta and one reading step over a
+/// smaller priced share reads far off.
 pub const MIN_RISE: f64 = 0.05;
 
 /// Two readings whose resets differ by more than this name different windows. Within it they are one reset as the
@@ -31,6 +32,10 @@ pub(crate) const RESET_TOLERANCE_MS: i64 = 60_000;
 /// How long a reconciled window is kept, by its `window_end`: the fold's purge and the route's trailing read share it,
 /// so the two agree at the edge.
 pub(crate) const RECONCILIATION_RETENTION_MS: i64 = 30 * 24 * 3_600_000;
+
+/// An account that serves nothing writes no new row, so its stale row leaves the condition once this old, while a
+/// serving account completes a 7-day window inside it.
+pub(crate) const DRIFT_HOLD_MS: i64 = 8 * 24 * 3_600_000;
 
 /// How long before a run's first reading an attempt completing inside the run may have started: it bounds the scan of
 /// the account's attempts and lies well past any answer's duration.
@@ -53,8 +58,9 @@ pub struct ReconciliationRow {
     pub window_end: i64,
     pub first_reading_at: i64,
     pub last_reading_at: i64,
-    /// Each part's last end less its first, summed, as a fraction of the window, rounded to six decimals so a
-    /// whole-percent pair's rise compares against `MIN_RISE` as its percents read.
+    /// Each part's last end less its first, floored at zero, summed over the parts holding a priced attempt, as a
+    /// fraction of the window, rounded to six decimals so a whole-percent pair's rise compares against `MIN_RISE` as
+    /// its percents read.
     pub observed_rise: f64,
     /// The share of the window the router priced its plan-funded attempts completed between each part's two ends at.
     pub predicted_share: f64,
@@ -545,20 +551,26 @@ pub fn read_reconciliations(
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Per account, the newest row of each window among those whose rise is at least `MIN_RISE`, by window: what the hourly
-/// fold reads for `meter_drift`. The ledger cannot tell an OAuth account, so every account with such a row answers,
-/// and the attention reader gives OAuth accounts their series.
+/// Per account, the newest row of each window among those whose rise is at least `MIN_RISE` and whose window ended
+/// after `now - DRIFT_HOLD_MS`, by window: what the hourly fold reads for `meter_drift`. Both selects read the bound,
+/// so a window's newest row is its newest inside it, and a row outside it holds nothing while the route still answers
+/// it for its 30 days. The ledger cannot tell an OAuth account, so every account with such a row answers, and the
+/// attention reader gives OAuth accounts their series.
 pub fn newest_rows(
     conn: &Connection,
+    now: i64,
 ) -> Result<BTreeMap<String, Vec<ReconciliationRow>>, LedgerError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {COLUMNS} FROM window_reconciliations w WHERE observed_rise >= ?1 AND window_end = \
-         (SELECT MAX(window_end) FROM window_reconciliations \
-          WHERE account_id = w.account_id AND window = w.window AND observed_rise >= ?1) \
+        "SELECT {COLUMNS} FROM window_reconciliations w WHERE observed_rise >= ?1 AND window_end > ?2 \
+         AND window_end = (SELECT MAX(window_end) FROM window_reconciliations \
+          WHERE account_id = w.account_id AND window = w.window AND observed_rise >= ?1 AND window_end > ?2) \
          ORDER BY account_id, window"
     ))?;
     let mut out: BTreeMap<String, Vec<ReconciliationRow>> = BTreeMap::new();
-    for row in stmt.query_map(params![MIN_RISE], row_to_reconciliation)? {
+    for row in stmt.query_map(
+        params![MIN_RISE, now - DRIFT_HOLD_MS],
+        row_to_reconciliation,
+    )? {
         let row = row?;
         out.entry(row.account_id.clone()).or_default().push(row);
     }

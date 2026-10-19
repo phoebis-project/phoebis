@@ -3200,6 +3200,125 @@ async fn the_burn_key_grouping_names_the_live_holder_by_its_id_and_an_earlier_on
 }
 
 #[tokio::test]
+async fn the_breakdown_and_the_series_label_an_earlier_key_deleted_and_the_empty_model_no_model() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let earlier = common::generation(&parts.store, "desktop") - 60_000;
+    let at = common::NOW - HOUR;
+    parts.ledger.record(record_at(
+        "label-earlier",
+        at,
+        "claude-sonnet-5-5",
+        "s1",
+        earlier,
+    ));
+    // A request the router rejected before routing names no model and no attempt.
+    let mut rejected = record("label-rejected", at, "", "s2");
+    if let Record::Request {
+        request, attempts, ..
+    } = &mut rejected
+    {
+        request.outcome = "rejected".into();
+        request.status = Some(400);
+        request.attempts = 0;
+        attempts.clear();
+    }
+    parts.ledger.record(rejected);
+    landed(&parts, &["label-earlier", "label-rejected"]).await;
+    let earlier_key = format!("desktop@{earlier}");
+    let group_in = |series: &serde_json::Value, key: &str| -> serde_json::Value {
+        series["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|p| {
+                p["groups"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|g| g["key"] == key)
+                    .cloned()
+            })
+            .unwrap_or_else(|| panic!("a bucket carries the group {key}: {series}"))
+    };
+    let by_key = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=key",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let row = row_of(&by_key, &earlier_key);
+    assert_eq!(
+        (&row["label"], &row["key_id"], &row["key_created_at"]),
+        (
+            &serde_json::json!("desktop (deleted)"),
+            &serde_json::json!("desktop"),
+            &serde_json::json!(earlier)
+        ),
+        "an earlier holder reads deleted, its creation instant the member's to format: {row}"
+    );
+    let series_by_key = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=key",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        group_in(&series_by_key, &earlier_key)["label"],
+        "desktop (deleted)",
+        "the series labels the earlier holder as the breakdown does"
+    );
+    let by_model = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=model",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        row_of(&by_model, "")["label"],
+        "no model",
+        "the model grouping's empty key reads no model: {by_model}"
+    );
+    let series_by_model = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=model",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        group_in(&series_by_model, "")["label"],
+        "no model",
+        "the series labels the empty key as the breakdown does"
+    );
+}
+
+#[tokio::test]
 async fn the_burn_files_an_agent_under_the_user_agent_group_its_pattern_names() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

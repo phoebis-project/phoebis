@@ -1009,12 +1009,15 @@ pub(crate) struct Reconciliation {
     pub window_end: i64,
     pub first_reading_at: i64,
     pub last_reading_at: i64,
-    /// The last reading's utilization less the first's, as a fraction of the window.
+    /// The rise between each contributing part's two ends, readings of one source, summed over the parts a fall split
+    /// the window into, as a fraction of the window. A part contributes where it holds a priced attempt, and
+    /// `first_reading_at` and `last_reading_at` are the first and last ends of the parts that contributed.
     pub observed_rise: f64,
     /// The share of the window the router priced its attempts at.
     pub predicted_share: f64,
-    /// `observed_rise` over `predicted_share`. A ratio under 0.8 or over 1.25 holds `meter_drift` while the row is its
-    /// window's newest among those with a rise of at least 0.05, so a newer row with a smaller rise leaves it standing.
+    /// `observed_rise` over `predicted_share`. A ratio under 0.8 or over 1.25 holds `meter_drift` where
+    /// `predicted_share` reaches 0.05 too, while the row is its window's newest among those that ended in the last
+    /// eight days with a rise of at least 0.05, so a newer row with a smaller rise leaves it standing.
     pub ratio: f64,
     /// The attempts priced.
     pub requests: u32,

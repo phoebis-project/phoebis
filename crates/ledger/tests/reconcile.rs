@@ -263,7 +263,7 @@ fn a_five_point_rise_between_whole_percent_readings_meets_the_least_rise() {
     served(&db, "r1", SONNET, SATURDAY + 5 * MINUTE, 2, None);
     let now = reset + HOUR;
     fold(&db, now);
-    let newest = db.read_blocking(newest_rows).unwrap();
+    let newest = db.read_blocking(|c| newest_rows(c, now)).unwrap();
     let rows = newest.get("a").map(Vec::as_slice).unwrap_or_default();
     assert_eq!(
         rows.iter().map(|r| r.window.as_str()).collect::<Vec<_>>(),
@@ -735,6 +735,61 @@ fn rows_older_than_thirty_days_leave_with_the_fold() {
         kept,
         [now - 30 * DAY],
         "a row whose window ended more than 30 days before the fold leaves, one at the edge stays"
+    );
+}
+
+#[test]
+fn the_drift_reads_the_windows_that_ended_inside_eight_days_while_the_route_keeps_thirty() {
+    let now = SATURDAY + 40 * DAY;
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Each account's one window charged twice the table: `fresh`'s ended a millisecond inside the eight days, `edge`'s
+    // at their bound and `stale`'s twenty days before the fold, as an account that stopped serving leaves it.
+    db.write(|c| {
+        for (account, window_end) in [
+            ("edge", now - 8 * DAY),
+            ("fresh", now - 8 * DAY + 1),
+            ("stale", now - 20 * DAY),
+        ] {
+            c.execute(
+                "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+                 VALUES (?1, 'five_hour', ?2, ?2 - 10800000, ?2 - 3600000, 0.5, 0.25, 2.0, 3, 0, ?2)",
+                rusqlite::params![account, window_end],
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let newest = db.read_blocking(|c| newest_rows(c, now)).unwrap();
+    assert_eq!(
+        newest.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["fresh"],
+        "a window that ended eight days or more before the fold is not read, so its account is absent: {newest:?}"
+    );
+    assert_eq!(
+        rows(&db, now)
+            .iter()
+            .map(|r| r.account_id.as_str())
+            .collect::<Vec<_>>(),
+        ["fresh", "edge", "stale"],
+        "the route keeps every row of the trailing 30 days with its ratio"
+    );
+    let tables = subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_routing_conditions(&tx, &tables, now)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let held = db.read_blocking(routing_conditions).unwrap();
+    assert_eq!(
+        held.iter()
+            .filter(|r| r.kind == "meter_drift")
+            .map(|r| r.subject_id.as_str())
+            .collect::<Vec<_>>(),
+        ["fresh"],
+        "a row outside the eight days holds nothing: {held:?}"
     );
 }
 

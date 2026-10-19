@@ -419,8 +419,8 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         Some("sdk/python"),
     );
     plant("r6", None, 0, None, None);
-    // An earlier holder's rows filed before the generation column stay at 0, which is no creation time; and a
-    // generation at 09:31:45 pins the hour and the minute.
+    // An earlier holder's rows filed before the generation column stay at 0, which is no creation time, and a
+    // generation at 09:31:45 carries one the label leaves to `key_created_at`.
     plant("r7", Some("k1"), 0, None, Some("claude-code/cli"));
     plant("r8", Some("k1"), 34_305_000, None, Some("claude-code/cli"));
     let live = LiveKeys(BTreeMap::from([
@@ -454,16 +454,10 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         vec![
             ("k1", "k1", Some("k1"), None, 1),
             ("k1@0", "k1 (deleted)", Some("k1"), Some(0), 1),
-            (
-                "k1@1000",
-                "k1 (deleted, created 1970-01-01 00:00 UTC)",
-                Some("k1"),
-                Some(1_000),
-                2
-            ),
+            ("k1@1000", "k1 (deleted)", Some("k1"), Some(1_000), 2),
             (
                 "k1@34305000",
-                "k1 (deleted, created 1970-01-01 09:31 UTC)",
+                "k1 (deleted)",
                 Some("k1"),
                 Some(34_305_000),
                 1
@@ -471,7 +465,9 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
             ("k2", "k2", Some("k2"), None, 2),
             ("-", "unattributed", Some("-"), None, 1)
         ],
-        "groups sort by label; the reserved id keeps its label and no suffix, and a key group names its holder beside the label, with the creation instant for an earlier holder alone"
+        "groups sort by label, then by key where earlier holders share one. The reserved id keeps its label and no \
+         suffix, every earlier holder reads deleted whatever its generation, and a key group names its holder beside \
+         the label, with the creation instant for an earlier holder alone"
     );
     let agents = breakdown(
         &apply_filter(rows.clone(), &RollupFilter::default()),
@@ -565,6 +561,99 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         "the keys list never carries an earlier holder's row"
     );
     assert_eq!(totals["k1"].requests, 1);
+}
+
+#[test]
+fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_series() {
+    const HOUR_MS: i64 = 3_600_000;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, model: &str, kind: &str, outcome: &str| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: 1_000,
+            model: model.into(),
+            canonical_model: model.into(),
+            kind: kind.into(),
+            origin: "client".into(),
+            outcome: outcome.into(),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[], None).unwrap();
+    };
+    plant("served", "claude-sonnet-5-5", "inference", "succeeded");
+    // A request the router rejected before routing names no model.
+    plant("rejected", "", "inference", "rejected");
+    // An empty key under another grouping, which keeps it as its label.
+    plant("unkinded", "claude-sonnet-5-5", "", "succeeded");
+    let live = LiveKeys::default();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let labels = |groups: &[GroupRow]| -> Vec<(String, String)> {
+        groups
+            .iter()
+            .map(|g| (g.key.clone(), g.label.clone()))
+            .collect()
+    };
+    let want = vec![
+        (
+            "claude-sonnet-5-5".to_string(),
+            "claude-sonnet-5-5".to_string(),
+        ),
+        (String::new(), "no model".to_string()),
+    ];
+    let groups = breakdown(
+        &apply_filter(rows.clone(), &RollupFilter::default()),
+        "model",
+        true,
+        &live,
+        &[],
+        None,
+        &PRICES,
+        &COSTS,
+    );
+    assert_eq!(
+        labels(&groups),
+        want,
+        "the empty key keeps its key, so a filter on it works, and reads no model, while a model reads its id"
+    );
+    let points = series(
+        &apply_filter(rows.clone(), &RollupFilter::default()),
+        0,
+        HOUR_MS,
+        3_600,
+        "model",
+        true,
+        &live,
+        &[],
+        None,
+        &PRICES,
+        &COSTS,
+    )
+    .unwrap();
+    assert_eq!(
+        points.iter().map(|p| labels(&p.groups)).collect::<Vec<_>>(),
+        vec![want],
+        "the series labels its groups by the same function"
+    );
+    let kinds = breakdown(
+        &apply_filter(rows, &RollupFilter::default()),
+        "kind",
+        true,
+        &live,
+        &[],
+        None,
+        &PRICES,
+        &COSTS,
+    );
+    assert_eq!(
+        labels(&kinds),
+        vec![
+            (String::new(), String::new()),
+            ("inference".to_string(), "inference".to_string())
+        ],
+        "only the model grouping reads its empty key as no model"
+    );
 }
 
 /// The fixed filters as the analytics applied them in memory before the read took them into SQL: a key selector

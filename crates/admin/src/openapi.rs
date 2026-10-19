@@ -594,15 +594,16 @@ pub(crate) struct BreakdownRow {
     /// request no attempt answered files under the speed its last attempt reported, else under `fast` when it asked
     /// for `fast` and under `standard` otherwise.
     pub key: String,
-    /// Under `group_by=key` an earlier holder's rows read `<id> (deleted, created 2026-09-14 09:31 UTC)`, the
-    /// generation's date and time at minute precision in UTC, and `<id> (deleted)` at generation 0, which holds no
-    /// creation time. Under `group_by=client` the `-` row reads `unattributed`.
+    /// Under `group_by=key` an earlier holder's rows read `<id> (deleted)` whatever the generation, the creation
+    /// instant being `key_created_at`'s to format. Under `group_by=model` the empty key, the requests the router
+    /// rejected before routing, reads `no model`. Under `group_by=client` the `-` row reads `unattributed`.
     pub label: String,
     /// The key's id under `group_by=key`. Absent for another dimension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,
-    /// An earlier holder's `created_at` in Unix milliseconds, 0 for a generation with no creation time. The console
-    /// prints it in the viewer's zone. Absent for the key that holds the id now and for another dimension.
+    /// An earlier holder's `created_at` in Unix milliseconds, 0 for a generation with no creation time. The label
+    /// carries no instant, so a reader formats this one in its own zone. Absent for the key that holds the id now and
+    /// for another dimension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_created_at: Option<i64>,
     pub requests: u64,

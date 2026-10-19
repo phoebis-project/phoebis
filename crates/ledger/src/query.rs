@@ -1927,20 +1927,16 @@ impl LiveKeys {
         format!("{}@{}", row.key_id, row.key_generation)
     }
 
-    /// The label of a key group alone (every other dimension keeps its group key as its label): the id;
-    /// `<id> (deleted, created 2026-09-14 09:31 UTC)` for a generation no live key holds, the generation being that
-    /// key's `created_at` so two earlier holders read apart; `<id> (deleted)` for generation 0, the rows the
-    /// startup stamp left unstamped, which carry no creation time; `unattributed` for the reserved id.
+    /// The label of a key group: the id for the live generation, `<id> (deleted)` for every generation no live key
+    /// holds, generation 0 included, and `unattributed` for the reserved id. Two earlier holders of one id share the
+    /// label, and `holder_of` answers each one's creation instant for a reader to print in its own zone.
     pub fn label_of(&self, key: &str) -> String {
         if key == UNATTRIBUTED {
             return "unattributed".into();
         }
         // A key id never carries `@` (the admin's slug rule), so the split is unambiguous.
         match key.rsplit_once('@') {
-            Some((id, generation)) => match created_stamp(generation) {
-                Some(stamp) => format!("{id} (deleted, created {stamp})"),
-                None => format!("{id} (deleted)"),
-            },
+            Some((id, _)) => format!("{id} (deleted)"),
             None => key.into(),
         }
     }
@@ -2013,21 +2009,14 @@ pub fn group_of(
     }
 }
 
-/// Minute precision in UTC; the `<id>@<generation>` selector, never the label, tells two holders created in
-/// the same minute apart. `None` for generation 0, which is no creation time, and for a generation that is no
-/// millisecond instant, so the console and the ledger agree on every generation a key can carry.
-fn created_stamp(generation: &str) -> Option<String> {
-    generation
-        .parse::<i64>()
-        .ok()
-        .filter(|&ms| ms != 0)
-        .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok())
-        .map(|t| t.strftime("%Y-%m-%d %H:%M UTC").to_string())
-}
-
-fn label_of(key: &str) -> String {
+/// The label of a group under any dimension but the key: the group key itself, `unattributed` for the reserved id,
+/// and "no model" for the model grouping's empty key, the requests the router rejected before routing, whose key
+/// stays empty so a filter on it keeps working.
+fn label_of(key: &str, group_by: &str) -> String {
     if key == UNATTRIBUTED {
         "unattributed".into()
+    } else if key.is_empty() && group_by == "model" {
+        "no model".into()
     } else {
         key.into()
     }
@@ -2794,7 +2783,7 @@ impl GroupSums {
                     row.key_created_at = key_created_at;
                     row
                 } else {
-                    let label = label_of(&k);
+                    let label = label_of(&k, group_by);
                     group_row(&k, group, label)
                 }
             })
@@ -4459,8 +4448,9 @@ pub fn moves_by_reason_and_fit(
 
 /// One routing condition the hourly fold wrote: the kind, its subject, the oldest qualifying event's time (for
 /// `slowed_long` the own start of the oldest span counted, for `meter_drift` the `window_end` of the oldest off
-/// window), the count and the kind's detail. `pool_id` is the pool the condition's events name, which an account's
-/// `slowed_long` carries as the pool of its newest span, and null for an account's condition whose events name none.
+/// window, at most the fold's instant), the count and the kind's detail. `pool_id` is the pool the condition's events
+/// name, which an account's `slowed_long` carries as the pool of its newest span, and null for an account's condition
+/// whose events name none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoutingCondition {
     pub kind: String,

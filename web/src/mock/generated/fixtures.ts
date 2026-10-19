@@ -1006,7 +1006,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key": "desktop@1791720940000",
-          "label": "desktop (deleted, created 2026-10-11 12:15 UTC)",
+          "label": "desktop (deleted)",
           "key_id": "desktop",
           "key_created_at": 1791720940000,
           "requests": 1,
@@ -5650,7 +5650,7 @@ export const FIXTURES: Record<string, Fixture> = {
             },
             {
               "key": "desktop@1791720940000",
-              "label": "desktop (deleted, created 2026-10-11 12:15 UTC)",
+              "label": "desktop (deleted)",
               "key_id": "desktop",
               "key_created_at": 1791720940000,
               "requests": 1,

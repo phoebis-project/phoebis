@@ -1239,10 +1239,11 @@ struct Held {
 /// the account's newest wall's window inside that window's length before the wall: after a projection round its
 /// `projection_error` is one less the round's projection, after a stretch round its `early_ms` is the reset the wall's
 /// `window_spent` names less the wall's instant, 0 at or after the reset, and with no round both are null. The fifth,
-/// `meter_drift`, reads the reconciled windows: per account, the newest row of each window with a rise of at least
-/// `MIN_RISE`, held while any reads outside `RATIO_LOW` to `RATIO_HIGH`, `since` the oldest off row's `window_end`, its
-/// detail naming the off windows and the cost model `tables` holds, since the fix is that file rather than a pool
-/// setting. The ledger reads no registry, so a detail names its settings and the reader adds a pool's values.
+/// `meter_drift`, reads the reconciled windows that ended inside `DRIFT_HOLD_MS` of `now`: per account, the newest row
+/// of each window with a rise of at least `MIN_RISE`, held while any reads outside `RATIO_LOW` to `RATIO_HIGH` over a
+/// priced share of at least `MIN_RISE`, `since` the oldest off row's `window_end` or `now` where that end lies after
+/// it, its detail naming the off windows and the cost model `tables` holds, since the fix is that file rather than a
+/// pool setting. The ledger reads no registry, so a detail names its settings and the reader adds a pool's values.
 pub fn fold_routing_conditions(
     tx: &Transaction<'_>,
     tables: &PlanTables,
@@ -1516,9 +1517,15 @@ pub fn fold_routing_conditions(
         );
     }
 
-    for (account, rows) in newest_rows(tx)? {
+    for (account, rows) in newest_rows(tx, now)? {
         let off: Vec<&ReconciliationRow> = rows.iter().filter(|row| row.off()).collect();
-        let Some(since) = off.iter().map(|row| row.window_end).min() else {
+        // A row stored before slid runs wrote none, or one a reading without an instant closed, can end after `now`.
+        let Some(since) = off
+            .iter()
+            .map(|row| row.window_end)
+            .min()
+            .map(|end| end.min(now))
+        else {
             continue;
         };
         let windows: Vec<serde_json::Value> = off
