@@ -32,8 +32,8 @@ const pinnedRecipesOf = (s, recipes) => {
 };
 
 /**
- * The story's refusals, each seed flagged as the ledger's landing would flag it: the three guardrail blocks on desktop,
- * the runner's send on ci after its key's revocation, and the drift and the contract refusals on laptop.
+ * The story's refusals, each seed flagged as the ledger's landing would flag it: the runner's send on ci after its key's
+ * revocation, the three guardrail blocks on desktop, and the contract and the drift refusals on laptop.
  */
 const REFUSED_IDS = ['req_0c4e7a91-b5d', 'req_5d1b8e2f-c64', 'req_6c3a9e27-5b1', 'req_a8f3c6d0-e17', 'req_e0a4c6f2-118', 'req_f1c8e3a5-29d'];
 
@@ -1949,7 +1949,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const desktop = groups.find((g) => g.key === 'desktop');
     const blocked = (await s.api.getAnalyticsGuardrails(range)).guardrails.find((c) => c.id === 'large-auxiliary')?.blocked;
     assert.deepEqual([desktop?.refused, desktop?.refusals.guardrail_blocked, blocked], [3, 3, 3], "desktop's Refused, its map and the card's blocked count");
-    for (const g of groups.filter((x) => x !== desktop)) assert.equal(g.refused, sum(Object.values(g.refusals), (n) => n), `${g.key}'s Refused is its map's sum`);
+    // The day's refused rows by the group the route files them under, a live key's by its bare id.
+    const live = new Map(s.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
+    const want = {};
+    for (const r of s.requests.filter((x) => x.refused && startOfHour(Date.parse(x.at)) >= s.now - DAY)) {
+      const map = (want[live.get(r.keyId) === r.keyGeneration ? r.keyId : `${r.keyId}@${r.keyGeneration}`] ??= {});
+      map[r.errorCode] = (map[r.errorCode] ?? 0) + 1;
+    }
+    assert.deepEqual(want, { ci: { auth_unknown: 1 }, desktop: { guardrail_blocked: 3 }, laptop: { client_contract: 1, client_drift: 1 } }, "the day's refused rows by key");
+    for (const g of groups) {
+      const map = want[g.key] ?? {};
+      assert.deepEqual([g.refused, { ...g.refusals }], [sum(Object.values(map), (n) => n), map], `${g.key}'s Refused and its map read its refused rows`);
+    }
   });
 
   test(`the_requests_pages_guardrail_facet_lists_the_three_blocks_under_large_auxiliary at ${at}`, async () => {
