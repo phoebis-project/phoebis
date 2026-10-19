@@ -605,9 +605,8 @@ pub struct ExhaustionFacts {
 pub struct RefusalFacts {
     pub kind: &'static str,
     /// The refusal's structured word, which the console keys its labels on: a key refusal's variant in snake case,
-    /// `model_not_allowed` for a resolve refusal, `drift` for the relay's
-    /// refusal of a drifted client, `contract` for the relay's refusal of a Claude Code request that lacks an item
-    /// of the contract.
+    /// `model_not_allowed` for a resolve refusal, `contract` for the relay's refusal of a Claude Code request that
+    /// lacks an item of the contract, `drift` for the relay's refusal of a drifted client.
     pub code: &'static str,
     pub reason: String,
 }

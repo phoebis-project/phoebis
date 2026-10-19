@@ -199,7 +199,10 @@ fn contract_message(item: &str) -> &'static str {
         "attribution_line" => "the request carries no attribution line at system[0] the router requires of a Claude Code client. Leave CLAUDE_CODE_ATTRIBUTION_HEADER unset",
         "metadata_user_id" => "the request body has no metadata.user_id the router requires of a Claude Code client. Send the body as Claude Code sends it",
         "agent_id_header" => "the request names a subagent class and carries no x-claude-code-agent-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them",
-        _ => "the request names the compaction class and carries no x-claude-code-compaction header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1",
+        "compaction_header" => "the request names the compaction class and carries no x-claude-code-compaction header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1",
+        _ => unreachable!(
+            "contract_gap only ever names session_header, class_header, attribution_line, metadata_user_id, agent_id_header or compaction_header"
+        ),
     }
 }
 

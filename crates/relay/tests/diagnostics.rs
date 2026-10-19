@@ -1981,7 +1981,7 @@ async fn a_client_member_is_detached_on_the_first_turn_after_a_spent_move() {
 }
 
 /// A client that sent the null it sends on a conversation's first message names nothing to detach, so its body and
-/// its hash go as sent. API key accounts, so no identity splice moves a byte either.
+/// its hash go as sent. API key accounts, whose blank finds the uuid already empty, so it moves no byte either.
 #[tokio::test]
 async fn a_client_member_already_null_is_left_as_sent() {
     const A_SECRET: &str = "sk-ant-api03-AAAA";

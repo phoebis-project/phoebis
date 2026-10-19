@@ -8,6 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use phoebis_bus::Classifier;
 use phoebis_ledger::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, list_requests,
     price_equivalent, price_shares, request_by_id, request_events,
@@ -144,7 +145,8 @@ pub(crate) struct RequestSummary {
     /// has one, each the serving attempt's share of that window under the account tier the attempt recorded, priced
     /// at read time on the cost revision in force at the request's receipt with the peak band read at the attempt's
     /// finish, or null where the account tier has no capacity on that window or neither the model nor its model tier
-    /// has a weight there. An empty object for an attempt that recorded no account tier.
+    /// has a weight there. An empty object for an attempt that recorded no account tier. A free call under
+    /// `share_reason` lists the windows its account tier sizes alone, each at zero.
     pub cost_shares: Option<BTreeMap<String, Option<f64>>>,
     /// Null for a request billed in dollars, as `cost_shares`. Else the serving attempt's usage as the share of a
     /// Max 20x account's windows under the same keys, at the same revision and band, whatever account tier served it.
@@ -586,7 +588,7 @@ fn plan_figures(
     };
     let band_at = a.finished_at.or(r.finished_at).unwrap_or(a.started_at);
     let entrypoint = r.client.as_deref().and_then(entrypoint_of_client);
-    if r.classifier.is_some() {
+    if r.classifier.as_deref() == Some(Classifier::Client.as_str()) {
         // The admin prices through the share helpers and not price_row, so the free call's rule is taken here.
         return Some(PlanFigures {
             shares: a.tier.as_deref().map(|tier| PricedShares {
@@ -1264,6 +1266,44 @@ revisions:
             ),
             Value::Null,
             "the kind decides whatever the speed or the overage flag says"
+        );
+    }
+
+    /// The ledger's readers take the free rule on the bus's word alone, so a row naming another word prices from its
+    /// counts here as it does in the analytics.
+    #[test]
+    fn a_classifier_word_other_than_client_prices_from_the_counts() {
+        let shares = shares_of();
+        let summary = |classifier: Option<&str>| {
+            let request = RequestRecord {
+                classifier: classifier.map(String::from),
+                ..request_of("claude-fable-5-1")
+            };
+            serde_json::to_value(request_summary(
+                &request,
+                &[attempt_of("oauth", None, None)],
+                &shares,
+            ))
+            .unwrap()
+        };
+        let (plain, other, client) = (
+            summary(None),
+            summary(Some("other")),
+            summary(Some("client")),
+        );
+        let figures = |summary: &Value| {
+            (
+                summary["cost_shares"].clone(),
+                summary["cost_equivalent"].clone(),
+                summary["share_reason"].clone(),
+            )
+        };
+        assert_eq!(figures(&other), figures(&plain));
+        assert_eq!(plain["share_reason"], Value::Null);
+        assert_eq!(client["share_reason"], "client_classifier");
+        assert_ne!(
+            client["cost_shares"], plain["cost_shares"],
+            "the counts price above the free call's zero"
         );
     }
 

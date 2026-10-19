@@ -160,7 +160,6 @@ enum Spliced {
 
 /// `"account_uuid":"` as it appears escaped inside the `metadata.user_id` string.
 const ESCAPED_UUID_KEY: &[u8] = br#"\"account_uuid\":\""#;
-const ESCAPED_QUOTE: &[u8] = br#"\""#;
 
 /// Opening quote and prefix of the billing block as it appears in `system[0].text`.
 pub(crate) const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
@@ -609,8 +608,18 @@ fn replace_account_uuid(body: &mut Vec<u8>, uuid: &str) -> Spliced {
         return Spliced::Absent;
     };
     let value_start = start + key_at + ESCAPED_UUID_KEY.len();
-    let Some(value_len) = find(&body[value_start..end], ESCAPED_QUOTE) else {
-        return Spliced::Absent;
+    // The value ends at the first `\"` that opens an escape of its own. Stepping over each escape pair keeps the
+    // second backslash of a `\\` from pairing with the next quote, which on a value ending in that pair is the
+    // member's own closing quote, so a splice there would leave the outer string unterminated.
+    let raw = &body[value_start..end];
+    let mut at = 0;
+    let value_len = loop {
+        match raw.get(at) {
+            None => return Spliced::Absent,
+            Some(b'\\') if raw.get(at + 1) == Some(&b'"') => break at,
+            Some(b'\\') => at += 2,
+            Some(_) => at += 1,
+        }
     };
     let value_end = value_start + value_len;
     if body[value_start..value_end] == *uuid.as_bytes() {
@@ -747,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn an_api_key_body_needs_no_account_uuid() {
+    fn a_token_count_body_needs_no_account_uuid() {
         let mut body = br#"{"model":"claude-sonnet-4-5","messages":[]}"#.to_vec();
         let edits = edit_body(
             &mut body,
@@ -763,7 +772,7 @@ mod tests {
                 detach_diagnostics: false,
             },
         )
-        .expect("an api-key account never carried an identity");
+        .expect("a token count's body has no slot for the account identity");
         assert!(!edits.account_uuid_replaced);
     }
 
@@ -1297,6 +1306,25 @@ mod tests {
             assert!(!edits.account_uuid_replaced);
             assert_eq!(body, sent);
         }
+    }
+
+    /// A decoded `user_id` that ends inside the uuid's value on an escaped backslash: the raw bytes end `\\"`, where
+    /// the pair's second backslash and the member's own closing quote read as the value's `\"`.
+    #[test]
+    fn blank_on_a_user_id_ending_in_an_escaped_backslash_leaves_the_body_well_formed() {
+        let sent = br#"{"model":"claude-sonnet-4-5","metadata":{"user_id":"{\"account_uuid\":\"abc\\"},"messages":[]}"#;
+        serde_json::from_slice::<serde_json::Value>(sent).expect("the body as sent parses");
+        let mut body = sent.to_vec();
+        let edits = edit_body(&mut body, &blank_edit())
+            .expect("an API-key leg sends a body whose uuid it cannot find");
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_else(|e| {
+            panic!(
+                "the edited body parses ({e}): {}",
+                String::from_utf8_lossy(&body)
+            )
+        });
+        assert!(!edits.account_uuid_replaced);
+        assert_eq!(body, sent);
     }
 
     #[test]

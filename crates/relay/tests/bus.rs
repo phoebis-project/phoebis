@@ -996,7 +996,7 @@ async fn the_observed_event_carries_no_fork_for_a_sessions_own_turn() {
 /// request selects with neither the class nor `context_compacted`, and a refusal before the body is read
 /// publishes neither hash.
 #[tokio::test]
-async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_neither() {
+async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_the_class_alone() {
     use phoebis_profile::fixtures::{
         body as fixture_body, inference_head, BodyFixture, FixtureKind,
     };

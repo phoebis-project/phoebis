@@ -183,6 +183,24 @@ async fn recorded_refusal(
     }
 }
 
+/// The request class the router recorded with the request's decision, under a five-second bound.
+async fn recorded_request_class(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    request_id: &str,
+) -> Option<String> {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the request's decision arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision { record, .. } = event {
+            if record.request.request_id == request_id {
+                return record.request.request_class.clone();
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_claude_code_request_with_the_auxiliary_class_and_the_beta_is_observed_as_the_clients_classifier_call(
 ) {
@@ -335,6 +353,7 @@ async fn a_request_without_metadata_user_id_is_refused_for_the_contract() {
 async fn a_subagent_request_without_the_agent_id_header_is_refused_for_the_contract() {
     let up = upstream().await;
     let (h, mut sub) = observing(&up, &[oauth("a", A, 0)]).await;
+    let mut decisions = h.router.subscribe_events();
     let answer = send(
         &h,
         &mut sub,
@@ -342,6 +361,13 @@ async fn a_subagent_request_without_the_agent_id_header_is_refused_for_the_contr
     )
     .await;
     assert_refused_for(&answer, &up, "agent_id_header", "x-claude-code-agent-id");
+    // The refusal's record keeps the class the request named, where a drift's records none.
+    assert_eq!(
+        recorded_request_class(&mut decisions, &answer.complete().request_id)
+            .await
+            .as_deref(),
+        Some("subagent")
+    );
     up.shutdown().await;
 }
 

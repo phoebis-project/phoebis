@@ -975,7 +975,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         bodies: None,
     });
     // An auxiliary request a guardrail refused at admission: no attempt, no answer and no captured body, the
-    // observing guardrail's match beside the blocking one's. Older than every other row, so the list keeps their
+    // observing guardrail's match beside the blocking one's. Older than the rows above it, so the list keeps their
     // order, and under no session, so the session rows keep their counts.
     let blocked_at = hour_ago - 600;
     parts.ledger.record(Record::Request {

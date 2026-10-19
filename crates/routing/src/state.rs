@@ -2912,7 +2912,7 @@ impl RoutingState {
         for pin in moved_pins {
             let spelled = pin.key();
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
-            // its fast usage moves with it.
+            // its fast and unmetered usage move with it.
             let renewed = self.renewed.contains(&spelled);
             // Read ahead of `take_pin`, which drops it: the mark lives as long as its row, so a `Head` report still
             // finds it under the dated id.

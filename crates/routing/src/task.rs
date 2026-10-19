@@ -422,13 +422,13 @@ impl BurnRates {
     /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage as the row's `burn_fast` holds
     /// it and `unmetered` the usage of the client's own classifier calls as the row's `burn_unmetered` holds it.
     /// Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through the fast
-    /// table plus the unmetered usage at the standard dollar rates. On a row with fast cells the fast table carries
-    /// them whatever the prompt, so a prompt that crosses the threshold reprices the ordinary usage alone, and on a
-    /// row without them it carries the row's own sets, so the fast usage reprices with the row, as the ledger prices a
-    /// fast answer there. Under `WindowShare` the banded copy alone, through the table of the pin's regime: fast usage
-    /// draws usage credits and a classifier call takes no share of a plan window, so neither reaches the plan's
-    /// figure, while an account in overage or on an API key pays the dollars of both. `None` where a type the pin
-    /// burns has no rate.
+    /// table plus the unmetered usage through the dollar table at the set the last prompt selects. On a row with fast
+    /// cells the fast table carries them whatever the prompt, so a prompt that crosses the threshold reprices the
+    /// ordinary usage alone, and on a row without them it carries the row's own sets, so the fast usage reprices with
+    /// the row, as the ledger prices a fast answer there. Under `WindowShare` the banded copy alone, through the table
+    /// of the pin's regime: fast usage draws usage credits and a classifier call takes no share of a plan window, so
+    /// neither reaches the plan's figure, while an account in overage or on an API key pays the dollars of both. `None`
+    /// where a type the pin burns has no rate.
     pub fn price_pin(
         &self,
         unit: BurnUnit,
@@ -610,8 +610,8 @@ pub enum Report {
         usage: PinUsage,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
-        /// The request is the client's own classifier call, which charges no plan window and enters the pin's
-        /// unmetered copy alone.
+        /// The request is the client's own classifier call, which charges no plan window, so the report only
+        /// releases its booking.
         classifier: bool,
         /// The request whose booking the usage releases before it charges, and the wire attempt that answered.
         request_id: String,
@@ -1084,7 +1084,7 @@ pub struct WindowProjection {
 /// the ceiling on the window that binds among those the pin's model draws.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinStanding {
-    /// The pin with its three burn copies decayed with its pool's burn average and `burn_at` the instant they are
+    /// The pin with its four burn copies decayed with its pool's burn average and `burn_at` the instant they are
     /// decayed to. A pin never folded keeps its burn and its `burn_at` as stored.
     pub pin: PinRow,
     pub runway_ms: Option<i64>,

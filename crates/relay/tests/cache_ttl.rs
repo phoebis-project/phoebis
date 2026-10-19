@@ -211,7 +211,7 @@ async fn with_the_toggle_off_a_marker_less_body_goes_as_sent_and_asks_for_no_bet
         respond: json_200(),
     }])
     .await;
-    // An api_key account has no identity to splice, and a body carrying no attribution line and no `system`
+    // The api_key leg's blank finds the uuid already empty, and a body carrying no attribution line and no `system`
     // gives the restoration and diagnostics edits nothing to touch either, so a marker-less body's only
     // possible edit is the one this test is proving does not run. The `metadata.user_id` member is there for the
     // contract a Claude Code request meets, and nothing else is.
@@ -388,9 +388,10 @@ async fn with_the_toggle_on_a_marker_less_auxiliary_body_goes_as_sent() {
         respond: json_200(),
     }])
     .await;
-    // An api_key account has no identity to splice, and a body carrying no attribution line and no `system`
+    // The api_key leg's blank finds the uuid already empty, and a body carrying no attribution line and no `system`
     // gives the restoration and diagnostics edits nothing to touch either, so the policy's member is the one
-    // edit the relay could still make.
+    // edit the relay could still make. The `metadata.user_id` member is there for the contract a Claude Code
+    // request meets, and nothing else is.
     let h = harness(
         &up,
         &[api_key("acct", A, 0)],
