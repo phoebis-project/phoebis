@@ -31,8 +31,15 @@ import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 // Fixed, so a pass over the mock reads the same secrets every run.
 const MOCK_SEED = 4_211;
 
-// A short delay keeps loading states honest without making the mock feel slow.
-const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+let pending = 0;
+// A short delay keeps loading states honest without making the mock feel slow. The answers in flight are counted so
+// a harness settles on the mock's own signal rather than on a fixed wait.
+const latency = <T,>(value: T, ms = 120): Promise<T> => {
+  pending += 1;
+  return new Promise((resolve) => setTimeout(() => { pending -= 1; resolve(value); }, ms));
+};
+/** How many mock answers are still on their timer. */
+export const inFlight = (): number => pending;
 
 // The routes' own wording, so a page draws the text the router would have sent.
 const ACCOUNT_TAKEN = 'an account with this id exists';
