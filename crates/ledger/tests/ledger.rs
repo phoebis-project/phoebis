@@ -1314,6 +1314,72 @@ fn a_requests_slow_down_waits_count_into_its_hourly_row() {
     );
 }
 
+/// A request refused after it waited through a slow-down hold (its key revoked during the hold) counts under the
+/// refusals map alone, so the hour's held count and held time are the served request's.
+#[test]
+fn a_refusal_after_a_slow_down_hold_counts_under_no_held_figure() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let slowed = |held_ms: u64| {
+        format!(
+            r#"{{"waited_on":["a"],"cohort":null,"held_ms":{held_ms},"waits":[{{"reason":"slow_down","held_ms":{held_ms}}}]}}"#
+        )
+    };
+    let request = |id: &str, key_id: &str, held_ms: u64| RequestRecord {
+        id: id.into(),
+        received_at: 3_600_000,
+        key_id: Some(key_id.into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        held: Some(slowed(held_ms)),
+        ..Default::default()
+    };
+    let served = RequestRecord {
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..request("served", "desktop", 2_000)
+    };
+    let attempt = AttemptRecord {
+        request_id: "served".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        outcome: "succeeded".into(),
+        output_tokens: Some(5),
+        ..Default::default()
+    };
+    let refused = RequestRecord {
+        status: Some(401),
+        outcome: "rejected".into(),
+        error_code: Some("auth_unknown".into()),
+        refused: true,
+        ..request("refused", "laptop", 3_000)
+    };
+    db.insert_request(&served, &[attempt], None).unwrap();
+    db.insert_request(&refused, &[], None).unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    assert_eq!(
+        (
+            rows.iter().map(|r| r.slow_down_held).sum::<u64>(),
+            rows.iter().map(|r| r.slow_down_held_ms).sum::<u64>(),
+        ),
+        (1, 2_000),
+        "the served request's hold alone: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .flat_map(|r| r.refusals.clone())
+            .collect::<Vec<_>>(),
+        [("auth_unknown".to_string(), 1)],
+        "the refusal sits in the map"
+    );
+}
+
 /// The row `list_requests` hands back, the same query `/admin/requests` runs.
 async fn listed(h: &Harness, id: &str) -> RequestRecord {
     wait_for_async(Duration::from_secs(5), || async {

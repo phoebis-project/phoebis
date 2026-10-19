@@ -662,8 +662,9 @@ pub fn deltas_of(
     let held = request.kind == "probe"
         && request.status == Some(503)
         && request.error_code.as_deref() == Some("ledger_behind");
-    // A refusal before any account was asked files under the map alone, so every other figure of the row reads the
-    // requests an account was asked for. A probe is never flagged, so the probe arms stand.
+    // A refusal before any account was asked files under the map alone, its slow-down hold among the figures it
+    // leaves, so every other figure of the row reads the requests an account was asked for. A probe is never flagged,
+    // so the probe arms stand.
     let counted = !held && !request.refused;
     if held {
         d.probes_held = 1;
@@ -683,9 +684,11 @@ pub fn deltas_of(
             _ => {}
         }
     }
-    if let Some(held_ms) = slow_down_held_ms(request.held.as_deref()) {
-        d.slow_down_held_ms = held_ms;
-        d.slow_down_held = 1;
+    if counted {
+        if let Some(held_ms) = slow_down_held_ms(request.held.as_deref()) {
+            d.slow_down_held_ms = held_ms;
+            d.slow_down_held = 1;
+        }
     }
     // A 401 replay and an unsent retry both run again on the account the request was already on, so only a
     // move between accounts counts.
