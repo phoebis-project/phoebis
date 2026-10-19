@@ -383,6 +383,74 @@ row's expanded detail reads each agent's state and cause with the sentence of ea
 resolves to and the figure in effect under one switched on past it (see [Pools](console.md#pools)). The Analytics view's
 Cache warming tab draws the probes by outcome and the wasted probes by reason (see [Analytics](console.md#analytics)).
 
+The state's cause on the Sessions view reads a label in place of the engine's id, and the table maps the two.
+
+| Label | Cause id |
+| --- | --- |
+| affinity too short | `affinity_too_short` |
+| agent released | `agent_released` |
+| agent unknown | `agent_unknown` |
+| awaiting cache evidence | `awaiting_cache_evidence` |
+| awaiting request | `awaiting_request` |
+| awaiting selection | `awaiting_selection` |
+| at budget | `budget` |
+| bus gap | `bus_gap` |
+| compacted | `compacted` |
+| cooled down | `cooled` |
+| evicted | `evicted` |
+| entry expired | `expired` |
+| expired at restart | `expired_at_restart` |
+| fixed thinking | `fixed_thinking` |
+| forced tool | `forced_tool` |
+| headers too large | `headers_too_large` |
+| wake too far | `horizon` |
+| idle limit | `idle_limit` |
+| ineligible credential | `ineligible_credential` |
+| instance replaced | `instance_replaced` |
+| invalid cache control | `invalid_cache_control` |
+| invalid model | `invalid_model` |
+| invalid probe usage | `invalid_probe_usage` |
+| invalid request | `invalid_request` |
+| keepalive off | `keepalive_off` |
+| key opted out | `key_opted_out` |
+| lease expired | `lease_expired` |
+| ledger behind | `ledger_behind` |
+| missing account | `missing_account` |
+| no cache evidence | `no_cache_evidence` |
+| no probe cache evidence | `no_probe_cache_evidence` |
+| opted out | `opted_out` |
+| overage | `overage` |
+| owner mismatch | `owner_mismatch` |
+| parked limit | `parked_limit` |
+| partial cache coverage | `partial_cache_coverage` |
+| account paused | `paused` |
+| pool disabled | `pool_disabled` |
+| probe authentication error | `probe_authentication_error` |
+| pool exhausted | `probe_pool_exhausted` |
+| quota exhausted | `probe_quota_exhausted` |
+| retry limit | `probe_retry_limit` |
+| transport error | `probe_transport_error` |
+| probing | `probing` |
+| needs re-auth | `reauth` |
+| released | `released` |
+| cold probes | `repeated_cold_probe` |
+| request canceled | `request_canceled` |
+| request failed | `request_failed` |
+| request limit | `request_limit` |
+| request rejected | `request_rejected` |
+| request too large | `request_too_large` |
+| reset | `reset` |
+| retrying | `retryable_probe_error` |
+| scheduled | `scheduled` |
+| session ended | `session_ended` |
+| session expired | `session_expired` |
+| slow probe | `slow_probe` |
+| storage limit | `storage_limit` |
+| structured output | `structured_output` |
+| unexpected output | `unexpected_output` |
+| unsupported probe | `unsupported_probe` |
+| unsupported shape | `unsupported_shape` |
+
 <a id="the-cost-reference"></a>
 The Cost reference dialog, what a million tokens costs in dollars and as a share of a subscription window, is described
 with the Sessions view under [Sessions](console.md#sessions). The price table's rows and how a probe is priced are on
