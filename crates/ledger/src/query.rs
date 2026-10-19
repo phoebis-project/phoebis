@@ -2071,10 +2071,11 @@ fn row_key(row: &RollupRow) -> RowKey<'_> {
 }
 
 /// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it:
-/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Every reader of the
-/// module prices a row through it and reads its `usd`, `equivalent` and `estimated`, and none reads its `shares`, since
-/// the shares a route answers come from `ShareSums::add` under the caller's `pricing`. So the key carries no tier, as
-/// `price_group`'s does, `price_row` prices no share window, and `estimated` reads the equivalent's fallback alone.
+/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Every rollup row reader
+/// of the module prices a row through it and reads its `usd`, `equivalent` and `estimated`, and none reads its
+/// `shares`, since the shares a route answers come from `ShareSums::add` under the caller's `pricing`. So the key
+/// carries no tier, as `price_group`'s does, `price_row` prices no share window, and `estimated` reads the
+/// equivalent's fallback alone.
 pub(crate) fn priced(row: &RollupRow, prices: &PriceRevisions, costs: &PlanTables) -> Priced {
     let key = RowKey {
         tier: None,
@@ -3478,6 +3479,47 @@ fn activity(
             account_id: r.get(7)?,
             on_retired_secret: r.get(8)?,
             rotation_at: r.get(9)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The model one agent of a session named on its newest client request, as the client spelled it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentModel {
+    pub key_id: String,
+    pub key_generation: i64,
+    /// The client's own session, as `session_activity` keys it.
+    pub session_id: String,
+    /// `None` on a request that carried no agent.
+    pub agent_id: Option<String>,
+    pub received_at: i64,
+    /// The `model` column, which keeps the `[1m]` suffix of a long-context twin that `canonical_model` folds out.
+    pub model: String,
+}
+
+/// The newest client request's own model spelling per (key, key generation, session, agent) since `since`,
+/// over the window and the requests `session_activity` reads, newest first, so a session's first row is its newest
+/// request.
+pub fn agent_models(conn: &Connection, since: i64) -> Result<Vec<AgentModel>, LedgerError> {
+    let mut stmt = conn.prepare(&format!(
+        "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, agent_id, received_at, model \
+         FROM requests \
+         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
+         ranked AS (SELECT recent.*, \
+         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp, agent_id ORDER BY received_at DESC, id DESC) \
+         AS nth FROM recent WHERE grp IS NOT NULL) \
+         SELECT key_id, key_generation, grp, agent_id, received_at, model FROM ranked WHERE nth = 1 \
+         ORDER BY received_at DESC, id DESC"
+    ))?;
+    let rows = stmt.query_map(params![since], |r| {
+        Ok(AgentModel {
+            key_id: r.get(0)?,
+            key_generation: r.get(1)?,
+            session_id: r.get(2)?,
+            agent_id: r.get(3)?,
+            received_at: r.get(4)?,
+            model: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

@@ -421,7 +421,7 @@
       "in_overage": false,
       "pin_written": {
         "action": "created",
-        "epoch": 3,
+        "epoch": 6,
         "lane": "claude-sonnet-5|standard|none|-",
         "refresh_stamped": true,
         "hashes_stamped": false

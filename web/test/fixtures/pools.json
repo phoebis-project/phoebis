@@ -103,7 +103,7 @@
                 "period_end": 1793491200000
               }
             ],
-            "active_pins": 1,
+            "active_pins": 3,
             "pace_score": 0.005952380952380952,
             "burn": null,
             "speed": null
@@ -123,7 +123,7 @@
                 "period_end": 1793491200000
               }
             ],
-            "active_pins": 0,
+            "active_pins": 1,
             "pace_score": 1.0,
             "burn": null,
             "speed": null
@@ -150,7 +150,7 @@
           }
         },
         "estimated_24h": true,
-        "active_pins": 1,
+        "active_pins": 4,
         "traffic_24h": [
           {
             "at": 1791633600000,

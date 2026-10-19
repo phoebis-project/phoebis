@@ -74,6 +74,7 @@ pub use query::{
 };
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
 pub use query::{list_request_page, RequestPage};
+pub use query::{agent_models, AgentModel};
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
     POLL_INTERVAL, PROFILE_EVERY_POLLS,

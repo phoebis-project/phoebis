@@ -1023,6 +1023,51 @@ async fn the_request_detail_answers_stream_cut_as_null_or_the_cuts_six_members()
 }
 
 #[tokio::test]
+async fn a_session_row_answers_its_context_figures_and_agent_lines_as_null_or_their_values() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    for member in [
+        "agent_contexts",
+        "cached_prefix_tokens",
+        "context_share",
+        "context_window_tokens",
+    ] {
+        assert!(
+            admits_null(&schemas["Session"]["properties"][member]),
+            "Session.{member}: a row with no figure answers null: {}",
+            schemas["Session"]
+        );
+    }
+    let properties: BTreeSet<&str> = schemas["AgentContext"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        properties,
+        BTreeSet::from([
+            "agent_id",
+            "cached_prefix_tokens",
+            "context_share",
+            "context_window_tokens",
+            "last_input_tokens",
+            "model"
+        ])
+    );
+    for member in [
+        "cached_prefix_tokens",
+        "context_share",
+        "context_window_tokens",
+    ] {
+        assert!(
+            admits_null(&schemas["AgentContext"]["properties"][member]),
+            "AgentContext.{member}: a line with no turn answers null"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_field() {
     let (_app, _up, document) = document().await;
     for name in [

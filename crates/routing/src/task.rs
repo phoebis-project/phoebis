@@ -1420,6 +1420,22 @@ impl RouterHandle {
     pub async fn pins_standing(&self) -> Result<Vec<PinStanding>, RouterGone> {
         self.ask(|reply| Command::PinsStanding { reply }).await
     }
+    /// The greatest live cache-map prefix on the account and incarnation whose root is `root` and whose model is
+    /// `model`, `None` where none stands. Read under the shared map's lock, so the sessions list asks it per pin
+    /// without a command round trip.
+    pub fn cached_prefix(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+        root: &str,
+        model: &str,
+        now: i64,
+    ) -> Option<u64> {
+        self.affinity
+            .read()
+            .expect("affinity lock poisoned")
+            .cached_prefix(account_id, incarnation, root, model, now)
+    }
     /// Every member of `pool_id` with its projections, its Pace score and its slow-down entry in force under that
     /// pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by account: an
     /// api_key account answers its score alone, and a pool the registry does not hold answers none.

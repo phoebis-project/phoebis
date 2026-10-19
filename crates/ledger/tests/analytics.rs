@@ -7428,3 +7428,59 @@ fn the_reconciliations_read_answers_the_named_accounts_newest_first_inside_the_t
         "an empty filter answers every account's windows of the 30 days"
     );
 }
+
+/// The read keeps the `model` column's spelling, which `canonical_model` folds the long-context suffix out of, so a
+/// session whose main agent named the `[1m]` twin last and whose subagent named the plain model last answers both.
+#[test]
+fn each_agent_of_a_session_answers_the_model_its_newest_client_request_spelled() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, session: &str, agent: &str, kind: &str, model: &str, at: i64| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("k1".into()),
+            pool_id: Some("main".into()),
+            session_id: Some(session.into()),
+            agent_id: Some(agent.into()),
+            model: model.into(),
+            canonical_model: model.trim_end_matches("[1m]").into(),
+            kind: kind.into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[], None).unwrap();
+    };
+    plant("r1", "s1", "main", "inference", "claude-opus-5", 1_000);
+    plant(
+        "r2",
+        "s1",
+        "worker",
+        "inference",
+        "claude-opus-5[1m]",
+        2_000,
+    );
+    plant("r3", "s1", "main", "inference", "claude-opus-5[1m]", 3_000);
+    plant("r4", "s1", "worker", "inference", "claude-opus-5", 4_000);
+    // A probe replays main's request and is no client turn, and a request before the bound is outside the window.
+    plant("r5", "s1", "main", "probe", "claude-opus-5", 5_000);
+    plant("r6", "s2", "main", "inference", "claude-opus-5[1m]", 100);
+    let row = |agent: &str, at: i64, model: &str| phoebis_ledger::AgentModel {
+        key_id: "k1".into(),
+        key_generation: 0,
+        session_id: "s1".into(),
+        agent_id: Some(agent.into()),
+        received_at: at,
+        model: model.into(),
+    };
+    assert_eq!(
+        db.read_blocking(|c| phoebis_ledger::agent_models(c, 500))
+            .unwrap(),
+        [
+            row("worker", 4_000, "claude-opus-5"),
+            row("main", 3_000, "claude-opus-5[1m]"),
+        ],
+        "each agent's newest client request inside the window, the session's newest first"
+    );
+}

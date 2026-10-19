@@ -580,7 +580,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             key_id: "desktop".into(),
             key_generation,
             agent_id: "main".into(),
-            // No session, so the placement writes no pin and `sessions.json` keeps the one pinned row above.
+            // No session, so the placement writes no pin and adds no row to `sessions.json`.
             session_id: None,
             canonical_model: "claude-sonnet-5-5".into(),
             folded_model: "claude-sonnet-5-5".into(),
@@ -1111,6 +1111,185 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
+    // The companion session's main pin and a pin of each of its two agents, each renewed with a prompt and holding one
+    // live cache-map entry rooted at the session, so `sessions.json` carries the row's context figures and its agents'
+    // lines. Each selection is narrowed to one member, so no two pins share an account and a model and their cached
+    // prefixes read apart, and each entry lands on its selection's decision, so the ledger counts no orphan for it. The
+    // pins are placed a minute before the routing log's hour, which holds the routing stories alone.
+    let placed_at = hour_ago - 60_000;
+    for (agent, model, account, prompt, prefix_tokens) in [
+        ("main", "claude-sonnet-5-5", "business", 52_000, 41_000),
+        ("worker-1", "claude-sonnet-5", "business", 31_000, 24_000),
+        ("worker-2", "claude-sonnet-5-5", "direct", 18_500, 12_000),
+    ] {
+        let request_id = format!("r-s1-{agent}");
+        let candidates = phoebis_routing::resolve(&snapshot, &key_row, model, model)
+            .expect("the pool's model rules allow the model")
+            .into_iter()
+            .filter(|c| c.account_id == account)
+            .collect();
+        let answer = parts
+            .router
+            .select(phoebis_routing::SelectRequest {
+                request_id: request_id.clone(),
+                attempt: 1,
+                seq: 1,
+                key_id: "desktop".into(),
+                key_generation,
+                agent_id: agent.into(),
+                session_id: Some("s1".into()),
+                canonical_model: model.into(),
+                folded_model: model.into(),
+                candidates,
+                portable: true,
+                attempted: Vec::new(),
+                now: placed_at,
+                received_at: placed_at,
+                fallback_ms: 60_000,
+                revision: snapshot.revision,
+                probe: false,
+                count: false,
+                request_class: None,
+                context_compacted: false,
+                static_hash: None,
+                boundaries: Arc::from([]),
+                client: ClientClass::ClaudeCode,
+                entrypoint: None,
+                static_boundaries: Arc::from([]),
+                marker: false,
+                parent_agent_id: (agent != "main").then(|| "main".into()),
+                failed_over: None,
+                holds: Vec::new(),
+                dialed: false,
+                held_out: false,
+                lane: lane_key(model, "standard", "none", "-"),
+                fast: false,
+                classifier: false,
+                body_tokens: 0,
+            })
+            .await
+            .unwrap();
+        let selection = match &answer.result {
+            phoebis_routing::SelectResult::Selected(selection) => selection.clone(),
+            other => panic!("{agent}'s one member answers a selection, not {other:?}"),
+        };
+        // Its in-flight slot goes back now, so no later capture reads the account as busy.
+        drop(answer);
+        parts
+            .router
+            .report(phoebis_routing::Report::PinRenewed {
+                pin: selection.pin.expect("a session's selection holds a pin"),
+                now,
+                usage: Some(phoebis_routing::PinUsage {
+                    input: prompt,
+                    ..phoebis_routing::PinUsage::default()
+                }),
+                origin: "client",
+                cache_ttl_ms: 300_000,
+                fast: false,
+                classifier: false,
+            })
+            .await;
+        parts
+            .router
+            .report(phoebis_routing::Report::Affinity(
+                phoebis_routing::AffinityReport {
+                    account_id: account.into(),
+                    incarnation: selection.account.incarnation,
+                    key_id: "desktop".into(),
+                    key_generation,
+                    canonical_model: model.into(),
+                    lane: lane_key(model, "standard", "none", "-"),
+                    root: Some("s1".into()),
+                    static_boundaries: Arc::from([]),
+                    message_boundaries: Arc::from([format!("b-s1-{agent}")]),
+                    static_sizes: Vec::new(),
+                    static_ttl_ms: None,
+                    message_ttl_ms: Some(300_000),
+                    cache_touched: true,
+                    prefix_tokens,
+                    now,
+                    cache_write_5m_tokens: None,
+                    cache_write_1h_tokens: None,
+                    uniform_ttl_ms: None,
+                    request_id,
+                    seq: 1,
+                    attempt: 1,
+                    message_id: None,
+                },
+            ))
+            .await;
+    }
+    // The two agents register and each sends one turn, so the keepalive's view carries their recipes and the row lists
+    // their lines. Main's later `state` event takes a sequence past theirs.
+    for (sequence, agent, model, account) in [
+        (2, "worker-1", "claude-sonnet-5", "business"),
+        (3, "worker-2", "claude-sonnet-5-5", "direct"),
+    ] {
+        parts
+            .keepalive
+            .apply_event(
+                "desktop",
+                key_generation,
+                phoebis_keepalive::Event {
+                    event: "agent_start".into(),
+                    session_id: "s1".into(),
+                    instance_id: "i1".into(),
+                    sequence,
+                    agent_id: Some(agent.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let request_id = format!("k-{agent}");
+        parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: request_id.clone(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some(agent.into()), parent_agent_id: Some("main".into()), owner_id: None, model: model.into(), canonical_model: model.into(), wire_model: model.into(), stream: false, headers: vec![], body: bytes::Bytes::from(format!(r#"{{"model":"{model}","max_tokens":10,"messages":[{{"role":"user","content":"hi"}}]}}"#)), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now }));
+        parts
+            .keepalive
+            .observe(Event::AccountSelected(AccountSelected {
+                request_id: request_id.clone(),
+                attempt: 1,
+                account_id: account.into(),
+                account_kind: if account == "direct" {
+                    "api_key"
+                } else {
+                    "oauth"
+                }
+                .into(),
+                pin_epoch: Some(1),
+                started_at: now,
+                cache_ttl_ms: None,
+                selection: None,
+            }));
+        parts
+            .keepalive
+            .observe(Event::RequestComplete(RequestComplete {
+                request_id: request_id.clone(),
+                attempt: 1,
+                account_id: Some(account.into()),
+                outcome: phoebis_bus::Outcome::Succeeded,
+                status: 200,
+                usage: Some(Usage {
+                    cache_write_5m_tokens: Some(2_000),
+                    ..Default::default()
+                }),
+                response: ResponseFacts::default(),
+                ttfb_ms: None,
+                ttfc_ms: None,
+                error_code: None,
+                client_drift: None,
+                client_contract: None,
+                client_version: None,
+                response_bytes: None,
+                response_chunks: None,
+                held: None,
+                diagnostics: None,
+                message_id: Some(format!("msg_{request_id}_1")),
+                skipped_events: 0,
+                interruption: None,
+                passthrough: None,
+                finished_at: now,
+            }));
+    }
     parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now }));
     parts
         .keepalive
@@ -1506,7 +1685,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 event: "state".into(),
                 session_id: "s1".into(),
                 instance_id: "i1".into(),
-                sequence: 2,
+                sequence: 4,
                 agent_id: Some("main".into()),
                 state: Some("idle".into()),
                 request_generation: Some(request_generation),
