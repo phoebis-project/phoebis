@@ -1918,9 +1918,7 @@ fn window_projection(
 pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
-    // The end of the current hour rather than `hour_ceil(now)`, which is `now` itself on the hour's first millisecond
-    // and would leave out the hour a request just landed in.
-    let to = hour + 3_600;
+    let to = crate::analytics::hour_end(hour);
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
     let ledger = state

@@ -1902,7 +1902,9 @@ async fn land_acknowledging(
 /// Records a landed request whose plan-funded attempts with usage priced through the model tier's fallback at its
 /// arrival: the entry enters, or counts the request once however many of its attempts answered. A landing that finds
 /// the model weighted clears the entry and keeps its key, so its gauge series reads 0. A model the fallback cannot
-/// price (no model tier, or none weighted in it) is never named, since nothing stands in for it.
+/// price (no model tier, or none weighted in it) is never named, since nothing stands in for it. The entry follows
+/// landing order, by design: a request received before the revision that weighted its model and landed after the clear
+/// raises the entry again with its own earlier receipt as `since`.
 fn note_unweighted(
     tables: &PlanTables,
     unweighted: &Unweighted,

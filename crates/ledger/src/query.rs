@@ -2070,11 +2070,17 @@ fn row_key(row: &RollupRow) -> RowKey<'_> {
     }
 }
 
-/// One rollup row priced through `price_row` at its own key, a plain call that fills nothing in after it: a probe
-/// row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Every reader of the module
-/// prices a row through it.
+/// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it:
+/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Every reader of the
+/// module prices a row through it and reads its `usd`, `equivalent` and `estimated`, and none reads its `shares`, since
+/// the shares a route answers come from `ShareSums::add` under the caller's `pricing`. So the key carries no tier, as
+/// `price_group`'s does, `price_row` prices no share window, and `estimated` reads the equivalent's fallback alone.
 pub(crate) fn priced(row: &RollupRow, prices: &PriceRevisions, costs: &PlanTables) -> Priced {
-    price_row(prices, costs, &row_key(row), row.usage())
+    let key = RowKey {
+        tier: None,
+        ..row_key(row)
+    };
+    price_row(prices, costs, &key, row.usage())
 }
 
 fn cost_split_json(usd: &CostSplit) -> CostSplitJson {
@@ -3033,12 +3039,10 @@ pub struct Dashboard {
     pub equivalent_24h: SharedEquivalent,
     /// True when any plan row of the day priced through the model tier's fallback weight.
     pub estimated_24h: bool,
-    #[serde(skip)]
-    pub recent: Vec<RequestWithAttempts>,
 }
 
 /// The last day's rollups folded hour by hour through `read_rollups_paged`, each row's dollars and 20x equivalent
-/// priced from its counts, and the newest requests.
+/// priced from its counts.
 pub async fn dashboard(
     db: &Arc<LedgerDb>,
     now: i64,
@@ -3098,9 +3102,6 @@ pub async fn dashboard(
     .await?;
     let requests: u64 = hourly.iter().map(|h| h.requests).sum();
     let failed: u64 = hourly.iter().map(|h| h.errors).sum();
-    let (recent, _) = db
-        .read(|c| list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 20))
-        .await?;
     Ok(Dashboard {
         requests_24h: requests,
         tokens_24h: hourly.iter().map(|h| h.tokens).sum(),
@@ -3120,7 +3121,6 @@ pub async fn dashboard(
             }),
         estimated_24h: estimated,
         hourly,
-        recent,
     })
 }
 
@@ -4920,6 +4920,48 @@ mod tests {
             .map(|(w, share)| (*w, share.unwrap()))
             .collect();
         assert_eq!(cost, want);
+    }
+
+    /// No reader of a priced row reads its shares, since the shares a route answers come from the share fold under
+    /// the caller's pricing, so `priced` prices no share window of a plan row whose account tier the cost model sizes,
+    /// while the same row at its own key prices them.
+    #[test]
+    fn priced_prices_no_share_window_of_a_plan_row_on_a_sized_tier() {
+        let prices = crate::test_tables::api_prices();
+        let costs = crate::test_tables::subscription_costs();
+        let mut row = RollupRow::key(
+            HOUR,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-opus-5-5",
+            "inference",
+            "-",
+            "-",
+            "-",
+            "-",
+            "standard",
+            "plan",
+            "standard",
+            TIER,
+            "-",
+        );
+        row.requests = 1;
+        row.input_tokens = 1_000;
+        row.output_tokens = 100;
+        let own_key = price_row(&prices, &costs, &row_key(&row), row.usage());
+        assert!(
+            own_key.shares.is_some(),
+            "the tier is sized, so the row's own key prices its windows: {own_key:?}"
+        );
+        let read = priced(&row, &prices, &costs);
+        assert_eq!(read.shares, None, "{read:?}");
+        assert_eq!(
+            (&read.usd, &read.equivalent),
+            (&own_key.usd, &own_key.equivalent),
+            "the dollars and the equivalent stand"
+        );
     }
 
     /// The hour of a date's midnight, in seconds.

@@ -1366,9 +1366,7 @@ pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, Stor
     let guardrails = AttachmentIndex::from_load(&registry);
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
-    // The end of the current hour rather than `hour_ceil(now)`, which is `now` itself on the hour's first millisecond
-    // and would leave out the hour a request just landed in.
-    let to = hour + 3_600;
+    let to = crate::analytics::hour_end(hour);
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
     let day = state
@@ -1442,7 +1440,7 @@ pub(crate) async fn pool_json_from(
         state.ledger.db(),
         &row.id,
         hour - 24 * 3_600,
-        hour + 3_600,
+        crate::analytics::hour_end(hour),
         3_600,
         &state.pricing.revisions(),
         &state.tables,

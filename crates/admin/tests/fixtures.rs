@@ -1556,20 +1556,35 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "a route answers a bound probe differently; re-capture and move the console's copy with it"
         );
     }
+    let started = json(
+        post(
+            app,
+            "/admin/oauth/sessions",
+            r#"{"account_id":"business","login":"claude_ai"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
     hold(
         &planted,
         "pairing_started",
         "POST /admin/oauth/sessions",
-        json(
-            post(
-                app,
-                "/admin/oauth/sessions",
-                r#"{"account_id":"business","login":"claude_ai"}"#,
-                Some(&cookie),
-            )
-            .await,
-        )
-        .await,
+        started.clone(),
+    );
+    // A pairing answers only the session that started it, so the show reads the one the start opened under this
+    // cookie. A pairing the seed opened would draw from the seeded source and move every id minted after it.
+    let shown = format!(
+        "/admin/oauth/sessions/{}",
+        started["id"].as_str().expect("the started pairing's id")
+    );
+    let response = get(app, &shown, Some(&cookie)).await;
+    assert_eq!(response.status(), 200, "{shown}");
+    hold(
+        &planted,
+        "oauth_session",
+        &format!("GET {shown}"),
+        json(response).await,
     );
 
     // The routing log's hour, seeded after every other capture so its stories leave those files as they were.

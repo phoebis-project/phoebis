@@ -1,5 +1,5 @@
-//! The dashboard: the last day from the rollups, the newest quota sample per account and window, the recent
-//! requests, and the live pin count.
+//! The dashboard: the last day from the rollups, the newest quota sample per account and window, and the live pin
+//! count.
 
 use std::sync::Arc;
 
@@ -11,12 +11,10 @@ use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{HourPointView, LedgerFailure, SharedEquivalentView};
-use crate::requests::{request_summary, RequestSummary, ShareContext};
 use crate::AdminState;
 
-/// The ledger's dashboard rollup with the recent requests, the newest quota sample per account and window, and
-/// the live pin count. The rollup reads the last 24 hours up to the end of the current hour and leaves the probe
-/// rows out.
+/// The ledger's dashboard rollup with the newest quota sample per account and window, and the live pin count. The
+/// rollup reads the last 24 hours up to the end of the current hour and leaves the probe rows out.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Dashboard {
@@ -45,8 +43,6 @@ pub(crate) struct Dashboard {
     /// The window's 24 hours, oldest first: each hour's start as `at`, and its `billed`, `cost`, `equivalent`,
     /// `errors` (the requests that did not succeed, the ones a guardrail blocked left out), `requests` and `tokens`.
     pub hourly: Vec<HourPointView>,
-    /// One row per recent request and attempt.
-    pub recent: Vec<RequestSummary>,
     pub accounts: Vec<AccountWindows>,
     pub sessions: DashboardSessions,
 }
@@ -86,7 +82,6 @@ pub(crate) struct DashboardSessions {
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
-    let shares = ShareContext::read(&state);
     let board = match dashboard(
         state.ledger.db(),
         now,
@@ -138,11 +133,6 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
                 requests: h.requests,
                 tokens: h.tokens,
             })
-            .collect(),
-        recent: board
-            .recent
-            .iter()
-            .map(|(r, a)| request_summary(r, a, &shares))
             .collect(),
         accounts: accounts
             .into_iter()

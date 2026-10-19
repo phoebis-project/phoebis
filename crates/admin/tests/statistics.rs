@@ -2227,8 +2227,10 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
     assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 24.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
     assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 24);
-    assert_eq!(dashboard["recent"].as_array().unwrap().len(), 20);
-    assert_eq!(dashboard["recent"][0]["id"], "d0");
+    assert!(
+        dashboard.get("recent").is_none(),
+        "the dashboard answers no list of requests, which the console reads from the requests route"
+    );
     let business = dashboard["accounts"]
         .as_array()
         .unwrap()

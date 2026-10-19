@@ -1,0 +1,9 @@
+{
+  "route": "GET /admin/oauth/sessions/8nUM4icJZYZihjVC8c0NgSJxicKKP9XlvCBKnyyEIqI",
+  "body": {
+    "account_id": "business",
+    "expires_at": 1791721600000,
+    "id": "8nUM4icJZYZihjVC8c0NgSJxicKKP9XlvCBKnyyEIqI",
+    "status": "pending"
+  }
+}

@@ -6,9 +6,11 @@
 //! The mark holds every revision's thresholds rather than a hash of the file, since taking a request's old deltas
 //! back out needs the band each attempt fell in then, which only the old thresholds give. It carries `since`, the
 //! first start that wrote it, because the requests folded before it landed under the migration's `standard` and
-//! never used an older band: taking an older band out of their rows would subtract what was never added. The pass in
-//! progress is a row of `meta` of its own, written by every page's transaction, so a start that fails after a page
-//! committed resumes after that page rather than subtracting its old deltas a second time.
+//! never used an older band: taking an older band out of their rows would subtract what was never added. A request
+//! received before `since` and landed after it folds at the thresholds loaded at its landing and is never re-folded
+//! when a threshold moves later, by design, since every pass reads the requests received at or after `since`. The
+//! pass in progress is a row of `meta` of its own, written by every page's transaction, so a start that fails after a
+//! page committed resumes after that page rather than subtracting its old deltas a second time.
 //!
 //! A threshold move re-bands the request rows alone. The wasted-probe counts and the probes the keepalive still holds
 //! keep the band they settled or were recorded in, which leaves the waste of a probe whose prompt falls between the old

@@ -156,6 +156,7 @@ const EXAMPLE_FILES: &[&str] = &[
     "replay_held",
     "models_state",
     "pairing_started",
+    "oauth_session",
     "pools",
     "pool_traffic",
     "pricing",
@@ -214,6 +215,7 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
     ("key_models", Some(("key_models", 200))),
     ("keys", Some(("keys_list", 200))),
     ("models_state", Some(("models_state", 200))),
+    ("oauth_session", Some(("pairing_show", 200))),
     ("pairing_started", Some(("pairing_start", 201))),
     ("pool_traffic", Some(("pool_traffic", 200))),
     ("pools", Some(("pools_list", 200))),
@@ -731,8 +733,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        46,
-        "45 success answers and the replay's held answer"
+        47,
+        "46 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a

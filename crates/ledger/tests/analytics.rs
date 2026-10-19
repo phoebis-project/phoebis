@@ -1611,6 +1611,140 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
     assert!(close(cost.get(FIVE_HOUR), want), "{cost:?} vs {want}");
 }
 
+/// A weighted and an unweighted plan row of an account whose tier the test cost model sizes, beside a billed row of
+/// another account: the day, the pool's traffic and the account breakdown answer the same dollars, 20x equivalent and
+/// fallback mark whether or not the read answers the shares, each figure the test tables' own to the bit, and the read
+/// that answers the shares answers them.
+#[tokio::test]
+async fn a_dollar_read_and_a_shares_read_of_the_same_rows_answer_one_set_of_dollars_equivalent_and_mark(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let prices = phoebis_ledger::test_tables::api_prices();
+    let costs = phoebis_ledger::test_tables::subscription_costs();
+    let at = phoebis_ledger::test_tables::JANUARY_2026;
+    for (id, account, account_kind, model, counts) in [
+        ("r-plan", "a", "oauth", "claude-opus-5-5", usage(10, 1)),
+        // Opus 5 has no weight in the test cost model and prices at its model tier's latest weight.
+        ("r-unweighted", "a", "oauth", "claude-opus-5", usage(10, 0)),
+        ("r-billed", "b", "api_key", "claude-opus-5-5", usage(20, 0)),
+    ] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                account,
+                account_kind,
+                model,
+                at,
+                usage: counts,
+                tier: Some(PRO),
+                ..ShareRow::default()
+            },
+        );
+    }
+    let hour = hour_of(at);
+    let (from, to) = hour_range(at);
+    let day = phoebis_ledger::dashboard(&db, at, &prices, &costs)
+        .await
+        .unwrap();
+    let traffic =
+        phoebis_ledger::pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &prices, &costs)
+            .await
+            .unwrap();
+    let dollar_read = breakdown_paged(
+        &db,
+        &RollupFilter::default(),
+        &LiveKeys::default(),
+        from,
+        to,
+        "account",
+        None,
+        &prices,
+        &costs,
+    )
+    .await
+    .unwrap();
+    let shares_read = breakdown_paged(
+        &db,
+        &RollupFilter::default(),
+        &LiveKeys::default(),
+        from,
+        to,
+        "account",
+        Some(SharePricing { tables: &costs }),
+        &prices,
+        &costs,
+    )
+    .await
+    .unwrap();
+    let of_group = |groups: &[GroupRow], key: &str| {
+        let g = group(groups, key);
+        (
+            g.cost_usd,
+            g.billed_usd,
+            g.cost_equivalent.get(FIVE_HOUR).copied(),
+            g.cost_equivalent.get(SEVEN_DAY).copied(),
+            g.estimated,
+        )
+    };
+    let figures = [
+        (
+            "the day",
+            (
+                day.cost_24h,
+                day.billed_24h,
+                Some(day.equivalent_24h.five_hour),
+                Some(day.equivalent_24h.seven_day),
+                day.estimated_24h,
+            ),
+        ),
+        (
+            "the pool's bucket",
+            (
+                traffic[0].cost_usd,
+                traffic[0].billed_usd,
+                Some(traffic[0].equivalent.five_hour),
+                Some(traffic[0].equivalent.seven_day),
+                traffic[0].estimated,
+            ),
+        ),
+        ("a without the shares", of_group(&dollar_read, "a")),
+        ("a with the shares", of_group(&shares_read, "a")),
+        ("b without the shares", of_group(&dollar_read, "b")),
+        ("b with the shares", of_group(&shares_read, "b")),
+    ];
+    // Account a's rows weigh 60 units, 40 for Opus 5.5's 10 input and 1 output tokens at weight 2 and 20 for Opus 5's
+    // 10 input tokens at the same weight through the fallback: 0.6 and 0.06 of the 20x windows of 100 and 1,000 units,
+    // and $0.00015 beside $0.00005. Account b's 20 input tokens of Opus 5.5 are billed, $0.0002.
+    let both = (0.0004, 0.0002, Some(0.6000000000000001), Some(0.06), true);
+    let a = (0.0002, 0.0, Some(0.6000000000000001), Some(0.06), true);
+    let b = (0.0002, 0.0002, None, None, false);
+    assert_eq!(
+        figures,
+        [
+            ("the day", both),
+            ("the pool's bucket", both),
+            ("a without the shares", a),
+            ("a with the shares", a),
+            ("b without the shares", b),
+            ("b with the shares", b),
+        ]
+    );
+    assert_eq!(group(&dollar_read, "a").cost_shares, None);
+    let shares: Vec<(&str, f64)> = group(&shares_read, "a")
+        .cost_shares
+        .as_ref()
+        .expect("the shares read prices the sized tier")
+        .iter()
+        .map(|(window, share)| (*window, *share))
+        .collect();
+    assert_eq!(
+        shares,
+        [(FIVE_HOUR, 12.0), (SEVEN_DAY, 1.2000000000000002)],
+        "the 60 units over Pro's windows of 5 and 50 units"
+    );
+}
+
 /// The ledger's test cost model: `claude-mystery-2` sits in a tier that weighs no model and `claude-unlisted-1` in no
 /// tier, so neither prices on any window, `claude-opus-5` prices at its tier's latest weight and `claude-sonnet-5-5`
 /// at its own.

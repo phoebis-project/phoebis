@@ -387,13 +387,14 @@ pub struct KeepaliveDelta {
     /// request's own, read off its usage against the revision in force at its arrival. `None` (standard) for a probe
     /// row or a skip.
     pub band: Option<crate::pricing::Band>,
-    /// The serving account's kind as the engine read it once the probe's answer landed, which files an api_key
-    /// account's credit under `billed` beside its request row. `None` for a kept-warm credit, a skip or a
-    /// settlement, and for a probe whose account left the registry before its answer landed.
+    /// The serving account's kind as the engine read it, which files an api_key account's row under `billed` beside
+    /// its request row. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
+    /// settlement and the skip), `None` there where the registry no longer holds the account, and `None` on a delta
+    /// built by default.
     pub account_kind: Option<AccountKind>,
-    /// Whether the probe's answer reported overage in use, the fact its request row files under, so the credit row
-    /// keys the same funding. `None` for a kept-warm credit, a skip or a settlement, which have no probe of their
-    /// own and file under `plan`, or under `fast` for a fast recipe.
+    /// Whether the serving answer reported overage in use, the fact its request row files under, so the row keys the
+    /// same funding. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
+    /// settlement and the skip), and `None` on a delta built by default.
     pub overage_in_use: Option<bool>,
     /// The speed that keys the credit row, the recipe's for a credit, a skip or a migration mark and the probe answer's
     /// for a settlement: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so the derived `Default`'s `None` files
