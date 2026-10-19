@@ -117,7 +117,9 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
   return null;
 };
 
-/** The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes. */
+/**
+ * The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes.
+ */
 const engineRefusal = (input: PoolInput): string | null => {
   const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
   if (!(input.windowCeiling >= 0.5 && input.windowCeiling <= 1)) return 'window_ceiling is between 0.5 and 1.0';
@@ -502,9 +504,9 @@ export class MockApi implements Api {
   }
 
   /**
-   * The bound of a write from the guardrail's side over the lists it would leave, pool by pool in id order: a named pool
-   * takes the guardrail at the end of its list, a named key at the end of its own, and every key of a named pool and
-   * every named key is counted against its pool's list. An absent list leaves that kind's lists as they stand.
+   * The bound of a write from the guardrail's side over the lists it would leave, pool by pool in id order: a named
+   * pool takes the guardrail at the end of its list, a named key at the end of its own, and every key of a named pool
+   * and every named key is counted against its pool's list. An absent list leaves that kind's lists as they stand.
    */
   private sideBoundRefusal(id: string, pools: string[] | undefined, keys: string[] | undefined): string | null {
     const place = (list: string[], attached: boolean) => (attached ? (list.includes(id) ? list : [...list, id]) : list.filter((x) => x !== id));
@@ -742,7 +744,8 @@ export class MockApi implements Api {
     const stamp = preset === undefined ? null : { currentVersion: preset.version, customized: false, id: preset.id, version: preset.version };
     const row: Guardrail = { ...blank, keys: this.attached(blank, 'keys', input.keys), pools: this.attached(blank, 'pools', input.pools), preset: this.presetStateOf(stamp, blank.conditions) };
     this.guardrails = [...this.guardrails, row];
-    // A pool or key dialog opened before the create presents a stamp the row no longer carries, as the routes refuse it.
+    // A pool or key dialog opened before the create presents a stamp the row no longer carries, as the routes
+    // refuse it.
     const movedPools = new Set(row.pools.map((a) => a.id));
     const movedKeys = new Set(row.keys.map((a) => a.id));
     this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
@@ -843,7 +846,8 @@ export class MockApi implements Api {
     this.buriedGuardrails.set(id, Math.floor(row.revision / INCARNATION_STAMP));
     // The attachments live on the row, so they leave with it and every other guardrail keeps its positions.
     this.guardrails = this.guardrails.filter((g) => g.id !== id);
-    // A pool or key dialog opened before the delete presents a stamp the row no longer carries, as the routes refuse it.
+    // A pool or key dialog opened before the delete presents a stamp the row no longer carries, as the routes
+    // refuse it.
     const movedPools = new Set(row.pools.map((a) => a.id));
     const movedKeys = new Set(row.keys.map((a) => a.id));
     this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
@@ -855,7 +859,8 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
-    // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two tables.
+    // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two
+    // tables.
     this.setSubjectGuardrails('keys', id, [], false);
     return latency(undefined, 200);
   }

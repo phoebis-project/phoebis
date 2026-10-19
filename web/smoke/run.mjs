@@ -15042,8 +15042,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   results.push({ name: '/analytics the Requests and Error rate headers of the Traffic table say the refused requests are left out', ok: JSON.stringify(hinted) === JSON.stringify([['Requests', hint], ['Error rate', hint]]), missing: hinted.length ? hinted.map((h) => h.join(': ')) : ['no header carries a hint'] });
 }
 {
-  // The story's refusals by key: the three guardrail blocks on desktop, the runner's send after its key's revocation on
-  // ci, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the Traffic line does.
+  // The story's refusals by key: the runner's send after its key's revocation on ci, the three guardrail blocks
+  // on desktop, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the
+  // Traffic line does.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');

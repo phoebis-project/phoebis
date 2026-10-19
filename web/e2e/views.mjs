@@ -243,6 +243,11 @@ function railFit() {
   };
 }
 
+/** A rail that scrolls fails the fixture's check and the Pools dialog's read in one sentence, so the two read alike. */
+function railScrolls(read) {
+  return `the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px, ${read.firstBelow} is the first group below the fold`;
+}
+
 /**
  * The grouped dialog on a mock-only fixture that carries the pool dialog's eighteen groups under five parents: the
  * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 23 entries without
@@ -281,7 +286,7 @@ async function groupedDialogFixture(theme) {
     if (read.groups !== 18 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 18 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
-    if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px, ${read.firstBelow} is the first group below the fold`);
+    if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(railScrolls(read));
     if (read.rail.scrollWidth > read.rail.clientWidth) sayIn(`the rail overflows sideways: ${read.rail.scrollWidth} px of entries in ${read.rail.clientWidth} px`);
   };
   const levels = async (state) => {
@@ -2325,9 +2330,9 @@ async function poolDialogWalk(theme, mode) {
 }
 
 /**
- * The grouped-dialog fixture's rail read on the real pool dialog of the first story pool, opened on Identity in the
- * expert view, where the rail draws all eighteen groups: its headroom goes to the measurements beside the fixture's,
- * and a rail that scrolls names its first group below the fold.
+ * The grouped-dialog fixture's rail read on the real pool dialog of the first pool of the pass, opened on Identity in
+ * the expert view, where the rail draws all eighteen groups: its headroom goes to the measurements beside the
+ * fixture's, and a rail that scrolls names its first group below the fold.
  */
 async function poolRailFit(theme) {
   const say = (what) => failures.push(`${theme} /pools dialog, expert view: ${what}`);
@@ -2348,7 +2353,7 @@ async function poolRailFit(theme) {
     return;
   }
   measurements.push(`${theme} /pools expert dialog rail ${JSON.stringify(read)}`);
-  if (read.rail.scrollHeight > read.rail.clientHeight) say(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px, ${read.firstBelow} is the first group below the fold`);
+  if (read.rail.scrollHeight > read.rail.clientHeight) say(railScrolls(read));
   await closeByEscape(dialog, `${theme} /pools expert dialog rail`, say);
   await expertView(false).catch(() => {});
   await atRest();
