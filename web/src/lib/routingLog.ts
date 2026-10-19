@@ -1515,7 +1515,9 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
           const n = found.length;
           return { label: `${tier} ×${n}`, title: `${n} cache-map ${n === 1 ? 'entry' : 'entries'} on the ${tier} tier`, value: min === max ? `depth ${min}` : `depth ${min} to ${max}` };
         });
-        const latest = depths(entries.slice(-3));
+        // The next turn reads the deepest message depths, while the router writes the static chain after them.
+        const deepest = new Set(entries.filter((e) => e.tier === 'message').sort((a, b) => b.depth - a.depth).slice(0, 3));
+        const latest = depths(entries.filter((e) => deepest.has(e)));
         rows.push({ chips: [...accounts, ...tierChips, ...latest, prefix], label: 'Cache-map entries', more: { all: [...accounts, ...depths(entries), prefix], count: entries.length } });
       }
     }

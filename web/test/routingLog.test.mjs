@@ -745,27 +745,33 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.equal(rows(reachedBy(null)).find(([label]) => label === 'Spend'), undefined, 'an obstacle that names no period draws no budget detail');
 });
 
-test('a cache-map row of four entries or more draws one chip per tier and the latest three, with every entry behind its control', () => {
+test('a cache-map row of four entries or more draws one chip per tier and the three deepest message depths, with every entry behind its control', () => {
   const entry = (tier, depth, prefixTokens, accountId = 'primary') => ({ accountId, depth, prefixTokens, tier, ttlMs: 3_600_000 });
   const mapRow = (entries) => d.outcomeRows(record({ outcome: { completion: completion({ cacheMapWritten: entries, completedAt: iso(NOW), status: 200 }) } }), NOW).find((r) => r.label === 'Cache-map entries');
   const titles = (chips) => chips.filter((c) => c.title !== undefined).map((c) => c.title);
   // Three entries keep the row as it stands, one depth chip per entry.
-  const three = mapRow([entry('message', 1, 20_000), entry('message', 2, 24_000), entry('static', 1, 9_000)]);
-  assert.deepEqual(texts(three.chips), ['on primary', 'message depth 1', 'message depth 2', 'static depth 1', 'prefix 24K']);
+  const three = mapRow([entry('message', 1, 40_000), entry('message', 2, 40_000), entry('static', 1, 9_000)]);
+  assert.deepEqual(texts(three.chips), ['on primary', 'message depth 1', 'message depth 2', 'static depth 1', 'prefix 40K']);
   assert.equal(three.more, undefined, 'a short row has no control');
-  // The router writes the message chain's entries before the static chain's, each in its chain's order.
-  const long = [...Array.from({ length: 11 }, (_, i) => entry('message', i + 1, 20_000 + i * 2_000)), entry('static', 1, 9_000), entry('static', 1, 9_000), entry('static', 1, 9_000)];
+  // The router writes the message chain's rows, each at the answer's one prefix, then the static chain's, each in its
+  // chain's order. The next turn reads the deepest message depths, so those stand beside the tier chips.
+  const long = [...Array.from({ length: 11 }, (_, i) => entry('message', i + 1, 40_000)), entry('static', 1, 9_000), entry('static', 2, 12_000), entry('static', 3, 15_000)];
   const fourteen = mapRow(long);
-  assert.deepEqual(texts(fourteen.chips), ['on primary', 'message ×11 depth 1 to 11', 'static ×3 depth 1', 'static depth 1', 'static depth 1', 'static depth 1', 'prefix 40K']);
+  assert.deepEqual(texts(fourteen.chips), ['on primary', 'message ×11 depth 1 to 11', 'static ×3 depth 1 to 3', 'message depth 9', 'message depth 10', 'message depth 11', 'prefix 40K']);
   assert.deepEqual(titles(fourteen.chips), ['11 cache-map entries on the message tier', '3 cache-map entries on the static tier']);
   assert.equal(fourteen.more?.count, 14);
   assert.deepEqual(texts(fourteen.more?.all ?? []), ['on primary', ...long.map((e) => `${e.tier} depth ${e.depth}`), 'prefix 40K']);
-  // The threshold's own count folds too, the latest three in the record's order, and a tier of one is one entry.
-  const four = mapRow([entry('message', 1, 20_000), entry('message', 2, 24_000, 'secondary'), entry('message', 3, 28_000), entry('static', 1, 9_000)]);
+  // The threshold's own count folds too, and a tier of one is one entry.
+  const four = mapRow([entry('message', 1, 40_000), entry('message', 2, 40_000, 'secondary'), entry('message', 3, 40_000), entry('static', 1, 9_000)]);
   assert.equal(d.CACHE_MAP_COMPACT_FROM, 4);
-  assert.deepEqual(texts(four.chips), ['on primary', 'on secondary', 'message ×3 depth 1 to 3', 'static ×1 depth 1', 'message depth 2', 'message depth 3', 'static depth 1', 'prefix 28K']);
+  assert.deepEqual(texts(four.chips), ['on primary', 'on secondary', 'message ×3 depth 1 to 3', 'static ×1 depth 1', 'message depth 1', 'message depth 2', 'message depth 3', 'prefix 40K']);
   assert.deepEqual(titles(four.chips), ['3 cache-map entries on the message tier', '1 cache-map entry on the static tier']);
-  assert.deepEqual(texts(four.more?.all ?? []), ['on primary', 'on secondary', 'message depth 1', 'message depth 2', 'message depth 3', 'static depth 1', 'prefix 28K']);
+  assert.deepEqual(texts(four.more?.all ?? []), ['on primary', 'on secondary', 'message depth 1', 'message depth 2', 'message depth 3', 'static depth 1', 'prefix 40K']);
+  // Fewer message entries draw fewer depth chips, and a record without one draws its tier chips alone.
+  const two = mapRow([entry('message', 1, 40_000), entry('message', 2, 40_000), entry('static', 1, 9_000), entry('static', 2, 12_000)]);
+  assert.deepEqual(texts(two.chips), ['on primary', 'message ×2 depth 1 to 2', 'static ×2 depth 1 to 2', 'message depth 1', 'message depth 2', 'prefix 40K']);
+  const none = mapRow([1, 2, 3, 4].map((depth) => entry('static', depth, 9_000 + depth * 1_000)));
+  assert.deepEqual(texts(none.chips), ['on primary', 'static ×4 depth 1 to 4', 'prefix 13K']);
 });
 
 test('a refusal reads its words by code, and an unknown code reads through the fallback', () => {

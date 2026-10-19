@@ -578,7 +578,7 @@ test("a long cache-map row's control lists every entry on a click and folds them
   const { record, row } = await storyRecord('req_ef099b34-453', 1);
   assert.ok(record.outcome.completion, 'the story placement answered');
   const entry = (tier, depth, prefixTokens) => ({ accountId: 'primary', depth, prefixTokens, tier, ttlMs: 3_600_000 });
-  const entries = [...Array.from({ length: 11 }, (_, i) => entry('message', i + 1, 20_000 + i * 2_000)), entry('static', 1, 9_000), entry('static', 1, 9_000), entry('static', 1, 9_000)];
+  const entries = [...Array.from({ length: 11 }, (_, i) => entry('message', i + 1, 40_000)), entry('static', 1, 9_000), entry('static', 2, 12_000), entry('static', 3, 15_000)];
   const long = { ...record, outcome: { ...record.outcome, completion: { ...record.outcome.completion, cacheMapWritten: entries } } };
   const chipWords = (c) => {
     const label = c.querySelector('.chip__label')?.textContent ?? '';
@@ -589,7 +589,7 @@ test("a long cache-map row's control lists every entry on a click and folds them
     const button = dd?.querySelector('button') ?? null;
     return { button, chips: [...(dd?.querySelectorAll('.chip') ?? [])].map(chipWords), last: dd?.querySelector('.chips')?.lastElementChild ?? null, word: button?.textContent ?? null };
   };
-  const compact = ['on primary', 'message ×11 depth 1 to 11', 'static ×3 depth 1', 'static depth 1', 'static depth 1', 'static depth 1', 'prefix 40K'];
+  const compact = ['on primary', 'message ×11 depth 1 to 11', 'static ×3 depth 1 to 3', 'message depth 9', 'message depth 10', 'message depth 11', 'prefix 40K'];
   const card = await cardOf(long, row);
   const folded = mapRow(card);
   assert.deepEqual(folded.chips, compact);

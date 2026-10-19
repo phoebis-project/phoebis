@@ -938,28 +938,30 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`one story decision writes a long session's fourteen cache-map entries on two tiers, its prefix the deepest entry's, at ${at}`, async () => {
+  test(`one story decision writes a long session's cache-map rows on two tiers as the router writes them, at ${at}`, async () => {
     const s = await story;
     const long = (await decisionsOf(s)).filter((r) => (r.outcome.completion?.cacheMapWritten?.length ?? 0) >= s.lib.CACHE_MAP_COMPACT_FROM);
     assert.deepEqual(long.map((r) => `${r.requestId}/${r.seq}`), ['req_1d9c3e55-0b2/2']);
     const [r] = long;
     const entries = r.outcome.completion.cacheMapWritten;
     const tier = (name) => entries.filter((e) => e.tier === name);
-    assert.equal(entries.length, 14);
+    assert.equal(entries.length, 13);
     assert.deepEqual([...new Set(entries.map((e) => e.tier))], ['message', 'static'], 'the message chain before the static one, as the router writes them');
     assert.deepEqual(tier('message').map((e) => e.depth), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    assert.deepEqual(tier('static').map((e) => e.depth), [1, 1, 1]);
+    assert.deepEqual(tier('static').map((e) => e.depth), [1, 2], 'one row per static boundary, numbered by its place in the chain');
     assert.ok(entries.every((e) => e.accountId === r.outcome.accountId), 'every entry is on the account the decision placed');
-    const message = tier('message');
-    assert.ok(message.every((e, i) => i === 0 || e.prefixTokens > message[i - 1].prefixTokens), 'a deeper message entry covers a longer prefix');
-    // The deepest entry covers the answer's whole prefix, the figure a one-entry record of the same answer writes.
+    // Every message row carries the answer's one prefix, which read nothing and wrote it whole at 1h.
     const { usage } = s.lib.requestById.get(r.requestId);
-    const deepest = message.at(-1);
-    assert.equal(deepest.prefixTokens, usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h);
-    assert.equal(Math.max(...entries.map((e) => e.prefixTokens)), deepest.prefixTokens);
+    const prefix = usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
+    assert.equal(prefix, usage.cacheWrite1h);
+    assert.deepEqual([...new Set(tier('message').map((e) => e.prefixTokens))], [prefix]);
+    // The static chain the rung placed on is the one the answer writes again, its deepest row the rung's own size.
+    const [, deepestStatic] = tier('static');
+    assert.deepEqual([deepestStatic.depth, deepestStatic.prefixTokens], [r.outcome.rung.depth, r.outcome.rung.prefixTokens]);
+    assert.ok(tier('static').every((e) => e.prefixTokens < prefix), 'a static prefix is part of the message prefix');
     const row = s.lib.outcomeRows(r, s.now).find((x) => x.label === 'Cache-map entries');
-    assert.deepEqual(row?.chips.at(-1), { label: 'prefix', value: s.lib.fmtCompact(deepest.prefixTokens) });
-    assert.equal(row?.more?.count, 14);
+    assert.deepEqual(row?.chips.at(-1), { label: 'prefix', value: s.lib.fmtCompact(prefix) });
+    assert.equal(row?.more?.count, 13);
   });
 
   test(`every model rejection sets a cooldown row and every crossing a spent row, at ${at}`, async () => {

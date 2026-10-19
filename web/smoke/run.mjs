@@ -14249,18 +14249,18 @@ m.unmount();
     });
   }
   {
-    // The story's long session (`req_1d9c3e55-0b2/2` in the mock's routing log) writes fourteen entries, `message` at
-    // depths 1 to 11 and `static` three times at depth 1. The control is no chip, so its word finds it in the row.
+    // The story's long session (`req_1d9c3e55-0b2/2` in the mock's routing log) writes thirteen rows on primary:
+    // `message` at depths 1 to 11, each at the answer's 38.9K prefix, then `static` at depths 1 and 2. The compact row
+    // keeps the three deepest message depths. The control is no chip, so its word finds it in the row.
     const { card, page, record } = await story('req_1d9c3e55-0b2', 2);
     const entries = record.outcome.completion?.cacheMapWritten ?? [];
     const mapRow = () => kvRows(card?.querySelector('.decision-card__outcome')).find((r) => r.label === 'Cache-map entries')?.dd ?? null;
     const control = (word) => [...(mapRow()?.querySelectorAll('button') ?? [])].find((b) => b.textContent === word) ?? null;
-    const depthWords = (list) => list.map((e) => `${e.tier} depth ${e.depth}`);
-    const ends = [`on ${record.outcome.accountId}`, `prefix ${fmtCompact(Math.max(...entries.map((e) => e.prefixTokens)))}`];
-    const compact = [ends[0], 'message ×11 depth 1 to 11', 'static ×3 depth 1', ...depthWords(entries.slice(-3)), ends[1]];
+    const compact = ['on primary', 'message ×11 depth 1 to 11', 'static ×2 depth 1 to 2', 'message depth 9', 'message depth 10', 'message depth 11', 'prefix 38.9K'];
+    const full = ['on primary', ...Array.from({ length: 11 }, (_, i) => `message depth ${i + 1}`), 'static depth 1', 'static depth 2', 'prefix 38.9K'];
     const folded = ddWords(mapRow());
     scan('long cache-map row', card);
-    control('All 14 entries')?.click();
+    control('All 13 entries')?.click();
     await page.settle(50);
     const open = ddWords(mapRow());
     const latest = control('Latest 3');
@@ -14269,10 +14269,10 @@ m.unmount();
     await page.settle(50);
     const again = ddWords(mapRow());
     results.push({
-      name: "/routing-log a long session's cache-map row folds to a chip per tier and the latest three, and All 14 entries lists every entry until Latest 3 folds them",
+      name: "/routing-log a long session's cache-map row folds to a chip per tier and the three deepest message depths, and All 13 entries lists every entry until Latest 3 folds them",
       ok:
-        entries.length === 14 && JSON.stringify(folded) === JSON.stringify(compact) && JSON.stringify(open) === JSON.stringify([ends[0], ...depthWords(entries), ends[1]]) && latest !== null &&
-        JSON.stringify(again) === JSON.stringify(compact) && control('All 14 entries') !== null,
+        entries.length === 13 && JSON.stringify(folded) === JSON.stringify(compact) && JSON.stringify(open) === JSON.stringify(full) && latest !== null && JSON.stringify(again) === JSON.stringify(compact) &&
+        control('All 13 entries') !== null,
       missing: [`${entries.length} entries`, JSON.stringify(folded), JSON.stringify(open), JSON.stringify(again)],
     });
     page.unmount();

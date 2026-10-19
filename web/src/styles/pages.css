@@ -2401,6 +2401,11 @@
   line-height: 18px;
 }
 
+/* The cache-map row's control sits on its chips' line, so it reads at their size, as the chip line's own does. */
+.decision-card .chips > .link-btn {
+  font-size: 12px;
+}
+
 .decision-card__verdict {
   display: flex;
   flex-wrap: wrap;

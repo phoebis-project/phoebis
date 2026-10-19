@@ -316,6 +316,14 @@ test('a slowed selection ends in the fifth terminus drawn at the Held position w
   }
 });
 
+test("a long record's way-out popover reads the cache-map row's compact chips with no control", async () => {
+  const record = await recordOf('req_1d9c3e55-0b2/2');
+  const card = d.outcomeRows(record, NOW).find((r) => r.label === 'Cache-map entries');
+  assert.ok(card?.more, 'the card folds the row behind its control');
+  const popover = rowsOf(planOf(record, { id: 'chosen', kind: 'terminus' })).find((r) => r.label === 'Cache-map entries');
+  assert.deepEqual([popover?.chips, popover?.more], [card.chips, undefined]);
+});
+
 test('a version 1 record draws through the legacy maps with its Cool reading and its five partitions', async () => {
   const base = await recordOf('req_da52d141-a5a/1');
   const partitions = step('partitions', 'match', [fact('spent', 'off'), fact('at_cap', 0, 'count'), fact('above_ceiling', 0, 'count'), fact('winding_down', 0, 'count'), fact('floor', 0, 'count')]);

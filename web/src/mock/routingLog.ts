@@ -82,8 +82,11 @@ interface Spec {
    * reads another figure than the account routes answer now.
    */
   burns?: Record<string, Record<string, number>>;
-  /** The entries a long session's answer writes, in place of the one entry the builder derives from the usage. */
-  cacheMap?: { depth: number; prefixTokens: number; tier: 'message' | 'static' }[];
+  /**
+   * The rows a long session's answer writes where its boundaries are new to the account, in place of the one row the
+   * builder derives: the message chain's depth, and the size of each static boundary another key held there.
+   */
+  cacheMap?: { messages: number; staticSizes: number[] };
   exhaustion?: RecordOutcome['exhaustion'];
   /** A summary fact the story names where the router's own reading is not what the row tells. */
   fact?: SummaryFact[];
@@ -1237,12 +1240,18 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const hasUsage = answered && usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h > 0;
   const hit = !hasUsage ? null : spec.rung?.rung === 'content' ? usage.cacheRead >= (promised ?? 0) : usage.cacheRead > 0;
   const ttlMs = ttlOf(pool, chosen?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel);
+  const prefixTokens = usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h;
+  // The router writes the message chain's rows first, each at the answer's one prefix, then the static chain's, each
+  // numbered by its place in that chain.
+  const written = spec.cacheMap
+    ? [
+        ...Array.from({ length: spec.cacheMap.messages }, (_, i) => ({ depth: i + 1, prefixTokens, tier: 'message' })),
+        ...spec.cacheMap.staticSizes.map((size, i) => ({ depth: i + 1, prefixTokens: size, tier: 'static' })),
+      ]
+    : [{ depth: (spec.rung?.depth ?? 0) + 1, prefixTokens, tier: 'message' }];
   const completion: RecordCompletion | null = dispatched
     ? {
-        cacheMapWritten:
-          answered && usage.cacheWrite5m + usage.cacheWrite1h > 0
-            ? (spec.cacheMap ?? [{ depth: (spec.rung?.depth ?? 0) + 1, prefixTokens: usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h, tier: 'message' }]).map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs }))
-            : null,
+        cacheMapWritten: answered && usage.cacheWrite5m + usage.cacheWrite1h > 0 ? written.map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs })) : null,
         cacheReadTokens: hasUsage ? usage.cacheRead : null,
         completedAt: attempt ? iso(Date.parse(attempt.startedAt) + (attempt.durationMs ?? 0)) : null,
         freed: spec.heldBefore !== undefined,
@@ -1681,11 +1690,10 @@ function storySpecs(): Spec[] {
     at('req_1d9c3e55-0b2', 1, 1, t(14, 2, 10), 'renewed', 'secondary', { pin: live('continues_pin', 120_000) }),
     at('req_1d9c3e55-0b2', 2, 2, t(14, 2, 11), 'placed', 'primary', {
       attempted: ['secondary'],
-      // The long session's first answer on primary writes its conversation's every boundary there.
-      cacheMap: [
-        ...Array.from({ length: 11 }, (_, i) => ({ depth: i + 1, prefixTokens: 8_900 + i * 3_000, tier: 'message' as const })),
-        ...Array.from({ length: 3 }, () => ({ depth: 1, prefixTokens: 14_600, tier: 'static' as const })),
-      ],
+      // The failover lands the long conversation on primary, where each of its eleven message boundaries is new, and
+      // primary held the main static chain the rung placed on under another key, so the answer writes both of its
+      // boundaries again under this one.
+      cacheMap: { messages: 11, staticSizes: [26_800, 31_200] },
       failover: 'cooldown',
       from: 'secondary',
       pin: live(),
