@@ -592,12 +592,14 @@ routing log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
-any other class leaves it alone. A request that would refresh the pin reads it cold instead when it is on another cache
-lane than the pin's last (a speed change, a thinking change, or an effort change on a model the client sends no
-per-turn control entry for), whatever its messages continue, and the pin takes the new lane. A request that leaves the
-pin alone leaves its lane as it was, and a per-turn control entry is one more message and continues the conversation.
-Without the class header, a request whose messages extend the session's conversation refreshes the pin, one that
-repeats the session's static prefix (tools and system prompt) without extending its messages restarted the
+any other class leaves it alone. A pin only auxiliary requests have used since its placement stays warm while its last
+use is younger than the TTL, since those requests keep its prefix warm, and reads its last refresh again once a `main`,
+`subagent` or `compaction` turn refreshes it. A request that would refresh the pin reads it cold instead when it is on
+another cache lane than the pin's last (a speed change, a thinking change, or an effort change on a model the client
+sends no per-turn control entry for), whatever its messages continue, and the pin takes the new lane. A request that
+leaves the pin alone leaves its lane as it was, and a per-turn control entry is one more message and continues the
+conversation. Without the class header, a request whose messages extend the session's conversation refreshes the pin,
+one that repeats the session's static prefix (tools and system prompt) without extending its messages restarted the
 conversation and reads cold, and one that matches neither changes nothing. Where one session holds several
 conversations, a request that extends any conversation the pin has served refreshes it. A request that carries
 `x-claude-code-context-compacted` reads cold whatever else it says, so a compacted session goes first in the round's

@@ -5794,7 +5794,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
         pin.last_refresh_at, 3_500,
         "the probe's renewal counts as a refresh"
     );
-    assert!(warm(&pin, 3_600));
+    assert!(warm(&pin, false, 3_600));
 }
 
 /// A dollar table weighing every token a quarter beside a unit share table, so a fold that priced anything
@@ -7592,7 +7592,8 @@ fn quota_turn(handle: &RouterHandle, session: Option<&str>, now: i64) -> SelectR
 }
 
 /// Session `session`'s pin under the store's key `k` on `account`, burning `burn` input tokens a second in both
-/// copies, used a second before `AT` and last refreshed an hour before it, so it is live and cold.
+/// copies, placed an hour before `AT`, used a second before it and last refreshed half an hour before it, so it is
+/// live and cold: a refresh after the placement leaves it unflagged at the load.
 fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64) -> PinRow {
     let rates = PinBurn {
         input: burn,
@@ -7617,7 +7618,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         burn_unmetered: PinBurn::default(),
         last_input_tokens: 1_000,
         last_classifier: false,
-        last_refresh_at: AT - HOUR,
+        last_refresh_at: AT - HOUR / 2,
         cache_ttl_ms: 300_000,
         shed_from: None,
         shed_at: None,

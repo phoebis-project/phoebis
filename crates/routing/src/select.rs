@@ -402,21 +402,37 @@ pub fn warmth_of(
     (Warmth::Untouched, WarmthCause::Foreign)
 }
 
-/// The pin's warmth on this request: `Refresh` is warm, `Cold` is cold, `Untouched` reads `warm(current, now)`.
-pub fn effective_warm(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> bool {
+/// The pin's warmth on this request: `Refresh` is warm, `Cold` is cold, `Untouched` reads
+/// `warm(current, auxiliary_only, now)`.
+pub fn effective_warm(
+    current: &PinRow,
+    auxiliary_only: bool,
+    request: &SelectRequest,
+    affinity: &AffinityMap,
+) -> bool {
     warm_on(
         current,
+        auxiliary_only,
         warmth_of(current, request, affinity).0,
         request.now,
     )
 }
 
-fn warm_on(current: &PinRow, verdict: Warmth, now: i64) -> bool {
+fn warm_on(current: &PinRow, auxiliary_only: bool, verdict: Warmth, now: i64) -> bool {
     match verdict {
         Warmth::Cold => false,
         Warmth::Refresh => true,
-        Warmth::Untouched => warm(current, now),
+        Warmth::Untouched => warm(current, auxiliary_only, now),
     }
+}
+
+/// The flag a placement gives its pin: set for a request of a class outside `REFRESHING_CLASSES`, whose kind keeps the
+/// prefix warm without refreshing it, and clear for a refreshing class or a request that names none.
+fn placed_auxiliary_only(request: &SelectRequest) -> bool {
+    request
+        .request_class
+        .as_deref()
+        .is_some_and(|class| !REFRESHING_CLASSES.contains(&class))
 }
 
 /// The request's two hashes, for a pin it refreshed, colded or created: the static prefix and the last message
@@ -822,7 +838,7 @@ fn fresh_prior(
     state
         .pins()
         .into_iter()
-        .filter(|p| members.contains(p.account_id.as_str()) && kept(p) && warm(p, now))
+        .filter(|p| members.contains(p.account_id.as_str()) && kept(p) && state.pin_warm(p, now))
         .collect()
 }
 
@@ -1580,7 +1596,12 @@ fn run(
             } else {
                 slow_down_read(state, snapshot, pool, &current.account_id, request.now)
             };
-            let cold = !warm_on(&current, verdict, request.now);
+            let cold = !warm_on(
+                &current,
+                state.auxiliary_only(&current.key()),
+                verdict,
+                request.now,
+            );
             // The lane the pin carries once this request renews it: a request that leaves the pin alone stamps
             // none.
             let fast = if verdict == Warmth::Untouched {
@@ -2149,6 +2170,7 @@ fn run(
         });
         replace_expired(state, expired.take(), &mut writes);
         state.put_pin(row.clone());
+        state.set_auxiliary_only(&row.key(), placed_auxiliary_only(request));
         // The landing writes the destination's cache, so the pin's next requests wait for this request's head.
         if left.is_some() {
             state.mark_head(
@@ -4527,7 +4549,7 @@ fn shed_round(
         if is_current(p) {
             current_cold
         } else {
-            !warm(p, now)
+            !state.pin_warm(p, now)
         }
     };
     // The only place a left-out pin's skip word is written, so the record and the strip read one spelling.
@@ -4994,8 +5016,15 @@ fn renew(
         ..current.clone()
     };
     let chained = request.static_hash.is_some() || !request.boundaries.is_empty();
+    let auxiliary_only = state.auxiliary_only(&current.key());
     match verdict {
-        Warmth::Refresh => renewed.last_refresh_at = now,
+        Warmth::Refresh => {
+            renewed.last_refresh_at = now;
+            // Guarded, so a renewal of an unflagged pin builds no key for it.
+            if auxiliary_only {
+                state.clear_auxiliary_only(&current.key());
+            }
+        }
         Warmth::Cold => renewed.last_refresh_at = 0,
         Warmth::Untouched => {}
     }
@@ -5016,7 +5045,7 @@ fn renew(
         verdict != Warmth::Untouched && chained,
     );
     rec.renewal = Some(Renewal {
-        cold: !warm_on(current, verdict, now),
+        cold: !warm_on(current, auxiliary_only, verdict, now),
         cause: cause.as_str(),
         epoch: current.epoch,
     });
