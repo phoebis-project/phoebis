@@ -9,6 +9,7 @@ import type { UnitPosition } from '@/lib/unit';
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
 export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage' };
 export const NO_SHARE_TITLE = 'The cost model prices no share for this request';
+export const FREE_SHARE_TITLE = 'Free on the plan: a client classifier call takes no window share';
 
 /** A wait's reason as a held row's hover names it: `cap` waited for a slot the in-flight cap freed. */
 const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', rewrite: 'for the rewrite in flight', slow_down: 'for the slow-down' };
@@ -35,11 +36,11 @@ const SHARED_WINDOWS = ['five_hour', 'seven_day'];
  *  out) in the order 5-hour, 7-day, then the model week. One billed in dollars carries the dollars with the funding
  *  word. One the route priced no window for carries the dollar equivalent alone, and a request no account served the
  *  zero dollars, with no funding to name. Every variant carries `estimated`, the route's flag, so the mark follows the
- *  request under every position. */
+ *  request under every position. A plan-funded unit carries the route's `reason` where its figures read zero by rule. */
 export type CostUnit =
   | { kind: 'dollars'; estimated: boolean; funding: Exclude<Funding, 'plan'>; usd: number }
-  | { kind: 'equivalent'; equivalents: { key: string; share: number }[]; estimated: boolean; usd: number }
-  | { kind: 'shares'; estimated: boolean; shares: { key: string; share: number }[]; usd: number }
+  | { kind: 'equivalent'; equivalents: { key: string; share: number }[]; estimated: boolean; reason: 'client_classifier' | null; usd: number }
+  | { kind: 'shares'; estimated: boolean; reason: 'client_classifier' | null; shares: { key: string; share: number }[]; usd: number }
   | { kind: 'unpriced'; estimated: boolean; usd: number }
   | { kind: 'unserved'; estimated: boolean; usd: number };
 
@@ -55,20 +56,20 @@ function pricedWindows(map: Record<string, number | null> | null): { key: string
   return priced.sort((a, b) => rank(a[0]) - rank(b[0])).map(([key, share]) => ({ key, share }));
 }
 
-export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | 'costShares' | 'costUsd' | 'estimated'>, unit: UnitPosition): CostUnit {
-  const { costUsd: usd, estimated } = r;
+export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | 'costShares' | 'costUsd' | 'estimated' | 'shareReason'>, unit: UnitPosition): CostUnit {
+  const { costUsd: usd, estimated, shareReason: reason } = r;
   const last = r.attempts[r.attempts.length - 1];
   if (last === undefined) return { estimated, kind: 'unserved', usd };
   const funding = fundingOf(last);
   if (unit === 'native' && nativeOf(funding) === 'equivalent') {
     const equivalents = pricedWindows(r.costEquivalent);
-    return equivalents.length === 0 ? { estimated, kind: 'unpriced', usd } : { equivalents, estimated, kind: 'equivalent', usd };
+    return equivalents.length === 0 ? { estimated, kind: 'unpriced', usd } : { equivalents, estimated, kind: 'equivalent', reason, usd };
   }
   // The four positions beside native are the Cost section's, so a subscription request keeps its account's own
   // shares under each of them.
   if (funding !== 'plan') return { estimated, funding, kind: 'dollars', usd };
   const shares = pricedWindows(r.costShares);
-  return shares.length === 0 ? { estimated, kind: 'unpriced', usd } : { estimated, kind: 'shares', shares, usd };
+  return shares.length === 0 ? { estimated, kind: 'unpriced', usd } : { estimated, kind: 'shares', reason, shares, usd };
 }
 
 /** An equivalent unit's figures in full, then the dollar equivalent. */
@@ -87,7 +88,7 @@ function plainCell(unit: CostUnit): { main: string; sub: string; title: string }
     return {
       main: equivalentShort(main.key, main.share),
       sub: sub ? equivalentShort(sub.key, sub.share) : '',
-      title: equivalentReading(unit),
+      title: unit.reason !== null ? FREE_SHARE_TITLE : equivalentReading(unit),
     };
   }
   const main = unit.shares.find((s) => !SHARED_WINDOWS.includes(s.key)) ?? unit.shares.find((s) => s.key === 'seven_day') ?? unit.shares[0];
@@ -96,15 +97,16 @@ function plainCell(unit: CostUnit): { main: string; sub: string; title: string }
     main: shareShort(main.key, main.share),
     // A row priced on the 5-hour window alone reads it as its main line and not again under it.
     sub: fiveHour && fiveHour !== main ? shareShort(fiveHour.key, fiveHour.share) : '',
-    title: [...unit.shares.map((s) => shareLabel(s.key, s.share)), `${fmtUsd(unit.usd)} equivalent`].join(', '),
+    title: unit.reason !== null ? FREE_SHARE_TITLE : [...unit.shares.map((s) => shareLabel(s.key, s.share)), `${fmtUsd(unit.usd)} equivalent`].join(', '),
   };
 }
 
 /** The table cell's two lines and title. An equivalent unit draws the 5-hour equivalent over the 7-day one, a share
  *  unit the model week's share where there is one, else the 7-day's, over the 5-hour share, each in its window's short
- *  word, with every figure in full and the dollar equivalent on the title. A dollar unit draws the dollars over the
- *  funding word or `equivalent`, and an unserved request's dollars alone, with no second line and no title. A figure
- *  the route marked estimated reads a tilde before its main line and the estimate after its title. */
+ *  word, with every figure in full and the dollar equivalent on the title, or the free sentence where the route gave a
+ *  reason for zero figures. A dollar unit draws the dollars over the funding word or `equivalent`, and an unserved
+ *  request's dollars alone, with no second line and no title. A figure the route marked estimated reads a tilde before
+ *  its main line and the estimate after its title. */
 export function costCellOf(unit: CostUnit): { main: string; sub: string; title: string } {
   const cell = plainCell(unit);
   return unit.estimated ? { main: `~${cell.main}`, sub: cell.sub, title: withEstimate(cell.title, true) } : cell;

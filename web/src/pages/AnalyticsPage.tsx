@@ -42,16 +42,16 @@ type QueryDim = 'accountId' | 'keyId' | 'model' | 'poolId';
 type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
-const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
+const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', classifier: 'Classifier', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
 /** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
 const SPEED_SERIES = [
   { key: 'standard', label: 'standard', slot: 0 },
   { key: 'fast', label: 'fast', slot: 4 },
 ] as const;
-/** The group-by's eleventh option, which the Burn section alone honors: no rollup carries a session. */
+/** The group-by's twelfth option, which the Burn section alone honors: no rollup carries a session. */
 const SESSION_OPTION = 'Session (Burn only)';
 const SESSION_OPTION_HINT = 'The Burn section groups by session, and every other section groups by key, since no rollup carries a session';
-/** The page's one group-by control: the breakdown's ten groupings, then the Burn section's own session grouping. */
+/** The page's one group-by control: the breakdown's eleven groupings, then the Burn section's own session grouping. */
 const GROUP_OPTIONS: readonly { label: string; title?: string; value: BurnGroup }[] = [...(Object.keys(GROUP_LABEL) as GroupBy[]).map((value) => ({ label: GROUP_LABEL[value], value })), { label: SESSION_OPTION, title: SESSION_OPTION_HINT, value: 'session' }];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
 const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key', model: 'model', poolId: 'pool' };

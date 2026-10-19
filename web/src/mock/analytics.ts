@@ -25,6 +25,8 @@ export interface HourlyRollup {
   cacheMisses: number;
   /** Attempts that carried diagnostics, counted by what they reported. */
   cacheMissReasons: Record<CacheMissReason, number>;
+  /** `client` for the client's own auto-mode classifier calls, which take no share of a plan window, else `-`. */
+  classifier: string;
   /** The class the router derived for the lane's agent; the rollups file a row with none under `-`. */
   client: string;
   cost: CostSplit;
@@ -97,6 +99,7 @@ const bucketMsFor = (spanMs: number) => (spanMs <= 48 * HOUR ? HOUR : spanMs <= 
 const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   account: (r) => r.accountId,
   all: () => 'all',
+  classifier: (r) => r.classifier,
   client: (r) => r.client,
   effort: (r) => r.effort,
   key: (r) => {
@@ -263,7 +266,8 @@ function equivalentsOfGroup(counted: HourlyRollup[], probeRows: HourlyRollup[]):
   const s = windowSums(counted, probeRows, (r) => r.equivalents, equivalentsOf);
   const split: CostSplit = { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 };
   for (const r of planRows(counted)) {
-    if (tokensOfRow(r) === 0) continue;
+    // A client classifier call's split reads zero, as its equivalents do.
+    if (tokensOfRow(r) === 0 || r.classifier === 'client') continue;
     for (const kind of Object.keys(TOKEN_KINDS) as (keyof CostSplit)[]) split[kind] += equivalentOf(TABLES, 'seven_day', r.model, TOKEN_KINDS[kind](usageOf(r)), Date.parse(r.hour))?.equivalent ?? 0;
   }
   return {
@@ -459,7 +463,10 @@ const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, ca
  */
 function atHour(r: HourlyRollup, price: (window: string, usage: Usage, at: number) => number | null, usage = usageOf(r)): Record<'cost' | 'read' | 'write', Record<string, number | null>> {
   const windows = ['five_hour', 'seven_day', ...modelWeeks(TABLES, r.model)];
-  const over = (u: Usage) => Object.fromEntries(windows.map((window) => [window, price(window, u, Date.parse(r.hour))]));
+  // A client classifier call takes no share of a plan window, so its cache read, cache write and kept-warm credit read
+  // zero too, as the route answers them.
+  const free = r.classifier === 'client';
+  const over = (u: Usage) => Object.fromEntries(windows.map((window) => [window, free ? 0 : price(window, u, Date.parse(r.hour))]));
   return { cost: over(usage), read: over({ ...usage, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }), write: over({ ...usage, cacheRead: 0, input: 0, output: 0 }) };
 }
 

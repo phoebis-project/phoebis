@@ -10615,6 +10615,79 @@ m.unmount();
   });
   await closeBoxes(classes);
   classes.unmount();
+
+  // The story's two classifier calls take no share of a plan window, so their figures read 0% under the free sentence,
+  // and its contract refusal names the item the client left out.
+  const FREE = 'Free on the plan: a client classifier call takes no window share';
+  const freeCalls = requests.filter((r) => r.classifier === 'client');
+  const contractRow = requests.find((r) => r.errorCode === 'client_contract');
+  results.push({ name: 'fixture: two classifier calls and one contract refusal', ok: freeCalls.length === 2 && contractRow !== undefined, missing: [`${freeCalls.length} classifier calls`, String(contractRow?.id)] });
+  const classifierCheck = '/requests the Classifier filter stands in the Request group, offers client classifier and none, and choosing client classifier lists the two classifier calls under the chip classifier: client, their Cost cells 0% under the free sentence';
+  const facet = await mount('/requests', { now: CLOCK_ORIGIN });
+  const facetGroup = await groupOf(facet, 'Classifier');
+  const facetOptions = (await openOptions(facet, 'Classifier')).map((o) => o.textContent?.trim() ?? '');
+  await choose(facet, 'Classifier', 'client classifier');
+  await closeBoxes(facet);
+  const costAt = [...facet.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
+  const costCells = [...facet.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
+    const td = costAt < 0 ? null : tr.children[costAt];
+    return { main: td ? [...td.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim() : 'no Cost cell', title: td?.getAttribute('title') ?? null };
+  });
+  const chosenCalls = { chip: chipRead(facet, 'classifier'), param: param(facet, 'classifiers'), rows: listed(facet) };
+  results.push({
+    name: classifierCheck,
+    ok:
+      facetGroup === 'Request' &&
+      JSON.stringify(facetOptions) === JSON.stringify(['client classifier', 'none']) &&
+      chosenCalls.param === 'client' &&
+      chosenCalls.chip === 'classifier: client' &&
+      chosenCalls.rows.length === 2 &&
+      chosenCalls.rows.every((r) => r !== null && r.classifier === 'client') &&
+      costCells.length === 2 &&
+      costCells.every((c) => c.main.startsWith('0% ') && c.title === FREE),
+    missing: [String(facetGroup), JSON.stringify(facetOptions), JSON.stringify({ ...chosenCalls, rows: chosenCalls.rows.map((r) => r?.id ?? null) }), JSON.stringify(costCells)],
+  });
+  /** A drawer row by its section's title and its own label: the value's text, face and hover. */
+  const sectionRow = (page, section, label) => {
+    const at = [...page.container.querySelectorAll('.drawer section')].find((s) => s.querySelector('.section-title')?.textContent?.trim() === section);
+    const dd = [...(at?.querySelectorAll('.kv__row') ?? [])].find((row) => row.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
+    return dd ? { mono: dd.classList.contains('mono'), text: dd.textContent?.trim() ?? '', title: dd.getAttribute('title') } : null;
+  };
+  const classifierTitle = "The client's own auto-mode classifier call, which takes no share of a plan window";
+  if (freeCalls.length > 0) {
+    await facet.navigate(`/requests/${freeCalls[0].id}`);
+    await facet.settle(300);
+    const standing = sectionRow(facet, 'Request shape', 'Classifier');
+    const costValue = [...facet.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'Estimated cost')?.querySelector('td:last-child') ?? null;
+    const cost = { chips: [...(costValue?.querySelectorAll('.chip') ?? [])].map((c) => c.textContent?.trim() ?? ''), title: costValue?.getAttribute('title') ?? null };
+    const item = sectionRow(facet, 'Outcome', 'Client contract');
+    results.push({
+      name: "/requests the drawer of a classifier call reads Classifier client under Request shape, and its Estimated cost row's 0% figures under the free sentence",
+      ok:
+        JSON.stringify(standing) === JSON.stringify({ mono: true, text: 'client', title: classifierTitle }) &&
+        cost.chips.length > 0 &&
+        cost.chips.every((c) => c.startsWith('0%')) &&
+        (cost.title ?? '').startsWith(`${FREE}. `) &&
+        item === null,
+      missing: [freeCalls[0].id, JSON.stringify(standing), JSON.stringify(cost), JSON.stringify(item)],
+    });
+  }
+  if (contractRow) {
+    await facet.navigate(`/requests/${contractRow.id}`);
+    await facet.settle(300);
+    const item = sectionRow(facet, 'Outcome', 'Client contract');
+    const error = sectionRow(facet, 'Outcome', 'Error');
+    const standing = sectionRow(facet, 'Request shape', 'Classifier');
+    results.push({
+      name: '/requests the drawer of a contract refusal reads Client contract class_header under Outcome beside the client_contract error, and Classifier none',
+      ok:
+        JSON.stringify(item) === JSON.stringify({ mono: true, text: 'class_header', title: null }) &&
+        error?.text === 'client_contract' &&
+        JSON.stringify(standing) === JSON.stringify({ mono: false, text: 'none', title: classifierTitle }),
+      missing: [contractRow.id, JSON.stringify(item), JSON.stringify(error), JSON.stringify(standing)],
+    });
+  }
+  facet.unmount();
 }
 
 // Auto reload starts off on this view and reads the list again at the interval the split button's menu sets, over the
@@ -11368,7 +11441,7 @@ m.unmount();
     results.push({
       name: '/requests the Add filter popover walks its two steps for a list, a pattern, an id, a choice and a flag and closes on Escape, a click outside and focus leaving',
       ok:
-        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 19 }) &&
+        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 20 }) &&
         JSON.stringify(head) === JSON.stringify({ back: true, remove: false, title: 'Outcome' }) &&
         JSON.stringify(list) === JSON.stringify({ open: true, outcomes: 'canceled', remove: true }) &&
         back &&
@@ -14329,17 +14402,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics the Burn tab draws Spend per minute and a plan card per window and no token chart', ok: card('Tokens per minute') === undefined && !m.text().includes('Tokens per minute'), missing: [card('Tokens per minute') ? 'the token chart drawn' : 'the words on the page'] });
   {
     // The section draws no group-by and no reason line of its own. The page's group-by carries the Burn's session
-    // grouping as its eleventh option, named as the Burn's own.
+    // grouping as its twelfth option, named as the Burn's own.
     const section = m.container.querySelector('#burn');
     const options = [...(pageGroupBy(m)?.options ?? [])];
     const session = options.find((o) => o.value === 'session');
     results.push({
-      name: "/analytics the Burn section draws no group-by of its own and the page's group-by offers Session as the Burn's own eleventh option",
+      name: "/analytics the Burn section draws no group-by of its own and the page's group-by offers Session as the Burn's own twelfth option",
       ok:
         section !== null &&
         section.querySelector('select') === null &&
         !section.textContent?.includes('Burn groups by') &&
-        options.length === 11 &&
+        options.length === 12 &&
         options.at(-1) === session &&
         session?.textContent?.trim() === 'Session (Burn only)' &&
         session?.getAttribute('title') === 'The Burn section groups by session, and every other section groups by key, since no rollup carries a session',
@@ -16646,6 +16719,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const requestClasses = trafficRows('request class').map((row) => row[0]);
     results.push({ name: '/analytics the page groups by request class, a classless row as unattributed', ok: ['main', 'subagent', 'unattributed'].every((c) => requestClasses.includes(c)), missing: requestClasses });
 
+    await groupBy('Classifier');
+    const classifiers = trafficRows('classifier').map((row) => row[0]);
+    results.push({ name: "/analytics the page groups by classifier, the client's classifier calls as client and every other request as unattributed", ok: JSON.stringify([...classifiers].sort()) === JSON.stringify(['client', 'unattributed']), missing: classifiers });
+
     await groupBy('User agent');
     const tokens = trafficRows('user agent').map((row) => row[0]);
     results.push({
@@ -16756,6 +16833,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await groupBy('Request class');
     const byClass = linksUnder('request class', 'request_classes', { main: 'main', unattributed: '-' });
     results.push({ name: '/analytics a breakdown cell under the request class grouping links with its class, and any classless row that counts a miss as -', ok: byClass.linked.has('main') && byClass.wrong.length === 0, missing: [...byClass.wrong, `rows ${[...byClass.linked].join(',')}`] });
+    await groupBy('Classifier');
+    const byClassifier = linksUnder('classifier', 'classifiers', { client: 'client', unattributed: '-' });
+    results.push({ name: '/analytics a breakdown cell under the classifier grouping links with its standing, client as client and the rest as -', ok: byClassifier.linked.size === 2 && byClassifier.wrong.length === 0, missing: [...byClassifier.wrong, `rows ${[...byClassifier.linked].join(',')}`] });
     await groupBy('User agent');
     const agents = cellsOf('user agent');
     const counted = agents.filter((c) => c.column !== 'Expired between turns' && c.count > 0);
@@ -17042,7 +17122,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const burnSelects = m.container.querySelectorAll('#burn select').length;
     results.push({
       name: "/analytics the Burn tab reads the page's one group-by select, its Session option last as the Burn's own, and draws no group-by or reason line of its own",
-      ok: groupSelect !== null && [...groupSelect.options].map((o) => o.textContent).join() === 'Account,Client,Key,Effort,Kind,Model,Pool,Request class,Speed,User agent,Session (Burn only)' && burnSelects === 0 && m.container.querySelector('#burn .analytics-groupby__reason') === null,
+      ok: groupSelect !== null && [...groupSelect.options].map((o) => o.textContent).join() === 'Account,Classifier,Client,Key,Effort,Kind,Model,Pool,Request class,Speed,User agent,Session (Burn only)' && burnSelects === 0 && m.container.querySelector('#burn .analytics-groupby__reason') === null,
       missing: [groupSelect?.outerHTML.slice(0, 80) ?? 'missing', `${burnSelects} selects in the Burn section`],
     });
     await tab(m, 'Traffic');

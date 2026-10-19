@@ -1083,6 +1083,18 @@ test('a request reads its auto-mode standing, and a spelling the console does no
   assert.equal(d.decodeRequest({ attempts: [], auto_mode: 'unknown' }).autoMode, null);
 });
 
+test('a_request_decodes_its_classifier_standing_its_contract_item_and_its_share_reason', () => {
+  const read = (r) => [r.classifier, r.clientContract, r.shareReason];
+  assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: 'client', client_contract: 'class_header', share_reason: 'client_classifier' })), ['client', 'class_header', 'client_classifier'], 'the members set');
+  assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: null, client_contract: null, share_reason: null })), [null, null, null], 'the members null');
+  assert.deepEqual(read(d.decodeRequest({ attempts: [] })), [null, null, null], 'a row from before the members');
+  assert.deepEqual(read(d.decodeRequest({ attempts: [], classifier: 'server', share_reason: 'free' })), [null, null, null], 'a standing or a reason the console does not know reads as none');
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const byId = (id) => read(rows.find((r) => r.id === id));
+  assert.deepEqual(byId('r-classifier'), ['client', null, 'client_classifier'], "the route's classifier call");
+  assert.deepEqual(byId('r-contract'), [null, 'class_header', null], "the route's contract refusal");
+});
+
 test('a request reads who put the diagnostics member on its body, and any other value as none', () => {
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   assert.deepEqual(

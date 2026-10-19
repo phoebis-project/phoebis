@@ -9,7 +9,7 @@ import type {
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
-import { foldEffort, foldRequestClass } from '@/lib/dimensions';
+import { foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
@@ -349,6 +349,7 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   }
   if (q.efforts?.length && !q.efforts.includes(foldEffort(r.shape.effort))) return false;
   if (q.requestClasses?.length && !q.requestClasses.includes(foldRequestClass(r.requestClass))) return false;
+  if (q.classifiers?.length && !q.classifiers.includes(foldClassifier(r.classifier))) return false;
   // `-` keeps a request no guardrail matched, the spelling the class filter uses for none.
   if (q.guardrails?.length) {
     const listed = q.guardrails;

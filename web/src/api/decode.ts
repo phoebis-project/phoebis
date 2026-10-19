@@ -499,7 +499,7 @@ export function decodeRequest(v: unknown): RequestLog {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
     attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
     autoMode: AUTO_MODE_VALUES.find((m) => m === str(r.auto_mode)) ?? null,
-    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
+    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: r.classifier === 'client' ? 'client' : null, client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: r.cost_equivalent === null || r.cost_equivalent === undefined ? null : nullableNumberMap(r.cost_equivalent),
     costShares: r.cost_shares === null || r.cost_shares === undefined ? null : nullableNumberMap(r.cost_shares), costUsd: num(r.cost_usd),
     diagnosticsSource: DIAGNOSTICS_SOURCE_VALUES.find((s) => s === str(r.diagnostics_source)) ?? null,
@@ -511,7 +511,7 @@ export function decodeRequest(v: unknown): RequestLog {
     kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: REQUEST_OUTCOME_VALUES.find((o) => o === str(r.outcome)) ?? 'failed',
     phases: phasesOf(r.phases, isoOr(r.at, epoch)),
-    poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), requestClass: strOrNull(r.request_class), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape),
+    poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), requestClass: strOrNull(r.request_class), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape), shareReason: r.share_reason === 'client_classifier' ? 'client_classifier' : null,
     status: numOrNull(r.status), tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
 }

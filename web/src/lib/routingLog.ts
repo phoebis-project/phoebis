@@ -380,7 +380,7 @@ function decisionBy(row: DecisionSummary): Chip {
     case 'none':
       return { value: 'no rule fired' };
     case 'refusal':
-      if (value === 'client') return { value: 'client drift' };
+      if (value === 'client') return { value: row.refusal?.code === 'contract' ? 'client contract' : 'client drift' };
       return { value: row.refusal && own(KEY_REFUSAL_WORD, row.refusal.code) ? KEY_REFUSAL_WORD[row.refusal.code] : `${words(value)} refused` };
     case 'rule':
       return { value: `${words(value)} rule` };
@@ -991,10 +991,11 @@ function clientVersionOf(row: DecisionSummary | undefined): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/** A refusal's reason: a drift's trigger beside the client's version, or a key refusal's words by its code, its
- *  sentence for a code the console has no words for. */
+/** A refusal's reason: a contract's missing item, a drift's trigger beside the client's version, or a key refusal's
+ *  words by its code, its sentence for a code the console has no words for. */
 function refusalChips(refusal: { code: string; kind: string; reason: string }, version: string | null): Chip[] {
   if (refusal.kind !== 'client') return [plain(own(KEY_REFUSAL_WORD, refusal.code) ? KEY_REFUSAL_WORD[refusal.code] : refusal.reason)];
+  if (refusal.code === 'contract') return [plain(words(refusal.reason), 'contract')];
   return [plain(words(refusal.reason || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
 }
 
@@ -1560,7 +1561,7 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
   }
   if (o.refusal !== null) {
     const version = clientVersionOf(row);
-    const said = o.refusal.kind === 'client' ? [plain('client drift'), ...refusalChips(o.refusal, version).filter((ch) => ch.label === 'client')] : refusalChips(o.refusal, version);
+    const said = o.refusal.kind === 'client' ? [plain(o.refusal.code === 'contract' ? 'client contract' : 'client drift'), ...refusalChips(o.refusal, version).filter((ch) => ch.label === 'client' || ch.label === 'contract')] : refusalChips(o.refusal, version);
     rows.push({ chips: [...said, ...(record.request.keyId ? [{ entity: { id: record.request.keyId, kind: 'key' as const }, label: 'key', value: record.request.keyId }] : [])], label: 'Answer' });
   }
   const budget = (b: RecordCandidate['budget'][number]) => (b.spentUsd === null ? `${fmtUsd(b.budgetUsd)} spend unknown` : `${fmtUsd(b.spentUsd)} of ${fmtUsd(b.budgetUsd)}`);

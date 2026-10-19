@@ -52,8 +52,9 @@ const unlistableClient = (key: string) => key === OTHER_DIMENSION || foldRequest
 const unlistableClientPattern = (pattern: string) => pattern !== '' && !/^\*+$/.test(pattern) && matchesPattern(pattern, OTHER_DIMENSION);
 
 /** The Requests filter each grouping's row writes. The user agent grouping's counts stay plain. */
-const GROUP_PARAM: Record<Exclude<AnalyticsGroupBy, 'all' | 'user_agent'>, 'accounts' | 'client' | 'efforts' | 'keys' | 'kind' | 'models' | 'pools' | 'requestClasses' | 'speeds'> = {
+const GROUP_PARAM: Record<Exclude<AnalyticsGroupBy, 'all' | 'user_agent'>, 'accounts' | 'classifiers' | 'client' | 'efforts' | 'keys' | 'kind' | 'models' | 'pools' | 'requestClasses' | 'speeds'> = {
   account: 'accounts',
+  classifier: 'classifiers',
   client: 'client',
   effort: 'efforts',
   key: 'keys',
@@ -86,9 +87,9 @@ export function linkedKeyIds(selected: string[], sessionKey: string | null): str
  * as two ISO instants (the start of the hour holding the panel's start to one millisecond before the hour ceiling of
  * its end, capped at now, or the exact window for a session view), the page's selections as `accounts`, `keys`,
  * `models` and `pools`, the class pattern as `client`, a session id as `session`, and a breakdown row's group as its
- * own filter: `accounts`, `client`, `efforts`, `keys`, `kind`, `models`, `pools`, `request_classes` or `speeds`. A
- * client group keyed `other`, or keyed with a class the rollups would fold, answers no address, and outside the client
- * grouping neither does a class pattern that matches `other`.
+ * own filter: `accounts`, `classifiers`, `client`, `efforts`, `keys`, `kind`, `models`, `pools`, `request_classes` or
+ * `speeds`. A client group keyed `other`, or keyed with a class the rollups would fold, answers no address, and outside
+ * the client grouping neither does a class pattern that matches `other`.
  */
 export function requestsLink({ count, filters, group, reason, window }: RequestsLinkInput): RequestsLinkTarget {
   if (count === 0) return { href: null, title: NOTHING_TO_LIST };

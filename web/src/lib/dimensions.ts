@@ -25,3 +25,6 @@ export function foldRequestClass(raw: string | null): string {
   if (raw === null) return NO_CLASS;
   return IDENTIFIER.test(raw) ? raw : OTHER_DIMENSION;
 }
+
+/** A request's classifier standing as the rollups file it: `-` for a request the marker does not hold. */
+export const foldClassifier = (value: string | null): string => value ?? NO_CLASS;
