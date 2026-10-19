@@ -1172,7 +1172,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_relanded_row_keeps_only_its_new_matches_and_a_new_row_with_none_touches_the_child_table_not_at_all(
+    async fn a_relanded_row_keeps_only_its_new_matches_and_a_new_row_with_none_leaves_the_child_table_as_it_was(
     ) {
         async fn matches(db: &Arc<LedgerDb>, id: &str) -> Vec<String> {
             let (row, _) = db.request(id).await.unwrap().unwrap();

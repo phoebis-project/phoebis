@@ -1843,6 +1843,61 @@ async fn a_bodies_route_answers_the_bytes_each_side_stored_and_saw() {
     );
 }
 
+/// The route reads a capture at the admin state's clock, so a body whose expiry has passed answers 404 while its row
+/// waits for the purge's next pass.
+#[tokio::test]
+async fn the_bodies_route_serves_a_capture_before_its_expiry_by_the_clock_and_answers_404_past_it()
+{
+    let parts = common::admin_parts_full().await;
+    let now = common::NOW;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (id, expires_at) in [("r-expired", now - HOUR), ("r-kept", now + HOUR)] {
+        let mut row = request(
+            id,
+            now - 2 * HOUR,
+            Some("desktop"),
+            "claude-sonnet-5",
+            "succeeded",
+            200,
+            "inference",
+        );
+        row.bodies_captured = true;
+        parts
+            .db
+            .insert_request(
+                &row,
+                &[attempt(id, "business", 200)],
+                Some(&BodyRecord {
+                    request_id: id.into(),
+                    request_body: b"{}".to_vec(),
+                    response_body: None,
+                    request_len_seen: 2,
+                    response_len_seen: 0,
+                    expires_at,
+                }),
+            )
+            .unwrap();
+    }
+    let expired = get(
+        &parts.app,
+        "/admin/requests/r-expired/bodies",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(expired.status(), 404, "the expiry lies before the clock");
+    assert_eq!(
+        json(expired).await["error"],
+        "no captured bodies for this request"
+    );
+    assert_eq!(
+        get(&parts.app, "/admin/requests/r-kept/bodies", Some(&cookie))
+            .await
+            .status(),
+        200,
+        "the expiry lies after the clock"
+    );
+}
+
 /// A capturing request straight onto the bus: `delivered` of its response chunks reach the ledger while its
 /// completion says `published` went out, so the rest were dropped at the bus.
 /// The observation of an inference request under `desktop`, for a test that drives the writer through the bus.
