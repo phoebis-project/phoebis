@@ -52,7 +52,9 @@ const COOKIE_NAME: &str = "phoebis_admin";
 
 const LOGIN_PATH: &str = "/admin/session";
 
-pub fn router(state: Arc<AdminState>) -> Router {
+/// The route table and the document its registrations build, with no state bound, so the path count reads the
+/// document without an `AdminState`.
+pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
     let (router, mut api) = OpenApiRouter::with_openapi(openapi::Document::openapi())
         .routes(routes!(list_accounts, accounts::create))
         .routes(routes!(show_account, accounts::patch, accounts::remove))
@@ -119,6 +121,11 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/{*rest}", any(unknown_admin_route))
         .split_for_parts();
     openapi::Examples.modify(&mut api);
+    (router, api)
+}
+
+pub fn router(state: Arc<AdminState>) -> Router {
+    let (router, api) = parts();
     let document = Bytes::from(api.to_json().expect("the admin document serializes"));
     router
         .layer(from_fn_with_state(state.clone(), gate))
@@ -130,6 +137,12 @@ pub fn router(state: Arc<AdminState>) -> Router {
             }),
         )
         .with_state(state)
+}
+
+/// How many paths the served document holds, read off the document itself, so the merged-app test asserts the
+/// router serves the admin crate's document rather than a figure written twice.
+pub fn path_count() -> usize {
+    parts().1.paths.paths.len()
 }
 
 /// Who is calling, as the gate resolved them: the handle that names this admin session in pairing

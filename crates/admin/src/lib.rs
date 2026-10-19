@@ -45,6 +45,7 @@ use phoebis_transport::control::ControlClient;
 pub use guardrails::SAMPLE_PAGE;
 pub use pricing::table_envelopes;
 pub use readiness::{Readiness, ReadinessSource};
+pub use routes::path_count;
 pub use routes::router;
 pub use session::{AdminSecrets, LoginError, Sessions};
 pub use tls::{Reloaded, TlsReload};
