@@ -2289,6 +2289,175 @@ async fn a_request_past_the_first_entry_and_inside_the_second_that_reads_nothing
     );
 }
 
+/// The fixture of the chain cases: a request at 0 s writes a five-minute entry, and three probes 270, 540 and 810 s in
+/// each read it back, their own entries ending 570, 840 and 1,110 s in. Each later probe's read extended the entry the
+/// earlier ones kept, so the three are one chain whose last entry ends 1,110 s in.
+async fn a_chain_of_three_probes(r: &mut Rig) {
+    open_request(r, "first", 0, 2_000);
+    r.engine.observe(completed(r, "first", 0));
+    for _ in 0..3 {
+        r.advance_attended(270_000);
+        r.step().await;
+    }
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.unanswered, status.cold, status.reason),
+        (3, 3, 0, Reason::Scheduled),
+        "the three probes read the entry back: {status:?}"
+    );
+}
+
+/// Every probe of a chain is judged against the chain's last entry: a request 900 s in, past the first two probes' own
+/// entries and inside the last's, that reads the cache answers all three.
+#[tokio::test]
+async fn a_chain_of_three_probes_answered_warm_inside_its_last_entry_settles_none_as_expired() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_chain_of_three_probes(&mut r).await;
+    // No tick past 810 s, so no fourth probe joins the chain.
+    r.advance_attended(90_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    let rows = final_rollups(&r).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (1, 0, BTreeMap::new()),
+        "the request arrived 900 s in, past 570 s and 840 s and before 1,110 s"
+    );
+}
+
+/// A request past the chain's last entry reads nothing the chain kept, whatever it reads: all three probes settle as
+/// expired and the request earns no credit.
+#[tokio::test]
+async fn a_chain_whose_last_entry_lapsed_before_the_request_settles_all_three_probes_expired() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_chain_of_three_probes(&mut r).await;
+    // Past the last entry's end with no tick, so no fourth probe joins the chain at 1,080 s.
+    r.advance_attended(310_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    let rows = final_rollups(&r).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (0, 3, BTreeMap::from([("expired".to_string(), 3)])),
+        "the request arrived 1,120 s in, past 1,110 s"
+    );
+    assert!(probe.wasted_usage() == probe.usage(), "{probe:?}");
+}
+
+/// A compaction request reads the old prefix, so its completion answers the chain before it by the same test: one
+/// 900 s in, inside the last probe's entry, that reads the cache leaves none of the three wasted.
+#[tokio::test]
+async fn a_compaction_request_inside_the_chains_last_entry_answers_every_probe_of_the_chain() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_chain_of_three_probes(&mut r).await;
+    r.advance_attended(90_000);
+    r.engine.observe(r.observed_with(
+        "compaction",
+        "main",
+        Some("compaction"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(message_start(
+        "compaction",
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(2_000),
+            ..Default::default()
+        },
+    ));
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    let rows = final_rollups(&r).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            probe.requests,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (3, 0, BTreeMap::new()),
+        "the compaction arrived 900 s in, past 570 s and 840 s and before 1,110 s"
+    );
+}
+
+/// A chain the idle limit wrote off stays pending until its last entry lapses: the ceiling ends the recipe 1,080 s in
+/// with three probes pending, a tick 1,090 s in, past the first two probes' own entries, settles none of them, and a
+/// turn 1,100 s in, inside the last probe's entry, that reads the cache answers all three.
+#[tokio::test]
+async fn a_chain_the_idle_limit_wrote_off_waits_for_its_last_entry_and_a_turn_inside_it_answers_every_probe(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_seconds: 1_000,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    for _ in 0..3 {
+        r.advance(270_000);
+        r.step().await;
+    }
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.cold),
+        (3, 0),
+        "the three probes read the entry back: {status:?}"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 3),
+        "the ceiling kept the chain's three probes pending"
+    );
+    // The sweep's settlements reach the ledger with the save after them.
+    r.advance(10_000);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    r.advance(10_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the turn arrived 1,100 s in, before the chain's last entry ended at 1,110 s"
+    );
+}
+
 /// A later probe that did not cover the entry never shadows an older covered one whose entry still lives. The first
 /// probe reads the entry back 270 s in and keeps it to 570 s, the second reads a hundred tokens of the prefix 540 s in
 /// and falls short of it, and a request 550 s in that reads the cache is credited on the first probe's coverage.

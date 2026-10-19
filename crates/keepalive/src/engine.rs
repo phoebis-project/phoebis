@@ -936,7 +936,8 @@ impl Skipped {
 }
 
 /// One probe the next real request has not answered yet: what it used and the unit it settled in, the lineage a
-/// request has to match to be read as its answer, and the end of the entry it wrote, which settles it on its own.
+/// request has to match to be read as its answer, and the end of the entry it wrote, which a later probe of its chain
+/// extends by reading the entry back.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct UnansweredProbe {
     /// The relay's request id of the probe's exchange, which the probe's own ledger request row carries, so a
@@ -984,7 +985,8 @@ pub(crate) struct Kept {
     /// probe's hour and prices its counts at the cells and the revision the probe ran at.
     pub at: i64,
     pub band: Band,
-    /// When the entry this probe wrote expires: a read arriving at or past it found the entry gone.
+    /// When the entry this probe wrote expires. A later probe of its chain that read the entry back extended it, so a
+    /// settlement reads the chain's last entry (`chain_expires`).
     pub entry_expires: i64,
     pub kind: Option<AccountKind>,
     pub in_overage: bool,
@@ -1321,8 +1323,8 @@ impl Inner {
 
     /// `discard` for a real request that supersedes the recipe: the probes the recipe leaves unanswered were paying
     /// for that request, so it keeps them until the first of these decides them: its successful completion (each
-    /// probe on its own: a warm return on its lineage inside its entry clears it, one past its entry settles it
-    /// under `expired`, and any other return, on another lineage or with no read, under `cold_return`), a labeled
+    /// probe by its chain's last entry: a warm return on its lineage inside that entry clears it, one past it settles
+    /// it under `expired`, and any other return, on another lineage or with no read, under `cold_return`), a labeled
     /// discard (under its label), or the agent's lapse or eviction. A request the engine takes no observation of
     /// leaves them kept for whichever comes next, and one that fails hands them back for the next turn to read or
     /// the lapse sweep to settle.
@@ -1336,14 +1338,36 @@ impl Inner {
         self.set_reason(key, agent_id, reason);
     }
 
+    /// The entry a kept probe is judged against: the greatest `entry_expires` among the probes of its chain. The chain
+    /// is the probe and each later kept probe of its lineage (model, speed, account), in exchange order, up to the
+    /// first that read nothing: a probe that read the entry back extended it, while one that read nothing found it
+    /// gone and wrote a new entry, which starts a chain of its own.
+    fn chain_expires(kept: &[Kept], probe: &Kept) -> i64 {
+        let mut later: Vec<&Kept> = kept
+            .iter()
+            .filter(|other| {
+                other.at > probe.at
+                    && other.canonical_model == probe.canonical_model
+                    && other.fast == probe.fast
+                    && other.account == probe.account
+            })
+            .collect();
+        later.sort_by_key(|other| other.at);
+        later
+            .into_iter()
+            .take_while(|other| other.usage.read > 0)
+            .map(|other| other.entry_expires)
+            .fold(probe.entry_expires, i64::max)
+    }
+
     /// The decision `discard_keeping_unanswered` defers, taken by the successful completion of the request that
     /// kept the probes, `read` being what the completion read from the cache. Each probe answers to the lineage it
-    /// was paid under and to the entry it wrote, since a request that failed leaves its probes behind with the agent
-    /// already moved to that request's model and entry: a warm return is one on the probe's model, speed and
-    /// account, arriving before that probe's entry expired, that read the cache. A kept-warm credit takes no
-    /// shortcut here: a probe off the lineage the credited request read kept nothing it read. The model is the
-    /// probe's as resolutions followed it. A probe sent while the request was open is not among them: it pays for
-    /// the request after this one.
+    /// was paid under, since a request that failed leaves its probes behind with the agent already moved to that
+    /// request's model and entry, and each probe of a chain is judged against the chain's last entry
+    /// (`chain_expires`): a warm return is one on the probe's model, speed and account, arriving before that entry
+    /// expired, that read the cache. A kept-warm credit takes no shortcut here: a probe off the lineage the credited
+    /// request read kept nothing it read. The model is the probe's as resolutions followed it. A probe sent while the
+    /// request was open is not among them: it pays for the request after this one.
     pub(crate) fn decide_unanswered(&mut self, key: &SessionKey, agent_id: &str, read: u64) {
         self.touch_agent(key, agent_id);
         let Some(agent) = self
@@ -1356,15 +1380,20 @@ impl Inner {
         let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
         // The read happened when the request reached the cache, so a stream that outlives the entry still read it.
         let arrived = agent.current.as_ref().map(|o| o.started);
-        for kept in std::mem::take(&mut agent.kept) {
+        let probes = std::mem::take(&mut agent.kept);
+        let chain_ends: Vec<i64> = probes
+            .iter()
+            .map(|probe| Self::chain_expires(&probes, probe))
+            .collect();
+        for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
             let lineage = kept.canonical_model == agent.canonical_model
                 && kept.fast == fast
                 && kept.account == agent.account;
-            // A probe whose entry was gone when the request arrived kept nothing the request could read, whatever it
-            // read: `expired` is its own label, so a credited request never sits beside a cold return it
+            // A probe whose chain's last entry was gone when the request arrived kept nothing the request could read,
+            // whatever it read: `expired` is its own label, so a credited request never sits beside a cold return it
             // contradicts.
             let label = match arrived {
-                Some(at) if at >= kept.entry_expires => Some(Wasted::Expired),
+                Some(at) if at >= chain_end => Some(Wasted::Expired),
                 Some(_) if read > 0 && lineage => None,
                 _ => Some(Wasted::ColdReturn),
             };
@@ -1406,7 +1435,7 @@ impl Inner {
         let probes = std::mem::take(&mut agent.unanswered);
         if unanswered == Unanswered::Keep {
             // A row apiece: a request whose completion never came leaves its probes for the next one, which may
-            // keep probes paid under other keys, and each settles by the entry it wrote. A ceiling's label rides
+            // keep probes paid under other keys, and each settles by its chain's last entry. A ceiling's label rides
             // along, for the lapse sweep to settle under when no turn reads them first.
             let kept: Vec<Kept> = probes
                 .iter()
@@ -1430,11 +1459,11 @@ impl Inner {
         }
     }
 
-    /// Settles every kept probe whose `pending` label is set and whose `entry_expires <= now` under that label, on
-    /// each agent with no turn open, and touches each agent it settled for the next save, which releases the
-    /// settlements.
+    /// Settles every kept probe whose `pending` label is set and whose chain's last entry (`chain_expires`) ended at or
+    /// before `now` under that label, on each agent with no turn open, and touches each agent it settled for the next
+    /// save, which releases the settlements. A probe whose own entry ended inside a live chain waits with the chain, so
+    /// a turn inside the chain's last entry still answers every probe of it.
     pub(crate) fn settle_lapsed_pending(&mut self, now: i64) {
-        let lapsed = |kept: &Kept| kept.pending.is_some() && kept.entry_expires <= now;
         let open = &self.pending;
         let mut settled: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in self.sessions.iter_mut() {
@@ -1445,18 +1474,33 @@ impl Inner {
                     .current
                     .as_ref()
                     .is_some_and(|o| open.contains_key(&o.id));
-                if turn_open || !agent.kept.iter().any(lapsed) {
+                if turn_open {
                     continue;
                 }
-                let (due, waiting): (Vec<Kept>, Vec<Kept>) = std::mem::take(&mut agent.kept)
-                    .into_iter()
-                    .partition(lapsed);
-                agent.kept = waiting;
-                for kept in due {
-                    if let Some(label) = kept.pending {
-                        self.settlements_after_save.push(kept.settle(key, label));
+                let chain_ends: Vec<i64> = agent
+                    .kept
+                    .iter()
+                    .map(|probe| Self::chain_expires(&agent.kept, probe))
+                    .collect();
+                if !agent
+                    .kept
+                    .iter()
+                    .zip(&chain_ends)
+                    .any(|(kept, &chain_end)| kept.pending.is_some() && chain_end <= now)
+                {
+                    continue;
+                }
+                let mut waiting = Vec::new();
+                let probes = std::mem::take(&mut agent.kept);
+                for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
+                    match kept.pending {
+                        Some(label) if chain_end <= now => {
+                            self.settlements_after_save.push(kept.settle(key, label));
+                        }
+                        _ => waiting.push(kept),
                     }
                 }
+                agent.kept = waiting;
                 settled.push((key.clone(), agent_id.clone()));
             }
         }

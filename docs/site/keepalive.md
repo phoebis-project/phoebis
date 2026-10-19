@@ -108,7 +108,10 @@ whose entry that request read, a probe that rewrote the entry included, the newe
 it over a later one that did not cover it. An auxiliary or a foreign request may still read a warm cache, but it never
 resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no evidence about the cache, so
 a retry inside the probe's entry earns the credit the failed turn could not, its gap measured from the last turn that
-answered.
+answered. Probes on one model, speed and account form a chain while each later probe reads the entry back, since that
+read extends the entry, and a probe that reads nothing starts a chain of its own. A request on that model, speed and
+account that reads the cache inside the chain's last entry answers every probe of the chain, and one that arrives past
+that entry settles them all `expired`.
 
 A request a guardrail blocks is a refused request to the engine. A blocked `compaction`, `main` or `subagent` request,
 or one with no class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does, and a
@@ -325,16 +328,17 @@ first ends it under its own reason.
 ### The wasted probes
 
 A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered (at the idle
-limit, once the probe's entry lapses before a real request reads it) or is held under `horizon`, when the recipe lapses
-or is evicted, or when the next request after the probe reads nothing from the entry it kept:
+limit, once the last entry of the probe's [chain](#which-requests-re-arm-a-recipe) lapses before a real request reads
+it) or is held under `horizon`, when the recipe lapses or is evicted, or when the next request after the probe reads
+nothing from the entry its chain kept:
 
 | Reason | What settles it |
 | --- | --- |
-| `cold_return` | The next request read no cache, or on another account, model or speed, inside the probe's entry. |
+| `cold_return` | The next request read no cache, or on another account, model or speed, inside the last entry of the probe's chain. |
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
-| `expired` | The probe's entry expired before the next request arrived, or the recipe's before its probe was due. |
+| `expired` | The last entry of the probe's chain expired before the next request arrived, or the recipe's before its probe was due. |
 | `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
-| `idle_limit` | The idle window ran out and the probe's entry lapsed before a real request read it. |
+| `idle_limit` | The idle window ran out and the last entry of the probe's chain lapsed before a real request read it. |
 | `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
 | `released` | By an operator's release, a key's opt-out, or the mod reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
