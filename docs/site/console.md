@@ -888,17 +888,17 @@ a shared link keeps them, and a bare `/sessions` reads the defaults. The head un
 the session expiry that the filters keep, with the account each model is pinned to and each agent's cache-warming
 recipe." with the disclosure "How pins and recipes work", whose paragraph says what a pin and a recipe are, and a "Cost
 reference" link that opens the dialog on Plan rates. The tiles read Sessions (`{n} of {max}`, the rows the filters keep
-against the engine's cap), Agents (`{n} of {max}` with `{n} busy, {n} idle, {n} parked`, the agents of the rows the
-filters keep less the subagents the mod released while their session lives, which draw no line and keep their slot until
-the session leaves, named on hover), Retained (`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h"
-(a bar by outcome and `{n} ok ({pct}), {n} migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h"
-("misses cache warming exists to prevent") and "Bus gaps" ("times the keepalive engine missed bus events"). While the
-filters hide rows, the Sessions and Agents tiles name them on hover, `{k} sessions hidden by the filters`. A tile whose
-read failed draws a dash with the reason on hover, and Try again under the tiles reads them again. Auto reload starts at
-5 s and reads the sessions, the recipes and the tiles at that one interval, and it waits while the Cost reference
-dialog, the Release question or a row's menu is open. The probes and the recipe are explained on
-[Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the recipe's states under [The five
-states](keepalive.md#the-five-states).
+against the engine's cap), Agents (`{n} of {max}` with `{n} busy, {n} idle, {n} parked`, both over the agents of the
+rows the filters keep: the figure leaves out the subagents the mod released while their session lives, which draw no
+line and keep their slot until the session leaves, named on hover, and counts them while Released agents draws them),
+Retained (`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h" (a bar by outcome and `{n} ok ({pct}),
+{n} migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to
+prevent") and "Bus gaps" ("times the keepalive engine missed bus events"). While the filters hide rows, the Sessions and
+Agents tiles name them on hover, `{k} sessions hidden by the filters`. A tile whose read failed draws a dash with the
+reason on hover, and Try again under the tiles reads them again. Auto reload starts at 5 s and reads the sessions, the
+recipes and the tiles at that one interval, and it waits while the Cost reference dialog, the Release question or a
+row's menu is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
+mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
 
 The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
 all" or "Collapse all". The Session column is always drawn, and the twelve others, which the bar's Columns control
@@ -920,7 +920,8 @@ base's row where the list holds it. Companion reads the mod's state, `reporting`
 seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge, `busy`, `idle`, `parked`, `released`
 or `unknown`, with the recipe summary, or "no recipe". Next probe reads the instant, "pending" or "not scheduled".
 Before the first session the card reads "No live sessions" with "A session appears here on its first request, or as soon
-as the keepalive mod registers it, and drops off once it passes the session expiry."
+as the keepalive mod registers it, and drops off once it passes the session expiry." While the filters hide every row
+the router lists, the card reads "No sessions kept by the filters" with `{k} sessions hidden by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has ledgered traffic, "View in routing
 log", which opens the log on that session's decisions an hour either side of its last request, and "Release". Release

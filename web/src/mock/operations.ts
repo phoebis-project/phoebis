@@ -205,7 +205,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const keyGeneration = Date.parse(keyById.get(spec.keyId)!.createdAt);
   const sessionId = spec.sessionId ?? drawnId;
   const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
-  // Both rolls are drawn whatever the spec says, a fixed row's aside, so pinning one session's idle
+  // Both rolls are drawn whatever the spec says, except on a fixed row, so pinning one session's idle
   // does not shift the seeded stream the rest of these fixtures read from.
   const createdRoll = (written ? written.createdMinutes : rng.int(8, 9 * 60)) * MINUTE;
   const idleRoll = spec.fixed ? spec.idleMinutes * MINUTE : spec.state === 'busy' ? rng.int(5, 90) * 1000 : rng.int(2, 40) * MINUTE;
@@ -220,7 +220,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
       ? 'usd'
       : 'window_share'
     : null;
-  // Drawn whatever the spec says, a fixed row's aside, so pinning or the account's kind never shifts the stream the
+  // Drawn whatever the spec says, except on a fixed row, so pinning or the account's kind never shifts the stream the
   // rows after this one read. A row's burn is the per-hour figure the wire answers for its unit: dollars on the usd
   // roll, a share of the account's 5-hour window on the other.
   const burnRoll = written ? written.burn : rng.float(0.01, 0.9);

@@ -297,9 +297,16 @@ export function SessionsPage() {
   const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
   const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
   const sessionsNote = withCompanion !== null && withRecipe !== null ? `${fmtInt(withCompanion)} with the keepalive mod, ${fmtInt(withRecipe)} with a recipe` : null;
-  // Counted over the rows the filters keep, so the Agents figure agrees with the Agents column under it.
+  // Counted over the rows the filters keep, so the Agents figure and its note agree with the table under them.
   const agentRecords = rows?.reduce((n, r) => n + r.session.agents, 0) ?? 0;
   const hidden = rows?.reduce((n, r) => n + r.released, 0) ?? 0;
+  const lifecycle = rows?.reduce(
+    (n, r) => {
+      for (const a of r.agents) if (a.agentState === 'busy' || a.agentState === 'idle' || a.agentState === 'parked') n[a.agentState] += 1;
+      return n;
+    },
+    { busy: 0, idle: 0, parked: 0 },
+  );
   const onConfirmRelease = () => {
     if (!pending) return;
     void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
@@ -391,13 +398,13 @@ export function SessionsPage() {
             o && rows ? (
               <span
                 className="nowrap"
-                title={`The engine holds ${fmtInt(agentRecords)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.` : ''}${hiddenTitle === undefined ? '' : ` ${hiddenTitle}.`}`}
+                title={`The rows shown hold ${fmtInt(agentRecords)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.` : ''}${hiddenTitle === undefined ? '' : ` ${hiddenTitle}.`}`}
               >
                 {`${fmtInt(Math.max(0, agentRecords - hidden))} of ${fmtInt(o.limits.agents.max)}`}
               </span>
             ) : null
           }
-          note={o ? `${fmtInt(o.agents.busy)} busy, ${fmtInt(o.agents.idle)} idle, ${fmtInt(o.agents.parked)} parked` : null}
+          note={lifecycle ? `${fmtInt(lifecycle.busy)} busy, ${fmtInt(lifecycle.idle)} idle, ${fmtInt(lifecycle.parked)} parked` : null}
           title={hiddenTitle}
           error={overviewError}
         />
@@ -479,7 +486,11 @@ export function SessionsPage() {
           </div>
         ) : rows.length === 0 ? (
           <div style={{ padding: 20 }}>
-            <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." />
+            {hiddenTitle === undefined ? (
+              <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." />
+            ) : (
+              <EmptyState title="No sessions kept by the filters" body={`${hiddenTitle}.`} />
+            )}
           </div>
         ) : (
           <div className="table-wrap">

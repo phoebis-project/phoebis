@@ -74,6 +74,7 @@ test('each dimension list names keys of its codec, and every codec key but the e
     ['analytics', d.ANALYTICS_DIMENSIONS, d.ANALYTICS_CODEC],
     ['keys', d.KEYS_DIMENSIONS, d.KEYS_CODEC],
     ['accounts', d.ACCOUNTS_DIMENSIONS, d.ACCOUNTS_CODEC],
+    ['sessions', d.SESSIONS_DIMENSIONS, d.SESSIONS_CODEC],
   ];
   for (const [view, dimensions, codec] of views) {
     const keys = Object.keys(codec.fromParams(new URLSearchParams()));
@@ -91,7 +92,8 @@ test("the lists are alphabetical inside each group, the groups in the view's ord
   assert.deepEqual(groups(d.ANALYTICS_DIMENSIONS), ['Routing', 'Request', 'Subject']);
   assert.deepEqual(groups(d.KEYS_DIMENSIONS), ['Keys']);
   assert.deepEqual(groups(d.ACCOUNTS_DIMENSIONS), ['Accounts']);
-  for (const dimensions of [d.REQUESTS_DIMENSIONS, d.ROUTING_LOG_DIMENSIONS, d.ANALYTICS_DIMENSIONS, d.KEYS_DIMENSIONS, d.ACCOUNTS_DIMENSIONS]) {
+  assert.deepEqual(groups(d.SESSIONS_DIMENSIONS), ['Sessions']);
+  for (const dimensions of [d.REQUESTS_DIMENSIONS, d.ROUTING_LOG_DIMENSIONS, d.ANALYTICS_DIMENSIONS, d.KEYS_DIMENSIONS, d.ACCOUNTS_DIMENSIONS, d.SESSIONS_DIMENSIONS]) {
     for (const group of groups(dimensions)) {
       const labels = dimensions.filter((x) => x.group === group).map((x) => x.label);
       assert.deepEqual(labels, [...labels].sort((a, b) => a.localeCompare(b)), `${group} is alphabetical`);
