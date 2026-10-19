@@ -3853,6 +3853,7 @@ impl Task {
                                 folded(renewed.burn_unmetered, unmetered_weight);
                             renewed.burn_at = Some(now);
                             renewed.last_input_tokens = prompt;
+                            renewed.last_classifier = classifier;
                         }
                         self.state.put_pin(renewed.clone());
                         self.state.mark_renewed(&key);

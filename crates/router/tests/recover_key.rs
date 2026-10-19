@@ -689,13 +689,14 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }
 
-/// The reverse of the registry's newest migration, the pin's five unmetered burn columns gone, as `crates/store/tests`
-/// replays it.
+/// The reverse of the registry's newest migration, the pin's five unmetered burn columns and its `last_classifier`
+/// gone, as `crates/store/tests` replays it.
 const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN burn_unmetered_cache_read; \
      ALTER TABLE pins DROP COLUMN burn_unmetered_input; \
      ALTER TABLE pins DROP COLUMN burn_unmetered_output; \
      ALTER TABLE pins DROP COLUMN burn_unmetered_write_1h; \
      ALTER TABLE pins DROP COLUMN burn_unmetered_write_5m; \
+     ALTER TABLE pins DROP COLUMN last_classifier; \
      UPDATE meta SET value = '57' WHERE key = 'schema_version';";
 
 /// The reverse of the step before it, the guardrail tables gone.

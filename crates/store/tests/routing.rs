@@ -28,6 +28,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
         last_input_tokens: 0,
+        last_classifier: false,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
         shed_from: None,
@@ -936,9 +937,9 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     );
 }
 
-// The reverse of the registry's version 58: the five unmetered burn columns. One line with the marker last. The
-// trailing `\n` ends the marker's comment.
-const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN burn_unmetered_cache_read; ALTER TABLE pins DROP COLUMN burn_unmetered_input; ALTER TABLE pins DROP COLUMN burn_unmetered_output; ALTER TABLE pins DROP COLUMN burn_unmetered_write_1h; ALTER TABLE pins DROP COLUMN burn_unmetered_write_5m; -- rollback\n";
+// The reverse of the registry's version 58: the five unmetered burn columns and `last_classifier`. One line with the
+// marker last. The trailing `\n` ends the marker's comment.
+const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN burn_unmetered_cache_read; ALTER TABLE pins DROP COLUMN burn_unmetered_input; ALTER TABLE pins DROP COLUMN burn_unmetered_output; ALTER TABLE pins DROP COLUMN burn_unmetered_write_1h; ALTER TABLE pins DROP COLUMN burn_unmetered_write_5m; ALTER TABLE pins DROP COLUMN last_classifier; -- rollback\n";
 // The reverse of the registry's version 56: the pins lose `entrypoint`. One line with the marker last. The trailing
 // `\n` ends the marker's comment.
 const UNDO_V56: &str = "ALTER TABLE pins DROP COLUMN entrypoint; -- rollback\n";

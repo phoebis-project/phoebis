@@ -3334,6 +3334,7 @@ mod tests {
             burn_fast: PinBurn::default(),
             burn_unmetered: PinBurn::default(),
             last_input_tokens: 0,
+            last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
             shed_from: None,

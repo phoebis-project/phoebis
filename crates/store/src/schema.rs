@@ -835,11 +835,13 @@ CREATE INDEX IF NOT EXISTS guardrail_attachments_subject ON guardrail_attachment
 "#;
 
 // The pin's unmetered burn: the usage of the client's own classifier calls, priced in dollars alone and never under
-// a window share, as five columns beside the fast copy's. Zero on every standing pin, which the default gives.
+// a window share, as five columns beside the fast copy's, and whether a classifier call renewed the pin last, whose
+// stored context then prices no rewrite. Zero and unset on every standing pin, which the defaults give.
 const V58: &str = r#"
 ALTER TABLE pins ADD COLUMN burn_unmetered_cache_read REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN burn_unmetered_input REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN burn_unmetered_output REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN burn_unmetered_write_1h REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN burn_unmetered_write_5m REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN last_classifier INTEGER NOT NULL DEFAULT 0;
 "#;

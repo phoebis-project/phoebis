@@ -6157,6 +6157,56 @@ async fn a_classifier_renewal_is_written_with_the_pin_and_a_restart_reads_its_un
     );
 }
 
+#[tokio::test]
+async fn a_classifier_renewal_sets_the_pins_last_classifier_flag_with_its_prompt_and_a_standard_renewal_clears_it(
+) {
+    let store = averaged(seeded(&["a"]));
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let pin = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let (placed, _) = pin_and_fast_usage(&handle).await;
+    assert!(
+        !placed.last_classifier,
+        "a placement holds no classifier body as its context"
+    );
+    handle
+        .report(classifier_renewal(pin.clone(), 2_000, 600))
+        .await;
+    let (held, _) = pin_and_fast_usage(&handle).await;
+    assert_eq!(
+        (held.last_input_tokens, held.last_classifier),
+        (600, true),
+        "the classifier call's prompt is the pin's last context, flagged as a classifier body"
+    );
+    let stored = wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .find(|p| p.burn_at == Some(2_000))
+    })
+    .await;
+    assert!(
+        stored.last_classifier,
+        "the flag reaches the store in the renewal's row"
+    );
+    handle
+        .report(speed_renewal(pin, 62_000, false, 1_000))
+        .await;
+    let (held, _) = pin_and_fast_usage(&handle).await;
+    assert_eq!(
+        (held.last_input_tokens, held.last_classifier),
+        (1_000, false),
+        "a standard renewal's prompt replaces the classifier body and clears the flag"
+    );
+}
+
 /// A client renewal of `pin` at `now` by the client's own classifier call, with `input` uncached tokens as its whole
 /// prompt.
 fn classifier_renewal(pin: PinRef, now: i64, input: u64) -> Report {
@@ -7395,6 +7445,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
         last_input_tokens: 1_000,
+        last_classifier: false,
         last_refresh_at: AT - HOUR,
         cache_ttl_ms: 300_000,
         shed_from: None,

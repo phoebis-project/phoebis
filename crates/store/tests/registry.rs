@@ -141,9 +141,9 @@ const UNDO_V40: &str =
 // a seeded version-40 store is faithful. One line with the marker last. The trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
 const UNDO_V42: &str = "DROP INDEX IF EXISTS alert_deliveries_event; CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id);";
-// The reverse of the registry's version 58: the five unmetered burn columns. One line with the marker last. The
-// trailing `\n` ends the marker's comment.
-const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN burn_unmetered_cache_read; ALTER TABLE pins DROP COLUMN burn_unmetered_input; ALTER TABLE pins DROP COLUMN burn_unmetered_output; ALTER TABLE pins DROP COLUMN burn_unmetered_write_1h; ALTER TABLE pins DROP COLUMN burn_unmetered_write_5m; -- rollback\n";
+// The reverse of the registry's version 58: the five unmetered burn columns and `last_classifier`. One line with the
+// marker last. The trailing `\n` ends the marker's comment.
+const UNDO_V58: &str = "ALTER TABLE pins DROP COLUMN burn_unmetered_cache_read; ALTER TABLE pins DROP COLUMN burn_unmetered_input; ALTER TABLE pins DROP COLUMN burn_unmetered_output; ALTER TABLE pins DROP COLUMN burn_unmetered_write_1h; ALTER TABLE pins DROP COLUMN burn_unmetered_write_5m; ALTER TABLE pins DROP COLUMN last_classifier; -- rollback\n";
 // The reverse of the registry's version 57: the guardrail tables, the attachments first since they reference the
 // guardrails, each `IF EXISTS` so a chain reads the same over a store that never ran the version. One line with the
 // marker last. The trailing `\n` ends the marker's comment.
@@ -1371,6 +1371,7 @@ fn a_store_left_at_50_is_carried_to_52_and_a_pins_fast_burn_reads_back_as_writte
         },
         burn_unmetered: PinBurn::default(),
         last_input_tokens: 1_000,
+        last_classifier: false,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
         shed_from: None,
@@ -1429,6 +1430,7 @@ fn a_store_left_at_57_is_carried_to_58_and_a_pins_unmetered_burn_reads_back_as_w
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
         last_input_tokens: 1_000,
+        last_classifier: false,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
         shed_from: None,
@@ -1491,6 +1493,94 @@ fn a_store_left_at_57_is_carried_to_58_and_a_pins_unmetered_burn_reads_back_as_w
     assert!(
         UNMETERED_COLUMNS.iter().all(|c| columns.contains(*c)),
         "V58 added the five unmetered columns: {columns:?}"
+    );
+}
+
+#[test]
+fn a_store_left_at_57_is_carried_to_58_and_a_pins_last_classifier_flag_reads_back_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let key = StorageKey::generate();
+    let store = Store::open(&path, &key).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    let before = PinRow {
+        key_id: "k".into(),
+        session_id: "s".into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        account_id: "a".into(),
+        epoch: 1,
+        created_at: 1,
+        last_used_at: 1,
+        key_generation: 1,
+        incarnation: 1,
+        burn: PinBurn::default(),
+        burn_at: Some(5),
+        burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
+        burn_unmetered: PinBurn::default(),
+        last_input_tokens: 1_000,
+        last_classifier: false,
+        last_refresh_at: 1,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        static_hash: None,
+        tail_hash: None,
+        lane: String::new(),
+        entrypoint: String::new(),
+        marked_at: None,
+        marked_on: None,
+        marked_window: None,
+    };
+    store.upsert_pin(&before).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V58} UPDATE meta SET value = '57' WHERE key = 'schema_version';"
+    ))
+    .unwrap();
+    drop(conn);
+    let rewound = columns_of(&path, "pins");
+    assert!(
+        !rewound.contains("last_classifier"),
+        "the undo leaves the pins of a version-57 store without the flag: {rewound:?}"
+    );
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 58);
+    assert_eq!(
+        migrated.load_routing().unwrap().pins,
+        vec![before.clone()],
+        "a pin from before the step reads the flag unset"
+    );
+    let classified = PinRow {
+        last_input_tokens: 600,
+        last_classifier: true,
+        ..before
+    };
+    migrated.upsert_pin(&classified).unwrap();
+    assert_eq!(
+        migrated.load_routing().unwrap().pins,
+        vec![classified.clone()],
+        "a pin a classifier call renewed last reads back with the flag set"
+    );
+    let renewed = PinRow {
+        last_input_tokens: 2_000,
+        last_classifier: false,
+        ..classified
+    };
+    migrated.upsert_pin(&renewed).unwrap();
+    assert_eq!(
+        migrated.load_routing().unwrap().pins,
+        vec![renewed],
+        "an upsert over the row clears the flag a standard renewal clears"
+    );
+    drop(migrated);
+    assert!(
+        columns_of(&path, "pins").contains("last_classifier"),
+        "V58 added the flag's column"
     );
 }
 
@@ -1950,6 +2040,7 @@ fn the_pins_columns_after_the_rebuild_are_the_old_set_plus_the_agent() {
         "incarnation",
         "burn_at",
         "last_input_tokens",
+        "last_classifier",
         "last_refresh_at",
         "cache_ttl_ms",
         "shed_from",
