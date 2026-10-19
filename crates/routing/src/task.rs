@@ -1690,9 +1690,9 @@ struct Task {
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     /// The reset each account and window's wall was announced for, `None` where the reading named no reset, as a
-    /// 5-hour window open past its reset does, beside the instant of the announcement: a charge, a booking or a sample
-    /// announces a wall once per reset cycle, and the sample that confirms it names that cycle's reset and announces
-    /// nothing.
+    /// 5-hour window open past its reset does, beside the instant of the announcement, or of the reset's passing for a
+    /// wall that went on past it: a charge, a booking or a sample announces a wall once per reset cycle, and the sample
+    /// that confirms it names that cycle's reset and announces nothing.
     spent_announced: HashMap<(String, String), (Option<i64>, i64)>,
     state: RoutingState,
     store: Arc<Store>,
@@ -2425,11 +2425,12 @@ fn destination_fit(
 }
 
 /// Whether a reading at `now` naming `reset` is in the cycle of a wall `announced` as `(reset, at)` on `window`. Two
-/// named resets are one within `RESET_SLACK_MS`, as `announce_reset` compares them. A wall announced with none was in a
-/// window open past its stored reset, which opened by `at` and runs the window's length at most, so a reset inside
-/// that length after `at` names it, and a second reading with none inside it is the same open window. Both bounds,
-/// the named reset's and the reading with none, take the same slack, since the request that opened the window can
-/// reach the upstream after `at`.
+/// named resets are one within `RESET_SLACK_MS`, as `announce_reset` compares them. A reading with none over a wall
+/// announced with a reset is of that reset's cycle at or before the reset, with the same slack past it, and of another
+/// cycle after. A wall announced with none was in a window open past its stored reset, which opened by `at` and runs
+/// the window's length at most, so a reset inside that length after `at` names it, and a second reading with none
+/// inside it is the same open window. Both bounds, the named reset's and the reading with none, take the same slack,
+/// since the request that opened the window can reach the upstream after `at`.
 fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, window: &str) -> bool {
     let (announced_reset, at) = announced;
     let open_until = at.saturating_add(if window == FIVE_HOUR {
@@ -2444,7 +2445,7 @@ fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, windo
         }
         (None, Some(reset)) => at <= reset && reset <= bound,
         (None, None) => now <= bound,
-        (Some(_), None) => false,
+        (Some(announced), None) => now <= announced.saturating_add(RESET_SLACK_MS),
     }
 }
 
@@ -3924,7 +3925,7 @@ impl Task {
                     })
                     .collect();
                 let now = (self.clock)();
-                let sample = self.held_at_the_wall(sample, &stored, now);
+                let sample = self.held_at_the_wall(&account_id, sample, &stored, now);
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: a head and a poll can cross, and the older one's reading is one
@@ -4429,7 +4430,7 @@ impl Task {
     /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
     /// reset names, or no reset on a reading taken past it, then the window cleared, which a reading under 1.0 names
     /// over one at 1.0 or above with no reset passed, or the window spent, which a reading at 1.0 or above names over
-    /// one under it.
+    /// one under it, or over any one where it names the next reset after a passed one.
     fn window_edges(
         &mut self,
         account_id: &str,
@@ -4464,6 +4465,25 @@ impl Task {
                     at: now,
                 });
             }
+            // A wall announced under the passed reset that goes on into the window open past it is the same wall: its
+            // announcement moves to the reset's passing, so its clamp runs from here and it is announced no second
+            // time. A reading below the wall leaves the old cycle's announcement standing, and a reading at the wall
+            // that names the next reset is that cycle's own wall, announced below.
+            let key = (account_id.to_string(), window.to_string());
+            let goes_on =
+                utilization_before >= 1.0 && reading.utilization >= 1.0 && next_reset.is_none();
+            if goes_on
+                && self
+                    .spent_announced
+                    .get(&key)
+                    .is_some_and(|(announced, _)| {
+                        announced.is_some_and(|announced| {
+                            announced.abs_diff(reset_at) <= RESET_SLACK_MS.unsigned_abs()
+                        })
+                    })
+            {
+                self.spent_announced.insert(key, (reading.reset, now));
+            }
         }
         // The clear leaves the reset to the next sample or the clock walk, and the wall's announcement, the
         // prediction's or a sample's, leaves with it, so a reading back at the limit under the same reset is spent
@@ -4485,14 +4505,17 @@ impl Task {
                 });
             }
         }
-        // The prediction may have announced this wall already: the reading then names the reset it did, or names none
-        // before the stored reset passed and stands under that one.
+        // A wall the prediction or an earlier sample announced is not announced again by a reading of its cycle, and
+        // a reading that names no reset before the stored reset passed stands under that one.
         let reset = reset_under(stored.as_ref(), &reading);
         let announced = self
             .spent_announced
             .get(&(account_id.to_string(), window.to_string()))
             .is_some_and(|announced| same_cycle(*announced, reset, now, window));
-        if stored.is_none_or(|stored| stored.utilization < 1.0)
+        // A reading at the wall that names the reset after a passed one is a new wall, over a stored reading at the
+        // wall too.
+        let next_cycle = matches!(passed, Some((_, _, Some(_))));
+        if (next_cycle || stored.is_none_or(|stored| stored.utilization < 1.0))
             && reading.utilization >= 1.0
             && !announced
         {
@@ -4518,13 +4541,16 @@ impl Task {
     /// reading's reset passed, is of that reset's cycle and takes that reset, raised or not, so the reading the fold
     /// stores keeps it and the next edge reads it passed. A reading within `SPENT_MARGIN` of 1.0 over a stored reading
     /// at the wall under the same reset cycle is then raised to the stored utilization with its own instant and source,
-    /// so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the wall again. A
-    /// reading under the margin is a real clear and lands at its own utilization, so `window_edges` reads the window
-    /// cleared and forgets the announcement, and the next crossing announces anew. A reading of another cycle lands as
-    /// read. Only a reading newer than the stored one counts, since the fold drops any other: an older reading, or one
-    /// of the stored instant, goes to the fold as read.
+    /// so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the wall again. The cycle
+    /// is the announcement's for the account and window where one stands and the stored reading's reset and instant
+    /// where none does, and since no raised reading moves the announcement's instant, readings with no reset on either
+    /// side are held for the window's length from it and no longer. A reading under the margin is a real clear and
+    /// lands at its own utilization, so `window_edges` reads the window cleared and forgets the announcement, and the
+    /// next crossing announces anew. A reading of another cycle lands as read. Only a reading newer than the stored one
+    /// counts, since the fold drops any other: an older reading, or one of the stored instant, goes to the fold as read.
     fn held_at_the_wall(
         &self,
+        account_id: &str,
         mut sample: UtilizationSample,
         stored: &HashMap<String, WindowReading>,
         now: i64,
@@ -4541,9 +4567,12 @@ impl Task {
             if stored.utilization < 1.0 || reading.utilization >= 1.0 {
                 continue;
             }
-            if reading.utilization >= 1.0 - SPENT_MARGIN
-                && same_cycle((stored.reset, stored.observed_at), reset, now, window)
-            {
+            let anchor = self
+                .spent_announced
+                .get(&(account_id.to_string(), window.to_string()))
+                .copied()
+                .unwrap_or((stored.reset, stored.observed_at));
+            if reading.utilization >= 1.0 - SPENT_MARGIN && same_cycle(anchor, reset, now, window) {
                 reading.utilization = stored.utilization;
             }
         }
@@ -5289,6 +5318,32 @@ mod tests {
         assert!(
             !same_cycle((None, at), None, open_until + RESET_SLACK_MS + 1, FIVE_HOUR),
             "past the slack a later window"
+        );
+    }
+
+    /// A reading that names no reset over a wall announced with one is of that wall's cycle until the announced reset
+    /// passes, with the slack the named-reset arm takes, and of another cycle past it.
+    #[test]
+    fn a_reading_with_no_reset_is_of_the_announced_resets_cycle_up_to_the_reset_and_its_slack() {
+        let at = 1_000;
+        let reset = at + FIVE_HOUR_MS;
+        assert!(
+            !same_cycle(
+                (Some(reset), at),
+                None,
+                reset + RESET_SLACK_MS + 1,
+                FIVE_HOUR
+            ),
+            "past the slack another cycle"
+        );
+        assert!(
+            same_cycle((Some(reset), at), None, reset - 1_000, FIVE_HOUR),
+            "before the reset the announced cycle"
+        );
+        assert!(same_cycle((Some(reset), at), None, reset, FIVE_HOUR));
+        assert!(
+            same_cycle((Some(reset), at), None, reset + RESET_SLACK_MS, FIVE_HOUR),
+            "inside the slack, as the named-reset arm reads it"
         );
     }
 

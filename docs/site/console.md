@@ -1171,7 +1171,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
 | window cleared | A quota window read under its limit again after a reading at the limit, with the readings before and after and the reset unchanged. |
 | window reset | A quota window reset, with the reading before it. |
-| window spent | A response head, the poll or the prediction read a quota window at its limit, once per reset cycle: a newer head of the same cycle within two points of 1.0 after it neither clears nor repeats it. |
+| window spent | A response head, the poll or the prediction read a quota window at its limit, once per reset cycle: a newer head of the same cycle within two points of 1.0 after it neither clears nor repeats it, and a head naming no reset, taken before the announced reset, is of the same cycle. |
 
 Other views open the log on what they show: a Requests row and its drawer on the request a quarter hour either side, the
 Sessions row menu's "View in routing log" on the session's decisions an hour either side of its last request, a pool

@@ -9964,12 +9964,14 @@ async fn a_charge_or_a_reservation_that_predicts_a_spent_window_emits_window_spe
             .any(|event| matches!(event, RouterEvent::WindowSpent { .. })),
         "one announcement per reset: {quiet:?}"
     );
-    // Past the reset the window opens with the router's own charges, and a charge that spends it is a new cycle.
-    now.store(reset + 2_000, Ordering::SeqCst);
+    // Past the reset the window opens with the router's own charges, and a charge that spends it past the reset's
+    // minute of slack is a new cycle: a reading that names no reset inside the slack is of the announced one.
+    let opened = reset + 2 * 60_000;
+    now.store(opened, Ordering::SeqCst);
     handle
         .report(Report::Usage {
             account_id: "a".into(),
-            at: reset + 2_000,
+            at: opened,
             canonical_model: "claude-sonnet-5".into(),
             incarnation: 1,
             usage: PinUsage {
@@ -11045,6 +11047,332 @@ async fn a_predicted_wall_is_not_announced_again_by_a_head_that_names_no_reset_b
             .any(|event| matches!(event, RouterEvent::WindowSpent { .. })),
         "the predicted wall is announced once: {quiet:?}"
     );
+}
+
+/// A head that names no reset, taken past the announced reset and its minute of slack, is of another cycle than the
+/// wall's: within the margin it lands as read and reads the reset passed, with no clear.
+#[tokio::test]
+async fn a_head_naming_no_reset_past_the_announced_reset_and_its_slack_lands_as_read() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 2 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    let past = reset + 2 * 60_000;
+    now.store(past, Ordering::SeqCst);
+    handle.report(head_reading(past, 0.99, None, "r-1")).await;
+    assert_eq!(
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
+        0.99,
+        "the head lands as read"
+    );
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset,
+            observed,
+            at,
+            ..
+        } => assert_eq!(
+            (reset_at, next_reset, observed, at),
+            (reset, None, "sample", past)
+        ),
+        other => panic!("the announced reset reads passed, not {other:?}"),
+    }
+    no_further_event(&mut events).await;
+}
+
+/// A wall announced with no reset bounds its cycle by the window's length and a minute of slack from the
+/// announcement, which a head held at the wall does not move: hourly heads within the margin are held for five hours,
+/// and the first past them lands as read and clears the wall.
+#[tokio::test]
+async fn a_wall_with_no_reset_holds_heads_within_the_margin_for_the_windows_length_from_its_announcement(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let announced = 2_000;
+    let now = Arc::new(AtomicI64::new(announced));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed("a", sample_with(announced, FIVE_HOUR, 1.0, None)))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { reset: None, at, .. } if at == announced
+    ));
+    for hour in 1..=5 {
+        let at = announced + hour * HOUR;
+        now.store(at, Ordering::SeqCst);
+        handle
+            .report(head_reading(at, 0.99, None, &format!("r-{hour}")))
+            .await;
+        assert_eq!(
+            predicted_reading(&handle, FIVE_HOUR).await.utilization,
+            1.0,
+            "a head {hour} hours after the announcement is held at the wall"
+        );
+    }
+    no_further_event(&mut events).await;
+    let past = announced + 6 * HOUR;
+    now.store(past, Ordering::SeqCst);
+    handle.report(head_reading(past, 0.99, None, "r-6")).await;
+    assert_eq!(
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
+        0.99,
+        "a head past the window's length from the announcement lands as read"
+    );
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.99,
+            None,
+            WindowSource::Head,
+            Some("r-6")
+        )),
+        "{event:?}"
+    );
+    no_further_event(&mut events).await;
+}
+
+/// A wall a poll announced with its reset that continues into the window open past that reset: the head at the wall
+/// that reads the reset passed announces nothing and anchors the wall's cycle at its own instant, so hourly heads
+/// within the margin are held for the window's length from the reset's passing, the first past it clears the wall
+/// once, and the next head at the wall announces it anew.
+#[tokio::test]
+async fn a_wall_that_outlives_its_reset_is_held_for_the_windows_length_from_the_resets_passing_and_announced_once(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 2 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    let passed = reset + 1_000;
+    now.store(passed, Ordering::SeqCst);
+    handle.report(head_reading(passed, 1.0, None, "r-0")).await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset,
+            observed,
+            at,
+            ..
+        } => assert_eq!(
+            (reset_at, next_reset, observed, at),
+            (reset, None, "sample", passed)
+        ),
+        other => panic!("the announced reset reads passed, not {other:?}"),
+    }
+    for hour in 1..=5 {
+        let at = passed + hour * HOUR;
+        now.store(at, Ordering::SeqCst);
+        handle
+            .report(head_reading(at, 0.99, None, &format!("r-{hour}")))
+            .await;
+        assert_eq!(
+            predicted_reading(&handle, FIVE_HOUR).await.utilization,
+            1.0,
+            "a head {hour} hours after the reset's passing is held at the wall"
+        );
+    }
+    // Neither the head at the wall past the reset nor a held head announced or cleared the wall.
+    no_further_event(&mut events).await;
+    let past = passed + 6 * HOUR;
+    now.store(past, Ordering::SeqCst);
+    handle.report(head_reading(past, 0.99, None, "r-6")).await;
+    assert_eq!(
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
+        0.99,
+        "a head past the window's length from the reset's passing lands as read"
+    );
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.99,
+            None,
+            WindowSource::Head,
+            Some("r-6")
+        )),
+        "{event:?}"
+    );
+    no_further_event(&mut events).await;
+    let again = past + 1_000;
+    now.store(again, Ordering::SeqCst);
+    handle.report(head_reading(again, 1.0, None, "r-7")).await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowSpent {
+            reset, source, at, ..
+        } => assert_eq!((reset, source, at), (None, WindowSource::Head, again)),
+        other => panic!("the next wall is announced anew, not {other:?}"),
+    }
+}
+
+/// A wall the prediction announced ends at its reset: a poll past that reset that names the next one at the wall is the
+/// next cycle's own crossing and announces it.
+#[tokio::test]
+async fn a_poll_at_the_next_cycles_wall_past_a_predicted_walls_reset_announces_that_wall() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let reset = 2 * HOUR;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    now.store(1_500, Ordering::SeqCst);
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: 1_500,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 10_000_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            classifier: false,
+            request_id: "r-1".into(),
+            attempt: 1,
+            entrypoint: None,
+        })
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent {
+            reset: Some(at),
+            source: WindowSource::Predicted,
+            ..
+        } if at == reset
+    ));
+    let past = reset + 1_000;
+    let next_reset = reset + 5 * HOUR;
+    now.store(past, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(past, FIVE_HOUR, 1.0, Some(next_reset)),
+        ))
+        .await;
+    match next_spent(&mut events).await {
+        RouterEvent::WindowSpent {
+            reset: spent,
+            source,
+            at,
+            ..
+        } => assert_eq!(
+            (spent, source, at),
+            (Some(next_reset), WindowSource::Poll, past)
+        ),
+        other => panic!("the next cycle's wall, not {other:?}"),
+    }
+}
+
+/// A poll at the wall past the announced reset that names the next one is a new wall, over a stored reading at the wall
+/// too: it announces that cycle's wall, and a head within the margin naming the same reset is held at it.
+#[tokio::test]
+async fn a_poll_at_the_wall_naming_the_next_reset_past_an_announced_walls_reset_announces_the_new_wall(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 2 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    let passed = reset + 1_000;
+    let next_reset = reset + 5 * HOUR;
+    now.store(passed, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(passed, FIVE_HOUR, 1.0, Some(next_reset)),
+        ))
+        .await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset: next,
+            ..
+        } => assert_eq!((reset_at, next), (reset, Some(next_reset))),
+        other => panic!("the announced reset reads passed, not {other:?}"),
+    }
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowSpent {
+            reset: spent,
+            source,
+            at,
+            ..
+        } => assert_eq!(
+            (spent, source, at),
+            (Some(next_reset), WindowSource::Poll, passed)
+        ),
+        other => panic!("the next cycle's wall, not {other:?}"),
+    }
+    let headed = passed + HOUR;
+    now.store(headed, Ordering::SeqCst);
+    handle
+        .report(head_reading(headed, 0.99, Some(next_reset), "r-1"))
+        .await;
+    assert_eq!(
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
+        1.0,
+        "a head within the margin of the new wall is held at it"
+    );
+    no_further_event(&mut events).await;
 }
 
 /// A main turn of `session` selected against `state` over the task's snapshot: the task's own state is out of the

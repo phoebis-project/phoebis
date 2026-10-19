@@ -590,15 +590,17 @@ account with the Burn section in view.
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is
 announced once per reset cycle, since a newer head of the same cycle within two points of 1.0 after it neither clears
 nor repeats it, and two points cover a head, which reads the share up to a point under the poll's whole percent, with
-one point of room. The ledger folds the four routing conditions from its events once an hour and at start into one
-table, which the gauge and `GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds
-none of its events. The subject is the account, and the item dates from the oldest wall of the day. The detail counts
-the walls, names their windows and the settings `shed_cap` and `window_ceiling`, and names one figure by the trigger of
-the newest shedding round on the wall's window within that window's length before the wall: after a projection round the
-projection error, one less the round's projection, after a slow-down round the time the wall arrived before the reset (0
-at or after it), and neither with no round. The ledger also keeps each account's longest early wall of the hour under a
-slow-down round, so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on
-the account's spent windows since the condition began.
+one point of room. A head that names no reset, taken before the announced reset, is of the announced cycle and neither
+clears nor repeats the wall, and the cycle that holds a head within the two points runs from the instant the wall was
+announced, or from the reset's passing for a wall that goes on past its reset. The ledger folds the four routing
+conditions from its events once an hour and at start into one table, which the gauge and `GET /admin/attention` read, so
+a condition clears at the first fold whose trailing day holds none of its events. The subject is the account, and the
+item dates from the oldest wall of the day. The detail counts the walls, names their windows and the settings `shed_cap`
+and `window_ceiling`, and names one figure by the trigger of the newest shedding round on the wall's window within that
+window's length before the wall: after a projection round the projection error, one less the round's projection, after a
+slow-down round the time the wall arrived before the reset (0 at or after it), and neither with no round. The ledger
+also keeps each account's longest early wall of the hour under a slow-down round, so the figure outlives the trailing
+day. The item opens the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour. It is folded as `wall_reached` is. The subject is the destination account, and
