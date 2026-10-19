@@ -205,8 +205,47 @@ async function atRest() {
 }
 
 /**
- * The grouped dialog on a mock-only fixture that carries the pool dialog's sixteen groups under five parents: the
- * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 21 entries without
+ * The open dialog's frame and rail as the browser lays them out, run in the page, so the grouped-dialog fixture and the
+ * Pools dialog read the rail alike. The headroom is the room the rail keeps below its last entry, which the next group
+ * spends, and `firstBelow` is the first group past the rail's content bottom, null while every group fits.
+ */
+function railFit() {
+  const dialog = document.querySelector('dialog[open]');
+  const rail = dialog.querySelector('.dialog-rail');
+  const box = dialog.getBoundingClientRect();
+  const top = rail.getBoundingClientRect().top;
+  const paddingBottom = parseFloat(getComputedStyle(rail).paddingBottom);
+  // scrollHeight never reads under clientHeight, so the entries' own height is taken from the last run's edge.
+  const runs = rail.querySelectorAll('.dialog-rail__run');
+  const last = runs[runs.length - 1];
+  const entries = last ? last.getBoundingClientRect().bottom - top + paddingBottom : null;
+  // The bottom padding counts toward scrollHeight, so a group that ends inside it already scrolls the rail and the fold
+  // is the content box's bottom.
+  const fold = top + rail.clientHeight - paddingBottom;
+  const below = [...rail.querySelectorAll('.dialog-rail__group')].find((g) => g.getBoundingClientRect().bottom > fold);
+  const wrapped = [...rail.querySelectorAll('button')]
+    .filter((b) => {
+      const style = getComputedStyle(b);
+      return b.getBoundingClientRect().height > parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 0.5;
+    })
+    .map((b) => b.querySelector('.dialog-rail__label')?.textContent);
+  // A label too wide for its row ends in an ellipsis rather than wrapping, so the cut is read apart from the wrap.
+  const truncated = [...rail.querySelectorAll('.dialog-rail__label')].filter((l) => l.scrollWidth > l.clientWidth).map((l) => l.textContent);
+  return {
+    firstBelow: below ? (below.querySelector('.dialog-rail__label')?.textContent ?? null) : null,
+    frame: { height: box.height, width: box.width },
+    groups: rail.querySelectorAll('.dialog-rail__group').length,
+    headroom: entries === null ? null : Math.round((rail.clientHeight - entries) * 100) / 100,
+    parents: rail.querySelectorAll('.dialog-rail__parent').length,
+    rail: { clientHeight: rail.clientHeight, clientWidth: rail.clientWidth, entries, scrollHeight: rail.scrollHeight, scrollWidth: rail.scrollWidth, width: rail.getBoundingClientRect().width },
+    truncated,
+    wrapped,
+  };
+}
+
+/**
+ * The grouped dialog on a mock-only fixture that carries the pool dialog's eighteen groups under five parents: the
+ * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 23 entries without
  * scrolling either way at the pass's viewport. The two longest labels are read chosen, refused, and both, since the
  * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
@@ -235,38 +274,14 @@ async function groupedDialogFixture(theme) {
     await settle();
   };
   const check = async (state) => {
-    const read = await page.evaluate(() => {
-      const dialog = document.querySelector('dialog[open]');
-      const rail = dialog.querySelector('.dialog-rail');
-      const box = dialog.getBoundingClientRect();
-      // scrollHeight never reads under clientHeight, so the entries' own height is taken from the last run's edge.
-      const runs = rail.querySelectorAll('.dialog-rail__run');
-      const last = runs[runs.length - 1];
-      const entries = last ? last.getBoundingClientRect().bottom - rail.getBoundingClientRect().top + parseFloat(getComputedStyle(rail).paddingBottom) : null;
-      const wrapped = [...rail.querySelectorAll('button')]
-        .filter((b) => {
-          const style = getComputedStyle(b);
-          return b.getBoundingClientRect().height > parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 0.5;
-        })
-        .map((b) => b.querySelector('.dialog-rail__label')?.textContent);
-      // A label too wide for its row ends in an ellipsis rather than wrapping, so the cut is read apart from the wrap.
-      const truncated = [...rail.querySelectorAll('.dialog-rail__label')].filter((l) => l.scrollWidth > l.clientWidth).map((l) => l.textContent);
-      return {
-        frame: { height: box.height, width: box.width },
-        groups: rail.querySelectorAll('.dialog-rail__group').length,
-        parents: rail.querySelectorAll('.dialog-rail__parent').length,
-        rail: { clientHeight: rail.clientHeight, clientWidth: rail.clientWidth, entries, scrollHeight: rail.scrollHeight, scrollWidth: rail.scrollWidth, width: rail.getBoundingClientRect().width },
-        truncated,
-        wrapped,
-      };
-    });
+    const read = await page.evaluate(railFit);
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
     if (read.groups !== 18 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 18 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
-    if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
+    if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px, ${read.firstBelow} is the first group below the fold`);
     if (read.rail.scrollWidth > read.rail.clientWidth) sayIn(`the rail overflows sideways: ${read.rail.scrollWidth} px of entries in ${read.rail.clientWidth} px`);
   };
   const levels = async (state) => {
@@ -2086,6 +2101,36 @@ async function poolDialogWalk(theme, mode) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+}
+
+/**
+ * The grouped-dialog fixture's rail read on the real pool dialog of the first story pool, opened on Identity in the
+ * expert view, where the rail draws all eighteen groups: its headroom goes to the measurements beside the fixture's,
+ * and a rail that scrolls names its first group below the fold.
+ */
+async function poolRailFit(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog, expert view: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  let read;
+  try {
+    await expertView(true);
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+    await dialog.locator('.dialog-rail__group[data-group="identity"]').click();
+    await settle();
+    read = await page.evaluate(railFit);
+  } catch (error) {
+    say(`the rail was never read on Identity (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
+    return;
+  }
+  measurements.push(`${theme} /pools expert dialog rail ${JSON.stringify(read)}`);
+  if (read.rail.scrollHeight > read.rail.clientHeight) say(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px, ${read.firstBelow} is the first group below the fold`);
+  await closeByEscape(dialog, `${theme} /pools expert dialog rail`, say);
+  await expertView(false).catch(() => {});
+  await atRest();
 }
 
 /**
@@ -8174,6 +8219,7 @@ try {
         await poolMemberPins(theme);
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
+        await poolRailFit(theme);
         await poolKeyMenus(theme);
       }
       if (view.path === '/analytics') {
