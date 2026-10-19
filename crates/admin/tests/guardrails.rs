@@ -330,6 +330,71 @@ async fn a_patch_is_fenced_on_the_revision_and_the_incarnation() {
 }
 
 #[tokio::test]
+async fn a_pool_save_opened_before_a_guardrail_side_attachment_answers_409_stale_edit_and_the_reread_carries_it(
+) {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    created(app, &cookie, "g1", j!({})).await;
+    let pools = show(app, &cookie, "/admin/pools").await;
+    let read = row(&pools, "pools", "main")["revision"].clone();
+    let attached = patch(
+        app,
+        "/admin/guardrails/g1",
+        r#"{"pools":["main"]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(attached.status(), StatusCode::OK);
+    let stale = patch(
+        app,
+        "/admin/pools/main",
+        &j!({"guardrails": [], "expected_revision": read}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(stale.headers()["x-phoebis-error-code"], "stale_edit");
+    let pools = show(app, &cookie, "/admin/pools").await;
+    assert_eq!(
+        placed(&row(&pools, "pools", "main")["guardrails"]),
+        at(&[("g1", 0)]),
+        "the reread carries the attachment the stale save would have dropped"
+    );
+}
+
+#[tokio::test]
+async fn a_key_save_opened_before_a_guardrail_side_attachment_answers_409_stale_edit() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    created(app, &cookie, "g1", j!({})).await;
+    let keys = show(app, &cookie, "/admin/keys").await;
+    let read = row(&keys, "keys", "desktop")["revision"].clone();
+    let attached = patch(
+        app,
+        "/admin/guardrails/g1",
+        r#"{"keys":["desktop"]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(attached.status(), StatusCode::OK);
+    let stale = patch(
+        app,
+        "/admin/keys/desktop",
+        &j!({"guardrails": [], "expected_revision": read}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(stale.headers()["x-phoebis-error-code"], "stale_edit");
+    let keys = show(app, &cookie, "/admin/keys").await;
+    assert_eq!(
+        placed(&row(&keys, "keys", "desktop")["guardrails"]),
+        at(&[("g1", 0)]),
+        "the reread carries the attachment the stale save would have dropped"
+    );
+}
+
+#[tokio::test]
 async fn a_delete_answers_204_then_404() {
     let (parts, cookie) = seeded().await;
     let app = &parts.app;

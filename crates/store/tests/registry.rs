@@ -4825,12 +4825,12 @@ fn the_guardrail_side_appends_a_new_subject_keeps_a_held_position_and_detaches_o
     );
     assert_eq!(
         (
-            store.pool("main").unwrap().unwrap().updated_at,
-            store.pool("other").unwrap().unwrap().updated_at,
+            store.pool("main").unwrap().unwrap().updated_at > main_stamp,
+            store.pool("other").unwrap().unwrap().updated_at > other_stamp,
             store.api_key("k1").unwrap().unwrap().updated_at,
         ),
-        (main_stamp, other_stamp, k1_stamp),
-        "a write from the guardrail's side leaves the subjects' stamps"
+        (true, true, k1_stamp),
+        "a write from the guardrail's side stamps the subjects whose list it changed and no other"
     );
 }
 
@@ -4873,10 +4873,164 @@ fn the_subject_side_replaces_the_list_whole_in_the_given_order() {
         .update_api_key_with_guardrails(&k1, k1.updated_at, Some(&[]), "test")
         .unwrap();
     assert!(attached(&store, &on_key("k1")).is_empty());
+    assert!(
+        store.guardrail("g1").unwrap().unwrap().updated_at > g1.updated_at,
+        "a write from the subject's side stamps each guardrail whose membership it changed"
+    );
+}
+
+#[test]
+fn a_pool_save_opened_before_a_guardrail_side_attachment_is_refused_stale_and_a_reread_carries_the_new_list(
+) {
+    let store = guarded_store();
+    for id in ["g1", "g2"] {
+        store
+            .insert_guardrail(&guardrail(id, None), &ids(&["main"]), &[], "test")
+            .unwrap();
+    }
+    let main = store.pool("main").unwrap().unwrap();
+    store
+        .insert_guardrail(&guardrail("g3", None), &ids(&["main"]), &[], "test")
+        .unwrap();
+    assert!(matches!(
+        store.update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&ids(&["g2", "g1"])),
+            "test",
+        ),
+        Err(StoreError::Stale)
+    ));
     assert_eq!(
-        store.guardrail("g1").unwrap().unwrap().updated_at,
-        g1.updated_at,
-        "a write from the subject's side leaves the guardrail's stamp"
+        attached(&store, &on_pool("main")),
+        at(&[("g1", 0), ("g2", 1), ("g3", 2)]),
+        "the attachment the stale save would have dropped stands"
+    );
+}
+
+#[test]
+fn a_key_save_opened_before_a_guardrail_side_attachment_is_refused_stale() {
+    let store = guarded_store();
+    for id in ["g1", "g2"] {
+        store
+            .insert_guardrail(&guardrail(id, None), &[], &ids(&["k1"]), "test")
+            .unwrap();
+    }
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    store
+        .insert_guardrail(&guardrail("g3", None), &[], &ids(&["k1"]), "test")
+        .unwrap();
+    assert!(matches!(
+        store.update_api_key_with_guardrails(&k1, k1.updated_at, Some(&ids(&["g2", "g1"])), "test"),
+        Err(StoreError::Stale)
+    ));
+    assert_eq!(
+        attached(&store, &on_key("k1")),
+        at(&[("g1", 0), ("g2", 1), ("g3", 2)]),
+        "the attachment the stale save would have dropped stands"
+    );
+}
+
+#[test]
+fn delete_guardrail_stamps_every_subject_it_was_attached_to() {
+    let store = guarded_store();
+    store
+        .insert_guardrail(
+            &guardrail("g1", None),
+            &ids(&["main"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    let stamps = |store: &Store| {
+        (
+            store.pool("main").unwrap().unwrap().updated_at,
+            store.api_key("k1").unwrap().unwrap().updated_at,
+            store.pool("other").unwrap().unwrap().updated_at,
+        )
+    };
+    let (main, k1, other) = stamps(&store);
+    store.delete_guardrail("g1", "test").unwrap();
+    let (main_after, k1_after, other_after) = stamps(&store);
+    assert_eq!(
+        (main_after > main, k1_after > k1, other_after),
+        (true, true, other),
+        "the delete stamps the pool and the key it was attached to and no other"
+    );
+}
+
+#[test]
+fn a_guardrail_save_opened_before_a_pool_side_detach_is_refused_stale() {
+    let store = guarded_store();
+    store
+        .insert_guardrail(&guardrail("g1", None), &ids(&["main"]), &[], "test")
+        .unwrap();
+    let g1 = store.guardrail("g1").unwrap().unwrap();
+    let main = store.pool("main").unwrap().unwrap();
+    store
+        .update_pool_with_members_and_guardrails(&main, main.updated_at, None, Some(&[]), "test")
+        .unwrap();
+    assert!(matches!(
+        store.update_guardrail(&g1, g1.updated_at, None, None, "test"),
+        Err(StoreError::Stale)
+    ));
+    assert!(
+        store.guardrail("g1").unwrap().unwrap().updated_at > g1.updated_at,
+        "the detach moved the guardrail's stamp"
+    );
+}
+
+#[test]
+fn a_write_that_changes_no_list_moves_no_stamp_on_the_other_side() {
+    let store = guarded_store();
+    for id in ["g1", "g2"] {
+        store
+            .insert_guardrail(&guardrail(id, None), &ids(&["main"]), &[], "test")
+            .unwrap();
+    }
+    let main = store.pool("main").unwrap().unwrap();
+    let g1 = store.guardrail("g1").unwrap().unwrap();
+    let stamped = store
+        .update_guardrail(
+            &GuardrailRow {
+                description: "edited".into(),
+                ..g1.clone()
+            },
+            g1.updated_at,
+            None,
+            None,
+            "test",
+        )
+        .unwrap();
+    store
+        .update_guardrail(&g1, stamped, Some(&ids(&["main"])), None, "test")
+        .unwrap();
+    assert_eq!(
+        store.pool("main").unwrap().unwrap().updated_at,
+        main.updated_at,
+        "a guardrail write that keeps the pool's membership leaves the pool's stamp"
+    );
+    let guardrail_stamps =
+        |store: &Store| ["g1", "g2"].map(|id| store.guardrail(id).unwrap().unwrap().updated_at);
+    let before = guardrail_stamps(&store);
+    store
+        .update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&ids(&["g2", "g1"])),
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        attached(&store, &on_pool("main")),
+        at(&[("g2", 0), ("g1", 1)])
+    );
+    assert_eq!(
+        guardrail_stamps(&store),
+        before,
+        "a reorder from the pool's side leaves the guardrails' stamps"
     );
 }
 

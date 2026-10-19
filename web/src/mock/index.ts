@@ -442,11 +442,16 @@ export class MockApi implements Api {
   }
 
   /** A subject's list replaced whole from its own side, positions 0 to n-1 in the given order. */
-  private setSubjectGuardrails(kind: 'keys' | 'pools', subjectId: string, ids: string[]) {
+  private setSubjectGuardrails(kind: 'keys' | 'pools', subjectId: string, ids: string[], moveStamps = true) {
     this.guardrails = this.guardrails.map((g) => {
       const others = g[kind].filter((a) => a.id !== subjectId);
       const at = ids.indexOf(g.id);
-      return withAttachments(g, kind, at < 0 ? others : [...others, { id: subjectId, label: subjectId, position: at }]);
+      const held = others.length < g[kind].length;
+      const next = withAttachments(g, kind, at < 0 ? others : [...others, { id: subjectId, label: subjectId, position: at }]);
+      // A guardrail dialog opened before a save presents a stamp the row no longer carries, as the routes refuse it. A
+      // reorder leaves the guardrail's membership, and a subject delete removes its attachments as the store's delete
+      // does, so neither moves a stamp.
+      return !moveStamps || held === (at >= 0) ? next : { ...next, ...restamp(g) };
     });
   }
 
@@ -674,6 +679,11 @@ export class MockApi implements Api {
     const stamp = preset === undefined ? null : { currentVersion: preset.version, customized: false, id: preset.id, version: preset.version };
     const row: Guardrail = { ...blank, keys: this.attached(blank, 'keys', input.keys), pools: this.attached(blank, 'pools', input.pools), preset: this.presetStateOf(stamp, blank.conditions) };
     this.guardrails = [...this.guardrails, row];
+    // A pool or key dialog opened before the create presents a stamp the row no longer carries, as the routes refuse it.
+    const movedPools = new Set(row.pools.map((a) => a.id));
+    const movedKeys = new Set(row.keys.map((a) => a.id));
+    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
+    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
     return latency(this.guardrailView(row), 300);
   }
 
@@ -770,6 +780,11 @@ export class MockApi implements Api {
     this.buriedGuardrails.set(id, Math.floor(row.revision / INCARNATION_STAMP));
     // The attachments live on the row, so they leave with it and every other guardrail keeps its positions.
     this.guardrails = this.guardrails.filter((g) => g.id !== id);
+    // A pool or key dialog opened before the delete presents a stamp the row no longer carries, as the routes refuse it.
+    const movedPools = new Set(row.pools.map((a) => a.id));
+    const movedKeys = new Set(row.keys.map((a) => a.id));
+    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
+    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
     return latency(undefined, 200);
   }
 
@@ -778,7 +793,7 @@ export class MockApi implements Api {
     if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
     // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two tables.
-    this.setSubjectGuardrails('keys', id, []);
+    this.setSubjectGuardrails('keys', id, [], false);
     return latency(undefined, 200);
   }
 
@@ -788,7 +803,7 @@ export class MockApi implements Api {
     const pool = this.pools.find((p) => p.id === id);
     if (pool) this.buriedPools.set(id, Math.floor(pool.revision / INCARNATION_STAMP));
     this.pools = this.pools.filter((p) => p.id !== id);
-    this.setSubjectGuardrails('pools', id, []);
+    this.setSubjectGuardrails('pools', id, [], false);
     return latency(undefined, 200);
   }
 
@@ -1208,8 +1223,8 @@ export class MockApi implements Api {
   }
 
   /**
-   * The edit route's checks in its order. An edit stamps the guardrail alone: the attachments it changes from its side
-   * leave the pools' and keys' stamps where they were.
+   * The edit route's checks in its order. An edit stamps the guardrail and every pool and key it attaches or detaches,
+   * so a dialog of either side opened before it is refused as stale.
    */
   async updateGuardrail(id: string, input: Partial<GuardrailInput>, revision?: number): Promise<Guardrail> {
     const current = this.guardrails.find((g) => g.id === id);
@@ -1243,6 +1258,15 @@ export class MockApi implements Api {
       ...restamp(current),
     };
     this.guardrails = this.guardrails.map((g) => (g.id === id ? next : g));
+    const changed = (kind: 'keys' | 'pools') => {
+      const before = new Set(current[kind].map((a) => a.id));
+      const after = new Set(next[kind].map((a) => a.id));
+      return new Set([...before, ...after].filter((s) => before.has(s) !== after.has(s)));
+    };
+    const movedPools = changed('pools');
+    const movedKeys = changed('keys');
+    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
+    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
     return latency(this.guardrailView(next), 250);
   }
 

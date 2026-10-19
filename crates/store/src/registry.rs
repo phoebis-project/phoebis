@@ -774,6 +774,16 @@ fn stamp_past(now: i64, previous: i64) -> i64 {
     now.max(previous.saturating_add(1))
 }
 
+/// Moves a fenced row's stamp past its current one, so a save opened before this write presents a token the row
+/// no longer carries and is refused as stale. `at` is the writing side's own stamp.
+fn stamp_subject(tx: &Transaction<'_>, table: &str, id: &str, at: i64) -> Result<(), StoreError> {
+    tx.execute(
+        &format!("UPDATE {table} SET updated_at = MAX(?2, updated_at + 1) WHERE id = ?1"),
+        params![id, at],
+    )?;
+    Ok(())
+}
+
 fn rules_json(rules: &[ModelRule]) -> Result<String, StoreError> {
     serde_json::to_string(rules).map_err(StoreError::from)
 }
@@ -982,7 +992,8 @@ impl Store {
     }
 
     /// The pool write with the pool's guardrail list, replaced whole in the given order when `Some`. The pool's stamp
-    /// alone moves, so an operator editing a guardrail is not refused because the pool's list changed under it.
+    /// moves, and so does the stamp of every guardrail whose membership in the list changed, so a guardrail save opened
+    /// before the change is refused rather than restoring a detached pool.
     pub fn update_pool_with_members_and_guardrails(
         &self,
         row: &PoolRow,
@@ -1072,7 +1083,7 @@ impl Store {
             set_pool_members_in(&tx, &row.id, members, at, actor)?;
         }
         if let Some(ids) = guardrails {
-            set_subject_guardrails_in(&tx, &AttachmentSubject::Pool(row.id.clone()), ids)?;
+            set_subject_guardrails_in(&tx, &AttachmentSubject::Pool(row.id.clone()), ids, at)?;
         }
         tx.commit()?;
         Ok(at)
@@ -1241,8 +1252,9 @@ impl Store {
         self.update_api_key_with_guardrails(row, expected_updated_at, None, actor)
     }
 
-    /// The key write with the key's own guardrail list, replaced whole in the given order when `Some`. The key's
-    /// stamp alone moves, so an operator editing a guardrail is not refused because the key's list changed under it.
+    /// The key write with the key's own guardrail list, replaced whole in the given order when `Some`. The key's stamp
+    /// moves, and so does the stamp of every guardrail whose membership in the list changed, so a guardrail save opened
+    /// before the change is refused rather than restoring a detached key.
     pub fn update_api_key_with_guardrails(
         &self,
         row: &ApiKeyRow,
@@ -1306,7 +1318,7 @@ impl Store {
         };
         record_change(&tx, at, actor, "key_updated", &row.id, &diff)?;
         if let Some(ids) = guardrails {
-            set_subject_guardrails_in(&tx, &AttachmentSubject::Key(row.id.clone()), ids)?;
+            set_subject_guardrails_in(&tx, &AttachmentSubject::Key(row.id.clone()), ids, at)?;
         }
         tx.commit()?;
         Ok(at)
@@ -1702,7 +1714,9 @@ impl Store {
         all_guardrail_attachments(&conn)
     }
 
-    /// The row with its attachments under one `BEGIN IMMEDIATE`, answering the committed row with its incarnation.
+    /// The row with its attachments under one `BEGIN IMMEDIATE`, answering the committed row with its incarnation. Each
+    /// pool and key it attaches to takes a stamp past its own, so a save of theirs opened before the create presents a
+    /// token the row no longer carries.
     pub fn insert_guardrail(
         &self,
         row: &GuardrailRow,
@@ -1733,8 +1747,8 @@ impl Store {
                 now
             ],
         )?;
-        set_guardrail_subjects_in(&tx, &row.id, "pool", pools)?;
-        set_guardrail_subjects_in(&tx, &row.id, "key", keys)?;
+        set_guardrail_subjects_in(&tx, &row.id, "pool", pools, now)?;
+        set_guardrail_subjects_in(&tx, &row.id, "key", keys, now)?;
         record_change(
             &tx,
             now,
@@ -1753,7 +1767,8 @@ impl Store {
     }
 
     /// Fenced on `expected_updated_at` and `row.incarnation`. `None` leaves that kind's attachments as they are.
-    /// Answers the stamp written, which the next fenced edit reads.
+    /// Answers the stamp written, which the next fenced edit reads. Each pool and key the write attaches or detaches
+    /// takes a stamp past its own, so a save of theirs opened before it presents a token the row no longer carries.
     pub fn update_guardrail(
         &self,
         row: &GuardrailRow,
@@ -1796,10 +1811,10 @@ impl Store {
             });
         }
         if let Some(pools) = pools {
-            set_guardrail_subjects_in(&tx, &row.id, "pool", pools)?;
+            set_guardrail_subjects_in(&tx, &row.id, "pool", pools, at)?;
         }
         if let Some(keys) = keys {
-            set_guardrail_subjects_in(&tx, &row.id, "key", keys)?;
+            set_guardrail_subjects_in(&tx, &row.id, "key", keys, at)?;
         }
         let diff = guardrail_diff(
             row,
@@ -1811,7 +1826,9 @@ impl Store {
         Ok(at)
     }
 
-    /// The attachments go with the row through the foreign key's cascade, and the tombstone keeps the incarnation.
+    /// The attachments go with the row through the foreign key's cascade, and the tombstone keeps the incarnation. Each
+    /// pool and key it was attached to, read before the cascade, takes a stamp past its own, so a save of theirs opened
+    /// before the delete presents a token the row no longer carries.
     pub fn delete_guardrail(&self, id: &str, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -1824,24 +1841,37 @@ impl Store {
             .optional()?;
         let incarnation =
             incarnation.ok_or_else(|| StoreError::GuardrailNotFound(id.to_string()))?;
+        let now = self.now_ms();
+        let subjects = [
+            ("pools", guardrail_subjects(&tx, id, "pool")?),
+            ("api_keys", guardrail_subjects(&tx, id, "key")?),
+        ];
         tx.execute("DELETE FROM guardrails WHERE id = ?1", params![id])?;
         tx.execute(
             "INSERT INTO guardrail_tombstones (id, incarnation) VALUES (?1, ?2) \
              ON CONFLICT(id) DO UPDATE SET incarnation = max(guardrail_tombstones.incarnation, excluded.incarnation)",
             params![id, incarnation],
         )?;
-        record_change(&tx, self.now_ms(), actor, "guardrail_deleted", id, "{}")?;
+        for (table, subject_ids) in &subjects {
+            for subject_id in subject_ids {
+                stamp_subject(&tx, table, subject_id, now)?;
+            }
+        }
+        record_change(&tx, now, actor, "guardrail_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
     }
 }
 
 /// The subject's list replaced whole, positions 0 to n-1, every id checked against `guardrails`. The pool and key
-/// dialogs show the subject's whole order, so their list is the order.
+/// dialogs show the subject's whole order, so their list is the order. Each guardrail the write attaches or detaches
+/// takes a stamp past its own, so a guardrail save opened before it presents a token the row no longer carries, and a
+/// reorder alone changes no guardrail's membership and stamps none.
 fn set_subject_guardrails_in(
     tx: &Transaction<'_>,
     subject: &AttachmentSubject,
     ids: &[String],
+    at: i64,
 ) -> Result<(), StoreError> {
     for id in ids {
         if tx.query_row(
@@ -1853,6 +1883,7 @@ fn set_subject_guardrails_in(
             return Err(StoreError::GuardrailNotFound(id.clone()));
         }
     }
+    let held = subject_guardrails(tx, subject.kind(), subject.id())?;
     tx.execute(
         "DELETE FROM guardrail_attachments WHERE subject_kind = ?1 AND subject_id = ?2",
         params![subject.kind(), subject.id()],
@@ -1863,17 +1894,24 @@ fn set_subject_guardrails_in(
             params![id, subject.kind(), subject.id(), position as i64],
         )?;
     }
+    let detached = held.iter().filter(|id| !ids.contains(id));
+    let attached = ids.iter().filter(|id| !held.contains(id));
+    for id in detached.chain(attached) {
+        stamp_subject(tx, "guardrails", id, at)?;
+    }
     Ok(())
 }
 
 /// The guardrail's subjects of one kind: a new id appended at the end of that subject's order, a held id keeping its
 /// position, an id left out detached, every id checked against `pools` or `api_keys`. The guardrail dialog cannot see
-/// each subject's order, so it must not reorder it.
+/// each subject's order, so it must not reorder it. Each subject attached or detached takes a stamp past its own, so a
+/// pool or key save opened before it presents a token the row no longer carries.
 fn set_guardrail_subjects_in(
     tx: &Transaction<'_>,
     guardrail_id: &str,
     kind: &str,
     ids: &[String],
+    at: i64,
 ) -> Result<(), StoreError> {
     let (table, missing): (&str, fn(String) -> StoreError) = if kind == "pool" {
         ("pools", StoreError::PoolNotFound)
@@ -1896,6 +1934,7 @@ fn set_guardrail_subjects_in(
             "DELETE FROM guardrail_attachments WHERE guardrail_id = ?1 AND subject_kind = ?2 AND subject_id = ?3",
             params![guardrail_id, kind, subject_id],
         )?;
+        stamp_subject(tx, table, subject_id, at)?;
     }
     for subject_id in ids.iter().filter(|id| !held.contains(id)) {
         let position: i64 = tx.query_row(
@@ -1907,6 +1946,7 @@ fn set_guardrail_subjects_in(
             "INSERT INTO guardrail_attachments (guardrail_id, subject_kind, subject_id, position) VALUES (?1, ?2, ?3, ?4)",
             params![guardrail_id, kind, subject_id, position],
         )?;
+        stamp_subject(tx, table, subject_id, at)?;
     }
     Ok(())
 }
