@@ -464,7 +464,11 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         [matched("g-watch", 0, false), matched("g-block", 1, true)]
     );
     assert!(row.bodies_captured);
-    let stored = h.db.bodies("blocked").await.unwrap().expect("the body row");
+    let stored =
+        h.db.bodies("blocked", clock_of(&h)())
+            .await
+            .unwrap()
+            .expect("the body row");
     assert_eq!(stored.request_body, body);
     assert_eq!(stored.expires_at, NOW + 5 + 24 * 3_600_000);
     up.shutdown().await;

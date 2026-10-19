@@ -1023,7 +1023,7 @@ pub(crate) async fn bodies(
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).into_owned()))
     };
     let db = state.ledger.db();
-    let b = match db.bodies(&id).await {
+    let b = match db.bodies(&id, (state.clock)()).await {
         Ok(Some(b)) => b,
         Ok(None) => return failure(StatusCode::NOT_FOUND, "no captured bodies for this request"),
         Err(e) => return ledger_failure(e),

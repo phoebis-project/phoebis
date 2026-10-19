@@ -338,13 +338,19 @@ impl LedgerDb {
         self.read(move |conn| request_by_id(conn, &id)).await
     }
 
-    pub async fn bodies(self: &Arc<Self>, id: &str) -> Result<Option<BodyRecord>, LedgerError> {
+    /// The captured bodies of a request whose expiry is after `now`, `None` past it as for a purged row, since the
+    /// purge deletes an expired row on its next pass only.
+    pub async fn bodies(
+        self: &Arc<Self>,
+        id: &str,
+        now: i64,
+    ) -> Result<Option<BodyRecord>, LedgerError> {
         let id = id.to_string();
         self.read(move |conn| {
             Ok(conn
                 .query_row(
-                    "SELECT request_id, request_body, response_body, request_len_seen, response_len_seen, expires_at FROM bodies WHERE request_id = ?1",
-                    params![id],
+                    "SELECT request_id, request_body, response_body, request_len_seen, response_len_seen, expires_at FROM bodies WHERE request_id = ?1 AND expires_at > ?2",
+                    params![id, now],
                     |r| Ok(BodyRecord {
                         request_id: r.get(0)?,
                         request_body: r.get(1)?,
@@ -577,10 +583,14 @@ pub(crate) fn insert_request_in(
             ],
         )?;
     }
-    tx.execute(
-        "DELETE FROM request_guardrails WHERE request_id = ?1",
-        params![request.id],
-    )?;
+    // A new row with no match has no child row to clear, so it pays no statement. A replaced row keeps the delete
+    // so a stale match never survives a re-landing.
+    if previous.is_some() || !request.guardrails.is_empty() {
+        tx.execute(
+            "DELETE FROM request_guardrails WHERE request_id = ?1",
+            params![request.id],
+        )?;
+    }
     for m in &request.guardrails {
         tx.execute(
             "INSERT INTO request_guardrails (request_id, guardrail_id, position, blocked, received_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -993,7 +1003,7 @@ mod tests {
             (Some(1_450), Some(1_012)),
             "the two instants cross the insert and the select"
         );
-        assert_eq!(db.bodies("r1").await.unwrap().unwrap(), bodies);
+        assert_eq!(db.bodies("r1", 1_500).await.unwrap().unwrap(), bodies);
         assert!(db.request("nope").await.unwrap().is_none());
         db.insert_event(&EventRecord {
             at: 5,
@@ -1159,5 +1169,58 @@ mod tests {
             db.request("r1").await.unwrap().is_some(),
             "and its row is there"
         );
+    }
+
+    #[tokio::test]
+    async fn a_relanded_row_keeps_only_its_new_matches_and_a_new_row_with_none_touches_the_child_table_not_at_all(
+    ) {
+        async fn matches(db: &Arc<LedgerDb>, id: &str) -> Vec<String> {
+            let (row, _) = db.request(id).await.unwrap().unwrap();
+            row.guardrails.into_iter().map(|m| m.guardrail_id).collect()
+        }
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let matched = |id: &str, guardrails: &[&str]| RequestRecord {
+            guardrails: guardrails
+                .iter()
+                .enumerate()
+                .map(|(position, g)| GuardrailMatchRecord {
+                    guardrail_id: (*g).into(),
+                    position: position as u32,
+                    blocked: false,
+                })
+                .collect(),
+            ..request(id)
+        };
+        let child_rows = || -> i64 {
+            db.read_blocking(|c| {
+                Ok(c.query_row("SELECT COUNT(*) FROM request_guardrails", [], |r| r.get(0))?)
+            })
+            .unwrap()
+        };
+        db.insert_request(&matched("r1", &["g1", "g2"]), &[], None)
+            .unwrap();
+        assert_eq!(matches(&db, "r1").await, ["g1", "g2"]);
+        db.insert_request(&matched("r1", &["g3"]), &[], None)
+            .unwrap();
+        assert_eq!(
+            matches(&db, "r1").await,
+            ["g3"],
+            "the second landing's matches replace the first's"
+        );
+        db.insert_request(&matched("r2", &["g1"]), &[], None)
+            .unwrap();
+        db.insert_request(&matched("r2", &[]), &[], None).unwrap();
+        assert!(
+            matches(&db, "r2").await.is_empty(),
+            "a row landed again with no match keeps none of its earlier ones"
+        );
+        assert_eq!(child_rows(), 1, "r1's one match is all the table holds");
+        db.insert_request(&matched("r3", &[]), &[], None).unwrap();
+        assert_eq!(
+            child_rows(),
+            1,
+            "a new row with no match leaves the table as it was"
+        );
+        assert_eq!(matches(&db, "r1").await, ["g3"]);
     }
 }

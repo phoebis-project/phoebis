@@ -6350,7 +6350,10 @@ async fn a_parked_record_keeps_its_money_and_not_its_capture() {
         "its money is kept"
     );
     assert!(
-        h.db.bodies("poison").await.unwrap().is_none(),
+        h.db.bodies("poison", h.clock.load(Ordering::SeqCst))
+            .await
+            .unwrap()
+            .is_none(),
         "its capture is gone"
     );
     assert!(
