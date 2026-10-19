@@ -1024,6 +1024,246 @@ fn a_replace_that_moves_the_serving_attempt_empties_the_old_accounts_reading() {
     assert_eq!(peak(&db, "b"), Some(0.4));
 }
 
+/// A request the router refused under `key` before it asked any account, flagged as the landing flags it.
+fn refusal(id: &str, key: &str) -> RequestRecord {
+    RequestRecord {
+        id: id.into(),
+        received_at: 3_700_000,
+        finished_at: Some(3_700_004),
+        key_id: Some(key.into()),
+        pool_id: Some("p".into()),
+        model: "m".into(),
+        canonical_model: "m".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(403),
+        outcome: "rejected".into(),
+        attempts: 0,
+        duration_ms: Some(4),
+        error_code: Some("guardrail_blocked".into()),
+        refused: true,
+        ..Default::default()
+    }
+}
+
+/// Every rollup row the ledger holds.
+fn all_rows(db: &LedgerDb) -> Vec<RollupRow> {
+    db.read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap()
+}
+
+/// A row's key with the figures a reader sums for requests: requests, rejected, uncached requests, the errors map,
+/// the duration histogram's count and the refusals map.
+type Figures = (
+    String,
+    u64,
+    u64,
+    u64,
+    BTreeMap<String, u64>,
+    u64,
+    BTreeMap<String, u64>,
+);
+
+fn request_figures(row: &RollupRow) -> Figures {
+    (
+        row.key_id.clone(),
+        row.requests,
+        row.rejected,
+        row.uncached_requests,
+        row.errors.clone(),
+        row.duration_hist.count(),
+        row.refusals.clone(),
+    )
+}
+
+fn blocked(n: u64) -> BTreeMap<String, u64> {
+    BTreeMap::from([("guardrail_blocked".to_string(), n)])
+}
+
+#[test]
+fn a_flagged_request_folds_into_its_hours_refusals_map_and_under_no_other_figure() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
+    let rows = all_rows(&db);
+    assert_eq!(rows.len(), 1, "one row for the refused request's hour");
+    assert_eq!(rows[0].hour, hour_of(3_700_000));
+    assert_eq!(
+        request_figures(&rows[0]),
+        ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1)),
+        "the refusal sits in the map alone: no request, no rejected, no uncached request, no error, no duration"
+    );
+}
+
+#[test]
+fn a_rejection_after_an_attempt_folds_as_a_rejected_request_as_before() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let request = RequestRecord {
+        status: Some(403),
+        outcome: "rejected".into(),
+        attempts: 1,
+        duration_ms: Some(4),
+        error_code: Some("client_not_allowed".into()),
+        refused: false,
+        ..replaced("r1")
+    };
+    let attempt = AttemptRecord {
+        request_id: "r1".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        started_at: 3_700_000,
+        outcome: "failed".into(),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+    let rows = all_rows(&db);
+    assert_eq!(rows.len(), 1, "one row for the attempt's account");
+    assert_eq!(
+        (
+            rows[0].requests,
+            rows[0].rejected,
+            rows[0].errors.clone(),
+            rows[0].refusals.clone()
+        ),
+        (
+            1,
+            1,
+            BTreeMap::from([("client_not_allowed".to_string(), 1)]),
+            BTreeMap::new()
+        ),
+        "an account was asked, so the rejection counts as a request and an error"
+    );
+}
+
+#[test]
+fn a_replaced_flagged_request_leaves_its_old_row_and_a_row_of_refusals_alone_is_kept() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
+    db.insert_request(&refusal("r1", "k2"), &[], None).unwrap();
+    assert_eq!(
+        all_rows(&db)
+            .iter()
+            .map(request_figures)
+            .collect::<Vec<_>>(),
+        [("k2".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1))],
+        "the old row held the refusal alone and goes, the new row holds the map alone and stays"
+    );
+
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Landed without an attempt row, the served request files under the unattributed account the refusal's row names:
+    // a request with an attempt files under that attempt's account, a row of its own.
+    db.insert_request(&replaced("s1"), &[], None).unwrap();
+    db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
+    db.insert_request(&refusal("r1", "k2"), &[], None).unwrap();
+    let rows = all_rows(&db);
+    let row = |key: &str| {
+        rows.iter()
+            .find(|r| r.key_id == key)
+            .unwrap_or_else(|| panic!("a row under {key}: {rows:?}"))
+    };
+    assert_eq!(
+        (
+            row("k").requests,
+            row("k").succeeded,
+            row("k").refusals.clone()
+        ),
+        (1, 1, BTreeMap::new()),
+        "the row keeps the served request and gives the refusal up"
+    );
+    assert_eq!(row("k2").refusals, blocked(1));
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
+fn the_start_time_pass_moves_the_stored_refusals_and_leaves_a_request_after_an_attempt_alone() {
+    use phoebis_ledger::{refold_refusals, REFUSALS_BACKFILL_KEY};
+
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Landed unflagged, as the fold read every refusal before the flag existed, then flagged by id as the step's
+    // backfill flags the rows it matches.
+    let stored = RequestRecord {
+        refused: false,
+        ..refusal("r1", "k")
+    };
+    db.insert_request(&stored, &[], None).unwrap();
+    let after_an_attempt = RequestRecord {
+        status: Some(403),
+        outcome: "rejected".into(),
+        attempts: 1,
+        duration_ms: Some(4),
+        error_code: Some("client_not_allowed".into()),
+        ..replaced("r2")
+    };
+    let attempt = AttemptRecord {
+        request_id: "r2".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        started_at: 3_700_000,
+        outcome: "failed".into(),
+        ..Default::default()
+    };
+    db.insert_request(&after_an_attempt, &[attempt], None)
+        .unwrap();
+    db.write(|c| {
+        c.execute(
+            "UPDATE requests SET refused = 1 WHERE id IN (?1)",
+            rusqlite::params!["r1"],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let now = 3_700_000 + DAY_MS;
+    assert_eq!(
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, now).unwrap(),
+        1,
+        "the one flagged request moved"
+    );
+    let rows = all_rows(&db);
+    let on = |account: &str| {
+        rows.iter()
+            .find(|r| r.account_id == account)
+            .unwrap_or_else(|| panic!("a row on {account}: {rows:?}"))
+    };
+    assert_eq!(
+        request_figures(on(UNATTRIBUTED)),
+        ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1)),
+        "the refusal's request, rejected, uncached request, error and duration moved into the map"
+    );
+    assert_eq!(
+        (
+            on("a").requests,
+            on("a").rejected,
+            on("a").errors.clone(),
+            on("a").refusals.clone()
+        ),
+        (
+            1,
+            1,
+            BTreeMap::from([("client_not_allowed".to_string(), 1)]),
+            BTreeMap::new()
+        ),
+        "the rejection after an attempt keeps its figures"
+    );
+    let mark: serde_json::Value = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                [REFUSALS_BACKFILL_KEY],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .map(|text| serde_json::from_str(&text).expect("the mark is JSON"))
+        .expect("the pass wrote its mark");
+    assert_eq!(mark["done_at"].as_i64(), Some(now));
+    assert_eq!(
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, now + DAY_MS).unwrap(),
+        0,
+        "the mark stands, so a second start moves nothing"
+    );
+    assert_eq!(all_rows(&db), rows);
+}
+
 #[test]
 fn merged_histogram_percentiles_lie_within_one_bucket_of_the_exact_percentiles() {
     let db = LedgerDb::open_in_memory().unwrap();

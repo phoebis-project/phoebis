@@ -243,6 +243,13 @@ pub async fn run_until(
             "re-folded the requests whose prompt-length band moved"
         );
     }
+    phoebis_ledger::refold_refusals(
+        &ledger_db,
+        &pricing.revisions(),
+        config.stats.retention_days,
+        clock(),
+    )
+    .context("moving the stored refusals out of their hours' counts")?;
     let metrics = Arc::new(Metrics::new());
     let ledger = phoebis_ledger::spawn(
         ledger_db.clone(),

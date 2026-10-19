@@ -5,6 +5,24 @@
 //! `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, since the router's own standing
 //! caused them, and `accounts_exhausted`, `model_rejected` and every upstream code, since an account was asked.
 
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+
+use crate::db::{begin_write, row_to_request, LedgerDb, REQUEST_SELECT};
+use crate::pricing::PriceRevisions;
+use crate::record::RequestRecord;
+use crate::refold::{fail_after_page, page_size, read_meta, write_meta};
+use crate::rollup::{deltas_of, empty_row, read_rollup, unfold, write_rollup};
+use crate::LedgerError;
+
+const DAY_MS: i64 = 86_400_000;
+
+/// The `meta` key holding the mark `{"done_at": <ms>}` once the stored refusals were moved into the map.
+pub const REFUSALS_BACKFILL_KEY: &str = "refusals_backfill";
+/// The `meta` key holding a pass in progress, `{"received_at": <ms>, "id": "<request id>"}`, the last request the
+/// last committed page moved, written by every page's transaction and deleted by the last page's.
+pub const REFUSALS_BACKFILL_CURSOR_KEY: &str = "refusals_backfill_cursor";
+
 /// One token list feeds the slice and the step's `IN (..)` text, so `is_refusal` and the step's backfill cannot
 /// name different codes.
 macro_rules! refusal_codes {
@@ -56,9 +74,134 @@ pub fn is_refusal(kind: &str, outcome: &str, error_code: Option<&str>, attempts:
         && error_code.is_some_and(|code| REFUSAL_CODES.contains(&code))
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Mark {
+    done_at: i64,
+}
+
+/// The last request a committed page moved, in the pass's `(received_at, id)` order.
+#[derive(Debug, Serialize, Deserialize)]
+struct Cursor {
+    received_at: i64,
+    id: String,
+}
+
+/// Moves each flagged request's old contribution (one request, its rejected, its uncached request, its errors entry
+/// and its duration bucket) out of its hour's row and its refusals entry in, over the rows the retention still
+/// holds, in pages of `page_size()` with a cursor, once. Answers how many requests moved: 0 when the mark stands.
+///
+/// It runs at start, after the step flagged the stored rows and before the ledger task lands anything, so every
+/// flagged row a page meets was folded before the flag existed. A row landed later folds under the map at once and
+/// meets no page, since the mark stands by then. The cursor is the refold's rule: a start that fails after a page
+/// committed resumes after that page rather than taking its contribution out a second time.
+pub fn refold_refusals(
+    db: &LedgerDb,
+    prices: &PriceRevisions,
+    retention_days: u32,
+    now: i64,
+) -> Result<usize, LedgerError> {
+    let (mark, mut after) = db.write(|c| {
+        Ok((
+            read_meta::<Mark>(c, REFUSALS_BACKFILL_KEY)?,
+            read_meta::<Cursor>(c, REFUSALS_BACKFILL_CURSOR_KEY)?,
+        ))
+    })?;
+    if mark.is_some() {
+        return Ok(0);
+    }
+    // The retention purge's own arithmetic: a zero keeps the requests for good, so nothing is cut off.
+    let from = if retention_days == 0 {
+        i64::MIN
+    } else {
+        now - i64::from(retention_days) * DAY_MS
+    };
+    let page = page_size();
+    let mut moved = 0;
+    let mut pages = 0;
+    loop {
+        let done = db.write(|c| {
+            let tx = begin_write(c)?;
+            let requests = refused_after(&tx, from, after.as_ref(), page)?;
+            for request in &requests {
+                // The fold before the flag booked the refusal as a rejected request, so that is what comes out.
+                let before = RequestRecord {
+                    refused: false,
+                    ..request.clone()
+                };
+                for delta in deltas_of(&before, &[], prices) {
+                    unfold(&tx, &delta)?;
+                }
+                for delta in deltas_of(request, &[], prices) {
+                    let mut row = read_rollup(&tx, &delta)?.unwrap_or_else(|| empty_row(&delta));
+                    row.add(&delta);
+                    write_rollup(&tx, &row)?;
+                }
+                moved += 1;
+            }
+            let last = requests.len() < page;
+            if last {
+                tx.execute(
+                    "DELETE FROM meta WHERE key = ?1",
+                    params![REFUSALS_BACKFILL_CURSOR_KEY],
+                )?;
+                write_meta(&tx, REFUSALS_BACKFILL_KEY, &Mark { done_at: now })?;
+            } else if let Some(request) = requests.last() {
+                let next = Cursor {
+                    received_at: request.received_at,
+                    id: request.id.clone(),
+                };
+                write_meta(&tx, REFUSALS_BACKFILL_CURSOR_KEY, &next)?;
+                after = Some(next);
+            }
+            tx.commit()?;
+            Ok(last)
+        })?;
+        pages += 1;
+        fail_after_page(pages)?;
+        if done {
+            break;
+        }
+    }
+    tracing::info!(
+        requests = moved,
+        pages,
+        "moved the stored refusals out of their hours' request figures into the refusals map"
+    );
+    Ok(moved)
+}
+
+/// The next page of flagged requests received at or after `from`, past `after`, in `(received_at, id)` order. A
+/// flagged row has no attempt row, since the flag requires none, so the page reads none.
+fn refused_after(
+    conn: &Connection,
+    from: i64,
+    after: Option<&Cursor>,
+    page: usize,
+) -> Result<Vec<RequestRecord>, LedgerError> {
+    let (after_at, after_id) = after.map_or((i64::MIN, ""), |a| (a.received_at, a.id.as_str()));
+    let mut stmt = conn.prepare(&format!(
+        "{REQUEST_SELECT} WHERE refused = 1 AND received_at >= ?1 AND (received_at, id) > (?2, ?3) ORDER BY received_at, id LIMIT ?4"
+    ))?;
+    let requests = stmt
+        .query_map(
+            params![from, after_at, after_id, page as i64],
+            row_to_request,
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(requests)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::record::AttemptRecord;
+    use crate::refold::{FAIL_AFTER_PAGES, TEST_PAGE};
+    use crate::rollup::{read_rollups, RollupRow, RollupSelect};
+    use crate::test_tables::{api_prices, JANUARY_2026};
+
+    const HAIKU: &str = "claude-haiku-5-5";
 
     #[test]
     fn is_refusal_flags_a_rejected_client_request_with_a_listed_code_and_no_attempt_and_nothing_else(
@@ -136,5 +279,240 @@ mod tests {
                 "the backfill carries {clause}: {REFUSED_STEP_SQL}"
             );
         }
+    }
+
+    /// A request the router refused before any account, as a ledger from before the flag landed it: unflagged, so
+    /// the fold booked it as a rejected request.
+    fn refusal(id: &str, received_at: i64) -> RequestRecord {
+        RequestRecord {
+            id: id.into(),
+            received_at,
+            finished_at: Some(received_at + 4),
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            model: HAIKU.into(),
+            canonical_model: HAIKU.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(403),
+            outcome: "rejected".into(),
+            duration_ms: Some(4),
+            error_code: Some("guardrail_blocked".into()),
+            ..Default::default()
+        }
+    }
+
+    /// A request one attempt served with 100 uncached input tokens.
+    fn served(id: &str, received_at: i64) -> (RequestRecord, Vec<AttemptRecord>) {
+        (
+            RequestRecord {
+                id: id.into(),
+                received_at,
+                finished_at: Some(received_at + 900),
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                model: HAIKU.into(),
+                canonical_model: HAIKU.into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                status: Some(200),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                duration_ms: Some(900),
+                ..Default::default()
+            },
+            vec![AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                started_at: received_at,
+                outcome: "succeeded".into(),
+                input_tokens: Some(100),
+                output_tokens: Some(10),
+                ..Default::default()
+            }],
+        )
+    }
+
+    fn land(db: &LedgerDb, request: &RequestRecord, attempts: &[AttemptRecord]) {
+        db.insert_request_at(request, attempts, None, &api_prices())
+            .unwrap();
+    }
+
+    /// Sets the flag on the named rows alone, as the step's backfill does on the rows it matches.
+    fn flag(db: &LedgerDb, ids: &[&str]) {
+        db.write(|c| {
+            let marks = vec!["?"; ids.len()].join(", ");
+            c.execute(
+                &format!("UPDATE requests SET refused = 1 WHERE id IN ({marks})"),
+                rusqlite::params_from_iter(ids),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn rows(db: &LedgerDb) -> Vec<RollupRow> {
+        db.read_blocking(|c| read_rollups(c, i64::MIN, i64::MAX, &RollupSelect::default()))
+            .unwrap()
+    }
+
+    fn meta(db: &LedgerDb, key: &str) -> Option<serde_json::Value> {
+        db.read_blocking(|c| {
+            Ok(rusqlite::OptionalExtension::optional(c.query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                [key],
+                |r| r.get::<_, String>(0),
+            ))?)
+        })
+        .unwrap()
+        .map(|text| serde_json::from_str(&text).expect("the meta value is JSON"))
+    }
+
+    /// Three refusals folded under the old arithmetic beside a served request: the pass takes each one's request,
+    /// rejected, uncached request, errors entry and duration bucket out of the hour and books it in the map, the
+    /// served request keeps its figures, and the mark makes a second pass move nothing.
+    #[test]
+    fn the_pass_moves_each_flagged_requests_old_contribution_into_the_map_once() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        for (n, id) in ["r1", "r2", "r3"].into_iter().enumerate() {
+            land(&db, &refusal(id, JANUARY_2026 + n as i64), &[]);
+        }
+        let (request, attempts) = served("s1", JANUARY_2026 + 10);
+        land(&db, &request, &attempts);
+        flag(&db, &["r1", "r2", "r3"]);
+        let sum = |rows: &[RollupRow], figure: fn(&RollupRow) -> u64| -> u64 {
+            rows.iter().map(figure).sum()
+        };
+        let before = rows(&db);
+        assert_eq!(
+            (sum(&before, |r| r.requests), sum(&before, |r| r.rejected)),
+            (4, 3),
+            "the old arithmetic booked the refusals as rejected requests"
+        );
+        let now = JANUARY_2026 + DAY_MS;
+        assert_eq!(refold_refusals(&db, &api_prices(), 0, now).unwrap(), 3);
+        let after = rows(&db);
+        assert_eq!(
+            (
+                sum(&after, |r| r.requests),
+                sum(&after, |r| r.rejected),
+                sum(&after, |r| r.uncached_requests),
+                sum(&after, |r| r.duration_hist.count()),
+            ),
+            (1, 0, 1, 1),
+            "the served request's figures alone"
+        );
+        assert!(
+            after
+                .iter()
+                .all(|r| !r.errors.contains_key("guardrail_blocked")),
+            "no errors entry for the code: {after:?}"
+        );
+        let refusals: Vec<_> = after
+            .iter()
+            .filter(|r| !r.refusals.is_empty())
+            .map(|r| (r.requests, r.refusals.clone()))
+            .collect();
+        assert_eq!(
+            refusals,
+            [(0, BTreeMap::from([("guardrail_blocked".to_string(), 3)]))],
+            "one row holds the three refusals in the map alone"
+        );
+        assert_eq!(
+            meta(&db, REFUSALS_BACKFILL_KEY).expect("the mark")["done_at"].as_i64(),
+            Some(now)
+        );
+        assert_eq!(meta(&db, REFUSALS_BACKFILL_CURSOR_KEY), None);
+        assert_eq!(
+            refold_refusals(&db, &api_prices(), 0, now + DAY_MS).unwrap(),
+            0,
+            "the mark stands"
+        );
+        assert_eq!(rows(&db), after, "the second pass moved nothing");
+    }
+
+    /// A pass of three flagged requests at a page of one commits a cursor after each page, and a pass interrupted
+    /// after a committed page resumes after its cursor: the rows then equal an uninterrupted pass's, so no
+    /// contribution came out twice.
+    #[test]
+    fn the_pass_commits_a_cursor_after_each_page_and_a_resumed_pass_subtracts_no_contribution_twice(
+    ) {
+        let seed = |db: &LedgerDb| {
+            for (n, id) in ["r1", "r2", "r3"].into_iter().enumerate() {
+                land(db, &refusal(id, JANUARY_2026 + n as i64 * 1_000), &[]);
+            }
+            flag(db, &["r1", "r2", "r3"]);
+        };
+        let now = JANUARY_2026 + DAY_MS;
+        let whole = LedgerDb::open_in_memory().unwrap();
+        seed(&whole);
+        assert_eq!(refold_refusals(&whole, &api_prices(), 0, now).unwrap(), 3);
+        let interrupted = LedgerDb::open_in_memory().unwrap();
+        seed(&interrupted);
+        let cursor = |db: &LedgerDb| {
+            meta(db, REFUSALS_BACKFILL_CURSOR_KEY).map(|c| {
+                (
+                    c["received_at"].as_i64(),
+                    c["id"].as_str().map(String::from),
+                )
+            })
+        };
+        TEST_PAGE.set(Some(1));
+        FAIL_AFTER_PAGES.set(Some(1));
+        let failed = refold_refusals(&interrupted, &api_prices(), 0, now);
+        FAIL_AFTER_PAGES.set(None);
+        assert!(failed.is_err(), "the injected failure after the first page");
+        assert_eq!(
+            cursor(&interrupted),
+            Some((Some(JANUARY_2026), Some("r1".to_string()))),
+            "the cursor after page 1"
+        );
+        assert_eq!(
+            meta(&interrupted, REFUSALS_BACKFILL_KEY),
+            None,
+            "no mark yet"
+        );
+        FAIL_AFTER_PAGES.set(Some(1));
+        let failed = refold_refusals(&interrupted, &api_prices(), 0, now);
+        FAIL_AFTER_PAGES.set(None);
+        assert!(
+            failed.is_err(),
+            "the injected failure after the resumed pass's first page"
+        );
+        assert_eq!(
+            cursor(&interrupted),
+            Some((Some(JANUARY_2026 + 1_000), Some("r2".to_string()))),
+            "the cursor after page 2"
+        );
+        assert_eq!(
+            refold_refusals(&interrupted, &api_prices(), 0, now).unwrap(),
+            1,
+            "the third pass moves the request after the cursor"
+        );
+        TEST_PAGE.set(None);
+        assert_eq!(cursor(&interrupted), None, "the cursor is cleared");
+        assert_eq!(
+            meta(&interrupted, REFUSALS_BACKFILL_KEY).expect("the mark")["done_at"].as_i64(),
+            Some(now)
+        );
+        assert_eq!(rows(&interrupted), rows(&whole));
+    }
+
+    #[test]
+    fn a_ledger_with_no_flagged_row_writes_the_mark_and_moves_nothing() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let (request, attempts) = served("s1", JANUARY_2026);
+        land(&db, &request, &attempts);
+        let before = rows(&db);
+        let now = JANUARY_2026 + DAY_MS;
+        assert_eq!(refold_refusals(&db, &api_prices(), 0, now).unwrap(), 0);
+        assert_eq!(
+            meta(&db, REFUSALS_BACKFILL_KEY).expect("the mark")["done_at"].as_i64(),
+            Some(now)
+        );
+        assert_eq!(meta(&db, REFUSALS_BACKFILL_CURSOR_KEY), None);
+        assert_eq!(rows(&db), before);
     }
 }
