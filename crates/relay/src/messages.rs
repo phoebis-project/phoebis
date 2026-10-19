@@ -1563,9 +1563,13 @@ impl Relay {
             )
             .await;
         if let Some(id) = guardrail_id {
+            // The routes refuse a name that carries one of the client's phrases, but a stored row can predate that
+            // rule, and the phrase in the 403's message would start the client's own handling, so the id stands in
+            // for such a name.
             let name = snapshot
                 .guardrails()
                 .name_of(&id)
+                .filter(|name| phoebis_guardrails::client_phrase(name).is_none())
                 .unwrap_or(&id)
                 .to_string();
             tracing::debug!(

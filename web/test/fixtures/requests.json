@@ -919,7 +919,7 @@
         "classifier": null,
         "forked_from": null,
         "fork_depth": null,
-        "status": 400,
+        "status": 403,
         "outcome": "rejected",
         "error_code": "guardrail_blocked",
         "client_drift": null,

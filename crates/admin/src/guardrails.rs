@@ -48,8 +48,9 @@ pub(crate) struct GuardrailInput {
     /// `[a-z0-9][a-z0-9-]{0,63}`, neither `presets` nor `test`.
     #[serde(default)]
     id: Option<String>,
-    /// At most 256 bytes, not empty, and never containing `prompt is too long` in any case, since the name is the
-    /// part of a refusal's message the operator writes.
+    /// At most 256 bytes, not empty, and never containing `model:`, `OAuth token has been revoked` or
+    /// `prompt is too long` in any case, since the name is the part of a refusal's message the operator writes and
+    /// the client reads each of the three specially.
     #[serde(default)]
     name: Option<String>,
     /// At most 256 bytes, default empty.
@@ -471,8 +472,8 @@ pub(crate) fn distinct_ids(field: &str, ids: &[String]) -> Result<(), Response> 
     }
 }
 
-/// The name's bound, an empty name, and the phrase the client reads in a `400` as its compaction trigger: a
-/// guardrail's refusal carries the name in its message, and the name is the one part of it the operator writes.
+/// The name's bound, an empty name, and the three phrases the client reads specially in a `400` or a `403` answer:
+/// a guardrail's refusal carries the name in its message, and the name is the one part of it the operator writes.
 // The error is a rendered HTTP response, returned once per request and dropped, so boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
@@ -481,10 +482,10 @@ fn validate_name(name: &str) -> Result<(), Response> {
     if name.is_empty() {
         return Err(failure(StatusCode::BAD_REQUEST, "name is required"));
     }
-    if name.to_lowercase().contains("prompt is too long") {
+    if let Some(phrase) = phoebis_guardrails::client_phrase(name) {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "name must not contain \"prompt is too long\"",
+            &format!("name must not contain \"{phrase}\""),
         ));
     }
     Ok(())
@@ -605,7 +606,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = GuardrailInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The guardrail, the same shape as a row of `GET /admin/guardrails`.", body = Guardrail),
-        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `id is required`\n- `id is reserved`: `presets` and `test`, which the routes beside `GET /admin/guardrails/{id}` take\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`\n- `name must not contain \"prompt is too long\"`\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset_version applies on edit`\n- `unknown preset {id}`: an id `GET /admin/guardrails/presets` does not list", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `id is required`\n- `id is reserved`: `presets` and `test`, which the routes beside `GET /admin/guardrails/{id}` take\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`\n- `name must not contain \"{phrase}\"`: the phrase the name carries, `model:`, `OAuth token has been revoked` or `prompt is too long`, each matched in any case\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset_version applies on edit`\n- `unknown preset {id}`: an id `GET /admin/guardrails/presets` does not list", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `key {id} not found`, with nothing written\n- `pool {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "pool {id} not found"})),
         (status = 409, description = "`a guardrail with this id exists`", body = ErrorBody, example = json!({"error": "a guardrail with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -970,7 +971,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
     request_body(content = GuardrailInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The guardrail, the same shape as a row of `GET /admin/guardrails`.", body = Guardrail),
-        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `guardrail has no preset`: a `preset_version` on a guardrail created without one\n- `id cannot change`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`: an empty name\n- `name must not contain \"prompt is too long\"`\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset applies on create`\n- `preset_version is not a shipped version of {preset}`: a version the build does not ship of the guardrail's preset", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `guardrail has no preset`: a `preset_version` on a guardrail created without one\n- `id cannot change`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`: an empty name\n- `name must not contain \"{phrase}\"`: the phrase the name carries, `model:`, `OAuth token has been revoked` or `prompt is too long`, each matched in any case\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset applies on create`\n- `preset_version is not a shipped version of {preset}`: a version the build does not ship of the guardrail's preset", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `guardrail not found`\n- `key {id} not found`, with nothing written\n- `pool {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "guardrail not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.

@@ -392,6 +392,14 @@ async fn every_400_sentence_is_answered_one_by_one() {
             "name must not contain \"prompt is too long\"",
         ),
         (
+            j!({"id": "g1", "name": "Model: Opus Only", "conditions": [c]}),
+            "name must not contain \"model:\"",
+        ),
+        (
+            j!({"id": "g1", "name": "oauth TOKEN has been REVOKED", "conditions": [c]}),
+            "name must not contain \"OAuth token has been revoked\"",
+        ),
+        (
             j!({"id": "g1", "name": "G", "description": long, "conditions": [c]}),
             "description is at most 256 bytes",
         ),

@@ -69,7 +69,7 @@ Each operation names its request (path segments, query parameters, or body field
         (name = "Dashboard"),
         (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \
             before any account is selected, attached to pools and keys in order. `observe` records each match on the \
-            request, `enforce` refuses a matching request with `400 guardrail_blocked`."),
+            request, `enforce` refuses a matching request with `403 guardrail_blocked`."),
         (name = "Keepalive"),
         (name = "Keys", description = "The secret is answered on `POST /admin/keys` and `POST /admin/keys/{id}/rotate` \
             and nowhere else. A `key_json` answer never carries the digest either."),

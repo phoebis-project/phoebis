@@ -156,7 +156,7 @@ fn each_preset_matches_its_own_fork_fixture_and_none_of_the_other_bodies() {
 
 // A create from a preset writes the preset's name past the route's name checks, so the table holds each name to them.
 #[test]
-fn every_presets_name_passes_the_create_routes_three_rules() {
+fn every_presets_name_passes_the_create_routes_five_rules() {
     for preset in presets() {
         assert!(
             preset.name.len() <= 256,
@@ -168,6 +168,19 @@ fn every_presets_name_passes_the_create_routes_three_rules() {
         assert!(
             !preset.name.to_lowercase().contains("prompt is too long"),
             "{}: the name carries the compaction sentence",
+            preset.id
+        );
+        assert!(
+            !preset.name.to_lowercase().contains("model:"),
+            "{}: the name carries the client's model-access phrase",
+            preset.id
+        );
+        assert!(
+            !preset
+                .name
+                .to_lowercase()
+                .contains("oauth token has been revoked"),
+            "{}: the name carries the client's token-refresh phrase",
             preset.id
         );
     }
