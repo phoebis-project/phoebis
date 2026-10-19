@@ -176,6 +176,9 @@ pub(crate) struct RequestSummary {
     pub guardrail_id: Option<String>,
     /// Every guardrail that matched, in evaluation order, observed or blocking.
     pub guardrails: Vec<GuardrailMatchView>,
+    /// True where the router refused the request before any account was asked, for the client's or a policy's cause.
+    /// The figures leave such a request out, the log lists it.
+    pub refused: bool,
 }
 
 /// A guardrail that matched a request: its id, its place in the evaluation order and whether it blocked.
@@ -520,6 +523,7 @@ pub(crate) fn request_summary(
                 blocked: m.blocked,
             })
             .collect(),
+        refused: r.refused,
     }
 }
 

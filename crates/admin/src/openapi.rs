@@ -608,6 +608,10 @@ pub(crate) struct BreakdownRow {
     pub cost_usd: f64,
     /// By error code.
     pub errors: BTreeMap<String, u64>,
+    /// The refused requests of the group, the sum of `refusals`, not in `requests`.
+    pub refused: u64,
+    /// The refused requests of the group by error code.
+    pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
     pub histograms: HistogramsView,
     pub percentiles: PercentilesView,
@@ -783,6 +787,7 @@ pub(crate) struct HourPointView {
     /// The hour's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
     pub equivalent: SharedEquivalentView,
     pub errors: u64,
+    pub refused: u64,
     pub requests: u64,
     pub tokens: u64,
 }

@@ -989,6 +989,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             ttfc_ms: None,
             duration_ms: Some(4),
             error_code: Some("guardrail_blocked".into()),
+            // The seed writes what `finish` would set, since the harness's `record` skips the assembler.
+            refused: true,
             request_class: Some("auxiliary".into()),
             stream_end_at: None,
             guardrail_id: Some("large-auxiliary".into()),
@@ -1056,6 +1058,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             duration_ms: Some(3),
             error_code: Some("client_contract".into()),
             client_contract: Some("class_header".into()),
+            // The seed writes what `finish` would set, since the harness's `record` skips the assembler.
+            refused: true,
             stream_end_at: None,
             ..request(
                 key_generation,

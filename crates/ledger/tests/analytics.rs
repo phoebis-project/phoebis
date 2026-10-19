@@ -6720,10 +6720,10 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
     );
 }
 
-/// A guardrail's block is a refusal the operator asked for: the day's error rate and its most common code leave the
-/// blocked requests out, numerator and denominator and the hour's errors alike, and the day's requests keep them.
+/// A row the landing did not flag is a rejected request like any other: the day's requests, the hour's errors, the
+/// error rate and the most common code count its guardrail blocks with the other rejections.
 #[tokio::test]
-async fn the_dashboard_leaves_the_blocked_requests_out_of_the_rate_and_the_top_code_and_keeps_them_in_the_requests(
+async fn the_dashboard_counts_an_unflagged_block_in_the_rate_and_the_top_code_like_any_other_rejection(
 ) {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     let row = |n: usize, outcome: &str, status: u16, code: Option<&str>| RequestRecord {
@@ -6759,11 +6759,195 @@ async fn the_dashboard_leaves_the_blocked_requests_out_of_the_rate_and_the_top_c
         .expect("the planted hour");
     assert_eq!(
         (day.requests_24h, point.requests, point.errors),
-        (10, 10, 1),
-        "the blocked requests count among the requests and not among the hour's errors"
+        (10, 10, 4),
+        "the unflagged blocks count among the requests and among the hour's errors"
     );
-    assert_eq!(day.error_rate_24h, Some(1.0 / 7.0));
-    assert_eq!(day.top_error_code.as_deref(), Some("upstream_error"));
+    assert_eq!(day.error_rate_24h, Some(4.0 / 10.0));
+    assert_eq!(day.top_error_code.as_deref(), Some("guardrail_blocked"));
+}
+
+/// Six requests of the key `desktop` in the minute before `WEEKDAY_OFF_PEAK` on the pool `p`: two guardrail blocks
+/// and a contract refusal, each flagged with no attempt as the landing flags a refusal, a `client_not_allowed`
+/// rejection after one attempt, a succeeded request and a 529. The succeeded request and the two blocks share the
+/// session `s1`, the contract refusal is alone on `s2`, and the rejection and the 529 carry no session.
+fn plant_asked_and_refused(db: &LedgerDb) {
+    let row = |n: i64, session: Option<&str>, outcome: &str, status: u16, code: Option<&str>| {
+        RequestRecord {
+            id: format!("r{n}"),
+            received_at: WEEKDAY_OFF_PEAK - 60_000 + n,
+            finished_at: Some(WEEKDAY_OFF_PEAK - 60_000 + n + 4),
+            key_id: Some("desktop".into()),
+            pool_id: Some("p".into()),
+            session_id: session.map(String::from),
+            model: "claude-opus-5-5".into(),
+            canonical_model: "claude-opus-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(status),
+            outcome: outcome.into(),
+            duration_ms: Some(4),
+            error_code: code.map(String::from),
+            ..RequestRecord::default()
+        }
+    };
+    let refused = |n: i64, session: &str, status: u16, code: &str| RequestRecord {
+        attempts: 0,
+        refused: true,
+        ..row(n, Some(session), "rejected", status, Some(code))
+    };
+    let asked = |n: i64, outcome: &str, status: u16, code: Option<&str>, session: Option<&str>| {
+        let attempt = AttemptRecord {
+            request_id: format!("r{n}"),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            started_at: WEEKDAY_OFF_PEAK - 60_000 + n,
+            upstream_status: Some(status),
+            outcome: if status == 200 { "succeeded" } else { "failed" }.into(),
+            ..Default::default()
+        };
+        let request = RequestRecord {
+            attempts: 1,
+            ..row(n, session, outcome, status, code)
+        };
+        (request, vec![attempt])
+    };
+    for request in [
+        refused(0, "s1", 403, "guardrail_blocked"),
+        refused(1, "s1", 403, "guardrail_blocked"),
+        refused(2, "s2", 400, "client_contract"),
+    ] {
+        db.insert_request(&request, &[], None).unwrap();
+    }
+    for (request, attempts) in [
+        asked(3, "rejected", 403, Some("client_not_allowed"), None),
+        asked(4, "succeeded", 200, None, Some("s1")),
+        asked(5, "failed", 529, Some("overloaded_error"), None),
+    ] {
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+}
+
+/// The pool's traffic and the key's totals read the folded rows, which hold the asked requests alone, so the refused
+/// requests stay out of the requests and the failed count without a rule of the readers' own.
+#[tokio::test]
+async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_asked_and_refused(&db);
+    let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
+    let traffic =
+        phoebis_ledger::pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &PRICES, &COSTS)
+            .await
+            .unwrap();
+    assert_eq!(
+        (traffic[0].requests, traffic[0].failed),
+        (3, 2),
+        "the rejection and the 529 among the three asked requests"
+    );
+    let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
+    let totals = db
+        .read_blocking(|c| key_request_totals(c, hour, hour + 3_600, &live, &PRICES, &COSTS))
+        .unwrap();
+    assert_eq!(totals["desktop"].requests, 3, "the three asked requests");
+}
+
+/// The day's requests, its error rate and its most common error code read the asked requests alone, and the refused
+/// requests read in the day's refused count, its most common refusal code and the hour's refused count.
+#[tokio::test]
+async fn the_dashboard_leaves_the_refused_requests_out_of_its_counts_and_reads_them_in_its_own_members(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_asked_and_refused(&db);
+    let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
+    let day = phoebis_ledger::dashboard(&db, WEEKDAY_OFF_PEAK, &PRICES, &COSTS)
+        .await
+        .unwrap();
+    let point = day
+        .hourly
+        .iter()
+        .find(|h| h.at == hour * 1_000)
+        .expect("the planted hour");
+    assert_eq!(
+        (day.requests_24h, point.requests, point.refused),
+        (3, 3, 3),
+        "the rejection and the two served requests are the requests, the three refusals the refused"
+    );
+    assert_eq!(
+        day.error_rate_24h,
+        Some(2.0 / 3.0),
+        "the failed and the rejected over the three asked requests"
+    );
+    assert!(
+        matches!(
+            day.top_error_code.as_deref(),
+            Some("client_not_allowed" | "overloaded_error")
+        ),
+        "an asked request's code, never a refusal's: {:?}",
+        day.top_error_code
+    );
+    assert_eq!(
+        (day.refused_24h, day.top_refusal_code.as_deref()),
+        (3, Some("guardrail_blocked")),
+        "two blocks over one contract refusal"
+    );
+}
+
+#[test]
+fn the_breakdown_answers_refused_and_refusals_per_group() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_asked_and_refused(&db);
+    let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default());
+    let groups = breakdown(&filtered, "key", false, &live, &[], None, &PRICES, &COSTS);
+    let desktop = group(&groups, "desktop");
+    assert_eq!(
+        (desktop.requests, desktop.refused, desktop.refusals.clone()),
+        (
+            3,
+            3,
+            BTreeMap::from([
+                ("client_contract".to_string(), 1),
+                ("guardrail_blocked".to_string(), 2),
+            ])
+        ),
+        "the refused requests beside the three asked ones and not among them"
+    );
+}
+
+/// A session's count leaves its refused requests out, while the refused rows stay in the window that picks a
+/// session's newest request, so a session whose every request was refused is still listed.
+#[test]
+fn a_sessions_count_leaves_its_refused_requests_out_and_a_session_of_refusals_alone_is_still_listed(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_asked_and_refused(&db);
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_activity(c, WEEKDAY_OFF_PEAK - 3_600_000))
+        .unwrap();
+    let session = |id: &str| {
+        sessions
+            .iter()
+            .find(|s| s.session_id == id)
+            .unwrap_or_else(|| panic!("the session {id} is listed: {sessions:?}"))
+    };
+    assert_eq!(
+        sessions.len(),
+        2,
+        "the rejection and the 529 carry no session: {sessions:?}"
+    );
+    assert_eq!(
+        session("s1").requests,
+        1,
+        "the served request, the two blocks left out"
+    );
+    assert_eq!(
+        (session("s2").requests, session("s2").last_request_at),
+        (0, WEEKDAY_OFF_PEAK - 60_000 + 2),
+        "the contract refusal alone, listed with its newest request"
+    );
 }
 
 /// A probe on a model the revision does not list consumed quota all the same, so its row prices its counts and its

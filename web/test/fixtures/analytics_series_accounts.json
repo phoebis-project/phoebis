@@ -137,6 +137,8 @@
             "errors": {
               "stream_incomplete": 1
             },
+            "refused": 0,
+            "refusals": {},
             "cache_miss_reasons": {
               "none": 4
             },
@@ -501,18 +503,18 @@
           {
             "key": "-",
             "label": "unattributed",
-            "requests": 2,
+            "requests": 0,
             "succeeded": 0,
             "rate_limited": 0,
             "failed": 0,
             "exhausted": 0,
-            "rejected": 2,
+            "rejected": 0,
             "attempts": 0,
             "failovers": 0,
             "incomplete": 0,
             "cache_hits": 0,
             "cache_misses": 0,
-            "uncached": 2,
+            "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
               "cache_read": 0,
@@ -531,7 +533,9 @@
               "output": 0.0
             },
             "cost_usd": 0.0,
-            "errors": {
+            "errors": {},
+            "refused": 2,
+            "refusals": {
               "client_contract": 1,
               "guardrail_blocked": 1
             },
@@ -544,8 +548,8 @@
                 0,
                 0,
                 0,
-                1,
-                1,
+                0,
+                0,
                 0,
                 0,
                 0,
@@ -804,10 +808,10 @@
             },
             "percentiles": {
               "duration_ms": {
-                "p50": 3.219678444251377,
-                "p90": 3.854228868623104,
-                "p95": 3.854228868623104,
-                "p99": 3.854228868623104
+                "p50": null,
+                "p90": null,
+                "p95": null,
+                "p99": null
               },
               "output_tps": {
                 "p50": null,
@@ -847,7 +851,7 @@
             "cost_shares": null,
             "cache_shares": null,
             "probe_shares": null,
-            "plan_requests": 2,
+            "plan_requests": 0,
             "plan_output_tokens": 0,
             "cost_equivalent": {},
             "cache_equivalent": {},
@@ -906,6 +910,8 @@
             "errors": {
               "upstream_error": 1
             },
+            "refused": 0,
+            "refusals": {},
             "cache_miss_reasons": {
               "none": 3
             },
@@ -1301,6 +1307,8 @@
             },
             "cost_usd": 0.0036,
             "errors": {},
+            "refused": 0,
+            "refusals": {},
             "cache_miss_reasons": {
               "none": 1
             },

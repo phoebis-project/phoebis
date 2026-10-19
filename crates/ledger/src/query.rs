@@ -1651,6 +1651,10 @@ pub struct GroupRow {
     pub cost: CostSplitJson,
     pub cost_usd: f64,
     pub errors: BTreeMap<String, u64>,
+    /// The refused requests of the group, the sum of `refusals`, not in `requests`.
+    pub refused: u64,
+    /// The refused requests of the group by error code.
+    pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
     pub histograms: Histograms,
     pub percentiles: Percentiles,
@@ -2038,6 +2042,8 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         cost: cost_split_json(&dollars.usd),
         cost_usd: dollars.usd.total(),
         errors: sum.errors.clone(),
+        refused: sum.refusals.values().sum(),
+        refusals: sum.refusals.clone(),
         cache_miss_reasons: reasons,
         histograms: Histograms {
             duration_ms: sum.duration_hist.buckets(),
@@ -2853,6 +2859,7 @@ pub struct HourPoint {
     pub at: i64,
     pub cost: f64,
     pub errors: u64,
+    pub refused: u64,
     pub requests: u64,
     pub tokens: u64,
     /// The billed rows' dollars of the hour, a part of `cost`.
@@ -2867,11 +2874,15 @@ pub struct Dashboard {
     pub tokens_24h: u64,
     pub tokens_cached_24h: u64,
     pub cost_24h: f64,
-    /// The requests that did not succeed over the requests, both without the requests a guardrail blocked: a
-    /// guardrail block is a refusal the operator asked for, so it is no error of the router's.
+    /// The requests that did not succeed over the requests. The refused requests are in neither, since the fold never
+    /// counted them.
     pub error_rate_24h: Option<f64>,
-    /// The most frequent error code but `guardrail_blocked`, for the same reason.
+    /// The most frequent error code of the window.
     pub top_error_code: Option<String>,
+    /// The requests the router refused before any account was asked over the window, not in `requests_24h`.
+    pub refused_24h: u64,
+    /// The most frequent code of the window's refusals, `None` with none.
+    pub top_refusal_code: Option<String>,
     pub hourly: Vec<HourPoint>,
     /// The billed rows' dollars of the day, a part of `cost_24h`.
     pub billed_24h: f64,
@@ -2894,12 +2905,14 @@ pub async fn dashboard(
     let to_hour = (now / 1_000).div_euclid(3_600) * 3_600 + 3_600;
     let from_hour = to_hour - 24 * 3_600;
     let mut errors: BTreeMap<String, u64> = BTreeMap::new();
+    let mut refusals: BTreeMap<String, u64> = BTreeMap::new();
     let mut hourly: Vec<HourPoint> = (from_hour..to_hour)
         .step_by(3_600)
         .map(|hour| HourPoint {
             at: hour * 1_000,
             cost: 0.0,
             errors: 0,
+            refused: 0,
             requests: 0,
             tokens: 0,
             billed: 0.0,
@@ -2915,13 +2928,10 @@ pub async fn dashboard(
         }
         if let Some(point) = hourly.get_mut(((r.hour - from_hour) / 3_600) as usize) {
             let (usd, billed, equivalent, fallback) = shared_figures(r, prices, costs);
-            let blocked = r.errors.get("guardrail_blocked").copied().unwrap_or(0);
             point.requests += r.requests;
-            point.errors += r
-                .requests
-                .saturating_sub(r.succeeded)
-                .saturating_sub(blocked);
-            rated += r.requests.saturating_sub(blocked);
+            point.errors += r.requests.saturating_sub(r.succeeded);
+            rated += r.requests;
+            point.refused += r.refusals.values().sum::<u64>();
             point.cost += usd;
             point.billed += billed;
             point.equivalent.add(&equivalent);
@@ -2932,12 +2942,11 @@ pub async fn dashboard(
                 + r.cache_write_1h_tokens
                 + r.output_tokens;
         }
-        for (code, n) in r
-            .errors
-            .iter()
-            .filter(|(code, _)| *code != "guardrail_blocked")
-        {
+        for (code, n) in &r.errors {
             *errors.entry(code.clone()).or_default() += n;
+        }
+        for (code, n) in &r.refusals {
+            *refusals.entry(code.clone()).or_default() += n;
         }
         tokens_cached += r.cache_read_tokens;
     })
@@ -2954,6 +2963,11 @@ pub async fn dashboard(
         cost_24h: hourly.iter().map(|h| h.cost).sum(),
         error_rate_24h: (rated > 0).then(|| failed as f64 / rated as f64),
         top_error_code: errors
+            .iter()
+            .max_by_key(|(_, n)| **n)
+            .map(|(c, _)| c.clone()),
+        refused_24h: refusals.values().sum(),
+        top_refusal_code: refusals
             .iter()
             .max_by_key(|(_, n)| **n)
             .map(|(c, _)| c.clone()),
@@ -3292,7 +3306,8 @@ pub fn session_activity(
 
 /// One pass over the window's client requests, grouped by `group` (a column expression over `requests`): the
 /// newest request of a group is inside the window whenever any of its requests is, so the window alone answers
-/// both the counts and the newest request's facts.
+/// both the counts and the newest request's facts. The count leaves the refused requests out, while their rows
+/// stay in the partition, so a session whose every request was refused keeps its newest request and is listed.
 fn activity(
     conn: &Connection,
     since: i64,
@@ -3300,12 +3315,12 @@ fn activity(
 ) -> Result<Vec<SessionActivity>, LedgerError> {
     let mut stmt = conn.prepare(&format!(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id, {group} AS grp, received_at, canonical_model, \
-         presented_retired, rotation_at, identified_by, identity_root FROM requests \
+         presented_retired, rotation_at, identified_by, identity_root, refused FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
          ranked AS (SELECT recent.*, \
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
          MIN(received_at) OVER (PARTITION BY key_id, key_generation, grp) AS first_at, \
-         COUNT(*) OVER (PARTITION BY key_id, key_generation, grp) AS n \
+         SUM(CASE WHEN refused = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY key_id, key_generation, grp) AS n \
          FROM recent WHERE grp IS NOT NULL) \
          SELECT key_id, key_generation, grp, first_at, received_at, n, canonical_model, \
          (SELECT a.account_id FROM attempts a WHERE a.request_id = ranked.id ORDER BY a.attempt DESC LIMIT 1), \

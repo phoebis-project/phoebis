@@ -226,7 +226,8 @@
           "position": 0,
           "blocked": false
         }
-      ]
+      ],
+      "refused": false
     },
     "events": [
       {

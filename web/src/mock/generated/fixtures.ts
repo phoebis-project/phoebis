@@ -605,18 +605,18 @@ export const FIXTURES: Record<string, Fixture> = {
           "key": "desktop",
           "label": "desktop",
           "key_id": "desktop",
-          "requests": 9,
+          "requests": 7,
           "succeeded": 5,
           "rate_limited": 0,
           "failed": 1,
           "exhausted": 0,
-          "rejected": 2,
+          "rejected": 0,
           "attempts": 8,
           "failovers": 1,
           "incomplete": 1,
           "cache_hits": 7,
           "cache_misses": 0,
-          "uncached": 2,
+          "uncached": 0,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 4000,
@@ -636,10 +636,13 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0249,
           "errors": {
-            "client_contract": 1,
-            "guardrail_blocked": 1,
             "stream_incomplete": 1,
             "upstream_error": 1
+          },
+          "refused": 2,
+          "refusals": {
+            "client_contract": 1,
+            "guardrail_blocked": 1
           },
           "cache_miss_reasons": {
             "none": 7
@@ -652,8 +655,8 @@ export const FIXTURES: Record<string, Fixture> = {
               0,
               0,
               0,
-              1,
-              1,
+              0,
+              0,
               0,
               0,
               0,
@@ -955,7 +958,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": 7,
+          "plan_requests": 5,
           "plan_output_tokens": 500,
           "cost_equivalent": {
             "five_hour": 0.0000393625,
@@ -1026,6 +1029,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "errors": {},
+          "refused": 0,
+          "refusals": {},
           "cache_miss_reasons": {
             "none": 1
           },
@@ -1422,6 +1427,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "stream_incomplete": 1,
             "upstream_error": 1
           },
+          "refused": 0,
+          "refusals": {},
           "cache_miss_reasons": {
             "none": 7
           },
@@ -1817,6 +1824,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0036,
           "errors": {},
+          "refused": 0,
+          "refusals": {},
           "cache_miss_reasons": {
             "none": 1
           },
@@ -2152,18 +2161,18 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "key": "-",
           "label": "unattributed",
-          "requests": 2,
+          "requests": 0,
           "succeeded": 0,
           "rate_limited": 0,
           "failed": 0,
           "exhausted": 0,
-          "rejected": 2,
+          "rejected": 0,
           "attempts": 0,
           "failovers": 0,
           "incomplete": 0,
           "cache_hits": 0,
           "cache_misses": 0,
-          "uncached": 2,
+          "uncached": 0,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 0,
@@ -2182,7 +2191,9 @@ export const FIXTURES: Record<string, Fixture> = {
             "output": 0
           },
           "cost_usd": 0,
-          "errors": {
+          "errors": {},
+          "refused": 2,
+          "refusals": {
             "client_contract": 1,
             "guardrail_blocked": 1
           },
@@ -2195,8 +2206,8 @@ export const FIXTURES: Record<string, Fixture> = {
               0,
               0,
               0,
-              1,
-              1,
+              0,
+              0,
               0,
               0,
               0,
@@ -2455,10 +2466,10 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "percentiles": {
             "duration_ms": {
-              "p50": 3.219678444251377,
-              "p90": 3.854228868623104,
-              "p95": 3.854228868623104,
-              "p99": 3.854228868623104
+              "p50": null,
+              "p90": null,
+              "p95": null,
+              "p99": null
             },
             "output_tps": {
               "p50": null,
@@ -2498,7 +2509,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": 2,
+          "plan_requests": 0,
           "plan_output_tokens": 0,
           "cost_equivalent": {},
           "cache_equivalent": {},
@@ -2560,6 +2571,8 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.00355,
           "errors": {},
+          "refused": 0,
+          "refusals": {},
           "cache_miss_reasons": {
             "none": 1
           },
@@ -2895,18 +2908,18 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "key": "standard",
           "label": "standard",
-          "requests": 9,
+          "requests": 7,
           "succeeded": 5,
           "rate_limited": 0,
           "failed": 1,
           "exhausted": 0,
-          "rejected": 2,
+          "rejected": 0,
           "attempts": 8,
           "failovers": 0,
           "incomplete": 1,
           "cache_hits": 7,
           "cache_misses": 0,
-          "uncached": 2,
+          "uncached": 0,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 4000,
@@ -2926,10 +2939,13 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "cost_usd": 0.0249,
           "errors": {
-            "client_contract": 1,
-            "guardrail_blocked": 1,
             "stream_incomplete": 1,
             "upstream_error": 1
+          },
+          "refused": 2,
+          "refusals": {
+            "client_contract": 1,
+            "guardrail_blocked": 1
           },
           "cache_miss_reasons": {
             "none": 7
@@ -2942,8 +2958,8 @@ export const FIXTURES: Record<string, Fixture> = {
               0,
               0,
               0,
-              1,
-              1,
+              0,
+              0,
               0,
               0,
               0,
@@ -3245,7 +3261,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_shares": null,
           "cache_shares": null,
           "probe_shares": null,
-          "plan_requests": 8,
+          "plan_requests": 6,
           "plan_output_tokens": 600,
           "cost_equivalent": {
             "five_hour": 0.000048175000000000005,
@@ -4932,18 +4948,18 @@ export const FIXTURES: Record<string, Fixture> = {
               "key": "desktop",
               "label": "desktop",
               "key_id": "desktop",
-              "requests": 5,
+              "requests": 3,
               "succeeded": 2,
               "rate_limited": 0,
               "failed": 0,
               "exhausted": 0,
-              "rejected": 2,
+              "rejected": 0,
               "attempts": 4,
               "failovers": 1,
               "incomplete": 1,
               "cache_hits": 3,
               "cache_misses": 0,
-              "uncached": 2,
+              "uncached": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 2000,
@@ -4963,9 +4979,12 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "cost_usd": 0.0142,
               "errors": {
-                "client_contract": 1,
-                "guardrail_blocked": 1,
                 "stream_incomplete": 1
+              },
+              "refused": 2,
+              "refusals": {
+                "client_contract": 1,
+                "guardrail_blocked": 1
               },
               "cache_miss_reasons": {
                 "none": 3
@@ -4978,8 +4997,8 @@ export const FIXTURES: Record<string, Fixture> = {
                   0,
                   0,
                   0,
-                  1,
-                  1,
+                  0,
+                  0,
                   0,
                   0,
                   0,
@@ -5281,7 +5300,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
-              "plan_requests": 4,
+              "plan_requests": 2,
               "plan_output_tokens": 200,
               "cost_equivalent": {
                 "five_hour": 0.0000088125,
@@ -5352,6 +5371,8 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "cost_usd": 0.00355,
               "errors": {},
+              "refused": 0,
+              "refusals": {},
               "cache_miss_reasons": {
                 "none": 1
               },
@@ -5743,6 +5764,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "errors": {
                 "upstream_error": 1
               },
+              "refused": 0,
+              "refusals": {},
               "cache_miss_reasons": {
                 "none": 4
               },
@@ -6236,6 +6259,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "errors": {
                 "stream_incomplete": 1
               },
+              "refused": 0,
+              "refusals": {},
               "cache_miss_reasons": {
                 "none": 4
               },
@@ -6600,18 +6625,18 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "key": "-",
               "label": "unattributed",
-              "requests": 2,
+              "requests": 0,
               "succeeded": 0,
               "rate_limited": 0,
               "failed": 0,
               "exhausted": 0,
-              "rejected": 2,
+              "rejected": 0,
               "attempts": 0,
               "failovers": 0,
               "incomplete": 0,
               "cache_hits": 0,
               "cache_misses": 0,
-              "uncached": 2,
+              "uncached": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 0,
@@ -6630,7 +6655,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 "output": 0
               },
               "cost_usd": 0,
-              "errors": {
+              "errors": {},
+              "refused": 2,
+              "refusals": {
                 "client_contract": 1,
                 "guardrail_blocked": 1
               },
@@ -6643,8 +6670,8 @@ export const FIXTURES: Record<string, Fixture> = {
                   0,
                   0,
                   0,
-                  1,
-                  1,
+                  0,
+                  0,
                   0,
                   0,
                   0,
@@ -6903,10 +6930,10 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "percentiles": {
                 "duration_ms": {
-                  "p50": 3.219678444251377,
-                  "p90": 3.854228868623104,
-                  "p95": 3.854228868623104,
-                  "p99": 3.854228868623104
+                  "p50": null,
+                  "p90": null,
+                  "p95": null,
+                  "p99": null
                 },
                 "output_tps": {
                   "p50": null,
@@ -6946,7 +6973,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cost_shares": null,
               "cache_shares": null,
               "probe_shares": null,
-              "plan_requests": 2,
+              "plan_requests": 0,
               "plan_output_tokens": 0,
               "cost_equivalent": {},
               "cache_equivalent": {},
@@ -7005,6 +7032,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "errors": {
                 "upstream_error": 1
               },
+              "refused": 0,
+              "refusals": {},
               "cache_miss_reasons": {
                 "none": 3
               },
@@ -7400,6 +7429,8 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "cost_usd": 0.0036,
               "errors": {},
+              "refused": 0,
+              "refusals": {},
               "cache_miss_reasons": {
                 "none": 1
               },
@@ -8271,7 +8302,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "dashboard": {
     "route": "GET /admin/dashboard",
     "body": {
-      "requests_24h": 10,
+      "requests_24h": 8,
       "tokens_24h": 16200,
       "tokens_cached_24h": 4500,
       "cost_24h": 0.028450000000000003,
@@ -8281,8 +8312,10 @@ export const FIXTURES: Record<string, Fixture> = {
         "seven_day": 0.000012846666666666668
       },
       "estimated_24h": true,
-      "error_rate_24h": 0.3333333333333333,
+      "error_rate_24h": 0.25,
       "top_error_code": "upstream_error",
+      "refused_24h": 2,
+      "top_refusal_code": "guardrail_blocked",
       "hourly": [
         {
           "at": 1791637200000,
@@ -8293,6 +8326,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8305,6 +8339,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8317,6 +8352,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8329,6 +8365,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8341,6 +8378,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8353,6 +8391,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8365,6 +8404,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8377,6 +8417,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8389,6 +8430,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8401,6 +8443,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8413,6 +8456,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8425,6 +8469,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8437,6 +8482,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8449,6 +8495,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8461,6 +8508,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8473,6 +8521,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8485,6 +8534,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8497,6 +8547,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8509,6 +8560,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8521,6 +8573,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8533,6 +8586,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8545,6 +8599,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0
           },
           "errors": 0,
+          "refused": 0,
           "requests": 0,
           "tokens": 0
         },
@@ -8556,8 +8611,9 @@ export const FIXTURES: Record<string, Fixture> = {
             "five_hour": 0.000017625,
             "seven_day": 0.0000047
           },
-          "errors": 2,
-          "requests": 6,
+          "errors": 1,
+          "refused": 2,
+          "requests": 4,
           "tokens": 9000
         },
         {
@@ -8569,6 +8625,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "seven_day": 0.000008146666666666666
           },
           "errors": 1,
+          "refused": 0,
           "requests": 4,
           "tokens": 7200
         }
@@ -8705,7 +8762,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-unweighted",
@@ -8842,7 +8900,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-captured",
@@ -8975,7 +9034,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": "client",
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-failed",
@@ -9108,7 +9168,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-incomplete",
@@ -9245,7 +9306,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-earlier-holder",
@@ -9378,7 +9440,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-failover",
@@ -9605,7 +9668,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "position": 0,
               "blocked": false
             }
-          ]
+          ],
+          "refused": false
         },
         {
           "id": "r-blocked",
@@ -9704,7 +9768,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "position": 1,
               "blocked": true
             }
-          ]
+          ],
+          "refused": true
         },
         {
           "id": "r-classifier",
@@ -9837,7 +9902,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-contract",
@@ -9925,7 +9991,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": true
         }
       ],
       "accounts": [
@@ -10959,7 +11026,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "u-s5A9Dn",
+          "prefix": "90BVqEpP",
           "created_at": 1791721000000,
           "updated_at": 1791721000000,
           "revision": 6189767511104,
@@ -10993,7 +11060,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "seven_day": 0.000010496666666666667
             },
             "estimated": true,
-            "requests": 9,
+            "requests": 7,
             "tokens": 14400
           },
           "lifetime": {
@@ -11004,7 +11071,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "seven_day": 0.000010496666666666667
             },
             "estimated": true,
-            "requests": 9
+            "requests": 7
           }
         }
       ]
@@ -11375,8 +11442,8 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "at": 1791716400000,
-          "requests": 6,
-          "failed": 3,
+          "requests": 4,
+          "failed": 1,
           "tokens": 9000,
           "cost_usd": 0.017750000000000002,
           "billed_usd": 0.0071,
@@ -11537,12 +11604,12 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "u-s5A9Dn",
+              "prefix": "90BVqEpP",
               "enabled": true
             }
           ],
           "status": "active",
-          "requests_24h": 10,
+          "requests_24h": 8,
           "cost_24h": 0.028450000000000007,
           "billed_24h": 0.0107,
           "equivalent_24h": {
@@ -11853,8 +11920,8 @@ export const FIXTURES: Record<string, Fixture> = {
             },
             {
               "at": 1791716400000,
-              "requests": 6,
-              "failed": 3,
+              "requests": 4,
+              "failed": 1,
               "tokens": 9000,
               "cost_usd": 0.017750000000000002,
               "billed_usd": 0.0071,
@@ -12661,7 +12728,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "position": 0,
             "blocked": false
           }
-        ]
+        ],
+        "refused": false
       },
       "events": [
         {
@@ -12899,7 +12967,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-captured",
@@ -13032,7 +13101,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": "client",
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-failed",
@@ -13165,7 +13235,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-incomplete",
@@ -13302,7 +13373,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-earlier-holder",
@@ -13435,7 +13507,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-failover",
@@ -13662,7 +13735,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "position": 0,
               "blocked": false
             }
-          ]
+          ],
+          "refused": false
         },
         {
           "id": "r-blocked",
@@ -13761,7 +13835,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "position": 1,
               "blocked": true
             }
-          ]
+          ],
+          "refused": true
         },
         {
           "id": "r-classifier",
@@ -13894,7 +13969,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": false
         },
         {
           "id": "r-contract",
@@ -13982,7 +14058,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "held": null,
           "diagnostics_source": null,
           "guardrail_id": null,
-          "guardrails": []
+          "guardrails": [],
+          "refused": true
         }
       ],
       "next_cursor": null
@@ -15845,7 +15922,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": null,
           "last_used_at": null,
           "last_request_at": 1791720880000,
-          "requests": 3,
+          "requests": 2,
           "pinned": false,
           "burn": null,
           "burn_unit": null,
