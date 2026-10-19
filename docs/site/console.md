@@ -740,9 +740,10 @@ range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alo
 registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range." where none did
 ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited, Failed,
 Incomplete, Exhausted, Rejected, Error rate, Failovers, Search and Fetch. Under the model grouping the requests the
-router rejected before routing group under "no model", which the Cache by model table leaves out. The "Errors by code"
-card and the Traffic table keep the requests a guardrail blocked under `guardrail_blocked`, as inventories of what the
-router answered, beside the Guardrails card that counts the same requests by guardrail.
+router rejected before routing group under "no model", which the Cache by model table leaves out. The `{pct} errors`
+figure, the "Error rate" column and the "Errors by code" card leave out the requests a guardrail blocked, since a block
+is a refusal the operator asked for. The `{n} requests` count, the "Requests" and "Rejected" columns and the Guardrails
+card keep counting them.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply

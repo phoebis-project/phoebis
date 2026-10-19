@@ -75,9 +75,8 @@ guardrail created without a preset carries no stamp.
 with three conditions: `request_class` equals `auxiliary`, the body member `tools` is present, and the last user message
 matches `^Describe your most recent action in 3-5 words`. Its description reads: "Claude Code forks each running
 subagent's whole conversation every 30 seconds to ask for a status line of three to five words. Each fork reads the
-subagent's full cached context for about 24 output tokens, and no client setting turns it off. On one router the forks
-were 22 percent of every cached token read over three days. Blocking them leaves the Agent tool's status line static and
-changes nothing else."
+subagent's full cached context for about 24 output tokens, and no client setting turns it off. Blocking the forks leaves
+the Agent tool's status line static and changes nothing else."
 
 `Prompt suggestion`, version 1, measured on Claude Code 2.1.296 to 2.1.301, catches a second fork of the same shape. In
 an interactive session the client forks the main thread's whole conversation to predict what the user types next and
@@ -178,8 +177,9 @@ on, a match is refused before any account is selected.
 
 A block is a refusal the operator asked for, so the Dashboard's "Error rate, 24h" tile leaves the blocked requests out
 of its rate and `Most common` skips the code, while "Requests, 24h" keeps counting them, since the router received them.
-The Analytics view's "Errors by code" card and its Traffic table keep the `guardrail_blocked` rows as inventories of
-what the router answered, beside the Guardrails card that counts the same requests by guardrail.
+The Analytics view follows the same rule: Traffic's `{pct} errors` figure, its table's "Error rate" column and its
+"Errors by code" card leave the blocked requests out. The `{n} requests` count, the table's "Requests" and "Rejected"
+columns and the Guardrails card keep counting them.
 
 ## Testing a guardrail
 
