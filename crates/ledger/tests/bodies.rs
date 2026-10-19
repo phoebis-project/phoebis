@@ -749,3 +749,62 @@ async fn the_retention_purges_decisions_under_the_request_cutoff_and_keeps_them_
         "the decision older than a day leaves and the two younger stay"
     );
 }
+
+/// Ten expired bodies whose request rows count a third of the byte budget each, so a slice takes three and the pass
+/// repeats the family over four slices, beside three bodies that have not expired.
+#[tokio::test]
+async fn a_pass_over_byte_bounded_slices_removes_every_expired_body_and_keeps_the_unexpired() {
+    const EXPIRED: usize = 10;
+    const FRESH: usize = 3;
+    const DAY: i64 = 86_400_000;
+    let now = 2 * DAY;
+    let dir = tempfile::tempdir().unwrap();
+    let db = std::sync::Arc::new(
+        phoebis_ledger::LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap(),
+    );
+    db.write(|c| {
+        c.execute_batch(&format!(
+            "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < {last}) \
+             INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+             request_bytes, response_bytes, bodies_captured) \
+             SELECT 'r-' || i, {received}, 'm', 'm', 0, 'inference', 'client', 'succeeded', 1, {bytes}, 0, 1 FROM n; \
+             WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < {last}) \
+             INSERT INTO bodies (request_id, request_body, response_body, expires_at) \
+             SELECT 'r-' || i, x'7b7d', x'7b7d', CASE WHEN i < {EXPIRED} THEN {now} - i ELSE {now} + 1 + i END FROM n;",
+            last = EXPIRED + FRESH - 1,
+            received = now - DAY / 2,
+            bytes = phoebis_ledger::PURGE_SLICE_BYTES / 3,
+        ))?;
+        Ok(())
+    })
+    .unwrap();
+    let count = |sql: &str| -> usize {
+        db.read_blocking(|c| Ok(c.query_row(sql, [now], |r| r.get::<_, i64>(0))?))
+            .unwrap() as usize
+    };
+    let purged = run_retention(db.clone(), LedgerConfig::default(), now, Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        purged,
+        Purged {
+            bodies: EXPIRED,
+            ..Purged::default()
+        },
+        "the sum of the slices, and no request row"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM bodies WHERE expires_at <= ?1"),
+        0
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM bodies WHERE expires_at > ?1"),
+        FRESH,
+        "every unexpired body stays"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM requests WHERE received_at < ?1"),
+        EXPIRED + FRESH,
+        "the request rows stand inside their own cutoff"
+    );
+}

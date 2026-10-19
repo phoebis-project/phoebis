@@ -24,7 +24,10 @@ mod task;
 mod usage;
 
 pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
-pub use bodies::{run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE};
+pub use bodies::{
+    run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,
+    PURGE_SLICE_BYTES,
+};
 pub use db::LedgerDb;
 pub use events::{catalog_changed, event_of, poll_backoff, spawn_event_mirror, MirrorBaseline};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};

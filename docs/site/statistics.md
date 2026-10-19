@@ -368,14 +368,15 @@ refusal drops it.
 
 A routing decision leaves in the purge that takes its request. One whose request never landed leaves at the same age.
 
-The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction, so the
-writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute poll's
-reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per day. The same pass
-cuts the registry's history at the requests' cutoff, in slices of 1,000 rows: its resolved credential refresh attempts
-and its change log. It keeps what is read whatever its age: an attempt whose outcome is still uncertain, each account's
-newest two resolved attempts, which the attention line reads, and its newest attempt, which the account view reads, and
-each key id's newest create and delete, which tell a re-created key from its predecessor. A budgeted member's hourly
-rows stay from its period's start on, so a retention shorter than the period never reopens an exhausted member.
+The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction. A slice
+of captured bodies is bounded at 32 MiB beside the 1,000 rows, so the writer waits behind one slice at most and never
+behind a whole pass, and the day's cut costs the WAL one slice at a time. Every five-minute poll's reading is kept for
+`stats.retention_days`, so an idle account adds 288 quota rows per window per day. The same pass cuts the registry's
+history at the requests' cutoff, in slices of 1,000 rows: its resolved credential refresh attempts and its change log.
+It keeps what is read whatever its age: an attempt whose outcome is still uncertain, each account's newest two resolved
+attempts, which the attention line reads, and its newest attempt, which the account view reads, and each key id's newest
+create and delete, which tell a re-created key from its predecessor. A budgeted member's hourly rows stay from its
+period's start on, so a retention shorter than the period never reopens an exhausted member.
 
 The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
 its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
