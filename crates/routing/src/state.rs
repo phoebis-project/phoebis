@@ -2614,7 +2614,8 @@ impl RoutingState {
 
     /// The twin of `burn_shares` that the slow-down's readers take: the kept pins' sum on every window over `speed`,
     /// the account's realized speed, and the live reservations' `burn` undivided, since a booking is a fresh session's
-    /// prior or a moving pin's figure, neither of them slowed on the account yet.
+    /// prior or a moving pin's figure, neither of them slowed on the account yet. `keep` decides which of the account's
+    /// rows count, as `pin_rates` reads it.
     pub fn demand_shares(
         &self,
         account_id: &str,
@@ -2630,7 +2631,8 @@ impl RoutingState {
     /// The account's rates as `shares` sums them, each over `[now, horizon(window))` as the band weighs it, for the
     /// windows `horizon` names: each kept pin's at its own regime's segments, the pins' sum over `speed`, then each
     /// live booking's undivided at its own regime's segments, its plain rate read under the band of its `booked_at`,
-    /// since its `burn` was priced there. An unpriced pin adds nothing.
+    /// since its `burn` was priced there. An unpriced pin adds nothing. `keep` decides which of the account's rows
+    /// count, as `pin_rates` reads it.
     #[allow(clippy::too_many_arguments)]
     pub fn banded_shares(
         &self,
@@ -2722,7 +2724,9 @@ impl RoutingState {
     }
 
     /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws, with the pin's
-    /// entrypoint, in the pin map's order. A priced pin alone reaches `add`.
+    /// entrypoint, in the pin map's order. A priced pin alone reaches `add`. `keep` is the one test of which rows
+    /// count, with no idle test: a row idle past the TTL stands until its placement replaces it or the purge takes
+    /// it, and a placement's own reads leave the request's own row out through `keep`.
     fn pin_rates<'a>(
         &'a self,
         account_id: &str,

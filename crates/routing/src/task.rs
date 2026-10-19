@@ -2512,6 +2512,7 @@ fn projections(
                 tier,
                 now,
                 BurnRead::Achieved,
+                None,
             );
             let demands = projections_of(
                 state,
@@ -2521,6 +2522,7 @@ fn projections(
                 tier,
                 now,
                 BurnRead::Demand,
+                None,
             );
             let windows = all_plan_windows()
                 .filter_map(|window| {
@@ -2534,8 +2536,10 @@ fn projections(
                             horizon: projection.horizon,
                             burn: projection.burn * 3_600.0,
                             demand: demand.burn * 3_600.0,
-                            spare_rate: pace_of(state, snapshot, pool, &candidate, window, now)
-                                .score,
+                            spare_rate: pace_of(
+                                state, snapshot, pool, &candidate, window, now, None,
+                            )
+                            .score,
                         },
                     ))
                 })
@@ -2543,7 +2547,7 @@ fn projections(
             AccountProjection {
                 account_id: account_id.to_string(),
                 windows,
-                pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now).score,
+                pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now, None).score,
                 slow_down: state
                     .slow_down_in_force(pool, account_id, now)
                     .map(|entry| AccountSlowDown {

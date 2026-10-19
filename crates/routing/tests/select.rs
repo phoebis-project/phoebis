@@ -26577,6 +26577,95 @@ fn a_row_idle_past_the_ttl_stands_through_a_cap_hold_and_the_landing_after_the_w
     );
 }
 
+const STANDING_AT: i64 = T + 2 * HOUR;
+
+/// A Pace pool of `a`, `b` and `c` read alike at `STANDING_AT`, with `s1`'s row idle past the TTL on `a`, its burn of a
+/// thousand input tokens a second decayed over the two hours since `T`, and `w`'s warm row on `c`, whose burn is a
+/// fresh session's prior and bounds every runway. `a` and `b` then differ by `s1`'s row alone.
+fn standing_row_on_a() -> (RegistrySnapshot, RoutingState) {
+    let s = tiered(Pool {
+        strategy: Strategy::Pace,
+        ..Pool::default()
+    });
+    let mut st = priced(vec![
+        gated_pin("s1", "a", 1_000.0),
+        burning("w", "c", 1_000.0, true, STANDING_AT),
+    ]);
+    for id in ["a", "b", "c"] {
+        st.record_sample(
+            id,
+            refreshing(
+                0.5,
+                STANDING_AT + HOUR,
+                STANDING_AT + 72 * HOUR,
+                STANDING_AT - 500,
+            ),
+        );
+    }
+    (s, st)
+}
+
+#[test]
+fn a_placement_s_fit_and_pace_score_leave_out_the_session_s_own_row_on_the_account_it_left() {
+    let (s, mut st) = standing_row_on_a();
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], STANDING_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle"),
+        "the row stands on a at step 1"
+    );
+    let (a, b) = (candidate(&d.record, "a"), candidate(&d.record, "b"));
+    assert!(
+        a.burn[SEVEN_DAY] > 0.0,
+        "the candidate table's achieved burn reads the row: {:?}",
+        a.burn
+    );
+    assert!(b.runway_ms.is_some(), "the fresh prior bounds b's runway");
+    assert_eq!(
+        a.runway_ms, b.runway_ms,
+        "the fit projects a without the session's own row"
+    );
+    let pace = |c: &CandidateFacts| {
+        let pace = c.pace.as_ref().expect("Pace scores every member");
+        (pace.burn, pace.score)
+    };
+    assert_eq!(
+        pace(a),
+        pace(b),
+        "the record's Pace figures read a without the row"
+    );
+    assert_eq!(a.score, b.score, "the pick scores a without the row");
+}
+
+#[test]
+fn another_session_s_placement_reads_the_burn_of_a_row_idle_past_the_ttl_on_its_account() {
+    let (s, mut st) = standing_row_on_a();
+    let req = request(&s, Some("s2"), "claude-sonnet-5", true, &[], STANDING_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(d.record.pin.as_ref().map(|pin| pin.found), Some("none"));
+    let (a, b) = (candidate(&d.record, "a"), candidate(&d.record, "b"));
+    let runway = |c: &CandidateFacts| c.runway_ms.expect("the fresh prior bounds the runway");
+    assert!(
+        runway(a) < runway(b),
+        "the fit projects a with s1's row: {} against {}",
+        runway(a),
+        runway(b)
+    );
+    let pace = |c: &CandidateFacts| c.pace.clone().expect("Pace scores every member");
+    let (pace_a, pace_b) = (pace(a), pace(b));
+    assert!(
+        pace_a.burn > 0.0 && pace_a.score < pace_b.score,
+        "the record's Pace figures read a with s1's row: {pace_a:?} against {pace_b:?}"
+    );
+    assert!(
+        a.score < b.score,
+        "the pick scores a with s1's row: {:?} against {:?}",
+        a.score,
+        b.score
+    );
+}
+
 #[test]
 fn a_renewal_and_a_placement_with_no_row_name_no_account_left() {
     let s = snapshot(Pool {
