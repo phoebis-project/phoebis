@@ -4845,7 +4845,7 @@ fn the_subject_side_replaces_the_list_whole_in_the_given_order() {
             "test",
         )
         .unwrap();
-    store
+    let g2 = store
         .insert_guardrail(
             &guardrail("g2", None),
             &ids(&["main"]),
@@ -4873,8 +4873,12 @@ fn the_subject_side_replaces_the_list_whole_in_the_given_order() {
         .update_api_key_with_guardrails(&k1, k1.updated_at, Some(&[]), "test")
         .unwrap();
     assert!(attached(&store, &on_key("k1")).is_empty());
-    assert!(
-        store.guardrail("g1").unwrap().unwrap().updated_at > g1.updated_at,
+    assert_eq!(
+        (
+            store.guardrail("g1").unwrap().unwrap().updated_at > g1.updated_at,
+            store.guardrail("g2").unwrap().unwrap().updated_at > g2.updated_at,
+        ),
+        (true, true),
         "a write from the subject's side stamps each guardrail whose membership it changed"
     );
 }
@@ -4966,10 +4970,19 @@ fn a_guardrail_save_opened_before_a_pool_side_detach_is_refused_stale() {
     store
         .insert_guardrail(&guardrail("g1", None), &ids(&["main"]), &[], "test")
         .unwrap();
+    let g2 = store
+        .insert_guardrail(&guardrail("g2", None), &[], &[], "test")
+        .unwrap();
     let g1 = store.guardrail("g1").unwrap().unwrap();
     let main = store.pool("main").unwrap().unwrap();
     store
-        .update_pool_with_members_and_guardrails(&main, main.updated_at, None, Some(&[]), "test")
+        .update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&ids(&["g2"])),
+            "test",
+        )
         .unwrap();
     assert!(matches!(
         store.update_guardrail(&g1, g1.updated_at, None, None, "test"),
@@ -4978,6 +4991,10 @@ fn a_guardrail_save_opened_before_a_pool_side_detach_is_refused_stale() {
     assert!(
         store.guardrail("g1").unwrap().unwrap().updated_at > g1.updated_at,
         "the detach moved the guardrail's stamp"
+    );
+    assert!(
+        store.guardrail("g2").unwrap().unwrap().updated_at > g2.updated_at,
+        "the attach in the same write moved the attached guardrail's stamp"
     );
 }
 
@@ -4991,20 +5008,15 @@ fn a_write_that_changes_no_list_moves_no_stamp_on_the_other_side() {
     }
     let main = store.pool("main").unwrap().unwrap();
     let g1 = store.guardrail("g1").unwrap().unwrap();
+    let edited = GuardrailRow {
+        description: "edited".into(),
+        ..g1.clone()
+    };
     let stamped = store
-        .update_guardrail(
-            &GuardrailRow {
-                description: "edited".into(),
-                ..g1.clone()
-            },
-            g1.updated_at,
-            None,
-            None,
-            "test",
-        )
+        .update_guardrail(&edited, g1.updated_at, None, None, "test")
         .unwrap();
     store
-        .update_guardrail(&g1, stamped, Some(&ids(&["main"])), None, "test")
+        .update_guardrail(&edited, stamped, Some(&ids(&["main"])), None, "test")
         .unwrap();
     assert_eq!(
         store.pool("main").unwrap().unwrap().updated_at,

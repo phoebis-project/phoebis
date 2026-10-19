@@ -254,7 +254,11 @@ test('a guardrail save opened before a pool-side detach is refused as stale', as
   const pool = (await api.listPools()).find((p) => p.id === 'all');
   await api.updatePool('all', { ...poolInputOf(pool), guardrails: [] }, pool.revision);
   await assert.rejects(() => api.updateGuardrail('subagent-status-summary', { mode: 'enforce' }, read.revision), staleAs(GUARDRAIL_STALE));
-  assert.ok((await api.getGuardrail('subagent-status-summary')).revision > read.revision, "the detach moves the guardrail's revision");
+  const detached = await api.getGuardrail('subagent-status-summary');
+  assert.ok(detached.revision > read.revision, "the detach moves the guardrail's revision");
+  const emptied = (await api.listPools()).find((p) => p.id === 'all');
+  await api.updatePool('all', { ...poolInputOf(emptied), guardrails: ['subagent-status-summary'] }, emptied.revision);
+  assert.ok((await api.getGuardrail('subagent-status-summary')).revision > detached.revision, "the attach moves the guardrail's revision");
 });
 
 test('an editor opened before its pool or key was deleted and created again is refused as stale and stores nothing', async () => {
