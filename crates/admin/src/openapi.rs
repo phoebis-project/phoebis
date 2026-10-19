@@ -40,7 +40,7 @@ Each operation names its request (path segments, query parameters, or body field
 
 /// The document's static half: the info block, the one relative server, the eighteen tags in the API page's area order
 /// (`docs/site/api-reference.md`), the bearer requirement on every operation, and the four shared responses. The paths
-/// join it in `parts()`.
+/// join it in `routes::parts()`.
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Phoebis Router admin API"),
