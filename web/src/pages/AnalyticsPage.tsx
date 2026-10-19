@@ -681,8 +681,7 @@ export function AnalyticsPage() {
               )}
             </Card>
           </div>
-          {/* Below the grid at full width, so the grid keeps its cards in pairs and the four columns read as the table
-              under it does. */}
+          {/* Below the grid at full width, so the four columns read as the table under it does. */}
           <GuardrailsCard answer={guardrailCounts.stale ? null : guardrailCounts.data} error={guardrailCounts.error} />
           <BreakdownTable
             title={`Traffic by ${groupLabel.toLowerCase()}`}

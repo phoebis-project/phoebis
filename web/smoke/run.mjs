@@ -16774,9 +16774,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const heads = [...(traffic('model')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({ name: '/analytics the traffic table ends with the server-tool calls', ok: JSON.stringify(heads.slice(-3)) === JSON.stringify(['Failovers', 'Search', 'Fetch']), missing: heads });
     const fable = trafficRows('model').find((row) => row[0] === 'claude-fable-5-1') ?? [];
+    // The cells sit under their headers' indexes, the group column leading both rows.
+    const calls = (head) => Number((fable[heads.indexOf(head)] ?? '').replace(/,/g, ''));
     results.push({
       name: '/analytics a model whose answers reach server tools counts both calls',
-      ok: fable.length > 11 && Number(fable[10].replace(/,/g, '')) > 0 && Number(fable[11].replace(/,/g, '')) > 0,
+      ok: heads.indexOf('Search') > 0 && heads.indexOf('Fetch') > 0 && calls('Search') > 0 && calls('Fetch') > 0,
       missing: fable,
     });
 

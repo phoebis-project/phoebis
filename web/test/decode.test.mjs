@@ -1497,6 +1497,10 @@ test('request rows fold into analytics groups with the same sums the routes answ
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
   assert.equal(all.requests, 7, 'the two requests the route flagged refused leave the count');
+  assert.equal(all.refused, 2, 'the fold counts them under refused');
+  assert.deepEqual({ ...all.refusals }, { client_contract: 1, guardrail_blocked: 1 }, 'and under their codes');
+  assert.equal(all.rejected, 0, 'and under no outcome');
+  assert.ok(!('client_contract' in all.errors) && !('guardrail_blocked' in all.errors), JSON.stringify({ ...all.errors }));
   assert.equal(all.succeeded, 5);
   assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
   assert.equal(all.incomplete, 1);
