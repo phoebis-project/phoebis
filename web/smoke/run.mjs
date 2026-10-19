@@ -8304,6 +8304,11 @@ const guardrailRefRows = (refs, inherited) =>
     .sort((a, b) => a.position - b.position)
     .map((r) => ({ badge: r.mode, name: r.name, off: !r.enabled, source: inherited ? 'inherited' : null, tone: `badge badge--${r.mode === 'enforce' ? 'warning' : 'neutral'}` }));
 const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+/** An Attach box's option by its guardrail's name, read past the Select all row. */
+const optionNamed = (box, name) => [...(box?.querySelectorAll(CHOICE) ?? [])].find((o) => o.textContent?.trim() === name);
+/** The names an Attach box shows checked, in its order: the row selected and its check drawn. */
+const checkedNames = (box) =>
+  [...(box?.querySelectorAll(CHOICE) ?? [])].filter((o) => o.getAttribute('aria-selected') === 'true' && o.querySelector('.mselect__check svg') !== null).map((o) => o.textContent?.trim());
 {
   const pool = (await api.listPools()).find((p) => p.id === 'all');
   const registry = await api.listGuardrails();
@@ -8325,11 +8330,15 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
   await page.settle(150);
   const box = [...document.querySelectorAll('.popover')].pop();
   const offered = [...(box?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const checked = checkedNames(box);
   const unattached = registry.filter((g) => !(pool?.guardrails ?? []).some((r) => r.id === g.id));
-  box?.querySelector(CHOICE)?.click();
+  const added = unattached[0];
+  optionNamed(box, added?.name)?.click();
   await page.settle(150);
   const attached = guardrailListRows(section).map((r) => r.name);
-  const added = unattached[0];
+  const picked = { checked: checkedNames(box).includes(added?.name), open: box?.isConnected === true };
+  // An operator's click on a row control closes the box first, which jsdom's click does not.
+  await closeBoxes(page);
   section?.querySelector(`button[aria-label="Move ${added?.name} up"]`)?.click();
   await page.settle(150);
   const moved = guardrailListRows(section).map((r) => r.name);
@@ -8352,10 +8361,16 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
       (hint?.textContent ?? '').startsWith("Top to bottom. A pool's guardrails run before a key's own. Manage guardrails") &&
       link?.getAttribute('href') === '/guardrails' &&
       unattached.length > 0 &&
-      JSON.stringify(offered) === JSON.stringify(unattached.map((g) => g.name)) &&
+      JSON.stringify(offered) === JSON.stringify(registry.map((g) => g.name)) &&
+      JSON.stringify(checked) === JSON.stringify(registry.filter((g) => ids.includes(g.id)).map((g) => g.name)) &&
       JSON.stringify(attached) === JSON.stringify([...(pool?.guardrails ?? []).map((r) => r.name), added?.name]) &&
       JSON.stringify(moved) === JSON.stringify([...(pool?.guardrails ?? []).slice(0, -1).map((r) => r.name), added?.name, (pool?.guardrails ?? []).at(-1)?.name]),
-    missing: [JSON.stringify(opened), hint?.textContent ?? 'no hint', link?.getAttribute('href') ?? 'no link', JSON.stringify(offered), JSON.stringify(attached), JSON.stringify(moved)],
+    missing: [JSON.stringify(opened), hint?.textContent ?? 'no hint', link?.getAttribute('href') ?? 'no link', JSON.stringify(offered), JSON.stringify(checked), JSON.stringify(attached), JSON.stringify(moved)],
+  });
+  results.push({
+    name: '/pools the Attach box of the pool dialog keeps the box open on a pick',
+    ok: added !== undefined && JSON.stringify(attached) === JSON.stringify([...(pool?.guardrails ?? []).map((r) => r.name), added.name]) && picked.open && picked.checked,
+    missing: [JSON.stringify(attached), JSON.stringify(picked)],
   });
   results.push({
     name: '/pools the pool dialog sends its guardrails as the whole list when it changed and leaves them out when it did not',
@@ -8389,12 +8404,13 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
 }
 {
   const desktop = (await api.listKeys()).find((k) => k.id === 'desktop');
-  // A third guardrail in the registry the dialog reads, so the list it offers shows what it leaves out: the key's own
-  // and its pool's.
+  // Two guardrails no list holds join the registry the dialog reads, so the box has two to pick in turn and shows what
+  // it leaves out: the pool's.
   const { listGuardrails } = api;
   const [first] = await listGuardrails.call(api);
   const extra = { ...first, id: 'smoke-extra', keys: [], name: 'Smoke extra', pools: [] };
-  api.listGuardrails = async () => [...(await listGuardrails.call(api)), extra];
+  const spare = { ...first, id: 'smoke-spare', keys: [], name: 'Smoke spare', pools: [] };
+  api.listGuardrails = async () => [...(await listGuardrails.call(api)), extra, spare];
   const page = await mount('/keys?edit=desktop&group=guardrails');
   await page.settle(300);
   const dlg = openDialogs(page).pop() ?? null;
@@ -8406,12 +8422,14 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
   const upHeld = section?.querySelector(`button[aria-label="Move ${ownFirst?.name} up"]`)?.disabled;
   buttonIn(section, 'Attach guardrail')?.click();
   await page.settle(150);
-  const offered = [...([...document.querySelectorAll('.popover')].pop()?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const box = [...document.querySelectorAll('.popover')].pop();
+  const offered = [...(box?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const checked = checkedNames(box);
   await closeBoxes(page);
   buttonIn(dlg, 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
-  api.listGuardrails = listGuardrails;
+  const own = guardrailRefRows(desktop?.guardrails ?? [], false).map((r) => r.name);
   results.push({
     name: "/keys the key dialog's Guardrails group draws the pool's rows inherited and the key's own after them",
     ok:
@@ -8421,8 +8439,53 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
       JSON.stringify(rows) === JSON.stringify([...guardrailRefRows(desktop?.poolGuardrails ?? [], true), ...guardrailRefRows(desktop?.guardrails ?? [], false)]) &&
       hint.startsWith("The pool's guardrails run first and cannot be dropped here. This key's own run after them. Manage guardrails") &&
       upHeld === true &&
-      JSON.stringify(offered) === JSON.stringify(['Smoke extra']),
-    missing: [shown, JSON.stringify(rows), hint, `first own row's Move up disabled ${upHeld}`, JSON.stringify(offered)],
+      JSON.stringify(offered) === JSON.stringify([...own, extra.name, spare.name]) &&
+      JSON.stringify(checked) === JSON.stringify(own),
+    missing: [shown, JSON.stringify(rows), hint, `first own row's Move up disabled ${upHeld}`, JSON.stringify(offered), JSON.stringify(checked)],
+  });
+  // The same key's box again, picked through: each pick attaches at once with the box open and its check drawn, an
+  // uncheck detaches, Select all attaches every offered guardrail and its uncheck none, and Escape closes the box.
+  const picking = await mount('/keys?edit=desktop&group=guardrails');
+  await picking.settle(300);
+  const pickSection = group(openDialogs(picking).pop() ?? null, 'Guardrails');
+  const ownNow = () => guardrailListRows(pickSection).filter((r) => r.source === null).map((r) => r.name);
+  buttonIn(pickSection, 'Attach guardrail')?.click();
+  await picking.settle(150);
+  const pickBox = [...document.querySelectorAll('.popover')].pop();
+  const all = [...(pickBox?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const steps = [];
+  const step = async (label, click) => {
+    click?.click();
+    await picking.settle(150);
+    steps.push({ checked: checkedNames(pickBox), label, open: pickBox?.isConnected === true, own: ownNow() });
+  };
+  await step('first pick', optionNamed(pickBox, extra.name));
+  await step('second pick', optionNamed(pickBox, spare.name));
+  await step('uncheck', optionNamed(pickBox, spare.name));
+  await step('Select all', pickBox?.querySelector('.mselect__option--all'));
+  await step('Select all unchecked', pickBox?.querySelector('.mselect__option--all'));
+  pressKey('Escape', pickBox);
+  await picking.settle(150);
+  const closed = { focused: document.activeElement !== null && document.activeElement === buttonIn(pickSection, 'Attach guardrail'), open: pickBox?.isConnected === true };
+  picking.unmount();
+  api.listGuardrails = listGuardrails;
+  const openWith = (label, list) => ({ checked: list, label, open: true, own: list });
+  results.push({
+    name: '/keys the Attach box stays open while the operator picks, each pick attaching at once, and Select all attaches every offered guardrail',
+    ok:
+      own.length > 0 &&
+      JSON.stringify(all) === JSON.stringify([...own, extra.name, spare.name]) &&
+      JSON.stringify(steps) ===
+        JSON.stringify([
+          openWith('first pick', [...own, extra.name]),
+          openWith('second pick', [...own, extra.name, spare.name]),
+          openWith('uncheck', [...own, extra.name]),
+          openWith('Select all', all),
+          openWith('Select all unchecked', []),
+        ]) &&
+      closed.open === false &&
+      closed.focused,
+    missing: [JSON.stringify(all), ...steps.map((s) => JSON.stringify(s)), JSON.stringify(closed)],
   });
   // A new key takes no attachment, so its group reads its pool's rows and says when its own can be attached.
   const pool = (await api.listPools())[0];

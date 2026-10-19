@@ -532,10 +532,10 @@ function GuardrailWords({ guardrail: g }: { guardrail: ListedGuardrail }) {
 
 /**
  * A pool's or a key's guardrails in the order they run, each with move up, move down and remove, and "Attach guardrail"
- * offering the registry's guardrails that neither the list nor `inherited` holds, since one on both runs once at its
- * pool position. `inherited` draws a key's pool's rows first, read-only. `refs` are the record's own rows as the route
- * reported them, which name a row before the registry answers. `pending` is the sentence a subject not saved yet reads
- * in place of its own list and the control, since the create routes take no attachment.
+ * offering the registry's guardrails that `inherited` does not hold, since one on both runs once at its pool position,
+ * the list's own ones among them and checked. `inherited` draws a key's pool's rows first, read-only. `refs` are the
+ * record's own rows as the route reported them, which name a row before the registry answers. `pending` is the sentence
+ * a subject not saved yet reads in place of its own list and the control, since the create routes take no attachment.
  */
 export function GuardrailList({ inherited = [], onChange, pending, refs, registry, value }: { inherited?: GuardrailRef[]; onChange: (ids: string[]) => void; pending?: string; refs: GuardrailRef[]; registry: Loaded<Guardrail[] | null>; value: string[] }): JSX.Element {
   const boxId = useId();
@@ -544,19 +544,23 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
   const fromPool = [...inherited].sort((a, b) => a.position - b.position);
   const own = pending === undefined ? value : [];
   const listed = (id: string): ListedGuardrail => refs.find((r) => r.id === id) ?? registry.data?.find((g) => g.id === id) ?? { enabled: true, id, mode: null, name: id };
-  const taken = new Set([...value, ...fromPool.map((r) => r.id)]);
-  const options = (registry.data ?? []).filter((g) => !taken.has(g.id)).map((g) => ({ label: g.name, value: g.id }));
+  const options = (registry.data ?? []).filter((g) => !fromPool.some((r) => r.id === g.id)).map((g) => ({ label: g.name, value: g.id }));
   const held = registry.data === null ? (registry.error ? `The guardrail list did not load: ${registry.error}` : 'Reading the guardrail list') : options.length === 0 ? 'No other guardrail is left to attach' : undefined;
   const move = (i: number, j: number) => {
     const next = [...value];
     [next[i], next[j]] = [next[j], next[i]];
     onChange(next);
   };
-  const attach = (picked: string[]) => {
-    setOpen(false);
-    anchor?.focus();
-    onChange([...value, ...picked.filter((id) => !value.includes(id))]);
+  // A pick attaches at once and lands at the end of the order, where the guardrail dialog's attach lands too, and an
+  // uncheck removes its guardrail, so the box stays open while the operator picks.
+  const pick = (next: string[]) => {
+    const kept = value.filter((id) => next.includes(id));
+    const added = options.map((o) => o.value).filter((id) => next.includes(id) && !value.includes(id));
+    onChange([...kept, ...added]);
   };
+  // The Popover hands the focus back to the anchor on Escape itself, and a focus move here would also pull the focus
+  // back when it leaves the box for another control.
+  const close = () => setOpen(false);
   return (
     <div className="pattern-editor guardrail-list" role="group" aria-label="Guardrails">
       {fromPool.length + own.length > 0 && (
@@ -594,8 +598,9 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
               Attach guardrail
             </Button>
           </div>
-          <Popover anchor={anchor} id={boxId} label="Attach guardrail" onClose={() => setOpen(false)} open={open}>
-            <OptionList autoFocus label="Guardrails" onChange={attach} options={options} searchable value={[]} />
+          {/* Each pick adds an own row above the anchor and each uncheck removes one, so the box is placed again. */}
+          <Popover anchor={anchor} id={boxId} label="Attach guardrail" onClose={close} open={open} placeKey={value.length}>
+            <OptionList autoFocus label="Guardrails" onChange={pick} options={options} searchable value={value} />
           </Popover>
         </>
       )}
