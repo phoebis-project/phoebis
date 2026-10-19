@@ -26667,6 +26667,61 @@ fn another_session_s_placement_reads_the_burn_of_a_row_idle_past_the_ttl_on_its_
 }
 
 #[test]
+fn rung_four_s_gate_reads_the_fit_without_the_session_s_own_row_on_the_account_it_left() {
+    let s = tiered(Pool {
+        members: vec![("a", 1), ("b", 0)],
+        ..Pool::default()
+    });
+    // A hundred thousand input tokens a second, decayed over the two hours since `T`, would overrun a's 5-hour window
+    // before its reset an hour out, so a gate that counted the row would pass over a's warm prefix and the strategy
+    // would pick b.
+    let mut st = priced(vec![PinRow {
+        agent_id: "sub-1".into(),
+        ..gated_pin("s1", "a", 100_000.0)
+    }]);
+    for id in ["a", "b"] {
+        st.record_sample(
+            id,
+            refreshing(
+                0.5,
+                STANDING_AT + HOUR,
+                STANDING_AT + 72 * HOUR,
+                STANDING_AT - 500,
+            ),
+        );
+    }
+    seed_affinity(
+        &st,
+        vec![AffinityRow {
+            written_at: STANDING_AT - 1_000,
+            ..static_row(&s, "s1", "a", 20_000)
+        }],
+    );
+    let req = SelectRequest {
+        now: STANDING_AT,
+        received_at: STANDING_AT,
+        ..static_req(&s, &["s1"])
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle"),
+        "the row stands on a at step 1"
+    );
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("the request is placed, got {:?}", d.result)
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.trace.placement.as_ref().map(|p| p.rung)
+        ),
+        ("a", Some("static")),
+        "rung 4 places the request on a's warm prefix"
+    );
+}
+
+#[test]
 fn a_renewal_and_a_placement_with_no_row_name_no_account_left() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],

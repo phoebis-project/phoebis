@@ -2724,9 +2724,9 @@ impl RoutingState {
     }
 
     /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws, with the pin's
-    /// entrypoint, in the pin map's order. A priced pin alone reaches `add`. `keep` is the one test of which rows
-    /// count, with no idle test: a row idle past the TTL stands until its placement replaces it or the purge takes
-    /// it, and a placement's own reads leave the request's own row out through `keep`.
+    /// entrypoint, in the pin map's order. A priced pin alone reaches `add`. `keep` decides which rows count, beside
+    /// the skip of a row a live booking names, with no idle test: a row idle past the TTL stands until its placement
+    /// replaces it or the purge takes it, and a placement's own reads leave the request's own row out through `keep`.
     fn pin_rates<'a>(
         &'a self,
         account_id: &str,

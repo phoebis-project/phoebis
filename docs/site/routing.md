@@ -430,9 +430,8 @@ reports a window, it reads the achieved burn: the prediction, the weekly windows
 which are what the upstream will see. The reservation a move or a placement books carries the demand-side burn the gate
 read, so the gate and the booking agree and the destination counts the session at the rate it will run at there,
 unslowed until the destination's own factor says otherwise. With no slow-down in force on the account the speed is 1 and
-the demand is the achieved burn. A placement's own read leaves the session's own standing row on the account it left (a
-pin idle past `affinity_ttl_seconds`, which stays until the placement replaces it) out of the fit and the Pace score,
-while every other read keeps it.
+the demand is the achieved burn. A placement's own read leaves the session's own standing row on the account it left out
+of the fit and the Pace score, while every other read keeps it.
 
 A session's runway on an account is the time until that account's projection, with the session's cold rewrite (its last
 prompt as one cache write) added now and its burn added to the account's, reaches `window_ceiling`: none when the
