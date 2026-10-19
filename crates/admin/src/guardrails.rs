@@ -823,9 +823,9 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
     let mut sampled: Vec<(String, i64, Verdict)> = Vec::new();
     let mut cursor: Option<String> = None;
     // One `read` per page, so the reader mutex is released between pages and a console read waits for one page at
-    // most. A page stays full rather than sized to the room left, since a row whose body aged out takes no room and a
-    // page sized to the room would walk the rest of the window in pages of one. Each body is parsed and dropped inside
-    // the closure, so no body outlives its row.
+    // most. A page stays full rather than sized to the room left: a row whose body aged out takes no room, and with
+    // room-sized pages a sample one short of its limit would walk the rest of the window in pages of one. Each body
+    // is parsed and dropped inside the closure, so no body outlives its row.
     loop {
         let page = SAMPLE_PAGE;
         let room = limit_rows - sampled.len();

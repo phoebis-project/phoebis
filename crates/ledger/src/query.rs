@@ -610,8 +610,8 @@ pub struct SampleRow {
     pub context_compacted: Option<String>,
 }
 
-/// The pool's sample page before its cursor clause and its order, walked on `requests_received`, exported so a test
-/// pins the plan.
+/// The pool's sample page before its cursor clause and its order, walked on `requests_received`, kept as a constant
+/// so this module's plan tests pin each statement's plan.
 pub const GUARDRAIL_SAMPLE_POOL_SQL: &str = "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE r.pool_id = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2";
 /// The key's, seeking `requests_key`.
 pub const GUARDRAIL_SAMPLE_KEY_SQL: &str = "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE r.key_id = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2";
