@@ -11056,7 +11056,16 @@ async fn a_head_naming_no_reset_past_the_announced_reset_and_its_slack_lands_as_
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(2_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // Held, so no clock walk announces the passed reset ahead of the reading that reads it passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
     let mut events = handle.subscribe_events();
     let reset = 2 * HOUR;
     handle
@@ -11160,7 +11169,16 @@ async fn a_wall_that_outlives_its_reset_is_held_for_the_windows_length_from_the_
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(2_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // Held, so no clock walk announces the passed reset ahead of the reading that reads it passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
     let mut events = handle.subscribe_events();
     let reset = 2 * HOUR;
     handle
@@ -11246,11 +11264,13 @@ async fn a_poll_at_the_next_cycles_wall_past_a_predicted_walls_reset_announces_t
     with_tier(&store, "a");
     let reset = 2 * HOUR;
     let now = Arc::new(AtomicI64::new(1_000));
+    // Held, so no clock walk announces the passed reset ahead of the reading that reads it passed.
     let handle = spawn(
         store,
         clock(&now),
         RouterConfig {
             share: a_tenth_per_million_written(),
+            hold_first_purge: true,
             ..RouterConfig::default()
         },
     )
@@ -11320,7 +11340,16 @@ async fn a_poll_at_the_wall_naming_the_next_reset_past_an_announced_walls_reset_
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(2_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // Held, so no clock walk announces the passed reset ahead of the reading that reads it passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
     let mut events = handle.subscribe_events();
     let reset = 2 * HOUR;
     handle
