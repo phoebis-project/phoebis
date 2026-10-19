@@ -479,9 +479,12 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         // the version-33 shape before the drops below, rebuilt since a primary-key column cannot be dropped in place.
         // Migrations 35 and 38 create the conditions' and the reconciliations' tables, so both leave before the replay
         // creates them again, the second before migration 20 creates a table of its name. Migration 39's column and
-        // table leave for the same reason. Migration 40's two request columns leave for the same reason.
+        // table leave for the same reason. Migration 40's two request columns leave for the same reason. Migration 41's
+        // flag and refusals map leave too, both ahead of the rebuild, which lays the rollup table out from its own
+        // columns and leaves no map column to drop.
         let mut sql = format!(
-            "DROP TABLE routing_conditions; DROP TABLE window_reconciliations; {VERSION_33_ROLLUPS} "
+            "ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
+             DROP TABLE routing_conditions; DROP TABLE window_reconciliations; {VERSION_33_ROLLUPS} "
         );
         sql.push_str(
             "ALTER TABLE requests DROP COLUMN classifier; ALTER TABLE requests DROP COLUMN client_contract; \
@@ -568,7 +571,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 40);
+    assert_eq!(db.schema_version().await.unwrap(), 41);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),
@@ -636,10 +639,12 @@ async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_
         .unwrap();
         // The file as version 36 left it: the one count, holding what a credit booked before the split.
         // Migration 38 creates the reconciliations' table and migration 39 the guardrails' column and table, so each
-        // leaves before the replay adds it again. Migration 40's two request columns leave for the same reason.
+        // leaves before the replay adds it again. Migration 40's two request columns and migration 41's flag and
+        // refusals map leave for the same reason.
         db.write(|c| {
             c.execute_batch(
-                "ALTER TABLE requests DROP COLUMN classifier; ALTER TABLE requests DROP COLUMN client_contract; \
+                "ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
+                 ALTER TABLE requests DROP COLUMN classifier; ALTER TABLE requests DROP COLUMN client_contract; \
                  DROP TABLE window_reconciliations; \
                  DROP TABLE request_guardrails; ALTER TABLE requests DROP COLUMN guardrail_id; \
                  ALTER TABLE rollups_hourly DROP COLUMN kept_warm_1h_tokens; \
@@ -652,7 +657,7 @@ async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 40);
+    assert_eq!(db.schema_version().await.unwrap(), 41);
     let counts: (i64, i64, i64) = db
         .read_blocking(|c| {
             Ok(c.query_row(

@@ -323,6 +323,12 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// rows carry neither, and the classifier as the sixteenth key part of the hourly rollups after the tier, so a
 /// classifier call's usage files on rows of its own and the share readers price it at no plan share. The rollup
 /// table is rebuilt once with `-` in the new position, as the band and the tier were added.
+///
+/// Version 41: the request row flags a refusal the router issued before it asked any account for the client's or a
+/// policy's cause, and an hourly rollup row counts such requests by error code in a map of their own, apart from every
+/// other figure, so a reader that sums the row's requests, outcomes, cache figures, histograms and errors sees none of
+/// them. The flag is set on every stored rejected row other than a probe with one of the refusal codes and no attempt,
+/// and the first start after the step moves each such row's share out of its hour's counts into the map.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -1045,4 +1051,5 @@ ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
 CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);
 CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
     ),
+    (41, crate::refusals::REFUSED_STEP_SQL),
 ];

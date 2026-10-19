@@ -18,6 +18,7 @@ mod quota;
 mod reconcile;
 mod record;
 mod refold;
+mod refusals;
 mod rollup;
 mod schema;
 mod task;
@@ -83,6 +84,7 @@ pub use record::{
     GuardrailMatchRecord, KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
 };
 pub use refold::{refold_bands, PRICE_BANDS_KEY, PRICE_BANDS_REFOLD_KEY};
+pub use refusals::{is_refusal, REFUSAL_CODES};
 pub use rollup::{
     bucket_of, deltas_of, fold_account, fold_effort, fold_event, fold_identifier, fold_keepalive,
     fold_request, fold_routing_conditions, fold_user_agent, hour_of, read_account_rollups,
