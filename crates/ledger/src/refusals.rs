@@ -12,7 +12,10 @@ use crate::db::{begin_write, row_to_request, LedgerDb, REQUEST_SELECT};
 use crate::pricing::PriceRevisions;
 use crate::record::RequestRecord;
 use crate::refold::{fail_after_page, page_size, read_meta, write_meta};
-use crate::rollup::{deltas_of, empty_row, read_rollup, unfold, write_rollup};
+use crate::rollup::{
+    delete_rollup, deltas_of, empty_row, read_rollup, read_rollups, write_rollup, KeySelector,
+    RollupRow, RollupSelect,
+};
 use crate::LedgerError;
 
 const DAY_MS: i64 = 86_400_000;
@@ -87,8 +90,9 @@ struct Cursor {
 }
 
 /// Moves each flagged request's old contribution (one request, its rejected, its uncached request, its errors entry
-/// and its duration bucket) out of its hour's row and its refusals entry in, over the rows the retention still
-/// holds, in pages of `page_size()` with a cursor, once. Answers how many requests moved: 0 when the mark stands.
+/// and its duration bucket) out of the hour's row that holds it and its refusals entry in, over the rows the
+/// retention still holds, in pages of `page_size()` with a cursor, once. Answers how many requests moved: 0 when the
+/// mark stands.
 ///
 /// It runs at start, after the step flagged the stored rows and before the ledger task lands anything, so every
 /// flagged row a page meets was folded before the flag existed. A row landed later folds under the map at once and
@@ -129,7 +133,7 @@ pub fn refold_refusals(
                     ..request.clone()
                 };
                 for delta in deltas_of(&before, &[], prices) {
-                    unfold(&tx, &delta)?;
+                    unfold_from_holding_row(&tx, request, &delta)?;
                 }
                 for delta in deltas_of(request, &[], prices) {
                     let mut row = read_rollup(&tx, &delta)?.unwrap_or_else(|| empty_row(&delta));
@@ -168,6 +172,59 @@ pub fn refold_refusals(
         "moved the stored refusals out of their hours' request figures into the refusals map"
     );
     Ok(moved)
+}
+
+/// Takes a stored refusal's old `delta` out of the row that holds it, with `unfold`'s arithmetic. The row is found
+/// rather than keyed by today's fold, since the build that stored it may have keyed it otherwise: the raw
+/// `User-Agent`, client and class before those dimensions were folded, and `standard` on every row stored before the
+/// speed joined the key, where today's fold keys a refusal that asked for `fast` under `fast`. Within one hour every
+/// row is of one build's fold, so today's exact key wins wherever it holds the refusal. Where no row holds it, the
+/// pass books the refusal in the map anyway and names the request in the log.
+pub(crate) fn unfold_from_holding_row(
+    conn: &Connection,
+    request: &RequestRecord,
+    delta: &RollupRow,
+) -> Result<(), LedgerError> {
+    let code = request.error_code.as_deref().unwrap_or_default();
+    let select = RollupSelect {
+        pools: vec![delta.pool_id.clone()],
+        accounts: vec![delta.account_id.clone()],
+        kinds: vec![delta.kind.clone()],
+        models: vec![delta.canonical_model.clone()],
+        keys: vec![KeySelector {
+            key_id: delta.key_id.clone(),
+            key_generation: None,
+        }],
+    };
+    let mut holding: Vec<RollupRow> = read_rollups(conn, delta.hour, delta.hour + 3_600, &select)?
+        .into_iter()
+        .filter(|row| row.rejected > 0 && row.errors.get(code).is_some_and(|n| *n > 0))
+        .collect();
+    // `empty_row` keeps a row's key alone, so two of them are equal exactly when the keys are.
+    let at = holding
+        .iter()
+        .position(|row| empty_row(row) == empty_row(delta))
+        .or_else(|| {
+            holding
+                .iter()
+                .position(|row| row.key_generation == delta.key_generation)
+        })
+        .or((!holding.is_empty()).then_some(0));
+    let Some(at) = at else {
+        tracing::warn!(
+            request = %request.id,
+            hour = delta.hour,
+            "no hourly row holds the stored refusal's figures, so they stay where the older fold booked them"
+        );
+        return Ok(());
+    };
+    let mut row = holding.swap_remove(at);
+    row.subtract(delta);
+    if row.holds_nothing() {
+        delete_rollup(conn, &row)
+    } else {
+        write_rollup(conn, &row)
+    }
 }
 
 /// The next page of flagged requests received at or after `from`, past `after`, in `(received_at, id)` order. A
@@ -498,6 +555,75 @@ mod tests {
             Some(now)
         );
         assert_eq!(rows(&interrupted), rows(&whole));
+    }
+
+    /// Two refusals an older build booked in one row keyed by the raw `User-Agent` and `standard` speed: a pass
+    /// interrupted after its first page took the first one's figures out of that row, and the resumed pass takes the
+    /// second one's alone, so the row empties and today's key holds both in the map.
+    #[test]
+    fn a_resumed_pass_takes_each_refusal_once_out_of_the_row_an_older_fold_keyed_it_under() {
+        const RAW_AGENT: &str = "claude-cli/2.1.302 (external, cli)";
+        let db = LedgerDb::open_in_memory().unwrap();
+        for (n, id) in ["r1", "r2"].into_iter().enumerate() {
+            let request = RequestRecord {
+                user_agent: Some(RAW_AGENT.into()),
+                requested_speed: Some("fast".into()),
+                ..refusal(id, JANUARY_2026 + n as i64)
+            };
+            land(&db, &request, &[]);
+        }
+        db.write(|c| {
+            c.execute(
+                "UPDATE rollups_hourly SET user_agent = ?1, speed = 'standard'",
+                [RAW_AGENT],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        flag(&db, &["r1", "r2"]);
+        let older = |db: &LedgerDb| {
+            rows(db)
+                .into_iter()
+                .find(|r| r.user_agent == RAW_AGENT)
+                .map(|r| (r.requests, r.rejected, r.errors))
+        };
+        let blocked = |n: u64| BTreeMap::from([("guardrail_blocked".to_string(), n)]);
+        let now = JANUARY_2026 + DAY_MS;
+        TEST_PAGE.set(Some(1));
+        FAIL_AFTER_PAGES.set(Some(1));
+        let failed = refold_refusals(&db, &api_prices(), 0, now);
+        FAIL_AFTER_PAGES.set(None);
+        assert!(failed.is_err(), "the injected failure after the first page");
+        assert_eq!(
+            older(&db),
+            Some((1, 1, blocked(1))),
+            "the first page took the first refusal out of the row that holds it"
+        );
+        assert_eq!(
+            refold_refusals(&db, &api_prices(), 0, now).unwrap(),
+            1,
+            "the resumed pass moves the second refusal alone"
+        );
+        TEST_PAGE.set(None);
+        assert_eq!(older(&db), None, "the row held nothing else, so it went");
+        assert_eq!(
+            rows(&db)
+                .into_iter()
+                .map(|r| (r.user_agent, r.speed, r.requests, r.refusals))
+                .collect::<Vec<_>>(),
+            [(
+                "claude-cli/2.1.302".to_string(),
+                "fast".to_string(),
+                0,
+                blocked(2)
+            )],
+            "today's key holds both refusals in the map alone"
+        );
+        assert_eq!(
+            meta(&db, REFUSALS_BACKFILL_KEY).expect("the mark")["done_at"].as_i64(),
+            Some(now)
+        );
+        assert_eq!(meta(&db, REFUSALS_BACKFILL_CURSOR_KEY), None);
     }
 
     #[test]

@@ -334,7 +334,8 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// policy's cause, and an hourly rollup row counts such requests by error code in a map of their own, apart from every
 /// other figure, so a reader that sums the row's requests, outcomes, cache figures, histograms and errors sees none of
 /// them. The flag is set on every stored rejected row other than a probe with one of the refusal codes and no attempt,
-/// and the first start after the step moves each such row's share out of its hour's counts into the map.
+/// and the first start after the step takes each such row's share out of the hourly row that holds it, whichever
+/// fold keyed that row, and into the map.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
