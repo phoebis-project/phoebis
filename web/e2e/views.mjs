@@ -6780,8 +6780,9 @@ const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Guardrails', 'Sessions', '
  * and a flat rail of six groups that fits it, 8 px apart with no line between them and a refusal dot 6 px after its
  * label on its line, each group inside one window of the body with the layout `groupGeometry` reads, the derived id
  * under a new key's typed Name, the moving warning leading Key on an edit that changes the pool, the bodies warning
- * leading Capture while capture is on, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every
- * dialog leaves by Escape, through the discard question where the walk changed it.
+ * leading Capture while capture is on, the mode badge ending at one x in the desktop key's inherited and own guardrail
+ * rows, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every dialog leaves by Escape, through
+ * the discard question where the walk changed it.
  */
 async function keyDialogGeometry(theme) {
   const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
@@ -6888,6 +6889,40 @@ async function keyDialogGeometry(theme) {
     }
   }
   await expertView(false).catch(() => {});
+  // The walk cannot read the mode badge: its create mode draws no own guardrail row, and its edit moves the key to
+  // another pool at the Key group, which drops the pool's inherited rows. The mock's desktop key holds both kinds of
+  // row, and the router's seed attaches no guardrail, so a missing row fails the mock pass alone.
+  const badgeAt = 'edit, Guardrails';
+  const sayBadge = (what) => (mock ? sayIn(badgeAt, what) : measurements.push(`${theme} /keys dialog ${badgeAt}: ${what}`));
+  const desktop = rows.filter({ has: page.locator('td:first-child > b', { hasText: /^desktop$/i }) }).first();
+  if ((await desktop.count()) === 0) sayBadge('no desktop key to open');
+  else {
+    try {
+      await openBy(editOf(desktop));
+      await railEntry(dialog, 'Guardrails').click();
+      await settle();
+      // The trailing slot fixes where the badge ends, and its start moves with the mode's word, so the right edges are
+      // the ones that agree.
+      const read = await dialog.locator('section.dialog-group[aria-label="Guardrails"]').evaluate((group) => {
+        const own = 'li.pattern-editor__row:not(.pattern-editor__row--inherited)';
+        const box = (selector) => group.querySelector(selector)?.getBoundingClientRect() ?? null;
+        const inherited = box('li.pattern-editor__row--inherited .badge');
+        const badge = box(`${own} .badge`);
+        const actions = box(`${own} .pattern-editor__actions`);
+        return { actions: actions && +actions.width.toFixed(2), inherited: inherited && +inherited.right.toFixed(2), own: badge && +badge.right.toFixed(2) };
+      });
+      const missing = [read.inherited === null && 'inherited row', read.own === null && 'own row'].filter(Boolean);
+      if (missing.length) sayBadge(`no ${missing.join(' and no ')} with a mode badge to read`);
+      else {
+        measurements.push(`${theme} /keys dialog ${badgeAt}: badge x inherited ${read.inherited} own ${read.own}, actions ${read.actions} px`);
+        if (Math.abs(read.inherited - read.own) > 1) sayIn(badgeAt, `the mode badge sits at ${read.inherited} in an inherited row and ${read.own} in an own row`);
+      }
+      await close(badgeAt);
+    } catch (error) {
+      sayIn(badgeAt, error instanceof Error ? error.message : String(error));
+      await close(badgeAt).catch(() => {});
+    }
+  }
   // The route refuses to re-enable a revoked key, so its dialog draws the switch disabled; a router with no revoked key
   // says so.
   const revoked = rows.filter({ has: page.locator('td:nth-child(7) .badge', { hasText: /^revoked$/ }) }).first();

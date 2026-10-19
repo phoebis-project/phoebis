@@ -558,13 +558,13 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
     onChange([...value, ...picked.filter((id) => !value.includes(id))]);
   };
   return (
-    <div className="pattern-editor" role="group" aria-label="Guardrails">
+    <div className="pattern-editor guardrail-list" role="group" aria-label="Guardrails">
       {fromPool.length + own.length > 0 && (
         <ol className="pattern-editor__rows">
           {fromPool.map((r) => (
             <li key={`inherited-${r.id}`} className="pattern-editor__row pattern-editor__row--inherited">
               <GuardrailWords guardrail={r} />
-              <span className="pattern-editor__source">inherited</span>
+              <span className="pattern-editor__source guardrail-row__trailing">inherited</span>
             </li>
           ))}
           {own.map((id, i) => {
@@ -573,7 +573,7 @@ export function GuardrailList({ inherited = [], onChange, pending, refs, registr
               <li key={id} className="pattern-editor__row">
                 <div className="pattern-editor__line">
                   <GuardrailWords guardrail={g} />
-                  <span className="pattern-editor__actions">
+                  <span className="pattern-editor__actions guardrail-row__trailing">
                     <Button size="sm" variant="ghost" className="pattern-editor__up" icon={<IconChevron size={14} />} aria-label={`Move ${g.name} up`} disabled={i === 0} onClick={() => move(i, i - 1)} />
                     <Button size="sm" variant="ghost" icon={<IconChevron size={14} />} aria-label={`Move ${g.name} down`} disabled={i === own.length - 1} onClick={() => move(i, i + 1)} />
                     <Button size="sm" variant="ghost" icon={<IconX size={14} />} aria-label={`Remove ${g.name}`} onClick={() => onChange(value.filter((x) => x !== id))} />
