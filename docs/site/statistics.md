@@ -502,7 +502,7 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `poll_backoff` | warning | the polled account | a poll answers clean |
 | `model_unweighted` | warning | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
-| `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind with a rise of at least 5% reads a ratio inside 0.8 to 1.25, or no window has such a rise |
+| `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no window has such a rise |
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
 | `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
@@ -579,13 +579,19 @@ model tier, the model whose weight stands in and the requests served since.
 
 **`meter_drift`** holds while, for any window kind, the account's newest completed window with a rise of at least 5%
 reads a ratio outside 0.8 to 1.25 between the rise the upstream's readings showed and the share the router priced for
-its own requests in it. The ledger reconciles each account's completed 5-hour, 7-day and Fable windows every hour,
-prices the plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the Meter
-reconciliation card of the [Analytics](console.md#analytics) view lists. The subject is the account, and the item dates
-from the oldest off window's end. The detail names the off windows with their ratios, the cost model's source and the
-revision in force, since the fix is the cost model file. The dashboard's line reads it under the label "Meter drift
-against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, and it opens the Analytics view on the
-account with the Burn section in view.
+its own requests in it, and only where the rise and the priced share both reach 5%, since one reading step over a
+smaller priced share reads far off. The ledger reconciles each account's completed 5-hour, 7-day and Fable windows every
+hour, prices the plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the
+Meter reconciliation card of the [Analytics](console.md#analytics) view lists. A window's rise is read between two
+readings of one source, the poll's where the window saw two or more polls and the head's otherwise, since the head
+truncates the percent the poll rounds, and the attempts priced are those completed between the two. A fall inside a
+window splits its run, except a head at most one percent under the poll before it, and the parts' rises and priced
+shares sum into the window's one row. A window whose reset slid, a later reading naming a later reset while its own
+still lay ahead, writes no row. The subject is the account, and the item dates from the oldest off window's end. The
+detail names the off windows with their ratios, the cost model's source and the revision in force, since the fix is the
+cost model file. The dashboard's line reads it under the label "Meter drift against the table" as
+`acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, and it opens the Analytics view on the account with the Burn
+section in view.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is
