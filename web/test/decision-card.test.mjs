@@ -573,3 +573,37 @@ test('the verdict line and the Outcome read a hold for the reset and a reservati
   const legacy = await cardOf({ ...placed.record, version: 1 }, placed.row);
   assert.equal(legacy.querySelector('.decision-card__record')?.textContent, 'Record v1');
 });
+
+test("a long cache-map row's control lists every entry on a click and folds them on the next, in its own card alone", async () => {
+  const { record, row } = await storyRecord('req_ef099b34-453', 1);
+  assert.ok(record.outcome.completion, 'the story placement answered');
+  const entry = (tier, depth, prefixTokens) => ({ accountId: 'primary', depth, prefixTokens, tier, ttlMs: 3_600_000 });
+  const entries = [...Array.from({ length: 11 }, (_, i) => entry('message', i + 1, 20_000 + i * 2_000)), entry('static', 1, 9_000), entry('static', 1, 9_000), entry('static', 1, 9_000)];
+  const long = { ...record, outcome: { ...record.outcome, completion: { ...record.outcome.completion, cacheMapWritten: entries } } };
+  const chipWords = (c) => {
+    const label = c.querySelector('.chip__label')?.textContent ?? '';
+    return label ? `${label} ${c.textContent.slice(label.length)}` : c.textContent;
+  };
+  const mapRow = (container) => {
+    const dd = [...container.querySelectorAll('.decision-card__outcome .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache-map entries')?.querySelector('dd');
+    const button = dd?.querySelector('button') ?? null;
+    return { button, chips: [...(dd?.querySelectorAll('.chip') ?? [])].map(chipWords), last: dd?.querySelector('.chips')?.lastElementChild ?? null, word: button?.textContent ?? null };
+  };
+  const compact = ['on primary', 'message ×11 depth 1 to 11', 'static ×3 depth 1', 'static depth 1', 'static depth 1', 'static depth 1', 'prefix 40K'];
+  const card = await cardOf(long, row);
+  const folded = mapRow(card);
+  assert.deepEqual(folded.chips, compact);
+  assert.equal(folded.word, 'All 14 entries');
+  assert.equal(folded.last, folded.button, 'the control follows the chips on their line');
+  assert.equal(folded.button?.getAttribute('aria-expanded'), 'false');
+  act(() => folded.button?.click());
+  const open = mapRow(card);
+  assert.deepEqual(open.chips, ['on primary', ...entries.map((e) => `${e.tier} depth ${e.depth}`), 'prefix 40K']);
+  assert.equal(open.word, 'Latest 3');
+  assert.equal(open.button?.getAttribute('aria-expanded'), 'true');
+  // Another card opened beside it starts folded, since the state is each card's own.
+  assert.deepEqual(mapRow(await cardOf(long, row)).chips, compact);
+  act(() => open.button?.click());
+  assert.deepEqual(mapRow(card).chips, compact);
+  assert.equal(mapRow(card).word, 'All 14 entries');
+});

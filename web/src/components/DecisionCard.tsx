@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import type { DecisionRecord, DecisionSummary } from '@/api/types';
@@ -27,7 +28,28 @@ import {
   verdictSentence,
 } from '@/lib/routingLog';
 
-export const keyValueRows = (rows: CardRow[]) => rows.map((r) => ({ label: r.label, title: r.title, value: rowValue(r.chips) }));
+/**
+ * A row with `more` draws its compact chips or its full list as `expanded` reads, the control after them on their line.
+ * The card holds the flag, so a card opened on another row starts folded.
+ */
+export const keyValueRows = (rows: CardRow[], expanded = false, setExpanded?: (expanded: boolean) => void) =>
+  rows.map((r) => ({
+    label: r.label,
+    title: r.title,
+    value:
+      r.more && setExpanded ? (
+        <span className="chips">
+          {(expanded ? r.more.all : r.chips).map((c, i) => (
+            <ChipView key={`${c.label ?? ''}/${c.value}/${i}`} chip={c} />
+          ))}
+          <button type="button" className="link-btn" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+            {expanded ? 'Latest 3' : `All ${r.more.count} entries`}
+          </button>
+        </span>
+      ) : (
+        rowValue(r.chips)
+      ),
+  }));
 
 /** A member's Pace score with its hover, described through the page's host as a `Badge` is. */
 function PaceCell({ title, value }: { title: string | null; value: string }) {
@@ -62,6 +84,7 @@ export function DecisionCard({ now, onWiden, row }: { now: number; onWiden: (lin
 }
 
 function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogLink) => void; record: DecisionRecord; row: DecisionSummary }) {
+  const [entriesShown, setEntriesShown] = useState(false);
   const at = Date.parse(row.at);
   const settings = settingsRows(record);
   // Narrow to wide, as the Requests drawer orders its own.
@@ -203,7 +226,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
 
       <section>
         <h4 className="decision-card__title">Outcome</h4>
-        <KeyValue className="decision-card__outcome" rows={keyValueRows(outcomeRows(record, now, row))} />
+        <KeyValue className="decision-card__outcome" rows={keyValueRows(outcomeRows(record, now, row), entriesShown, setEntriesShown)} />
       </section>
 
       <footer className="decision-card__foot">

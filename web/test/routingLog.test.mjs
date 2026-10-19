@@ -745,6 +745,29 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.equal(rows(reachedBy(null)).find(([label]) => label === 'Spend'), undefined, 'an obstacle that names no period draws no budget detail');
 });
 
+test('a cache-map row of four entries or more draws one chip per tier and the latest three, with every entry behind its control', () => {
+  const entry = (tier, depth, prefixTokens, accountId = 'primary') => ({ accountId, depth, prefixTokens, tier, ttlMs: 3_600_000 });
+  const mapRow = (entries) => d.outcomeRows(record({ outcome: { completion: completion({ cacheMapWritten: entries, completedAt: iso(NOW), status: 200 }) } }), NOW).find((r) => r.label === 'Cache-map entries');
+  const titles = (chips) => chips.filter((c) => c.title !== undefined).map((c) => c.title);
+  // Three entries keep the row as it stands, one depth chip per entry.
+  const three = mapRow([entry('message', 1, 20_000), entry('message', 2, 24_000), entry('static', 1, 9_000)]);
+  assert.deepEqual(texts(three.chips), ['on primary', 'message depth 1', 'message depth 2', 'static depth 1', 'prefix 24K']);
+  assert.equal(three.more, undefined, 'a short row has no control');
+  // The router writes the message chain's entries before the static chain's, each in its chain's order.
+  const long = [...Array.from({ length: 11 }, (_, i) => entry('message', i + 1, 20_000 + i * 2_000)), entry('static', 1, 9_000), entry('static', 1, 9_000), entry('static', 1, 9_000)];
+  const fourteen = mapRow(long);
+  assert.deepEqual(texts(fourteen.chips), ['on primary', 'message ×11 depth 1 to 11', 'static ×3 depth 1', 'static depth 1', 'static depth 1', 'static depth 1', 'prefix 40K']);
+  assert.deepEqual(titles(fourteen.chips), ['11 cache-map entries on the message tier', '3 cache-map entries on the static tier']);
+  assert.equal(fourteen.more?.count, 14);
+  assert.deepEqual(texts(fourteen.more?.all ?? []), ['on primary', ...long.map((e) => `${e.tier} depth ${e.depth}`), 'prefix 40K']);
+  // The threshold's own count folds too, the latest three in the record's order, and a tier of one is one entry.
+  const four = mapRow([entry('message', 1, 20_000), entry('message', 2, 24_000, 'secondary'), entry('message', 3, 28_000), entry('static', 1, 9_000)]);
+  assert.equal(d.CACHE_MAP_COMPACT_FROM, 4);
+  assert.deepEqual(texts(four.chips), ['on primary', 'on secondary', 'message ×3 depth 1 to 3', 'static ×1 depth 1', 'message depth 2', 'message depth 3', 'static depth 1', 'prefix 28K']);
+  assert.deepEqual(titles(four.chips), ['3 cache-map entries on the message tier', '1 cache-map entry on the static tier']);
+  assert.deepEqual(texts(four.more?.all ?? []), ['on primary', 'on secondary', 'message depth 1', 'message depth 2', 'message depth 3', 'static depth 1', 'prefix 28K']);
+});
+
 test('a refusal reads its words by code, and an unknown code reads through the fallback', () => {
   const refused = (refusal) => decision({ accountId: null, by: by('refusal', refusal.kind), kind: 'refused', refusal });
   assert.equal(read(refused({ code: 'pool_missing', kind: 'key', reason: 'x' })).by, 'pool missing', 'the code names the words whatever the reason says');

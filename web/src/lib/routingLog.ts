@@ -1502,8 +1502,22 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
     const entries = c.cacheMapWritten ?? [];
     if (entries.length === 0) rows.push({ chips: [plain(c.completedAt === null ? 'pending' : 'none')], label: 'Cache-map entries' });
     else {
-      const accounts = [...new Set(entries.map((e) => e.accountId))];
-      rows.push({ chips: [...accounts.map((id) => accountChip(id, 'on')), ...entries.map((e) => plain(String(e.depth), `${e.tier} depth`)), plain(fmtCompact(Math.max(...entries.map((e) => e.prefixTokens))), 'prefix')], label: 'Cache-map entries' });
+      const accounts = [...new Set(entries.map((e) => e.accountId))].map((id) => accountChip(id, 'on'));
+      const depths = (list: typeof entries) => list.map((e) => plain(String(e.depth), `${e.tier} depth`));
+      const prefix = plain(fmtCompact(Math.max(...entries.map((e) => e.prefixTokens))), 'prefix');
+      if (entries.length < CACHE_MAP_COMPACT_FROM) rows.push({ chips: [...accounts, ...depths(entries), prefix], label: 'Cache-map entries' });
+      else {
+        // A long session's row would run to a chip per turn, so each tier folds to its count and its depth range.
+        const tiers = new Map<string, number[]>();
+        for (const e of entries) tiers.set(e.tier, [...(tiers.get(e.tier) ?? []), e.depth]);
+        const tierChips = [...tiers].map(([tier, found]): Chip => {
+          const [min, max] = [Math.min(...found), Math.max(...found)];
+          const n = found.length;
+          return { label: `${tier} ×${n}`, title: `${n} cache-map ${n === 1 ? 'entry' : 'entries'} on the ${tier} tier`, value: min === max ? `depth ${min}` : `depth ${min} to ${max}` };
+        });
+        const latest = depths(entries.slice(-3));
+        rows.push({ chips: [...accounts, ...tierChips, ...latest, prefix], label: 'Cache-map entries', more: { all: [...accounts, ...depths(entries), prefix], count: entries.length } });
+      }
     }
     if (c.hit !== null && c.cacheReadTokens !== null) {
       const read = fmtCompact(c.cacheReadTokens);
@@ -2073,8 +2087,12 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
 export interface CardRow {
   chips: Chip[];
   label: string;
+  /** The row's full chip list behind a control: `chips` is the compact row, `all` the full row, `count` the entries. */
+  more?: { all: Chip[]; count: number };
   title?: string;
 }
+/** The compact row draws from this many entries, the latest three kept as chips. */
+export const CACHE_MAP_COMPACT_FROM = 4;
 
 /** The Request facts fold: the request as the engine read it, each entity a link, the lane and flags as chips. */
 export function requestRows(record: DecisionRecord, row: DecisionSummary): CardRow[] {

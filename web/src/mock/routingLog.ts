@@ -82,6 +82,8 @@ interface Spec {
    * reads another figure than the account routes answer now.
    */
   burns?: Record<string, Record<string, number>>;
+  /** The entries a long session's answer writes, in place of the one entry the builder derives from the usage. */
+  cacheMap?: { depth: number; prefixTokens: number; tier: 'message' | 'static' }[];
   exhaustion?: RecordOutcome['exhaustion'];
   /** A summary fact the story names where the router's own reading is not what the row tells. */
   fact?: SummaryFact[];
@@ -1237,7 +1239,10 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const ttlMs = ttlOf(pool, chosen?.kind ?? 'oauth', r.agentId !== 'main', r.canonicalModel);
   const completion: RecordCompletion | null = dispatched
     ? {
-        cacheMapWritten: answered && usage.cacheWrite5m + usage.cacheWrite1h > 0 ? [{ accountId: spec.accountId ?? '', depth: (spec.rung?.depth ?? 0) + 1, prefixTokens: usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h, tier: 'message', ttlMs }] : null,
+        cacheMapWritten:
+          answered && usage.cacheWrite5m + usage.cacheWrite1h > 0
+            ? (spec.cacheMap ?? [{ depth: (spec.rung?.depth ?? 0) + 1, prefixTokens: usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h, tier: 'message' }]).map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs }))
+            : null,
         cacheReadTokens: hasUsage ? usage.cacheRead : null,
         completedAt: attempt ? iso(Date.parse(attempt.startedAt) + (attempt.durationMs ?? 0)) : null,
         freed: spec.heldBefore !== undefined,
@@ -1676,6 +1681,11 @@ function storySpecs(): Spec[] {
     at('req_1d9c3e55-0b2', 1, 1, t(14, 2, 10), 'renewed', 'secondary', { pin: live('continues_pin', 120_000) }),
     at('req_1d9c3e55-0b2', 2, 2, t(14, 2, 11), 'placed', 'primary', {
       attempted: ['secondary'],
+      // The long session's first answer on primary writes its conversation's every boundary there.
+      cacheMap: [
+        ...Array.from({ length: 11 }, (_, i) => ({ depth: i + 1, prefixTokens: 8_900 + i * 3_000, tier: 'message' as const })),
+        ...Array.from({ length: 3 }, () => ({ depth: 1, prefixTokens: 14_600, tier: 'static' as const })),
+      ],
       failover: 'cooldown',
       from: 'secondary',
       pin: live(),
