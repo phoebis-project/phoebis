@@ -1,15 +1,16 @@
-//! The refusals the router issues before it asks any account, for the client's or a policy's cause, and the ledger's
-//! reading of a request row against them.
+//! The codes that flag a request row as refused, and the ledger's reading of a row against them. Each code names a
+//! refusal the router issues before it asks any account, for the client's or a policy's cause.
 //!
-//! Some codes answered before any account stay in the figures and are left off the list: `account_cancelled`,
-//! `accounts_unavailable`, `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, since
-//! the router's own standing caused them, and `accounts_exhausted`, `model_rejected` and every upstream code, since an
-//! account was asked.
+//! The codes that stay in the figures and off the list are `account_cancelled`, `accounts_unavailable`,
+//! `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, since the router's own standing
+//! caused them, and `accounts_exhausted`, `model_rejected` and every upstream code, since an account was asked.
 
 /// One token list feeds the slice and the step's `IN (..)` text, so `is_refusal` and the step's backfill cannot
 /// name different codes.
 macro_rules! refusal_codes {
     ($first:literal $(, $rest:literal)* $(,)?) => {
+        /// The codes that flag a rejected request with no attempt as refused, alphabetical, the same list the step's
+        /// backfill SQL is generated from.
         pub const REFUSAL_CODES: &[&str] = &[$first $(, $rest)*];
         pub(crate) const REFUSED_STEP_SQL: &str = concat!(
             "ALTER TABLE requests ADD COLUMN refused INTEGER NOT NULL DEFAULT 0;\n",
