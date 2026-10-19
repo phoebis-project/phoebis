@@ -10,11 +10,11 @@ use crate::chains::Chains;
 #[derive(Debug, PartialEq)]
 pub struct BodyFacts {
     /// UTF-16 code units 4, 7, and 20 of each `text` block of the first `user` message, in the wire's order,
-    /// matching the client's own JavaScript string indexing; `b'0' as u16` where a text is shorter. The client
-    /// hashes the first text of its first non-meta user message for the version suffix, and the meta flag never
-    /// reaches the wire: the blocks it prepends (a system reminder, a slash command's caveat and output) and the
-    /// user's own words all land as text blocks of one message, so every block is a candidate. A resumed body adds
-    /// the padding of the empty prompt, since the client stamps the request before it writes the resume placeholder.
+    /// matching the client's own JavaScript string indexing. A text too short for a position reads `b'0' as u16` there.
+    /// The client hashes the first text of its first non-meta user message for the version suffix, and the meta flag
+    /// never reaches the wire: the blocks it prepends (a system reminder, a slash command's caveat and output) and the
+    /// user's own words all land as text blocks of one message, so every block is a candidate. A resumed body adds the
+    /// padding of the empty prompt, since the client stamps the request before it writes the resume placeholder.
     pub prompt_units: Vec<[u16; 3]>,
     /// The first user message is the client's resume placeholder, so its text is no anchor the stamp was computed over.
     pub resumed: bool,

@@ -74,7 +74,8 @@ pub enum AccountUuidEdit<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VersionCheck<'a> {
     pub client_version: &'a str,
-    /// One sample per text block of the first user message; the suffix reproduces when any block does.
+    /// One sample per text block of the first user message, plus the empty prompt's padding for a resumed body. The
+    /// suffix reproduces when any sample does.
     pub prompt_units: &'a [[u16; 3]],
 }
 

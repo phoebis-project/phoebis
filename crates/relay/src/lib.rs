@@ -105,7 +105,7 @@ pub enum RelayError {
     /// body unedited under the client's stamp and stripping the stamp are the two alternatives this rejects.
     /// The cure is a re-pin to the client that moved. `resumed` marks a body whose first user message is the
     /// client's resume placeholder, a body the client stamped over a prompt the wire no longer carries, so the
-    /// refusal's words name the resume apart.
+    /// version suffix refusal's words name the resume apart.
     #[error("request body carries a billing hash this build's rules do not reproduce ({kind})")]
     ClientDrift { kind: &'static str, resumed: bool },
     #[error("blocked by guardrail \"{name}\"")]
