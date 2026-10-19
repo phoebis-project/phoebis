@@ -3778,6 +3778,12 @@
   padding: 6px 12px;
 }
 
+/* A companion session's lines read Context and Prefix after Model, 132px with their gaps, which Model, Account, TTL,
+   Last probe, Next probe and State's floor give up, so the eleven tracks and ten gaps take 894px of the same 910px. */
+.agents--context .agents__row {
+  grid-template-columns: 124px 76px 80px 40px 72px 32px 76px 68px 96px 64px minmax(106px, 1fr);
+}
+
 .agents__row + .agents__row {
   border-top: 1px solid var(--hairline);
 }

@@ -119,3 +119,18 @@ test('hiddenByAge hides a row no companion reports once its last use is past the
   const ledgered = row('none', null, NOW - 2 * HOUR);
   assert.deepEqual(['1h', '6h'].map((age) => d.hiddenByAge(ledgered, age, NOW)), [true, false]);
 });
+
+test("contextCell reads the tokens, the share of the model's window and the cached prefix, each compact", () => {
+  assert.deepEqual(d.contextCell(184_000, 200_000, 0.92, 171_000), { main: '184K', share: '92% of 200K', prefix: 'prefix 171K' });
+  assert.deepEqual(d.contextCell(184_000, null, null, 171_000), { main: '184K', share: null, prefix: 'prefix 171K' }, 'a null window drops the share and reads the tokens alone');
+  assert.deepEqual(d.contextCell(18_400, 200_000, 0.092, null), { main: '18.4K', share: '9.2% of 200K', prefix: null }, 'a pin with no entry standing reads no prefix');
+  assert.deepEqual(d.contextCell(null, null, null, null), { main: '-', share: null, prefix: null }, 'a session with no pin or no figure reads a dash');
+});
+
+test('the compacted cause reads its label and the sentence that says no probe goes out until the next main turn', () => {
+  assert.equal(d.CAUSE_LABEL.compacted, 'compacted');
+  assert.equal(
+    d.CAUSE_HINT.compacted,
+    'A completed compaction replaced the context this recipe kept warm, so the recipe stopped and no probe is sent. The next main turn starts a recipe for the new context.',
+  );
+});

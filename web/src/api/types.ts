@@ -1666,8 +1666,19 @@ export type CompanionState = 'none' | 'reporting' | 'silent';
 /** Which figure a pin's burn reads: the share of the account's own 5-hour window per hour on plan quota, dollars per hour off it. */
 export type BurnUnit = 'usd' | 'window_share';
 
+export interface AgentContext {
+  agentId: string;
+  cachedPrefixTokens: number | null;
+  contextShare: number | null;
+  contextWindowTokens: number | null;
+  lastInputTokens: number | null;
+  model: string;
+}
+
 export interface Session {
   accountId: string | null;
+  /** The other pins' figures on a companion session, keyed by the mod's agent id. Null where `companion` is `none`. */
+  agentContexts: AgentContext[] | null;
   /** The pin's own agent: `main`, or a subagent's id; null for a session with no pin. */
   agentId: string | null;
   agents: number;
@@ -1682,11 +1693,16 @@ export interface Session {
   burnEquivalent: number | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
+  /** The deepest cache-map entry of the main pin. Null with no entry standing. */
+  cachedPrefixTokens: number | null;
   /** The cache TTL in force at the pin's last refresh; null for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;
   /** When the companion last reported; set only while `companion` is `silent`. */
   companionSince: string | null;
+  /** `lastInputTokens` over the model's window, three decimals. Null with either side unknown. */
+  contextShare: number | null;
+  contextWindowTokens: number | null;
   createdAt: string | null;
   /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
    *  burn average, and on a row with no pin. */
@@ -1756,6 +1772,7 @@ export type RecipeCause =
   | 'awaiting_selection'
   | 'budget'
   | 'bus_gap'
+  | 'compacted'
   | 'cooled'
   | 'evicted'
   | 'expired'
@@ -1812,8 +1829,9 @@ export type RecipeCause =
   | 'unsupported_shape';
 
 /** What the last request the agent observed did to its recipe: `auxiliary` and `foreign` both left it alone,
- * `rearm` and `restart` both fed it. Never a hold: `cause` names that separately. */
-export type GuardVerdict = 'auxiliary' | 'foreign' | 'rearm' | 'restart';
+ * `rearm` and `restart` both fed it, and `compaction` did neither, since the completed compaction ended the recipe.
+ * Never a hold: `cause` names that separately. */
+export type GuardVerdict = 'auxiliary' | 'compaction' | 'foreign' | 'rearm' | 'restart';
 
 /** One row per agent that has sent a real request: its recipe's state and cause, its lifecycle and its probes. */
 export interface KeepaliveRecipe {

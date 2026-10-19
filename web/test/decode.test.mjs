@@ -1884,7 +1884,7 @@ test('a recipe paused because every account of its pool was exhausted keeps that
 
 test('a recipe decodes every cause word the engine serializes, its five states, the park and the day counts', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
-  assert.equal(d.RECIPE_CAUSE_VALUES.length, 62);
+  assert.equal(d.RECIPE_CAUSE_VALUES.length, 63);
   assert.deepEqual([...d.RECIPE_CAUSE_VALUES], [...d.RECIPE_CAUSE_VALUES].sort(), 'the causes read alphabetically');
   for (const cause of d.RECIPE_CAUSE_VALUES) assert.equal(d.decodeRecipe({ ...wire, cause }).cause, cause);
   assert.deepEqual([...d.RECIPE_STATE_VALUES], ['ended', 'held', 'not_retained', 'paused', 'retained']);
@@ -1905,6 +1905,45 @@ test('a session row carries the presence age and the cause of its main recipe', 
   assert.equal(d.decodeSession({ ...row, presence_age_seconds: null }).presenceAgeSeconds, null);
   assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'cooled' } }).keepalive.cause, 'cooled');
   assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: null } }).keepalive.cause, null);
+});
+
+test("a session row carries the main pin's context window, share and cached prefix, and a row without them reads null for each", () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  const s = d.decodeSession({ ...row, cached_prefix_tokens: 171_000, context_share: 0.92, context_window_tokens: 200_000, last_input_tokens: 184_000 });
+  assert.deepEqual([s.lastInputTokens, s.contextWindowTokens, s.contextShare, s.cachedPrefixTokens], [184_000, 200_000, 0.92, 171_000]);
+  const { agent_contexts: _a, cached_prefix_tokens: _p, context_share: _s, context_window_tokens: _w, ...bare } = row;
+  const b = d.decodeSession(bare);
+  assert.deepEqual([b.contextWindowTokens, b.contextShare, b.cachedPrefixTokens, b.agentContexts], [null, null, null, null], 'a row that predates the members reads none');
+});
+
+test("a companion session's agent lines decode in the order the route sent them, and a row no companion reports reads none", () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  const line = (agent_id, model, tokens) => ({
+    agent_id,
+    cached_prefix_tokens: tokens === null ? null : 9_000,
+    context_share: tokens === null ? null : tokens / 200_000,
+    context_window_tokens: tokens === null ? null : 200_000,
+    last_input_tokens: tokens,
+    model,
+  });
+  // Sent out of the alphabet's order, so a decoder that sorted would read the second line first.
+  const s = d.decodeSession({ ...row, agent_contexts: [line('7b2e', 'claude-haiku-4-5', 12_000), line('4f0c', 'claude-sonnet-5', null)], companion: 'reporting' });
+  assert.deepEqual(s.agentContexts, [
+    { agentId: '7b2e', cachedPrefixTokens: 9_000, contextShare: 0.06, contextWindowTokens: 200_000, lastInputTokens: 12_000, model: 'claude-haiku-4-5' },
+    { agentId: '4f0c', cachedPrefixTokens: null, contextShare: null, contextWindowTokens: null, lastInputTokens: null, model: 'claude-sonnet-5' },
+  ]);
+  assert.deepEqual(d.decodeSession({ ...row, agent_contexts: [], companion: 'reporting' }).agentContexts, [], 'a companion session whose other agents are all released reads an empty list');
+  assert.equal(d.decodeSession({ ...row, agent_contexts: null, companion: 'none' }).agentContexts, null, 'a row no companion reports carries no agent lines');
+});
+
+test('a recipe and a session row decode the compaction verdict and the compacted cause', () => {
+  assert.deepEqual([...d.GUARD_VERDICT_VALUES], ['auxiliary', 'compaction', 'foreign', 'rearm', 'restart'], 'the verdicts read alphabetically, compaction among them');
+  const [wire] = fixture('keepalive_recipes').recipes;
+  const recipe = d.decodeRecipe({ ...wire, cause: 'compacted', last_guard: 'compaction', next_probe_at: null, state: 'ended' });
+  assert.deepEqual([recipe.cause, recipe.lastGuard, recipe.nextProbeAt, recipe.state], ['compacted', 'compaction', null, 'ended']);
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  const session = d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'compacted', last_guard: 'compaction' } });
+  assert.deepEqual([session.keepalive.cause, session.keepalive.lastGuard], ['compacted', 'compaction']);
 });
 
 test('a recipe held under the horizon or ended at the parked limit keeps that cause, and the wasted probes their labels', () => {

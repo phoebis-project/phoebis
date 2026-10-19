@@ -678,6 +678,59 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(Date.parse(row.createdAt) < Date.parse(row.lastUsedAt), 'created before its last use');
   });
 
+  test(`every row with a turn reads its window, its share of it to three decimals and a prefix inside its context, and a row with none reads no figure, at ${at}`, async () => {
+    const s = await story;
+    // No request of the story names a `[1m]` twin, so every window is the 200 000 the route answers without one.
+    const figuresOk = (f) => f.contextWindowTokens === 200_000 && f.contextShare === Math.round((f.lastInputTokens / 200_000) * 1_000) / 1_000 && (f.cachedPrefixTokens === null || (f.cachedPrefixTokens > 0 && f.cachedPrefixTokens <= f.lastInputTokens));
+    const withTurn = s.sessions.filter((x) => !x.historical && x.lastInputTokens !== null && x.lastInputTokens > 0);
+    assert.ok(withTurn.length > 0, 'the story holds rows with a turn');
+    for (const row of withTurn) assert.ok(figuresOk(row), `${row.keyId} ${row.sessionId} reads ${JSON.stringify([row.lastInputTokens, row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens])}`);
+    assert.ok(withTurn.some((x) => x.cachedPrefixTokens !== null), 'a row reads its cached prefix');
+    for (const row of s.sessions.filter((x) => !withTurn.includes(x))) {
+      assert.deepEqual([row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens], [null, null, null], `${row.keyId} ${row.sessionId} has no turn to read`);
+    }
+    const lines = s.sessions.flatMap((x) => x.agentContexts ?? []);
+    assert.ok(lines.length > 0, 'the story holds agent lines');
+    for (const line of lines) assert.ok(figuresOk(line), `${line.agentId} reads ${JSON.stringify(line)}`);
+  });
+
+  test(`a companion session lists its unreleased subagents' lines in agent id order with their models, one of them two lines, and none where every other agent is released, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    const companions = s.sessions.filter((x) => x.companion !== 'none');
+    const othersOf = (row) => recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId && r.agentId !== 'main');
+    for (const row of companions) {
+      const unreleased = othersOf(row).filter((r) => r.agentState !== 'released');
+      // The route orders the lines by agent id as bytes, which a locale's collation need not.
+      const want = unreleased.map((r) => r.agentId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      assert.deepEqual(row.agentContexts?.map((c) => c.agentId), want, `${row.sessionId} lists its unreleased subagents by agent id`);
+      for (const line of row.agentContexts) assert.equal(line.model, unreleased.find((r) => r.agentId === line.agentId).model, `${line.agentId} reads its own model`);
+    }
+    assert.ok(companions.some((x) => x.agentContexts.length === 2), 'one companion session carries two agent lines');
+    // The session the mod released whole and the one it ended hold subagents whose every line is released.
+    const allReleased = companions.filter((x) => othersOf(x).length > 0 && othersOf(x).every((r) => r.agentState === 'released'));
+    assert.equal(allReleased.length, 2, 'two companion sessions whose other agents are all released');
+    for (const row of allReleased) assert.deepEqual(row.agentContexts, [], `${row.sessionId} carries an empty list`);
+  });
+
+  test(`a session no companion reports carries no agent lines, the plain row idle for two hours with the main pin's figures, at ${at}`, async () => {
+    const s = await story;
+    for (const row of s.sessions.filter((x) => x.companion === 'none')) assert.equal(row.agentContexts, null, `${row.keyId} ${row.sessionId} carries none`);
+    // Written out in the mock's seeds, as the smoke reads it.
+    const row = s.sessions.find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
+    assert.deepEqual([row.companion, row.lastInputTokens, row.contextWindowTokens, row.contextShare, row.cachedPrefixTokens, row.agentContexts], ['none', 6_400, 200_000, 0.032, 5_000, null]);
+  });
+
+  test(`one subagent's recipe stands under compacted after its compaction completed: ended, last guarded as a compaction, with no probe scheduled, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    const compacted = recipes.filter((r) => r.cause === 'compacted');
+    assert.equal(compacted.length, 1, 'one recipe stands under compacted');
+    const [line] = compacted;
+    assert.deepEqual([line.agentId === 'main', line.lastGuard, line.state, line.nextProbeAt], [false, 'compaction', 'ended', null]);
+    assert.notEqual(s.sessions.find((x) => x.keyId === line.keyId && x.sessionId === line.sessionId)?.companion ?? 'none', 'none', 'the agent belongs to a companion session');
+  });
+
   test(`a released agent keeps its pin while its last request or probe is inside its pool's affinity window and loses it past the window, the written session's three released lines counting, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();

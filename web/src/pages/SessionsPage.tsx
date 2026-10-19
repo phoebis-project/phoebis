@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
+import type { Account, AgentContext, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useSession } from '@/app/session';
 import { HELD_PROBE_HINT, MIGRATED_PROBE_HINT } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
@@ -14,8 +14,8 @@ import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skele
 import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSIONS_CODEC, type SessionsAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, hiddenByAge, isFinished, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
+import { SESSION_CHARS, fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
+import { CAUSE_HINT, CAUSE_LABEL, contextCell, hiddenByAge, isFinished, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
@@ -25,6 +25,7 @@ import { memberSpeed } from '@/lib/selection';
 const SESSION_COLUMNS = [
   { id: 'key', label: 'Key' },
   { id: 'model', label: 'Model' },
+  { id: 'context', label: 'Context' },
   { id: 'account', label: 'Account' },
   { id: 'runway', label: 'Runway' },
   { id: 'lastUsed', label: 'Last used' },
@@ -37,8 +38,9 @@ const SESSION_COLUMNS = [
 ] as const;
 type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
 // The default set fits the card at 1280 by 800 without these: Last used carries recency, Cache warming and the expanded
-// row carry the agents and their next probes.
-const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['agents', 'lastRequest', 'nextProbe'];
+// row carry the agents and their next probes, and the request log and analytics carry the request count, whose room the
+// Context column takes.
+const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['agents', 'lastRequest', 'nextProbe', 'requests'];
 // Add filter draws the dimension's "1 h" first as the default hour's row, so the options are the other four presets.
 const AGE_OPTIONS = [
   { label: '15 min', value: '15m' },
@@ -55,6 +57,22 @@ const runwayWord = (s: Session): string | null => (!s.pinned ? null : s.runwayMs
 
 /** The id as sent on hover where the cell shows less of it. */
 const modelTitle = (model: string, shown: string) => (shown === model ? undefined : model);
+
+type PinFigures = Pick<AgentContext, 'cachedPrefixTokens' | 'contextShare' | 'contextWindowTokens' | 'lastInputTokens'>;
+
+/** The main pin's figures off the row. A row with no pin, or a pin before its first turn, has no context to read. */
+const mainFigures = (s: Session): PinFigures => ({
+  cachedPrefixTokens: s.cachedPrefixTokens,
+  contextShare: s.contextShare,
+  contextWindowTokens: s.contextWindowTokens,
+  lastInputTokens: s.pinned && s.lastInputTokens ? s.lastInputTokens : null,
+});
+
+/**
+ * An agent line's pin figures: the row's own for the agent the row's pin is, the route's line under the agent's id for
+ * any other, and none where the route answers no line, a released agent's among them.
+ */
+const lineFigures = (s: Session, agentId: string): PinFigures | null => (agentId === s.agentId ? mainFigures(s) : (s.agentContexts?.find((c) => c.agentId === agentId) ?? null));
 
 const PIN_TONE: Record<KeepaliveState, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', released: 'neutral', unknown: 'neutral' };
 const PIN_HINT: Record<KeepaliveState, string> = {
@@ -473,6 +491,7 @@ export function SessionsPage() {
                   <th className="col-fill">Session</th>
                   {visible.has('key') && <th className="col-fit">Key</th>}
                   {visible.has('model') && <th className="col-fit">Model</th>}
+                  {visible.has('context') && <th className="col-fit">Context</th>}
                   {visible.has('account') && <th className="col-fit">Account</th>}
                   {visible.has('runway') && <th className="col-fit">Runway</th>}
                   {visible.has('lastUsed') && <th className="col-fit">Last used</th>}
@@ -583,6 +602,10 @@ function SessionRows({
   // row.
   const baseRow = forkBase === null ? null : (listedRows.get(forkBase) ?? null);
   const baseAccountId = baseRow !== null && baseRow.session.pinned ? baseRow.session.accountId : null;
+  const main = mainFigures(session);
+  const context = contextCell(main.lastInputTokens, main.contextWindowTokens, main.contextShare, main.cachedPrefixTokens);
+  // The route answers the other pins' figures on a companion session alone, so only its lines draw the two columns.
+  const companion = session.companion !== 'none';
   return (
     <>
       <tr
@@ -637,6 +660,13 @@ function SessionRows({
               {session.model === null ? <span className="muted">-</span> : shortModel(session.model)}
               <OtherPins agents={otherModels} />
             </span>
+          </td>
+        )}
+        {visible.has('context') && (
+          <td className="col-fit" title={context.share ?? undefined}>
+            <span className={main.lastInputTokens === null ? 'muted' : 'num'}>{context.main}</span>
+            {context.share !== null && <span className="sub">{context.share}</span>}
+            {context.prefix !== null && <span className="sub">{context.prefix}</span>}
           </td>
         )}
         {visible.has('account') && (
@@ -770,10 +800,16 @@ function SessionRows({
               <p className="agents__released">The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.</p>
             )}
             {shown.length > 0 && (
-              <div className="agents">
+              <div className={companion ? 'agents agents--context' : 'agents'}>
                 <div className="agents__row agents__row--head">
                   <span>Agent</span>
                   <span>Model</span>
+                  {companion && (
+                    <>
+                      <span>Context</span>
+                      <span>Prefix</span>
+                    </>
+                  )}
                   <span>Account</span>
                   <span>TTL</span>
                   <span>Last request</span>
@@ -788,6 +824,7 @@ function SessionRows({
                     <span className="mono nowrap" title={modelTitle(a.model, shortModel(a.model))}>
                       {shortModel(a.model)}
                     </span>
+                    {companion && <LineContext figures={lineFigures(session, a.agentId)} />}
                     {a.accountId === null ? <span className="muted">none</span> : <span className="mono">{a.accountId}</span>}
                     <span className="num">{fmtDuration(a.ttlSeconds * 1000)}</span>
                     <span title={a.lastRequestAt ? fmtAbsolute(a.lastRequestAt) : undefined}>{a.lastRequestAt ? <span className="num">{fmtRelative(a.lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>
@@ -891,6 +928,23 @@ function ForkBadge({
     >
       {words}
     </a>
+  );
+}
+
+/** An agent line's Context and Prefix cells: the tokens with the share as a sub line and on hover, a dash for none. */
+function LineContext({ figures }: { figures: PinFigures | null }) {
+  // A pin before its first turn has no context to read, as on the row.
+  const tokens = figures?.lastInputTokens || null;
+  const cell = contextCell(tokens, figures?.contextWindowTokens ?? null, figures?.contextShare ?? null, null);
+  const prefix = figures?.cachedPrefixTokens ?? null;
+  return (
+    <>
+      <span title={cell.share ?? undefined}>
+        <span className={tokens === null ? 'muted' : 'num'}>{cell.main}</span>
+        {cell.share !== null && <span className="sub">{cell.share}</span>}
+      </span>
+      <span>{prefix === null ? <span className="muted">-</span> : <span className="num">{fmtCompact(prefix)}</span>}</span>
+    </>
   );
 }
 

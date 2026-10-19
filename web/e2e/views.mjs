@@ -8186,9 +8186,10 @@ async function burnShot(theme) {
 }
 
 /**
- * The Sessions table's default columns fit its card at the pass's 1280 by 800: the table needs no more than its wrap's
- * width, so nothing scrolls sideways and the companion and the cache warming state stay in view. A slowed session's
- * speed chip stands on the account's line inside its Account cell, which the mock pass requires on studio's sessions.
+ * The Sessions table's default columns, the Context column among them, fit its card at the pass's 1280 by 800: the table
+ * needs no more than its wrap's width, so nothing scrolls sideways and the companion and the cache warming state stay in
+ * view. A slowed session's speed chip stands on the account's line inside its Account cell, which the mock pass
+ * requires on studio's sessions.
  */
 async function sessionsTableFits(theme) {
   const read = await page.evaluate(() => {
@@ -8217,6 +8218,7 @@ async function sessionsTableFits(theme) {
   measurements.push(`${theme} /sessions table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, speed chips ${JSON.stringify(read.speed)}`}`);
   if (read === null) failures.push(`${theme} /sessions: no session table to measure`);
   else {
+    if (!read.columns.some(([label]) => label === 'Context')) failures.push(`${theme} /sessions: the default columns draw no Context column, so the fit is read without it`);
     if (read.scroll > read.client || read.wrapScroll > read.client) failures.push(`${theme} /sessions: the default columns need ${Math.max(read.scroll, read.wrapScroll)}px of the wrap's ${read.client}px, so the table scrolls sideways`);
     if (mock && read.speed.length === 0) failures.push(`${theme} /sessions: the story slows studio's sessions, yet no Account cell draws a speed chip`);
     for (const chip of read.speed.filter((c) => !c.inside || !c.line)) failures.push(`${theme} /sessions: the speed chip ${JSON.stringify(chip.text)} stands ${chip.inside ? "off the account name's line" : 'past its Account cell'}`);

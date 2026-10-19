@@ -1,5 +1,6 @@
 import type { KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
 import { RANGE_PRESETS } from '@/lib/address';
+import { fmtCompact, fmtShare } from '@/lib/format';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
@@ -10,6 +11,7 @@ export const CAUSE_LABEL: Record<RecipeCause, string> = {
   awaiting_selection: 'awaiting selection',
   budget: 'at budget',
   bus_gap: 'bus gap',
+  compacted: 'compacted',
   cooled: 'cooled down',
   evicted: 'evicted',
   expired: 'entry expired',
@@ -76,6 +78,7 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   awaiting_selection: "The agent's request reached the router and waits for an account, and the recipe arms once one serves it.",
   budget: "The pinned member's spend reached its budget. Probes wait for the period to end or the budget to change while the entry lasts.",
   bus_gap: 'The keepalive engine missed bus events while this request was open, so it kept nothing from it. The next real request starts a new recipe.',
+  compacted: 'A completed compaction replaced the context this recipe kept warm, so the recipe stopped and no probe is sent. The next main turn starts a recipe for the new context.',
   cooled: 'The account the session is pinned to is under a cooldown. The probe waits for it to end while the entry lasts.',
   evicted: 'The engine was at its retained-bytes cap and this recipe was the oldest idle one. The next real request starts a new recipe.',
   expired: 'The cache entry expired before its probe was due, so no probe was sent. The next real request starts a new recipe.',
@@ -206,6 +209,14 @@ export const SESSION_AGE_MS: Record<string, number | null> = { '15m': 15 * 60_00
 export function isFinished(session: Pick<Session, 'keepalive'>, agents: readonly Pick<KeepaliveRecipe, 'agentState' | 'cause'>[]): boolean {
   const { cause } = session.keepalive;
   return cause === 'session_ended' || cause === 'released' || (agents.length > 0 && agents.every(isReleasedLine));
+}
+
+/** The Context cell's three texts, a dash where the tokens are null. */
+export function contextCell(tokens: number | null, window: number | null, share: number | null, prefix: number | null): { main: string; share: string | null; prefix: string | null } {
+  if (tokens === null) return { main: '-', share: null, prefix: null };
+  // The route rounds the share to three decimals, a tenth of a percent, which `fmtShare` keeps and a whole percent
+  // would round away.
+  return { main: fmtCompact(tokens), share: window === null || share === null ? null : `${fmtShare(share)} of ${fmtCompact(window)}`, prefix: prefix === null ? null : `prefix ${fmtCompact(prefix)}` };
 }
 
 /** Whether the Non-companion age hides the row: never a companion row, else its last use older than the preset. */

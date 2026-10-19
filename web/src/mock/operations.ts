@@ -17,6 +17,8 @@ interface WrittenFigures {
   agents: { agentId: string; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
   burn: number;
   burnAtMinutes: number;
+  /** The deepest cache-map entry's prefix of the main pin. */
+  cachedPrefixTokens: number;
   createdMinutes: number;
   lastInputTokens: number;
   lastRefreshMinutes: number;
@@ -108,6 +110,7 @@ const sessionSpec: ({
       ],
       burn: 0.18,
       burnAtMinutes: 22,
+      cachedPrefixTokens: 12_000,
       createdMinutes: 140,
       lastInputTokens: 14_200,
       lastRefreshMinutes: 22,
@@ -127,6 +130,7 @@ const sessionSpec: ({
       agents: [{ agentId: 'main', lastRequestMinutes: 120, nextProbeSeconds: null }],
       burn: 0.09,
       burnAtMinutes: 121,
+      cachedPrefixTokens: 5_000,
       createdMinutes: 310,
       lastInputTokens: 6_400,
       lastRefreshMinutes: 121,
@@ -140,13 +144,27 @@ const SESSION_EXPIRE_SECONDS = 86_400;
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id.
 const activityOf = (keyId: string | null, keyGeneration: number, sessionId: string) => `${keyId}|${keyGeneration}|${sessionId}`;
-const ledgered = new Map<string, { last: string; requests: number }>();
+// The newest request's model is kept as sent, since a `[1m]` spelling there names the session's context window.
+const ledgered = new Map<string, { last: string; model: string; requests: number }>();
 for (const r of REQUESTS) {
   if (r.sessionId === null || r.kind === 'probe') continue;
   const id = activityOf(r.keyId, r.keyGeneration, r.sessionId);
   const seen = ledgered.get(id);
-  if (!seen) ledgered.set(id, { last: r.at, requests: 1 });
-  else ledgered.set(id, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
+  if (!seen) ledgered.set(id, { last: r.at, model: r.model, requests: 1 });
+  else ledgered.set(id, r.at > seen.last ? { last: r.at, model: r.model, requests: seen.requests + 1 } : { ...seen, requests: seen.requests + 1 });
+}
+
+/**
+ * A pin's context figures as the route answers them off its tokens: the window by the client's rule, a million where
+ * the session's newest request named a `[1m]` twin and 200 000 otherwise, and the share of it to three decimals. The
+ * mock keeps no cache map, so unless a fixed row writes its own, the deepest entry's prefix stands at nine tenths of
+ * the tokens floored to the thousand, none below a thousand. A pin with no turn yet reads no figure.
+ */
+function pinContext(tokens: number | null, newestModel: string | null, writtenPrefix?: number): Pick<Session, 'cachedPrefixTokens' | 'contextShare' | 'contextWindowTokens'> {
+  if (tokens === null || tokens === 0) return { cachedPrefixTokens: null, contextShare: null, contextWindowTokens: null };
+  const window = newestModel?.endsWith('[1m]') ? 1_000_000 : 200_000;
+  const prefix = writtenPrefix ?? Math.floor((tokens * 0.9) / 1_000) * 1_000;
+  return { cachedPrefixTokens: prefix >= 1_000 ? prefix : null, contextShare: Math.round((tokens / window) * 1_000) / 1_000, contextWindowTokens: window };
 }
 
 /** The weight `model` prices at on the 5-hour window (a dated id reads its undated name), its model tier's latest
@@ -238,6 +256,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     burnUnit: unit,
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     lastInputTokens: pinned ? lastInputRoll : null,
+    ...pinContext(pinned ? lastInputRoll : null, seen?.model ?? null, written?.cachedPrefixTokens),
     lastRefreshAt: pinned ? lastRefreshRoll : null,
     shedFrom: null,
     shedReason: null,
@@ -334,6 +353,7 @@ const PROBE_IN_FLIGHT_MS = 20_000;
 const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   affinity_too_short: 'held',
   awaiting_cache_evidence: 'retained',
+  compacted: 'ended',
   expired: 'ended',
   horizon: 'held',
   idle_limit: 'ended',
@@ -367,6 +387,14 @@ const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
 
 /** What every line of a session the mod released whole reads, written over the drawn row. */
 const RELEASED_BY_THE_MOD: Partial<KeepaliveRecipe> = { agentState: 'released', cause: 'agent_released', deadline: null, nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null };
+/**
+ * What a subagent reads once its compaction completed: the engine stopped its recipe, and no probe goes out until the
+ * agent's next main turn arms one for the new context. Written over the drawn row, so the rows after it keep their
+ * rolls.
+ */
+const COMPACTED: Partial<KeepaliveRecipe> = { cause: 'compacted', lastGuard: 'compaction', nextProbeAt: null, state: 'ended' };
+/** The first session's second subagent compacted, while its first stays paused on its cold probes. */
+const COMPACTED_LINE = { agent: 2, session: 0 };
 /**
  * What main reads on a session the mod ended, written over the drawn row. Its lifecycle word stays its session's, as
  * an ended main's does, and its subagents read as the mod released them.
@@ -408,7 +436,17 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     // The written session's rows past its drawn pair are written, so a reader meets every lifecycle word. A session the
     // mod released whole keeps its draws, so the rows after it keep theirs.
-    const written = sessionSpec[i].released ? RELEASED_BY_THE_MOD : sessionSpec[i].finished ? (j === 0 ? ENDED_WITH_THE_SESSION : RELEASED_BY_THE_MOD) : i === WRITTEN_SESSION && j >= 2 ? WRITTEN_SUBAGENTS[j - 2] : undefined;
+    const written = sessionSpec[i].released
+      ? RELEASED_BY_THE_MOD
+      : sessionSpec[i].finished
+        ? j === 0
+          ? ENDED_WITH_THE_SESSION
+          : RELEASED_BY_THE_MOD
+        : i === WRITTEN_SESSION && j >= 2
+          ? WRITTEN_SUBAGENTS[j - 2]
+          : i === COMPACTED_LINE.session && j === COMPACTED_LINE.agent
+            ? COMPACTED
+            : undefined;
     return {
       ...RECIPE_SAMPLE,
       accountId,
@@ -455,6 +493,23 @@ for (const pin of SESSIONS) {
 }
 
 /**
+ * A subagent pin's tokens, set from its session's index and its line's place rather than drawn, so the rows after it
+ * keep their rolls.
+ */
+const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) * 1_000;
+// The route lists a companion session's other pins whose agent the mod has not released, ordered by agent id as
+// bytes, empty where every other agent is released, and none on a session no companion reports.
+SESSIONS.forEach((pin, i) => {
+  if (pin.companion === 'none') return;
+  const newest = ledgered.get(activityOf(pin.keyId, pin.keyGeneration, pin.sessionId))?.model ?? null;
+  pin.agentContexts = RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId)
+    .map((r, j) => ({ r, tokens: agentTokens(i, j) }))
+    .filter(({ r }) => r.agentId !== 'main' && r.agentState !== 'released')
+    .sort(({ r: a }, { r: b }) => (a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0))
+    .map(({ r, tokens }) => ({ agentId: r.agentId, lastInputTokens: tokens, model: r.model, ...pinContext(tokens, newest) }));
+});
+
+/**
  * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent, whose
  * main pin has the cycle its turns since the placement give, the two the round marked and the one whose turn opened the
  * span, whose pins have none yet. Each burn is the main pin's demand at the account's half speed. No recipe warms them.
@@ -475,6 +530,7 @@ for (const pin of SLOWED_PINS) {
   const main = rows.filter((r) => r.agentId === 'main');
   const last = main[0];
   const lastAttempt = last.attempts[last.attempts.length - 1];
+  const lastInputTokens = last.usage.input + last.usage.cacheRead + last.usage.cacheWrite5m + last.usage.cacheWrite1h;
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: 'studio',
@@ -497,7 +553,8 @@ for (const pin of SLOWED_PINS) {
     keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
     keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
     keyId: 'notebook',
-    lastInputTokens: last.usage.input + last.usage.cacheRead + last.usage.cacheWrite5m + last.usage.cacheWrite1h,
+    lastInputTokens,
+    ...pinContext(lastInputTokens, rows[0].model),
     lastRefreshAt: lastAttempt.startedAt,
     lastRequestAt: rows[0].at,
     lastUsedAt: lastAttempt.startedAt,

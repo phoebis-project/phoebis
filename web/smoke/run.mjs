@@ -18632,7 +18632,9 @@ m.unmount();
   row?.click();
   await page.settle(200);
   const line = [...page.container.querySelectorAll('.agents__row')].find((l) => l.children[0]?.textContent?.trim() === 'zz01');
-  const account = line?.children[2]?.textContent?.trim() ?? null;
+  // A companion session's lines carry Context and Prefix before Account, so the cell is found by its head.
+  const accountAt = [...(page.container.querySelector('.agents__row--head')?.children ?? [])].findIndex((c) => c.textContent?.trim() === 'Account');
+  const account = line?.children[accountAt]?.textContent?.trim() ?? null;
   page.unmount();
   api.listKeepaliveRecipes = listKeepaliveRecipes;
   results.push({
@@ -18799,6 +18801,8 @@ m.unmount();
   const first = rowsOf(page)[0];
   const labels = (await toggleMenu(page, first)).map((b) => b.textContent?.trim() ?? '');
   await toggleMenu(page, first);
+  // The default set leaves the request count to the Columns control.
+  await showColumn(page, 'Requests');
   const quiet = rowsOf(page).find((tr) => Number(sessionCell(page, tr, 'Requests')?.textContent) === 0);
   const off = await entryOf(page, quiet);
   await toggleMenu(page, quiet);
@@ -19703,6 +19707,129 @@ const CARD_VIEWS = [
   }
 }
 
+{
+  // The main agent's context on every session and each agent's on a companion session, read on the story's instant.
+  // The figures are the seeds the mock answers, and the row idle for two hours writes its own, 6 400 tokens with a
+  // prefix of 5 000, read against the 200 000 window of every story pin.
+  const TWO_HOURS_ID = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
+  const REGISTERED_ID = '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43';
+  const COMPACTED_HINT = 'A completed compaction replaced the context this recipe kept warm, so the recipe stopped and no probe is sent. The next main turn starts a recipe for the new context.';
+  const listed = await api.listSessions();
+  const recipes = await api.listKeepaliveRecipes();
+  const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
+  const shareOfRow = (f) => `${fmtShare(f.contextShare)} of ${fmtCompact(f.contextWindowTokens)}`;
+  const cellText = (c) => (c ? { main: c.firstElementChild?.textContent?.trim() ?? null, subs: [...c.querySelectorAll('.sub')].map((x) => x.textContent?.trim()), title: c.getAttribute('title') } : null);
+  /** An expanded row's agent lines, each cell read under its head. */
+  const linesOf = (page, tr) => {
+    const detail = tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+    const head = [...(detail?.querySelector('.agents__row--head')?.children ?? [])].map((c) => c.textContent?.trim() ?? '');
+    const lines = [...(detail?.querySelectorAll('.agents__row:not(.agents__row--head)') ?? [])].map((l) => {
+      const at = (name) => (head.includes(name) ? l.children[head.indexOf(name)] : null);
+      return {
+        agent: l.children[0]?.textContent?.trim() ?? '',
+        cause: l.querySelector('.agents__state > .badge:nth-child(2)'),
+        context: cellText(at('Context')),
+        next: at('Next probe')?.textContent?.trim() ?? null,
+        prefix: at('Prefix')?.textContent?.trim() ?? null,
+        state: l.querySelector('.agents__state > .badge:first-child'),
+      };
+    });
+    return { head, lines };
+  };
+  const open = async (page, s) => {
+    const tr = page.container.querySelector(`[id="${idOfRow(s)}"]`);
+    tr?.click();
+    await page.settle(150);
+    return tr;
+  };
+  {
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const firstTr = page.container.querySelector('tbody tr.srow');
+    const first = listed.find((s) => idOfRow(s) === firstTr?.id);
+    const drawn = cellText(sessionCell(page, firstTr, 'Context'));
+    const registered = listed.find((s) => s.sessionId === REGISTERED_ID);
+    const dash = cellText(sessionCell(page, page.container.querySelector(`[id="${registered === undefined ? '' : idOfRow(registered)}"]`), 'Context'));
+    results.push({
+      name: "/sessions the Context cell reads the main pin's tokens, its share of the model's window and its cached prefix as two sub lines, the share on its title, and a dash on a row with no pin",
+      ok:
+        first !== undefined &&
+        first.companion === 'reporting' &&
+        first.cachedPrefixTokens !== null &&
+        JSON.stringify(drawn) === JSON.stringify({ main: fmtCompact(first.lastInputTokens), subs: [shareOfRow(first), `prefix ${fmtCompact(first.cachedPrefixTokens)}`], title: shareOfRow(first) }) &&
+        registered !== undefined &&
+        !registered.pinned &&
+        JSON.stringify(dash) === JSON.stringify({ main: '-', subs: [], title: null }),
+      missing: [JSON.stringify(drawn), JSON.stringify(dash)],
+    });
+    // Expanded, the companion session's lines read Context and Prefix after Model: main the row's own figures, each
+    // subagent the line the route answers under its agent id.
+    const { head, lines } = linesOf(page, await open(page, first));
+    const want = (a) => {
+      const f = a === first.agentId ? first : (first.agentContexts ?? []).find((c) => c.agentId === a);
+      return f === undefined ? null : { context: { main: fmtCompact(f.lastInputTokens), subs: [shareOfRow(f)], title: shareOfRow(f) }, prefix: f.cachedPrefixTokens === null ? '-' : fmtCompact(f.cachedPrefixTokens) };
+    };
+    const off = lines.filter((l) => JSON.stringify({ context: l.context, prefix: l.prefix }) !== JSON.stringify(want(l.agent)));
+    results.push({
+      name: "/sessions a companion session's agent lines read Context and Prefix after Model, main the row's figures and each subagent its own line's",
+      ok: JSON.stringify(head.slice(0, 5)) === JSON.stringify(['Agent', 'Model', 'Context', 'Prefix', 'Account']) && first.agentContexts?.length === 2 && lines.length === 3 && off.length === 0,
+      missing: [JSON.stringify(head), ...off.map((l) => JSON.stringify({ agent: l.agent, context: l.context, prefix: l.prefix }))],
+    });
+    page.unmount();
+  }
+  {
+    // The subagent whose compaction completed reads its cause beside the ended state, both titled with the sentence,
+    // and no probe is scheduled for it.
+    const compacted = recipes.filter((r) => r.cause === 'compacted');
+    const session = compacted.length === 1 ? listed.find((s) => s.keyId === compacted[0].keyId && s.sessionId === compacted[0].sessionId) : undefined;
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const { lines } = session === undefined ? { lines: [] } : linesOf(page, await open(page, session));
+    const line = lines.find((l) => l.agent === compacted[0]?.agentId);
+    const got = line && { cause: line.cause?.textContent?.trim(), causeTitle: line.cause?.getAttribute('title'), next: line.next, state: line.state?.textContent?.trim(), stateTitle: line.state?.getAttribute('title') };
+    page.unmount();
+    results.push({
+      name: '/sessions the subagent whose compaction completed reads the cause compacted beside the state ended, both titled with its sentence, and no probe scheduled',
+      ok: JSON.stringify(got) === JSON.stringify({ cause: 'compacted', causeTitle: COMPACTED_HINT, next: 'not scheduled', state: 'ended', stateTitle: COMPACTED_HINT }),
+      missing: [JSON.stringify(got ?? 'no compacted line')],
+    });
+  }
+  {
+    // The row no companion reports, idle for two hours, shows under the six-hour age with the main pin's figures, and
+    // its agents table draws neither column.
+    const plain = listed.find((s) => s.sessionId === TWO_HOURS_ID);
+    const page = await mount('/sessions?age=6h', { now: CLOCK_ORIGIN });
+    const tr = page.container.querySelector(`[id="${plain === undefined ? '' : idOfRow(plain)}"]`);
+    const drawn = cellText(sessionCell(page, tr, 'Context'));
+    const { head, lines } = linesOf(page, await open(page, plain));
+    page.unmount();
+    results.push({
+      name: "/sessions a session no companion reports reads the main pin's figures on its row, and its agents table draws no Context or Prefix",
+      ok:
+        plain?.companion === 'none' &&
+        plain.agentContexts === null &&
+        JSON.stringify(drawn) === JSON.stringify({ main: '6.4K', subs: ['3.2% of 200K', 'prefix 5K'], title: '3.2% of 200K' }) &&
+        JSON.stringify(head) === JSON.stringify(['Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State']) &&
+        lines.length === 1,
+      missing: [JSON.stringify(drawn), JSON.stringify(head)],
+    });
+  }
+  {
+    // A line the mod released carries no pin the route answers, so under "Show released agents" it reads a dash in
+    // both columns while its live neighbors read theirs.
+    const released = recipes.filter((r) => r.agentState === 'released' && r.cause === 'agent_released');
+    const session = listed.find((s) => (s.agentContexts?.length ?? 0) > 0 && released.some((r) => r.keyId === s.keyId && r.sessionId === s.sessionId));
+    const page = await mount('/sessions?released=1', { now: CLOCK_ORIGIN });
+    const { lines } = session === undefined ? { lines: [] } : linesOf(page, await open(page, session));
+    page.unmount();
+    const gone = lines.filter((l) => released.some((r) => r.sessionId === session.sessionId && r.agentId === l.agent));
+    const live = lines.filter((l) => session.agentContexts.some((c) => c.agentId === l.agent));
+    results.push({
+      name: '/sessions a released line drawn under Show released agents reads a dash in Context and Prefix beside the live lines that read theirs',
+      ok: gone.length > 0 && gone.every((l) => l.context?.main === '-' && l.context.subs.length === 0 && l.prefix === '-') && live.length > 0 && live.every((l) => l.context?.main !== '-'),
+      missing: lines.map((l) => JSON.stringify({ agent: l.agent, context: l.context, prefix: l.prefix })),
+    });
+  }
+}
+
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
@@ -19800,8 +19927,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   const cell = (tr, header) => sessionCell(m, tr, header);
   const heads = () => [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
   // The optional columns the control offers: the Session column is the row's identity and is always drawn.
-  const COLUMNS = ['Key', 'Model', 'Account', 'Runway', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
-  const HIDDEN = ['Last request', 'Agents', 'Next probe'];
+  const COLUMNS = ['Key', 'Model', 'Context', 'Account', 'Runway', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
+  const HIDDEN = ['Requests', 'Last request', 'Agents', 'Next probe'];
   {
     // The default set fits the card at 1280 by 800 without these three, each one tick away in the control.
     const button = () => m.container.querySelector('button[aria-label="Columns"]');
@@ -19813,7 +19940,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     button()?.click();
     await m.settle(100);
     results.push({
-      name: '/sessions the Columns control starts with Last request, Agents and Next probe hidden',
+      name: '/sessions the Columns control starts with Requests, Last request, Agents and Next probe hidden',
       ok:
         JSON.stringify(offered.map((c) => c.label)) === JSON.stringify(COLUMNS) &&
         offered.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
@@ -19823,6 +19950,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       missing: [JSON.stringify(offered), JSON.stringify(shown), String(label)],
     });
   }
+  // The cases below read each row's request count, which the default set leaves to the Columns control.
+  await showColumn(m, 'Requests');
   {
     // The Runway cell reads the pin's runway as the route answers it: a span through the shared formatter, none at
     // zero, unbounded where no window binds, and a dash on a pinned row with no projection and on an unpinned row. The
@@ -20095,7 +20224,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const mixedRow = rows()[0];
     results.push({
       name: '/sessions an agent awaiting cache evidence counts as retained in the row summary',
-      ok: (cell(mixedRow, 'Cache warming')?.textContent ?? '').includes('2 retained, 1 paused'),
+      ok: (cell(mixedRow, 'Cache warming')?.textContent ?? '').includes('1 retained, 1 paused, 1 ended'),
       missing: [cell(mixedRow, 'Cache warming')?.textContent?.trim() ?? 'absent'],
     });
     const parkedBadge = [...(parkedRow?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'parked');
@@ -20259,6 +20388,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
     await m.navigate('/sessions?age=none&finished=1');
     await m.settle(300);
+    // Back from the routing log the view draws its default set again, which leaves the count to the Columns control.
+    await showColumn(m, 'Requests');
   }
   {
     const jumps = (await openMenu(busyRow())).filter((b) => b.textContent?.trim() === 'View in analytics');
@@ -20338,7 +20469,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State', 'main']);
   {
     const head = [...(detail?.querySelectorAll('.agents__row--head > span') ?? [])].map((c) => c.textContent?.trim());
-    const want = ['Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
+    // The story's first session has a companion, so its lines read Context and Prefix after Model.
+    const want = ['Agent', 'Model', 'Context', 'Prefix', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
     results.push({ name: "/sessions an agent's line carries no net, and the page no net-saved tile", ok: JSON.stringify(head) === JSON.stringify(want) && !m.text().includes('Net saved'), missing: [...head, m.text().includes('Net saved') ? 'Net saved tile' : ''].filter(Boolean) });
   }
   {
@@ -20653,6 +20785,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.
   // The earlier holder lies past the hour, so the release is read with every row shown.
   await m.navigate('/sessions?age=none&finished=1');
+  // The view drew its default set again on the way back from analytics, which leaves the count to the Columns control.
+  await showColumn(m, 'Requests');
   {
     const id = cell(busyRow(), 'Session')?.getAttribute('title') ?? '';
     const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
