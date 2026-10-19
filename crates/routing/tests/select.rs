@@ -11457,6 +11457,31 @@ fn the_return_to_plan_line_names_its_mode_on_every_verdict_and_the_dwell_under_a
         &FactValue::List(vec!["b".into()])
     );
 
+    // b metered too: the cold pin's return holds under always, and no plan member takes it.
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds: vec![("a", AccountKind::ApiKey), ("b", AccountKind::ApiKey)],
+        failover: Failover {
+            return_to_plan: ReturnToPlan::Always,
+            return_to_plan_dwell_seconds: 600,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = on_the_metered_member();
+    let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let stuck_line = line(&d.record, "move:return_to_plan");
+    assert_eq!(
+        (stuck_line.verdict, keys(stuck_line)),
+        (
+            "no",
+            vec!["mode", "cold", "dwell_age_ms", "dwell_ms", "no_destination"]
+        ),
+        "a return with no destination names the mode and the dwell beside the missing destination"
+    );
+    assert_eq!(fact(stuck_line, "no_destination"), &FactValue::Bool(true));
+
     let s = returning_pool(ReturnToPlan::WhenCold);
     let mut st = on_the_metered_member();
     let d = decide(&mut st, &s, &main_turn(&s, "warm", T), &mut rng());
@@ -20516,7 +20541,14 @@ fn time_of(value: &FactValue) -> i64 {
 
 #[test]
 fn the_stretch_is_the_time_the_unslowed_demand_passes_the_ceiling_before_the_reset() {
-    let s = slowed_pool();
+    // A 45-minute threshold, apart from the half hour the other slowing pools set, so the line reads the pool's own.
+    let mut pool = slowing(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        load_shedding: false,
+        ..Pool::default()
+    });
+    pool.slow_down.slow_down_stretch_seconds = 2_700;
+    let s = tiered(pool);
     // Two pins burn 0.10 and 0.05 of the 5-hour window an hour on a at 0.80 with its reset two hours out: the 0.15 of
     // room under the ceiling lasts an hour, so the sessions would pass it an hour before the reset.
     let mut st = rounding(vec![
@@ -20549,11 +20581,11 @@ fn the_stretch_is_the_time_the_unslowed_demand_passes_the_ceiling_before_the_res
     assert!((stretch_ms / 3_600_000.0 - 1.0).abs() < 1e-3);
     assert!((factor / 0.5 - 1.0).abs() < 1e-3);
     assert!(close(number(fact(shed, "speed")), 1.0));
-    assert_eq!(fact(shed, "threshold_ms"), &FactValue::Int(1_800_000));
+    assert_eq!(fact(shed, "threshold_ms"), &FactValue::Int(2_700_000));
     assert_eq!(
         time_of(fact(shed, "over_since")),
         T,
-        "an hour's stretch is over the half hour threshold since this read"
+        "an hour's stretch is over the 45-minute threshold since this read"
     );
     // One factor per account: the other session's turn reads the same figure and the entry holds it.
     let d = decide(&mut st, &s, &main_turn(&s, "s0", T), &mut rng());
@@ -20571,7 +20603,8 @@ fn the_stretch_is_the_time_the_unslowed_demand_passes_the_ceiling_before_the_res
 #[test]
 fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and_a_factor_of_zero()
 {
-    let (_, s) = held_pools(120);
+    // A cap of 150 seconds, apart from the shipped 120, so the held turn below waits the pool's own cap.
+    let (_, s) = held_pools(150);
     // a at 0.96 with 27 minutes to its reset: the ceiling is already passed.
     let mut st = rounding(vec![burning("s1", "a", 7.0, true, T)]);
     reading(&mut st, "a", 0.96, 27 * MINUTE, T);
@@ -20602,7 +20635,7 @@ fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and
     assert_eq!(fact(shed, "stretch_ms"), &FactValue::Int(26 * MINUTE));
     assert_eq!(number(fact(shed, "factor")), 0.0);
     assert_eq!(number(fact(shed, "demand_five_hour")), 0.0);
-    let until = T + MINUTE + 120_000;
+    let until = T + MINUTE + 150_000;
     assert_eq!(held_on(&d).1.until, Some(until));
 
     // Under the ceiling with nothing priced the window carries the sessions to its reset: the stretch reads zero and
@@ -20630,7 +20663,7 @@ fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and
             entry.held_ms,
             entry.over_since
         ),
-        (1.0, Some(T), Some(T + 2 * MINUTE), 0.0, 120_000, None),
+        (1.0, Some(T), Some(T + 2 * MINUTE), 0.0, 150_000, None),
         "the span stays open through the wait"
     );
 }
@@ -21253,7 +21286,18 @@ fn cycled(st: &mut RoutingState, off: &RegistrySnapshot, session: &str, gap: i64
 /// and writes the entry for, never held and folding no pace, so the ramp's stamp is a burn average old at `at` and a
 /// hold at `at` reads the read's full factor.
 fn stamped(st: &mut RoutingState, on: &RegistrySnapshot, session: &str, at: i64) {
-    let d = decide(st, on, &auxiliary(on, session, at - AVERAGE_MS), &mut rng());
+    stamped_over(st, on, session, at, AVERAGE_MS);
+}
+
+/// `stamped` on a pool whose burn average is `average_ms`.
+fn stamped_over(
+    st: &mut RoutingState,
+    on: &RegistrySnapshot,
+    session: &str,
+    at: i64,
+    average_ms: i64,
+) {
+    let d = decide(st, on, &auxiliary(on, session, at - average_ms), &mut rng());
     assert!(
         matches!(d.result, SelectResult::Selected(_)),
         "an auxiliary turn is never held: {:?}",
@@ -21293,9 +21337,12 @@ fn assert_cycle_over_factor(d: &Decided, received_at: i64) {
 
 #[test]
 fn a_slowed_pins_main_turn_is_held_for_its_cycle_over_the_factor_before_the_renewal() {
-    let (off, on) = held_pools(120);
+    // A burn average of twenty minutes, apart from `AVERAGE_MS`: a stamp that old ramps the read's whole factor only
+    // where the ramp reads the pool's own average.
+    let average_ms = 20 * MINUTE;
+    let (off, on) = paced_pools(120, average_ms);
     let mut st = slowed_s1(0.80);
-    stamped(&mut st, &on, "s1", T + 20 * SECOND);
+    stamped_over(&mut st, &on, "s1", T + 20 * SECOND, average_ms);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let before = pinned(&st, "s1");
     let req = main_turn(&on, "s1", T + 20 * SECOND);
@@ -22128,6 +22175,28 @@ fn a_pin_without_a_cycle_runs_at_full_speed_and_the_held_pins_cover_its_burn() {
 }
 
 #[test]
+fn a_held_turns_shed_line_reads_the_speed_its_hold_outcome_names() {
+    let (off, on) = held_pools(120);
+    let at = T + 240 * SECOND;
+    let mut st = a_tenth_with_a_cycle(&off, &on, 0.80, at);
+    let d = decide(&mut st, &on, &main_turn(&on, "s1", at), &mut rng());
+    assert_eq!(held_on(&d).1.reason, "slow_down");
+    let speed = d
+        .record
+        .outcome
+        .hold
+        .as_ref()
+        .and_then(|outcome| outcome.speed)
+        .expect("the speed the hold's plan realizes");
+    assert!(speed < 1.0, "the account runs slowed: {speed}");
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "speed"),
+        &FactValue::Number(speed),
+        "the shed line and the hold's outcome read one speed"
+    );
+}
+
+#[test]
 fn the_stretch_read_over_an_unheld_pins_full_speed_stays_under_the_threshold() {
     let (off, on) = held_pools(120);
     // At 0.74 the factor reads above 0.8, so the stretch starts under the half hour threshold.
@@ -22916,6 +22985,107 @@ fn a_stale_entry_whose_factor_returned_before_the_reset_ends_its_span_at_the_ret
         st.take_slow_down_edges(at),
         vec![slowed_span_ended(29 * MINUTE)],
         "the span ends at the return, the earlier of the return and the reset"
+    );
+}
+
+#[test]
+fn the_purge_drops_an_entry_no_selection_has_written_for_the_reclaim_hour() {
+    let (_, on) = held_pools(120);
+    // a's entry was written ten minutes before s1's last use and its reset lies two hours out, so an hour after the
+    // write the pin still stands, the pool still slows and the window has not reset: the entry's age alone drops it.
+    let mut st = s1_on_a(15.0);
+    reading(&mut st, "a", 0.5, 2 * HOUR, T);
+    let written = T - 10 * MINUTE;
+    st.write_slow_down(
+        "p",
+        "a",
+        &SlowDownRead {
+            reset: Some(T + 2 * HOUR),
+            ..seeded_read(0.38, written)
+        },
+        0.52,
+        written,
+        AVERAGE_MS,
+    );
+    st.take_slow_down_edges(written);
+    st.purge(&on, written + IN_FLIGHT_RECLAIM_MS - 1);
+    assert!(
+        st.slow_down_state("p", "a").is_some(),
+        "a millisecond short of the hour the entry stands"
+    );
+    let at = written + IN_FLIGHT_RECLAIM_MS;
+    st.purge(&on, at);
+    assert!(
+        st.slow_down_state("p", "a").is_none(),
+        "an hour after its last write the purge drops the entry"
+    );
+    assert_eq!(pinned(&st, "s1").account_id, "a", "the pin still stands");
+    assert_eq!(
+        st.take_slow_down_edges(at),
+        vec![(
+            "p".to_string(),
+            "a".to_string(),
+            SlowDownEdge::Ended {
+                since: written,
+                duration_ms: 0,
+                factor_min: 0.38,
+                held_ms: 0,
+            }
+        )],
+        "a span whose factor never returned ends at the entry's last read"
+    );
+}
+
+#[test]
+fn a_lingering_entry_on_a_pool_switched_off_is_in_force_nowhere_and_reads_at_full_speed() {
+    let (off, on) = held_pools(120);
+    // A warm pin on a burns 60 input tokens a second, which the ratio pricer reads as sixty ten-millionths of the
+    // 5-hour window a second, and a slowed read left a's entry at half speed before the switch went off. The purge
+    // tick has not dropped it yet.
+    let lingering = || {
+        let mut st = priced(vec![gated_pin("w0", "a", 60.0)]);
+        reading(&mut st, "a", 0.1, 3 * HOUR, T);
+        reading(&mut st, "b", 0.3, 3 * HOUR, T);
+        st.write_slow_down("p", "a", &seeded_read(0.5, T), 0.5, T, AVERAGE_MS);
+        st
+    };
+    // A fresh session's prior divides the warm pin's rate by a's speed, so it shows the speed each twin reads.
+    let prior = |s: &RegistrySnapshot| {
+        let mut st = lingering();
+        let d = decide(&mut st, s, &placing(s, "r-1", "s1", T), &mut rng());
+        let reserve = line(&d.record, "reserve");
+        assert_eq!(reserve.verdict, "booked");
+        number(fact(reserve, "burn_five_hour"))
+    };
+    let unslowed = 60.0 / 10_000_000.0 * 3_600.0;
+    assert!(
+        close(prior(&on), unslowed / 0.5),
+        "switched on, the entry's half speed doubles the pin's rate"
+    );
+
+    let mut st = lingering();
+    let pool = off.pool("p").expect("the pool");
+    assert!(
+        st.slow_down_state("p", "a").is_some(),
+        "the entry stands until the purge tick"
+    );
+    assert!(
+        st.slow_down_in_force(pool, "a", T).is_none(),
+        "a pool switched off holds no entry in force"
+    );
+    assert!(
+        close(prior(&off), unslowed),
+        "switched off, the speed reads 1 and the prior takes the pin at its achieved rate"
+    );
+    let d = decide(&mut st, &off, &main_turn(&off, "w0", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "slow_down"), &FactValue::Text("off".into()));
+    assert!(
+        shed.facts
+            .iter()
+            .all(|f| !SLOW_DOWN_FACTS[1..].contains(&f.key)),
+        "the line reads the switch alone: {:?}",
+        shed.facts
     );
 }
 

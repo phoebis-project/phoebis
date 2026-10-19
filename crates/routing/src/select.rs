@@ -2436,7 +2436,7 @@ pub(crate) enum BurnRead {
 /// The projections of `account_id` on the plan windows it holds a reading of, from one read of its burn as `read`
 /// names it: empty for an api_key account, which has no plan window. An unknown tier prices no burn, so an untiered
 /// account projects its prediction alone.
-fn projections_of(
+pub(crate) fn projections_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
@@ -3528,15 +3528,15 @@ fn move_of<'a>(
                 cold,
             ),
             ReturnToPlan::Always => {
-                let dwell_ms = return_to_plan_dwell_ms(pool);
+                let return_dwell_ms = return_to_plan_dwell_ms(pool);
                 (
                     vec![
                         Fact::text("mode", mode.as_str()),
                         Fact::bool("cold", cold),
                         Fact::int("dwell_age_ms", dwell_age_ms).unit("ms"),
-                        Fact::int("dwell_ms", dwell_ms).unit("ms"),
+                        Fact::int("dwell_ms", return_dwell_ms).unit("ms"),
                     ],
-                    cold || dwell_age_ms >= dwell_ms,
+                    cold || dwell_age_ms >= return_dwell_ms,
                 )
             }
         };
@@ -3819,7 +3819,7 @@ fn fired<'a>(
     rule: usize,
     mut facts: Vec<Fact>,
     gate: Gate<'a>,
-    pace_facts: &[Fact],
+    slow_down_facts: &[Fact],
 ) -> (Vec<&'a Candidate>, Vec<(String, FitRead)>) {
     let Gate {
         set, reads, step, ..
@@ -3828,8 +3828,8 @@ fn fired<'a>(
         "destinations",
         set.iter().map(|c| c.account_id.clone()).collect(),
     ));
-    rule_line(rec, rule, "fired", facts, pace_facts);
-    not_run_after(rec, rule, pace_facts);
+    rule_line(rec, rule, "fired", facts, slow_down_facts);
+    not_run_after(rec, rule, slow_down_facts);
     rec.walk.push(step);
     (set, reads)
 }
@@ -3841,18 +3841,18 @@ fn rule_line(
     rule: usize,
     verdict: &'static str,
     mut facts: Vec<Fact>,
-    pace_facts: &[Fact],
+    slow_down_facts: &[Fact],
 ) {
     if RULES[rule] == "move:shed" {
-        facts.extend_from_slice(pace_facts);
+        facts.extend_from_slice(slow_down_facts);
     }
     rec.step(RULES[rule], verdict, facts);
 }
 
 /// The lines of the rules after `rule`, `not_run` since `rule` answered.
-fn not_run_after(rec: &mut Recorder, rule: usize, pace_facts: &[Fact]) {
+fn not_run_after(rec: &mut Recorder, rule: usize, slow_down_facts: &[Fact]) {
     for later in rule + 1..RULES.len() {
-        rule_line(rec, later, "not_run", Vec::new(), pace_facts);
+        rule_line(rec, later, "not_run", Vec::new(), slow_down_facts);
     }
 }
 
@@ -4143,13 +4143,13 @@ fn no_destination(
     rule: usize,
     mut facts: Vec<Fact>,
     gate: Gate<'_>,
-    pace_facts: &[Fact],
+    slow_down_facts: &[Fact],
 ) {
     facts.push(Fact::bool("no_destination", true));
     if !gate.ending.is_empty() {
         facts.push(Fact::list("ending", gate.ending));
     }
-    rule_line(rec, rule, "no", facts, pace_facts);
+    rule_line(rec, rule, "no", facts, slow_down_facts);
     if !gate.step.facts.is_empty() {
         rec.walk.push(gate.step);
     }
@@ -7141,7 +7141,7 @@ mod banded_tests {
         StateCause, SubscriptionTerm,
     };
 
-    use super::{fit_of, lane_key, Banded, Figures, Judge, SelectRequest};
+    use super::{fit_of, lane_key, slow_down_of, Banded, Figures, Judge, SelectRequest};
     use crate::state::{
         BandSegment, Reservation, RoutingState, SharePricer, UtilizationSample, WindowReading,
         WindowSource, FIVE_HOUR,
@@ -7378,6 +7378,148 @@ mod banded_tests {
             (projection - expected).abs() < 1e-9,
             "the base booking weighs the band's half hour and the desk booking reads one rate: {projection} against \
              {expected}"
+        );
+    }
+
+    /// The pin path reads an account whose saved end passed as `subscription_ended` and runs no rule, so no selection
+    /// reads the slow-down at a horizon the end clamped to `now`: the case calls the read itself.
+    #[test]
+    fn a_horizon_the_end_reached_reads_a_factor_of_one_under_the_ceiling_and_zero_at_it() {
+        const HOUR: i64 = 3_600_000;
+        const T: i64 = 10 * HOUR;
+        let tier = "default_claude_max_20x";
+        let mut pool = PoolRow::for_tests("p");
+        pool.slow_down.slow_down = true;
+        let snapshot = RegistrySnapshot::from_load(
+            RegistryLoad {
+                accounts: vec![AccountRow {
+                    id: "b".into(),
+                    kind: AccountKind::Oauth,
+                    label: "b".into(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision: 1,
+                    state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
+                }],
+                pools: vec![pool],
+                terms: vec![SubscriptionTerm {
+                    account_id: "b".into(),
+                    since: None,
+                    trial_ends_at: None,
+                    cancelled: true,
+                    ends_at: Some(T),
+                    tier: Some(tier.into()),
+                }],
+                ..RegistryLoad::default()
+            },
+            [0; 32],
+            0,
+            1,
+        );
+        let pool = snapshot.pool("p").expect("the case's pool");
+        // A booking of a tenth of the window an hour, so the demand alone would read a stretch, and the reset an hour
+        // out past the end.
+        let read_at = |utilization: f64| {
+            let mut state = RoutingState::from_load(RoutingLoad::default());
+            state.book_reservation(
+                "r-1",
+                Reservation {
+                    account_id: "b".into(),
+                    attempt: 1,
+                    pin: None,
+                    entrypoint: None,
+                    booked_at: T,
+                    rewrite: BTreeMap::new(),
+                    burn: BTreeMap::from([(FIVE_HOUR.to_string(), 0.1 / 3_600.0)]),
+                    expires_at: T + HOUR,
+                },
+            );
+            state.record_sample(
+                "b",
+                UtilizationSample {
+                    observed_at: T,
+                    ..Default::default()
+                }
+                .with(
+                    FIVE_HOUR,
+                    WindowReading {
+                        utilization,
+                        reset: Some(T + HOUR),
+                        observed_at: T,
+                        source: WindowSource::Poll,
+                    },
+                ),
+            );
+            slow_down_of(&state, &snapshot, pool, "b", tier, T).expect("a read")
+        };
+        let under = read_at(0.5);
+        assert!(under.demand > 0.0, "{under:?}");
+        assert_eq!(
+            (under.horizon, under.stretch_ms, under.factor),
+            (T, 0, 1.0),
+            "under the ceiling a reached horizon reads no stretch and a factor of 1"
+        );
+        let over = read_at(0.97);
+        assert_eq!(
+            (over.horizon, over.factor),
+            (T, 0.0),
+            "at the ceiling a reached horizon reads a factor of 0"
+        );
+        assert_eq!(
+            over.stretch_ms,
+            ((0.97 - 0.95) / over.demand * 1_000.0).round() as i64,
+            "the stretch is the overrun at the demand, with no time left to the horizon"
+        );
+    }
+}
+
+#[cfg(test)]
+mod runway_tests {
+    use std::collections::BTreeMap;
+
+    use super::{runway_ties, Candidate, FitRead};
+
+    fn candidate(account_id: &str) -> Candidate {
+        Candidate {
+            account_id: account_id.into(),
+            incarnation: 1,
+            priority: 0,
+            upstream_model: String::new(),
+        }
+    }
+
+    fn fits(runway_ms: i64) -> FitRead {
+        FitRead {
+            verdict: "fits",
+            runway_ms: Some(runway_ms),
+            binding: None,
+            projection: BTreeMap::new(),
+            horizon: BTreeMap::new(),
+            rewrite: BTreeMap::new(),
+            reserved: BTreeMap::new(),
+            end: None,
+        }
+    }
+
+    /// The selection and the shedding round hand the tie break a read for each tie or for none, so the case calls it
+    /// with a mix.
+    #[test]
+    fn a_tie_with_no_read_stays_beside_the_longest_runway_and_a_shorter_one_leaves() {
+        let (short, long, unread) = (candidate("a"), candidate("b"), candidate("c"));
+        let reads = vec![
+            ("a".to_string(), fits(60_000)),
+            ("b".to_string(), fits(120_000)),
+        ];
+        let kept = runway_ties(&[&short, &long, &unread], &reads);
+        assert_eq!(
+            kept.iter()
+                .map(|c| c.account_id.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "c"],
+            "nothing says the unread tie's runway is shorter"
         );
     }
 }

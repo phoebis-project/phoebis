@@ -11574,6 +11574,10 @@ async fn the_projections_ask_answers_the_slow_down_read_and_the_demand_beside_th
         five_hour.burn > 0.0 && five_hour.demand >= five_hour.burn,
         "{five_hour:?}"
     );
+    assert!(
+        five_hour.projection > five_hour.predicted,
+        "the same answer projects the achieved burn to the horizon: {five_hour:?}"
+    );
     assert_eq!(
         projection_of_account(&first, "d").slow_down,
         None,

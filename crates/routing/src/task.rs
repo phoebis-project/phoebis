@@ -25,8 +25,8 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, projection_of, release_reasons, BurnRead, Decided, FailedOver, MigrateReason,
-    Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
+    decide, pace_of, projection_of, projections_of, release_reasons, BurnRead, Decided, FailedOver,
+    MigrateReason, Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -2473,10 +2473,10 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 }
 
 /// The members of `pool_id` in account order, each with its projection per plan window and its Pace score at `now`
-/// under that pool's settings: the windows from `projection_of` on the achieved burn and on the demand with `pace_of`'s
-/// spare rate on each, the score from `pace_of` on `seven_day`, the window Pace reads for a model without a week of its
-/// own, and the slow-down entry in force, which the last pinned selection on the account wrote. Empty for a pool the
-/// snapshot does not hold.
+/// under that pool's settings: the windows from one `projections_of` read on the achieved burn and one on the demand,
+/// so each window is built once per read, with `pace_of`'s spare rate on each, the score from `pace_of` on
+/// `seven_day`, the window Pace reads for a model without a week of its own, and the slow-down entry in force, which
+/// the last pinned selection on the account wrote. Empty for a pool the snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2503,28 +2503,28 @@ fn projections(
                 upstream_model: String::new(),
             };
             let tier = snapshot.tier(account_id).unwrap_or_default();
+            let achieved = projections_of(
+                state,
+                snapshot,
+                pool,
+                account_id,
+                tier,
+                now,
+                BurnRead::Achieved,
+            );
+            let demands = projections_of(
+                state,
+                snapshot,
+                pool,
+                account_id,
+                tier,
+                now,
+                BurnRead::Demand,
+            );
             let windows = all_plan_windows()
                 .filter_map(|window| {
-                    let projection = projection_of(
-                        state,
-                        snapshot,
-                        pool,
-                        account_id,
-                        tier,
-                        window,
-                        now,
-                        BurnRead::Achieved,
-                    )?;
-                    let demand = projection_of(
-                        state,
-                        snapshot,
-                        pool,
-                        account_id,
-                        tier,
-                        window,
-                        now,
-                        BurnRead::Demand,
-                    )?;
+                    let projection = achieved.get(window)?;
+                    let demand = demands.get(window)?;
                     Some((
                         window.to_string(),
                         WindowProjection {
@@ -5543,5 +5543,232 @@ mod tests {
                 shed_rounds_stale: 0,
             }
         );
+    }
+
+    #[test]
+    fn the_projections_answer_each_windows_projection_and_demand_as_two_projection_of_reads_do() {
+        use phoebis_store::{ApiKeyRow, PoolMember, SubscriptionTerm};
+
+        use crate::select::{Banded, SlowDownRead};
+        use crate::state::BandSegment;
+
+        const HOUR: i64 = 3_600_000;
+        const T: i64 = 10 * HOUR;
+        let tier = "default_claude_max_20x";
+        let mut pool = PoolRow::for_tests("p");
+        pool.slow_down.slow_down = true;
+        let snapshot = RegistrySnapshot::from_load(
+            RegistryLoad {
+                accounts: vec![AccountRow {
+                    id: "a".into(),
+                    kind: AccountKind::Oauth,
+                    label: "a".into(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision: 1,
+                    state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
+                }],
+                keys: vec![ApiKeyRow {
+                    id: "k".into(),
+                    label: "k".into(),
+                    notes: None,
+                    pool_id: "p".into(),
+                    enabled: true,
+                    revoked_at: None,
+                    expires_at: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: Default::default(),
+                    long_context_twins: false,
+                    keepalive_opt_out: false,
+                    body_capture_hours: None,
+                    secret_digest: Vec::new(),
+                    prefix: "k".into(),
+                    incarnation: 1,
+                    created_at: 0,
+                    updated_at: 0,
+                    rotated_at: None,
+                    last_used_at: None,
+                    retired_secret_last_used_at: None,
+                    auto_mode_server: None,
+                }],
+                members: vec![PoolMember {
+                    pool_id: "p".into(),
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                }],
+                pools: vec![pool],
+                terms: vec![SubscriptionTerm {
+                    account_id: "a".into(),
+                    tier: Some(tier.into()),
+                    ..SubscriptionTerm::default()
+                }],
+                ..RegistryLoad::default()
+            },
+            [0; 32],
+            0,
+            1,
+        );
+        let pool = snapshot.pool("p").expect("the case's pool");
+        let model = "claude-sonnet-5";
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![PinRow {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: model.into(),
+                account_id: "a".into(),
+                epoch: 1,
+                created_at: 0,
+                last_used_at: T,
+                key_generation: 0,
+                incarnation: 1,
+                burn: PinBurn {
+                    input: 1.0,
+                    ..PinBurn::default()
+                },
+                burn_at: Some(T),
+                burn_banded: PinBurn::default(),
+                burn_fast: PinBurn::default(),
+                burn_unmetered: PinBurn::default(),
+                last_input_tokens: 0,
+                last_classifier: false,
+                last_refresh_at: T,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                shed_reason: None,
+                static_hash: None,
+                tail_hash: None,
+                lane: crate::lane_key(model, "standard", "none", "-"),
+                entrypoint: String::new(),
+                marked_at: None,
+                marked_on: None,
+                marked_window: None,
+            }],
+            ..RoutingLoad::default()
+        });
+        // The case's own rates and band: the 5-hour window weighs twice inside the band, so its projection reads the
+        // band's segments and not one flat rate.
+        let (band_from, band_to) = (T + HOUR / 2, T + 3 * HOUR);
+        state.set_share(
+            SharePricer::default()
+                .with_rate(|window, _, _, _, _, _| {
+                    Some(if window == FIVE_HOUR { 1e-5 } else { 2e-6 })
+                })
+                .with_band_segments(move |window, _, from, to| {
+                    if window != FIVE_HOUR {
+                        return vec![BandSegment {
+                            from,
+                            to,
+                            weight: 1.0,
+                        }];
+                    }
+                    let mut edges = vec![from];
+                    edges.extend(
+                        [band_from, band_to]
+                            .into_iter()
+                            .filter(|edge| from < *edge && *edge < to),
+                    );
+                    edges.push(to);
+                    edges
+                        .windows(2)
+                        .map(|pair| BandSegment {
+                            from: pair[0],
+                            to: pair[1],
+                            weight: if band_from <= pair[0] && pair[0] < band_to {
+                                2.0
+                            } else {
+                                1.0
+                            },
+                        })
+                        .collect()
+                }),
+        );
+        let reading = |utilization: f64, reset: i64| WindowReading {
+            utilization,
+            reset: Some(reset),
+            observed_at: T,
+            source: WindowSource::Poll,
+        };
+        state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: T,
+                ..Default::default()
+            }
+            .with(FIVE_HOUR, reading(0.4, T + 2 * HOUR))
+            .with(SEVEN_DAY, reading(0.3, T + 72 * HOUR)),
+        );
+        // An entry in force at a realized speed of a half, so the demand reads the pin's burn at twice the achieved.
+        state.write_slow_down(
+            "p",
+            "a",
+            &SlowDownRead {
+                utilization: 0.4,
+                horizon: T + 2 * HOUR,
+                reset: Some(T + 2 * HOUR),
+                demand: 0.0,
+                banded: Banded::default(),
+                stretch_ms: 0,
+                threshold_ms: 0,
+                factor: 0.8,
+                ramp: 1.0,
+                ramped: 0.8,
+                speed: 1.0,
+                plan: Vec::new(),
+                realized: 0.5,
+            },
+            0.5,
+            T,
+            HOUR,
+        );
+        assert_eq!(state.slow_down_speed(pool, "a", T), 0.5);
+
+        let answer = projections(&state, &snapshot, "p", T);
+        let [account] = &answer[..] else {
+            panic!("one member answers: {answer:?}");
+        };
+        assert_eq!(
+            account
+                .windows
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [FIVE_HOUR, SEVEN_DAY],
+            "the windows the account holds a reading of"
+        );
+        for (window, answered) in &account.windows {
+            let read = |burn| {
+                projection_of(&state, &snapshot, pool, "a", tier, window, T, burn)
+                    .expect("a window with a reading projects")
+            };
+            let (projection, demand) = (read(BurnRead::Achieved), read(BurnRead::Demand));
+            assert_eq!(
+                (
+                    answered.predicted,
+                    answered.projection,
+                    answered.horizon,
+                    answered.burn,
+                    answered.demand,
+                ),
+                (
+                    projection.predicted,
+                    projection.at_horizon,
+                    projection.horizon,
+                    projection.burn * 3_600.0,
+                    demand.burn * 3_600.0,
+                ),
+                "{window}: one answer carries the projection and the demand to the bit"
+            );
+            assert!(
+                answered.demand > answered.burn,
+                "{window}: the demand divides the burn by the speed: {answered:?}"
+            );
+        }
     }
 }
