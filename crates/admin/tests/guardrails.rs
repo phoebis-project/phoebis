@@ -574,6 +574,36 @@ async fn every_400_sentence_is_answered_one_by_one() {
 }
 
 #[tokio::test]
+async fn an_array_body_is_refused_as_no_object_on_the_three_guardrail_routes() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let row = created(app, &cookie, "g1", j!({})).await;
+    for (method, route) in [
+        ("POST", "/admin/guardrails"),
+        ("PATCH", "/admin/guardrails/g1"),
+        ("POST", "/admin/guardrails/test"),
+    ] {
+        let response = match method {
+            "POST" => post(app, route, "[]", Some(&cookie)).await,
+            _ => patch(app, route, "[]", Some(&cookie)).await,
+        };
+        assert_eq!(
+            refusal(response).await,
+            (
+                StatusCode::BAD_REQUEST,
+                "body must be a JSON object".to_string()
+            ),
+            "{method} {route}"
+        );
+    }
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails").await,
+        j!({"guardrails": [row]}),
+        "no refused write landed"
+    );
+}
+
+#[tokio::test]
 async fn a_reserved_id_is_refused_and_nothing_is_written() {
     let (parts, cookie) = seeded().await;
     let app = &parts.app;

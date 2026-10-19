@@ -24,8 +24,8 @@ use crate::guardrails::{distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, SharedEquivalentView, StorageFailure};
 use crate::pools::valid_slug;
 use crate::routes::{
-    double_option, failure, failure_with_code, fence_token, present, reload_or_refuse,
-    store_failure, CreatedId,
+    double_option, failure, failure_with_code, fence_token, parse_object, present,
+    reload_or_refuse, store_failure, CreatedId,
 };
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
@@ -433,8 +433,9 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     ),
 )]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
-    let Ok(input) = serde_json::from_slice::<KeyInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: KeyInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     // A new key starts with none of its own, and its pool's list never passes the bound, so a create counts nothing.
     if input.guardrails.is_some() {
@@ -539,8 +540,9 @@ pub(crate) async fn patch(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    let Ok(input) = serde_json::from_slice::<KeyInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: KeyInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     let mut row = match state.store.api_key(&id) {
         Ok(Some(row)) => row,

@@ -2788,6 +2788,25 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
+/// A JSON array deserializes into a struct whose members all default, so a route would answer `id is required` to
+/// `[]` in place of the sentence every route gives a body that is no object. The value is read once and checked
+/// before any member check.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_object<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, Response> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| failure(StatusCode::BAD_REQUEST, "body must be a JSON object"))?;
+    if !value.is_object() {
+        return Err(failure(
+            StatusCode::BAD_REQUEST,
+            "body must be a JSON object",
+        ));
+    }
+    serde_json::from_value(value)
+        .map_err(|_| failure(StatusCode::BAD_REQUEST, "body must be a JSON object"))
+}
+
 /// The reports of one member, any period: what `phoebis_routing::budget_deadline` reads, so the routes answer the
 /// selector's own verdict rather than a copy of its rule.
 pub(crate) fn spend_rows<'a>(
@@ -2892,10 +2911,14 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{same_authority, spend_rows};
+    use super::{parse_object, same_authority, spend_rows};
     use crate::openapi::round_trip::round_trips;
+    use axum::body::Bytes;
+    use axum::http::StatusCode;
     use phoebis_routing::MemberSpend;
     use phoebis_store::BudgetPeriod;
+    use serde::Deserialize;
+    use serde_json::{json, Value};
 
     #[test]
     fn same_authority_names_the_requests_own_host_and_requires_https_when_asked() {
@@ -2975,6 +2998,38 @@ mod tests {
             spend_rows(&spends, "other", "a").is_empty(),
             "the same account under another pool reads none"
         );
+    }
+
+    #[tokio::test]
+    async fn parse_object_reads_an_object_and_refuses_an_array_a_string_and_malformed_bytes() {
+        #[derive(Debug, Default, Deserialize, PartialEq)]
+        #[serde(default)]
+        struct Pair {
+            a: u32,
+            b: u32,
+        }
+        assert_eq!(
+            parse_object::<Pair>(&Bytes::from_static(br#"{"a": 1}"#)).ok(),
+            Some(Pair { a: 1, b: 0 })
+        );
+        for body in [&b"[]"[..], br#""x""#, b"{"] {
+            let Err(response) = parse_object::<Pair>(&Bytes::copy_from_slice(body)) else {
+                panic!("{} read as an object", String::from_utf8_lossy(body));
+            };
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(
+                (status, serde_json::from_slice::<Value>(&bytes).unwrap()),
+                (
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "body must be a JSON object"})
+                ),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
     }
 
     #[test]

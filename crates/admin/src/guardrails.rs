@@ -27,7 +27,8 @@ use crate::analytics::ledger_failure;
 use crate::openapi::{ConditionView, ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::pools::valid_slug;
 use crate::routes::{
-    failure, failure_with_code, fence_token, present, reload_or_refuse, store_failure, CreatedId,
+    failure, failure_with_code, fence_token, parse_object, present, reload_or_refuse,
+    store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -614,8 +615,9 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     ),
 )]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
-    let Ok(input) = serde_json::from_slice::<GuardrailInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: GuardrailInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     // A new guardrail takes its stamp from `preset`, so the member that moves the stamp applies to a saved one.
     if input.preset_version.is_some() {
@@ -736,8 +738,9 @@ pub(crate) async fn presets() -> Response {
     ),
 )]
 pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
-    let Ok(input) = serde_json::from_slice::<GuardrailTestInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: GuardrailTestInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     match (&input.guardrail, &input.conditions) {
         (Some(_), Some(_)) => {
@@ -987,8 +990,9 @@ pub(crate) async fn patch(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    let Ok(input) = serde_json::from_slice::<GuardrailInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: GuardrailInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     let mut row = match state.store.guardrail(&id) {
         Ok(Some(row)) => row,
