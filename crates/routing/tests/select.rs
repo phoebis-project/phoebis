@@ -23048,7 +23048,7 @@ fn a_read_under_1_that_replaces_a_stamped_stale_entry_takes_a_fresh_stamp_at_its
     assert_eq!(
         (entry.read_at, entry.ramp_since, entry.slowed_since),
         (at, Some(at), Some(at)),
-        "the replacing read stamps the ramp and the span at its own instant, and no stamp of the old window carries over"
+        "the replacing read stamps the ramp and the span at its instant, and no stamp of the old window carries over"
     );
     let edges = st.take_slow_down_edges(at);
     assert_eq!(edges.len(), 2, "{edges:?}");
@@ -26964,5 +26964,237 @@ fn a_renewal_after_a_rewrite_wait_dates_the_pins_dispatch_at_the_release() {
             .map(|pace| (pace.dispatched_at, pace.gaps)),
         Some((moved_at + 11_500, gaps + 1)),
         "the next gap is measured from the release"
+    );
+}
+
+/// A main turn of `s1` on `model` under its own request id.
+fn turn_on(s: &RegistrySnapshot, model: &str, request_id: &str, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_id: request_id.into(),
+        ..with_facts(
+            request(s, Some("s1"), model, true, &[], now),
+            Some("main"),
+            false,
+            None,
+            &[],
+        )
+    }
+}
+
+/// `s1` placed on `a` under `claude-sonnet-5` at `T` by its request `r-1`, on a pool of `a` ahead of `b` whose hold
+/// cap is `REWRITE_HOLD_SECONDS`.
+fn sonnet_on_a() -> (RegistrySnapshot, RoutingState) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        slow_down: SlowDown {
+            slow_down_hold_seconds: REWRITE_HOLD_SECONDS,
+            ..SlowDown::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (placed, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-1", T),
+        &mut rng(),
+    );
+    assert_eq!((picked(&placed), left_of(&placed)), ("a", None));
+    (s, st)
+}
+
+/// `a` cooled for `claude-opus-5` alone, so an opus turn lands on `b` while the sonnet pin on `a` stays eligible.
+fn opus_cooled_on_a(st: &mut RoutingState) {
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-opus-5",
+        T + 10 * MINUTE,
+        "retry_after",
+        "rate_limit",
+    ));
+}
+
+#[test]
+fn a_session_that_switches_model_onto_another_account_names_the_account_it_left_and_holds_the_new_pins_next_request(
+) {
+    let (s, mut st) = sonnet_on_a();
+    opus_cooled_on_a(&mut st);
+    let switched_at = T + MINUTE;
+    let (switched, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-opus-5", "r-2", switched_at),
+        &mut rng(),
+    );
+    assert_eq!(
+        (picked(&switched), left_of(&switched)),
+        ("b", Some("a")),
+        "the opus turn lands on b and names a, where the sonnet turn before it landed"
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-opus-5", "r-3", switched_at + 200),
+        &mut rng(),
+    );
+    let (account_id, hold) = held_on(&d);
+    assert_eq!(
+        (account_id.as_str(), hold.reason, hold.waits_for.as_deref()),
+        ("b", "rewrite", Some("r-2")),
+        "the new pin's next request waits for the landing's head"
+    );
+}
+
+#[test]
+fn a_session_that_switches_model_onto_the_same_account_names_none_and_marks_no_head() {
+    let (s, mut st) = sonnet_on_a();
+    let (switched, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-opus-5", "r-2", T + MINUTE),
+        &mut rng(),
+    );
+    assert_eq!((picked(&switched), left_of(&switched)), ("a", None));
+    let opus = PinKey {
+        model: "claude-opus-5".into(),
+        ..pin_key("s1")
+    };
+    assert_eq!(
+        st.head_mark(&opus),
+        None,
+        "a landing on the account the session's previous turn landed on marks nothing"
+    );
+}
+
+#[test]
+fn a_return_to_a_models_live_pin_after_a_turn_on_another_account_names_that_account_and_the_next_turn_none(
+) {
+    let (s, mut st) = sonnet_on_a();
+    opus_cooled_on_a(&mut st);
+    let (switched, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-opus-5", "r-2", T + MINUTE),
+        &mut rng(),
+    );
+    assert_eq!(picked(&switched), "b");
+    let (returned, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-3", T + 2 * MINUTE),
+        &mut rng(),
+    );
+    let SelectResult::Selected(ref sel) = returned else {
+        panic!("the sonnet pin on a is live, got {returned:?}")
+    };
+    assert!(sel.trace.renewed, "the return renews the sonnet pin");
+    assert_eq!(
+        (picked(&returned), left_of(&returned)),
+        ("a", Some("b")),
+        "the renewal names b, where the opus turn before it landed"
+    );
+    let (next, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-4", T + 3 * MINUTE),
+        &mut rng(),
+    );
+    assert_eq!(
+        (picked(&next), left_of(&next)),
+        ("a", None),
+        "the turn after the return follows a turn on a"
+    );
+}
+
+#[test]
+fn an_auxiliary_call_on_another_model_that_landed_elsewhere_is_no_previous_landing_of_the_sessions_main_turn(
+) {
+    let (s, mut st) = sonnet_on_a();
+    opus_cooled_on_a(&mut st);
+    let call = SelectRequest {
+        request_id: "r-2".into(),
+        ..with_facts(
+            request(&s, Some("s1"), "claude-opus-5", true, &[], T + MINUTE),
+            Some("quota"),
+            false,
+            None,
+            &[],
+        )
+    };
+    let (placed, _) = select(&mut st, &s, &call, &mut rng());
+    assert_eq!(
+        (picked(&placed), left_of(&placed)),
+        ("b", None),
+        "the auxiliary call reads its own model's row alone"
+    );
+    let (renewed, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-3", T + 2 * MINUTE),
+        &mut rng(),
+    );
+    let SelectResult::Selected(ref sel) = renewed else {
+        panic!("the sonnet pin on a is live, got {renewed:?}")
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(
+        (picked(&renewed), left_of(&renewed)),
+        ("a", None),
+        "the main turn's previous landing is the sonnet turn's on a"
+    );
+}
+
+#[test]
+fn a_renewal_after_a_hold_carries_the_wait_it_followed_in_its_trace_and_outcome() {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    let req = turn_of(&s, "r-2", moved_at + 200);
+    let (_, hold) = held_on(&decide(&mut st, &s, &req, &mut rng()));
+    let released = SelectRequest {
+        seq: 2,
+        now: moved_at + 1_500,
+        holds: vec![HoldFacts {
+            held_ms: 1_300,
+            ..hold
+        }],
+        ..req
+    };
+    let d = decide(&mut st, &s, &released, &mut rng());
+    let SelectResult::Selected(ref sel) = d.result else {
+        panic!("the request that waited renews, got {:?}", d.result)
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(
+        sel.trace.cohort_hold.as_ref().map(|carried| (
+            carried.held_ms,
+            carried.waits.iter().map(|w| w.reason).collect::<Vec<_>>()
+        )),
+        Some((1_300, vec!["rewrite"])),
+        "the renewal's trace carries the rewrite wait"
+    );
+    assert_eq!(
+        d.record.outcome.cohort_hold, sel.trace.cohort_hold,
+        "the record's outcome reads the trace's"
+    );
+}
+
+#[test]
+fn a_renewal_without_a_hold_carries_no_cohort_hold() {
+    let (s, mut st) = sonnet_on_a();
+    let d = decide(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-2", T + MINUTE),
+        &mut rng(),
+    );
+    let SelectResult::Selected(ref sel) = d.result else {
+        panic!("the sonnet pin on a is live, got {:?}", d.result)
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(
+        (
+            sel.trace.cohort_hold.as_ref(),
+            d.record.outcome.cohort_hold.as_ref()
+        ),
+        (None, None)
     );
 }

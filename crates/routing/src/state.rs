@@ -3144,6 +3144,38 @@ impl RoutingState {
             .filter(move |p| p.key_id == key_id && p.session_id == session_id && p.model == model)
     }
 
+    /// The session's newest pin under one key and agent whatever the model, the row that says where the session's
+    /// previous request landed, `None` for a session with no row. A pin only auxiliary requests use is left out, so
+    /// an auxiliary call that landed elsewhere is never the previous landing. Rows used at one instant answer the
+    /// later placement, then the row under `model`, the request's own, then the greater model id, so the answer never
+    /// rests on the map's order.
+    pub(crate) fn session_latest_pin(
+        &self,
+        key_id: &str,
+        session_id: &str,
+        agent_id: &str,
+        model: &str,
+    ) -> Option<&PinRow> {
+        let own = self.canonical(model);
+        self.pins
+            .iter()
+            .filter(|(key, p)| {
+                p.key_id == key_id
+                    && p.session_id == session_id
+                    && p.agent_id == agent_id
+                    && !self.auxiliary_only.contains(*key)
+            })
+            .map(|(_, p)| p)
+            .max_by_key(|&p| {
+                (
+                    p.last_used_at,
+                    p.created_at,
+                    p.model == own,
+                    p.model.as_str(),
+                )
+            })
+    }
+
     /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, bucket windows read
     /// longer than `BUCKET_TTL_MS` ago, and everything held against an account the registry no longer has. An id
     /// is reusable, so state the deleted account left behind would otherwise be inherited by whatever is created
@@ -3734,6 +3766,95 @@ mod tests {
             state.auxiliary_only.iter().cloned().collect::<Vec<_>>(),
             vec![dated],
             "the rekey carries the flag to the dated id and leaves none under the spelling"
+        );
+    }
+
+    /// A pin of session `s`'s main agent under `model` on `account`, placed at `created_at` and used last at
+    /// `last_used_at`.
+    fn landing(model: &str, account: &str, created_at: i64, last_used_at: i64) -> PinRow {
+        PinRow {
+            model: model.into(),
+            account_id: account.into(),
+            created_at,
+            last_used_at,
+            ..burning("s", 1.0).0
+        }
+    }
+
+    /// The model and account of the row `session_latest_pin` answers for session `s`'s main agent under `model`.
+    fn latest<'a>(state: &'a RoutingState, model: &str) -> Option<(&'a str, &'a str)> {
+        state
+            .session_latest_pin("k", "s", "main", model)
+            .map(|p| (p.model.as_str(), p.account_id.as_str()))
+    }
+
+    #[test]
+    fn the_sessions_latest_pin_is_its_newest_row_across_the_model_keys_and_none_for_a_session_with_no_row(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        for pin in [
+            landing("m", "a", 0, 1_000),
+            landing("n", "b", 0, 2_000),
+            PinRow {
+                agent_id: "sub".into(),
+                ..landing("o", "c", 0, 3_000)
+            },
+            PinRow {
+                session_id: "t".into(),
+                ..landing("o", "c", 0, 3_000)
+            },
+            PinRow {
+                key_id: "j".into(),
+                ..landing("o", "c", 0, 3_000)
+            },
+        ] {
+            state.put_pin(pin);
+        }
+        assert_eq!(
+            latest(&state, "m"),
+            Some(("n", "b")),
+            "the row the session's other model used last, the rows of another agent, session or key aside"
+        );
+        assert_eq!(state.session_latest_pin("k", "none", "main", "m"), None);
+    }
+
+    #[test]
+    fn the_sessions_latest_pin_leaves_out_a_pin_only_auxiliary_requests_use() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let auxiliary = landing("n", "b", 1_500, 2_000);
+        state.put_pin(landing("m", "a", 0, 1_000));
+        state.put_pin(auxiliary.clone());
+        state.set_auxiliary_only(&auxiliary.key(), true);
+        assert_eq!(
+            latest(&state, "m"),
+            Some(("m", "a")),
+            "the auxiliary call's landing is no landing of the session"
+        );
+        state.clear_auxiliary_only(&auxiliary.key());
+        assert_eq!(
+            latest(&state, "m"),
+            Some(("n", "b")),
+            "a refreshing turn on the pin makes it one"
+        );
+    }
+
+    #[test]
+    fn rows_used_at_one_instant_answer_the_later_placement_then_the_requests_own_model() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.put_pin(landing("m", "a", 500, 1_000));
+        state.put_pin(landing("n", "b", 600, 1_000));
+        assert_eq!(latest(&state, "m"), Some(("n", "b")), "the later placement");
+        state.put_pin(landing("o", "c", 600, 1_000));
+        assert_eq!(
+            latest(&state, "n"),
+            Some(("n", "b")),
+            "placed at one instant too, the row under the request's own model"
+        );
+        assert_eq!(latest(&state, "o"), Some(("o", "c")));
+        assert_eq!(
+            latest(&state, "m"),
+            Some(("o", "c")),
+            "neither row the request's own, the greater model id"
         );
     }
 

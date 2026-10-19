@@ -488,9 +488,11 @@ pub struct Selection {
     /// policy on another's member.
     pub pool_id: String,
     /// The account the session's previous request landed on, where this selection lands elsewhere: the pin row
-    /// step 1 read, live, idle past the TTL or left behind by its pool, else the landing a failover carried to this
-    /// request. `None` on a renewal, a count's bound and a placement the routing holds no previous landing for.
-    /// The relay names no previous message on a request that carries it, since the account cannot find one.
+    /// step 1 read, live, idle past the TTL or left behind by its pool, the newest across the session's models
+    /// unless the request is an auxiliary call, else the landing a failover carried to this request. A renewal names
+    /// it too, after a turn of the session on another account. `None` on a count's bound and a placement the routing
+    /// holds no previous landing for. The relay names no previous message on a request that carries it, since the
+    /// account cannot find one.
     pub left: Option<String>,
 }
 
@@ -1287,10 +1289,28 @@ fn run(
         {
             state.pace_held_until(&key, until);
         }
-        if let Some(mut current) = state.pin(&key).cloned() {
+        let own_row = state.pin(&key).cloned();
+        // A turn after one on another of the session's models follows that turn's landing, which the own key's row
+        // does not know. An auxiliary call keeps the own key's read, and the reader leaves out the pins only such
+        // calls use, so an auxiliary call on another model is never a turn's previous landing.
+        if !placed_auxiliary_only(request) {
+            let own = own_row.as_ref().map(|p| (p.last_used_at, p.created_at));
+            previous_account = state
+                .session_latest_pin(
+                    &request.key_id,
+                    session,
+                    &request.agent_id,
+                    &request.canonical_model,
+                )
+                .filter(|latest| {
+                    own.is_none_or(|stamp| (latest.last_used_at, latest.created_at) > stamp)
+                })
+                .map(|latest| latest.account_id.clone());
+        }
+        if let Some(mut current) = own_row {
             // Whatever `found` names the row, it says where the session's previous request landed, which the
-            // placement compares against.
-            previous_account = Some(current.account_id.clone());
+            // placement compares against, unless a turn on another of the session's models landed since.
+            previous_account.get_or_insert_with(|| current.account_id.clone());
             let serves = request
                 .candidates
                 .iter()
@@ -1539,6 +1559,7 @@ fn run(
                     current,
                     request,
                     warmth,
+                    previous_account.as_deref(),
                     &mut writes,
                     rec,
                 )),
@@ -1734,6 +1755,7 @@ fn run(
                     current,
                     request,
                     warmth,
+                    previous_account.as_deref(),
                     &mut writes,
                     rec,
                 )),
@@ -5019,7 +5041,9 @@ fn obstacle(
 /// hashes, a cold one zeroes the refresh and stamps its hashes so the next continuation re-warms the pin, and
 /// a foreign one leaves both alone. A request that carries no chain has no hashes to stamp, so the pin keeps
 /// the last conversation it was judged against; its lane is stamped all the same, or a chainless body on a new
-/// lane would leave the pin cold for good.
+/// lane would leave the pin cold for good. `previous_landing` is the account step 1 read the session's previous
+/// request landed on, which the selection names as `left` where it is another account than the pin's: a return to
+/// the pin after a turn elsewhere refers to a message the pin's account cannot find.
 #[allow(clippy::too_many_arguments)]
 fn renew(
     state: &mut RoutingState,
@@ -5028,6 +5052,7 @@ fn renew(
     current: &PinRow,
     request: &SelectRequest,
     (verdict, cause): (Warmth, WarmthCause),
+    previous_landing: Option<&str>,
     writes: &mut Vec<StateWrite>,
     rec: &mut Recorder,
 ) -> Selection {
@@ -5118,10 +5143,13 @@ fn renew(
         trace: SelectionTrace {
             strategy: pool.strategy.as_str(),
             renewed: true,
+            cohort_hold: cohort_hold(&request.holds),
             ..SelectionTrace::default()
         },
         pool_id: pool.id.clone(),
-        left: None,
+        left: previous_landing
+            .filter(|account| *account != current.account_id)
+            .map(String::from),
     }
 }
 
