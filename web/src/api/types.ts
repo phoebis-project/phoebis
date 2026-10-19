@@ -162,6 +162,14 @@ export interface PairingPreview {
   state: string;
 }
 
+/** The confirm's answer: the paired account, and whether the confirm started that account's first usage poll, so its
+ *  windows land a few seconds after the answer. */
+export interface PairingConfirmed {
+  accountId: string;
+  firstPollInFlight: boolean;
+  status: string;
+}
+
 export interface CatalogModel {
   createdAt: string;
   displayName: string;
@@ -337,6 +345,11 @@ export interface PoolCacheTtl {
 export interface SharedEquivalent {
   fiveHour: number;
   sevenDay: number;
+  /**
+   * Per window, whether a plan row with tokens priced nothing on it (a model with no tier, or a tier with no weighted
+   * model): the sum then holds the other rows alone, and a zero with the flag unset is a sum with no plan row.
+   */
+  unpriced: { fiveHour: boolean; sevenDay: boolean };
 }
 
 export interface TrafficBucket {
@@ -579,7 +592,7 @@ export interface AttemptWindow {
 
 /**
  * Why the prompt-cache prefix did not hit, as the cache diagnostics beta named it. The router stores whatever
- * name the beta sends, so a name added after the console's eight (`CACHE_MISS_REASONS`) is kept as sent.
+ * name the beta sends, so a name added after the console's nine (`CACHE_MISS_REASONS`) is kept as sent.
  */
 export type CacheMissReason = string;
 
@@ -872,6 +885,8 @@ export interface RequestQuery {
   includeProbes?: boolean;
   keyIds?: string[];
   kind?: RequestKind | null;
+  /** Unix milliseconds: the rows the ledger wrote after this instant, the `landedThrough` of a poll's last answer. */
+  landedAfter?: number;
   limit?: number;
   models?: string[];
   outcomes?: RequestOutcome[];
@@ -893,6 +908,12 @@ export interface RequestQuery {
 }
 
 export interface RequestPage {
+  /**
+   * The newest write instant among the rows the query's filters admit at the read, `to` included, the `landedAfter` it
+   * passed where none above it has landed, and 0 where neither is set, never past a `to` the query names, since a row
+   * received after `to` lands after it.
+   */
+  landedThrough: number;
   nextCursor: string | null;
   requests: RequestLog[];
 }
@@ -1070,7 +1091,12 @@ export interface RecordPin {
   markedWindow: string | null;
   refreshAgeMs: number | null;
   released: string[];
-  shed: { at: string; from: string } | null;
+  /**
+   * The source a shed move or a failover's landing left the pin with. `reason` is `round` for a shedding round's move
+   * and the failover's word (`cooldown`, `fast_lane`, `mark`) for a landing, and `round` on a record from before the
+   * member.
+   */
+  shed: { at: string; from: string; reason: string } | null;
   /** The slow-down deadline standing on the pin, null without one or on a record from before the member. */
   slowDownUntil: string | null;
   warmth: string | null;
@@ -1422,8 +1448,11 @@ export interface AnalyticsGroup {
   fromRequests?: true;
   histograms: LatencyHistograms;
   incomplete: number;
-  /** The kept-warm requests and the tokens they read warm, booked per TTL. */
-  keptWarm: { requests: number; tokens1h: number; tokens5m: number } | null;
+  /**
+   * The kept-warm requests and the tokens they read warm, booked per TTL, each with its plan-funded part: the credits
+   * whose request a plan account served.
+   */
+  keptWarm: { planRequests: number; planTokens1h: number; planTokens5m: number; requests: number; tokens1h: number; tokens5m: number } | null;
   key: string;
   /**
    * An earlier holder's creation in Unix milliseconds under the key grouping, 0 for one with no creation time. Null
@@ -1443,9 +1472,14 @@ export interface AnalyticsGroup {
   probeCostUsd: number;
   /** The plan-funded probes' 20x window equivalents by window key, `cost` and `wasted` apart, and empty without one. */
   probeEquivalent: Record<string, { cost: number; wasted: number }>;
-  probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };
+  /** True when a plan probe row priced through the model tier's fallback weight, which `estimated` covers too. */
+  probeEstimated: boolean;
+  /** `planOk` is the part of `ok` a plan account served. */
+  probes: { failed: number; held: number; migrated: number; ok: number; planOk: number; skipped: number };
   /** `wasted` is null while the group's probe dollars are zero, and the map is null whole on a fold, which prices no probe share. */
   probeShares: Record<string, { cost: number; wasted: number | null }> | null;
+  /** Keyed as `unpriced`, for the plan probe rows, whose windows `probeEquivalent` leaves out the same way. */
+  probeUnpriced: Record<string, boolean>;
   rateLimited: number;
   /** The refused requests of the group by error code, each counted here and in `refused`, never in `requests`. */
   refusals: Record<string, number>;
@@ -1465,6 +1499,12 @@ export interface AnalyticsGroup {
    * thinking share and the rest. */
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; plainOutput?: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
+  /**
+   * Per window key, both shared windows always and the model week where the group's rows name one, whether a plan row
+   * with tokens priced nothing on it (a model with no tier, or a tier with no weighted model). Such a window is absent
+   * from `costEquivalent` and `cacheEquivalent`, and one absent with the flag unset is a window no plan row reached.
+   */
+  unpriced: Record<string, boolean>;
   wastedProbeReasons: Record<WastedProbeReason, number>;
   wastedProbeUsd: number;
   wastedProbes: number;
@@ -1536,6 +1576,9 @@ export interface BurnPoint {
    *  them) or one holding a row the cost model cannot price, and wherever the group holds more than one account's rows
    *  (every grouping but the account one, unless the Accounts filter names exactly one account). */
   fiveHourShare: number | null;
+  /** Whether the bucket holds a plan row with tokens the cost model could not price on the 5-hour window, so a null
+   *  `fiveHourEquivalent` with the flag unset is an idle bucket. The shares carry no flag of their own. */
+  fiveHourUnpriced: boolean;
   group: string;
   /** The same plan rows as a 20x equivalent of the model's own week, null where no row of the bucket is on a model
    *  with a week of its own. */
@@ -1543,10 +1586,14 @@ export interface BurnPoint {
   /** The same spend as a fraction of the account's model week, null where `fiveHourShare` is and where no row of the
    *  bucket is on a model with a week of its own. */
   modelWeekShare: number | null;
+  /** `fiveHourUnpriced` on the model week. */
+  modelWeekUnpriced: boolean;
   /** The same plan rows as a 20x 7-day equivalent, unbanded. */
   sevenDayEquivalent: number | null;
   /** The same spend as a fraction of the account's 7-day window, unbanded. */
   sevenDayShare: number | null;
+  /** `fiveHourUnpriced` on the 7-day window. */
+  sevenDayUnpriced: boolean;
   /** Every token of the bucket, all five types: zero for a bucket with no traffic the ledger can attribute. */
   tokens: number;
   /** Uncached input tokens. */
@@ -1694,6 +1741,10 @@ export interface Session {
   /** The account a shed round marked this pin's session to leave, kept off until the session moves; null off a
    *  pin never marked, or with no pin. */
   shedFrom: string | null;
+  /** Why the pin was stamped from `shedFrom`: `round` for a shedding round's move, the failover's word (`cooldown`,
+   *  `fast_lane`, `mark`) for its landing. Null with no stamp and on a pin stamped before it carried one, which reads
+   *  as shed. */
+  shedReason: string | null;
   /** The pin's account's factor from the slow-down entry in force, null on a row with no pin and where none is in force. */
   speed: number | null;
 }
@@ -1886,7 +1937,8 @@ export interface Settings {
   apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; revisions: PriceRevision[]; source: string };
   /** `proxyTls`: whether the proxy listener terminates TLS itself, which sets the client snippet's scheme. */
   listeners: { metrics: string; proxy: string; proxyTls: boolean };
-  retention: { bodyCaptureMaxHours: number };
+  /** The two day counts are file settings of the `stats` section, 0 for forever. */
+  retention: { bodyCaptureMaxHours: number; retentionDays: number; rollupRetentionDays: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
   /** Each path is null when no override file is configured. */

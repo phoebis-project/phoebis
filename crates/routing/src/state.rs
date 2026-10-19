@@ -29,6 +29,7 @@ pub const BUCKET_TTL_MS: i64 = 600_000;
 /// Bucket windows an account holds at most, the oldest reading evicted at insert.
 pub const MAX_BUCKETS_PER_ACCOUNT: usize = 64;
 pub const WEEK_MS: i64 = 7 * 24 * 3_600_000;
+pub(crate) const HOUR_MS: i64 = 3_600_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinRef {
@@ -260,6 +261,10 @@ pub enum StateWrite {
         credential_generation: u64,
         cause: StateCause,
         detail: Option<String>,
+        /// The instant the loop stamped the account's funding retry for this mark, `None` for a mark that is not
+        /// `FundingRequired` and for a superseded verdict's write, which its fences refuse, carried back on the
+        /// writer's acknowledgment so it credits that entry alone.
+        marked_at: Option<i64>,
     },
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
@@ -1134,8 +1139,10 @@ pub struct FundingRetry {
     /// The in-flight id of the claiming attempt's `AccountTicket`. The claim lasts while the ticket is in the
     /// table, so a slow upstream head never frees it early.
     pub claimed_by: Option<u64>,
-    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A retry's success
-    /// that went out before it says nothing of the balance the mark found.
+    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A mark's stamp is
+    /// strictly later than the entry it replaces, so it is unique per account while the entry lives and names the
+    /// entry the mark's acknowledgment credits. A retry's success that went out before it says nothing of the
+    /// balance the mark found.
     pub stamped_at: i64,
     /// The account row's revision once the writer acknowledged the mark's write, `None` until then. A load that read
     /// the row below it read the registry before the mark landed, so it drops nothing. A mark the fences refused and a
@@ -1174,8 +1181,9 @@ pub struct RoutingState {
     /// of a pin after a restart reads none.
     pin_paces: HashMap<PinKey, PinPace>,
     /// When each window of the projection test first read over the ceiling at a pinned selection, keyed by pool id,
-    /// account id and window. Memory only: a restart starts from none.
-    projection_over: HashMap<(String, String, String), i64>,
+    /// account id and window. Memory only: a restart starts from none. The stamp and the reading's reset it was set
+    /// under, `None` where the reading named none.
+    projection_over: HashMap<(String, String, String), (i64, Option<i64>)>,
     /// The ledger's tables, which this crate cannot name, handed in by the task; unit tables until then, so a
     /// burn read through them is a token count.
     rates: BurnRates,
@@ -1615,35 +1623,50 @@ impl RoutingState {
         v
     }
 
-    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, and frees the slot: the
-    /// attempt that held it ended in this mark.
+    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, frees the slot, since the
+    /// attempt that held it ended in this mark, and answers the entry's stamp, `max(now, the account's previous
+    /// stamp + 1)`: two marks in one millisecond still name two entries, so the first one's acknowledgment cannot
+    /// credit the second.
     pub fn funding_marked(
         &mut self,
         account_id: &str,
         incarnation: u64,
         now: i64,
         interval_ms: i64,
-    ) {
+    ) -> i64 {
+        let stamped_at = self
+            .funding_retries
+            .get(account_id)
+            .map_or(now, |previous| {
+                now.max(previous.stamped_at.saturating_add(1))
+            });
         self.funding_retries.insert(
             account_id.to_string(),
             FundingRetry {
                 retry_at: now.saturating_add(interval_ms),
                 incarnation,
                 claimed_by: None,
-                stamped_at: now,
+                stamped_at,
                 mark_revision: None,
             },
         );
+        stamped_at
     }
 
-    /// The writer finished the mark's write for `account_id` under `incarnation`: landed at `revision`, or refused by
-    /// its fences.
-    pub fn funding_written(&mut self, account_id: &str, incarnation: u64, revision: Option<u64>) {
-        if let Some(retry) = self
-            .funding_retries
-            .get_mut(account_id)
-            .filter(|retry| retry.incarnation == incarnation && retry.mark_revision.is_none())
-        {
+    /// The writer finished the mark's write for `account_id` under `incarnation`, the entry stamped at `stamped_at`:
+    /// landed at `revision`, or refused by its fences. A newer entry under the same incarnation stays unacknowledged.
+    pub fn funding_written(
+        &mut self,
+        account_id: &str,
+        incarnation: u64,
+        stamped_at: i64,
+        revision: Option<u64>,
+    ) {
+        if let Some(retry) = self.funding_retries.get_mut(account_id).filter(|retry| {
+            retry.incarnation == incarnation
+                && retry.stamped_at == stamped_at
+                && retry.mark_revision.is_none()
+        }) {
             retry.mark_revision = Some(revision.unwrap_or(0));
         }
     }
@@ -1898,9 +1921,9 @@ impl RoutingState {
     /// passed 5-hour reset: the reset less the window's length while the reset lies after `now`, the passed reset
     /// itself for a 5-hour reading at or before `now` (the window opened there with the account's next request, and the
     /// next reading names the new reset), a passed weekly reset rolled forward by whole weeks as `predicted` rolls it,
-    /// less `WEEK_MS`, and `None` for a reading that names no reset or for no reading at all. The stamp's start and the
-    /// hold on the 5-hour round read it. The start lies at or after `now` for a reset more than a window's length
-    /// ahead, which the hold reads as no age.
+    /// less `WEEK_MS`, and `None` for a reading that names no reset or for no reading at all. The hold on the 5-hour
+    /// round reads it. The start lies at or after `now` for a reset more than a window's length ahead, which the hold
+    /// reads as no age.
     pub fn window_started(&self, account_id: &str, window: &str, now: i64) -> Option<i64> {
         let reset = self.samples.get(account_id)?.reading(window)?.reset?;
         Some(if window.starts_with(SEVEN_DAY) {
@@ -2503,7 +2526,7 @@ impl RoutingState {
                 // The pin's last prompt selects the set, so a long-prompt pin ranks at the rates it burns, and a
                 // pin never renewed with usage carries zero and prices at the standard rates.
                 let burn = rates
-                    .price_pin(unit, p, &p.burn_fast, &p.burn_unmetered)
+                    .price_pin(unit, p)
                     .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
                 (p.clone(), burn)
             })
@@ -2769,19 +2792,22 @@ impl RoutingState {
                 account_id.to_string(),
                 window.to_string(),
             ))
-            .copied()
+            .map(|(since, _)| *since)
     }
 
-    /// Sets the stamp at the first reading over the ceiling, clears it at a reading at or under, and replaces a stamp
-    /// older than the window's start (`window_start`: the window's reset less its length where the reading names a
-    /// reset, or the reset a 5-hour reading has passed with no sample since).
+    /// Sets the stamp at the first reading over the ceiling under the reading's `reset`, clears it at a reading at or
+    /// under, and restarts it at `now` under the new reset where the reset differs from the stamp's by `HOUR_MS` or
+    /// more in either direction, or where a 5-hour reading names none and the stamp's reset has passed. It leaves the
+    /// stamp alone otherwise: a smaller move keeps the stamp and its reset, a reading that names none beside a stamp
+    /// that names none keeps it, and a stamp that names none adopts the reading's reset, since a first reset is no
+    /// move.
     pub fn note_projection(
         &mut self,
         pool_id: &str,
         account_id: &str,
         window: &str,
         over: bool,
-        window_start: Option<i64>,
+        reset: Option<i64>,
         now: i64,
     ) {
         let key = (
@@ -2793,17 +2819,28 @@ impl RoutingState {
             self.projection_over.remove(&key);
             return;
         }
-        let stamp = self.projection_over.entry(key).or_insert(now);
-        // A stamp belongs to one window: a quiet account's stamp from before the reset would fire the new window's
-        // first reading over the ceiling at once.
-        if window_start.is_some_and(|start| *stamp < start) {
-            *stamp = now;
+        let (since, stamped) = self.projection_over.entry(key).or_insert((now, reset));
+        // A stamp belongs to the window whose reset it was set under: a quiet account's stamp from before the reset
+        // would fire the new window's first reading over the ceiling at once. The upstream's reset drifts by minutes
+        // inside one window, so only an hour's move opens a new one.
+        let restart = match (*stamped, reset) {
+            (Some(stamped), Some(reset)) => (reset - stamped).abs() >= HOUR_MS,
+            // A 5-hour window past its reset names none until a sample follows, and the window the stamp was set under
+            // ended there.
+            (Some(stamped), None) => window == FIVE_HOUR && stamped <= now,
+            (None, _) => false,
+        };
+        if restart {
+            *since = now;
+            *stamped = reset;
+        } else if stamped.is_none() {
+            *stamped = reset;
         }
     }
 
-    /// Stamps `window` on the account as over the ceiling since `at`, so a test reaches a window past its wait without
-    /// a selection a wait before its instant. No production path stamps but the note, so it is compiled under `test`
-    /// and the `debug-hooks` feature alone.
+    /// Stamps `window` on the account as over the ceiling since `at` under the reading's `reset`, so a test reaches a
+    /// window past its wait without a selection a wait before its instant. No production path stamps but the note, so
+    /// it is compiled under `test` and the `debug-hooks` feature alone.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub fn stamp_projection_over(
         &mut self,
@@ -2811,6 +2848,7 @@ impl RoutingState {
         account_id: &str,
         window: &str,
         at: i64,
+        reset: Option<i64>,
     ) {
         self.projection_over.insert(
             (
@@ -2818,7 +2856,7 @@ impl RoutingState {
                 account_id.to_string(),
                 window.to_string(),
             ),
-            at,
+            (at, reset),
         );
     }
 
@@ -3339,6 +3377,7 @@ mod tests {
             cache_ttl_ms: 300_000,
             shed_from: None,
             shed_at: None,
+            shed_reason: None,
             static_hash: None,
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
@@ -3405,6 +3444,27 @@ mod tests {
     }
 
     #[test]
+    fn two_funding_marks_in_one_millisecond_take_two_stamps_and_only_the_second_ones_acknowledgment_credits_it(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let first = state.funding_marked("a", 1, 1_000, 300_000);
+        let second = state.funding_marked("a", 1, 1_000, 300_000);
+        assert_eq!(
+            (first, second),
+            (1_000, 1_001),
+            "the second mark is stamped one past the first"
+        );
+        assert_eq!(state.funding_retries["a"].retry_at, 301_000);
+        state.funding_written("a", 1, first, None);
+        assert_eq!(
+            state.funding_retries["a"].mark_revision, None,
+            "the first write's acknowledgment names the entry the second mark replaced"
+        );
+        state.funding_written("a", 1, second, Some(5));
+        assert_eq!(state.funding_retries["a"].mark_revision, Some(5));
+    }
+
+    #[test]
     fn a_loaded_resolution_files_a_report_under_the_spelling_at_its_dated_id() {
         let state = RoutingState::from_load(RoutingLoad {
             resolutions: vec![ResolutionRow {
@@ -3426,8 +3486,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pins_fast_usage_moves_with_a_rekey_leaves_with_the_pin_and_never_reaches_a_fresh_pin_under_its_key(
-    ) {
+    fn a_pins_fast_usage_moves_with_a_rekey_and_leaves_with_the_pin() {
         let (pin, _) = burning("s", 1.0);
         let mut state = RoutingState::from_load(RoutingLoad {
             pins: vec![pin.clone()],
@@ -3448,16 +3507,6 @@ mod tests {
             vec![(dated.clone(), fast)],
             "the rekey carries the fast usage to the dated id"
         );
-        state.put_pin(PinRow {
-            epoch: 2,
-            ..pin.clone()
-        });
-        assert_eq!(
-            state.fast_burn(&dated),
-            PinBurn::default(),
-            "a fresh pin under the key starts without the replaced pin's fast usage"
-        );
-        state.set_fast_burn(&dated, fast);
         state.remove_pin(&dated);
         assert!(
             state.fast_burns().is_empty(),
@@ -3966,7 +4015,6 @@ mod tests {
     }
 
     const CLOSE: f64 = 1e-9;
-    const HOUR_MS: i64 = 3_600_000;
 
     fn read(state: &mut RoutingState, window: &str, utilization: f64, reset: Option<i64>, at: i64) {
         state.record_sample(

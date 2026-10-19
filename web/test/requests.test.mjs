@@ -5,9 +5,11 @@ import * as d from './dist/api.js';
 const attempt = (accountKind, overageInUse, speed) => ({ accountKind, overageInUse, response: { speed } });
 const PLAN = attempt('oauth', false, 'standard');
 const request = (costShares, attempts = [PLAN], costUsd = 0.0048, more = {}) => ({ attempts, costEquivalent: null, costShares, costUsd, estimated: false, shareReason: null, ...more });
-/** The positions under which a plan request reads its own window shares. */
-const SHARE_POSITIONS = ['all', 'equivalent', 'share', 'usd'];
-const POSITIONS = ['native', ...SHARE_POSITIONS];
+/** The position under which a plan request reads its own window shares. */
+const SHARE_POSITIONS = ['share'];
+const POSITIONS = ['all', 'equivalent', 'native', 'share', 'usd'];
+/** The two positions under which a plan request reads its dollar equivalent. */
+const EQUIVALENT_DOLLAR_POSITIONS = ['all', 'equivalent'];
 /** A cell title as an estimated figure carries it: its own title, then the estimate as a sentence of its own. */
 const markedTitle = (title) => `${title}. ${d.ESTIMATED_TITLE}.`;
 
@@ -42,19 +44,75 @@ test('a plan request with a window the route could not price reads the priced on
   }
 });
 
-test('an overage request, a fast answer and an API key request read dollars over their funding word under every position', () => {
+test('an overage request, a fast answer and an API key request read dollars over their funding word under every position but Dollar equivalent', () => {
   for (const [a, funding, word] of [
     [attempt('oauth', true, 'standard'), 'overage', 'overage'],
     [attempt('oauth', false, 'fast'), 'fast', 'fast mode'],
     [attempt('api_key', null, 'standard'), 'api_key', 'API key'],
   ]) {
-    for (const position of POSITIONS) {
+    for (const position of POSITIONS.filter((p) => p !== 'equivalent')) {
       const unit = d.costUnitOf(request(null, [PLAN, a], 1.25), position);
       assert.deepEqual(unit, { estimated: false, funding, kind: 'dollars', usd: 1.25 }, `${word} under ${position}: the serving attempt's funding, the last of the trail`);
       assert.deepEqual(d.costCellOf(unit), { main: '$1.25', sub: word, title: `Billed in dollars: ${word}` }, `${word} under ${position}`);
     }
     assert.equal(d.FUNDING_WORD[funding], word);
   }
+});
+
+test('under Dollar equivalent an overage request, a fast answer and an API key request read a dash titled no subscription equivalent, with no mark where estimated', () => {
+  assert.equal(d.NO_EQUIVALENT_TITLE, 'Billed in dollars, no subscription equivalent');
+  for (const a of [attempt('oauth', true, 'standard'), attempt('oauth', false, 'fast'), attempt('api_key', null, 'standard')]) {
+    for (const estimated of [false, true]) {
+      const unit = d.costUnitOf(request(null, [PLAN, a], 1.25, { estimated }), 'equivalent');
+      const what = `${JSON.stringify(a)} estimated ${estimated}`;
+      assert.deepEqual(unit, { estimated, kind: 'dash', title: d.NO_EQUIVALENT_TITLE, usd: 1.25 }, `${what}: the flag stays on the unit`);
+      assert.deepEqual(d.costCellOf(unit), { main: '-', sub: '', title: d.NO_EQUIVALENT_TITLE }, `${what}: a dash shows no figure, so it reads no tilde and no estimate`);
+    }
+  }
+});
+
+test('under All in dollars and Dollar equivalent a plan request reads its dollar equivalent over equivalent, with every equivalent in full and the dollars on the title', () => {
+  const r = request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: { seven_day_fable: 0.02222, five_hour: 0.014667, seven_day: 0.002444 } });
+  for (const position of EQUIVALENT_DOLLAR_POSITIONS) {
+    const unit = d.costUnitOf(r, position);
+    assert.deepEqual(
+      unit,
+      { equivalents: [{ key: 'five_hour', share: 0.014667 }, { key: 'seven_day', share: 0.002444 }, { key: 'seven_day_fable', share: 0.02222 }], estimated: false, kind: 'equivalent_dollars', reason: null, usd: 0.0048 },
+      `${position}: the equivalents read 5-hour, 7-day, then the model week, whatever order the route answered them in, and the own-window shares are not read`,
+    );
+    assert.deepEqual(d.costCellOf(unit), { main: '$0.0048', sub: 'equivalent', title: '1.47% of 20x 5-hour, 0.244% of 20x 7-day, 2.22% of 20x Fable week, $0.0048 equivalent' }, position);
+  }
+  const estimated = d.costUnitOf({ ...r, estimated: true }, 'all');
+  assert.deepEqual(d.costCellOf(estimated), { main: '~$0.0048', sub: 'equivalent', title: markedTitle('1.47% of 20x 5-hour, 0.244% of 20x 7-day, 2.22% of 20x Fable week, $0.0048 equivalent') }, 'an estimated figure reads the tilde and the estimate');
+});
+
+test('under All in dollars and Dollar equivalent a plan request the route priced no equivalent for reads its dollar equivalent alone on the title', () => {
+  for (const position of EQUIVALENT_DOLLAR_POSITIONS) {
+    for (const costEquivalent of [null, {}, { five_hour: null, seven_day: null }]) {
+      const unit = d.costUnitOf(request({ five_hour: 0.0042 }, [PLAN], 0.0048, { costEquivalent }), position);
+      assert.deepEqual(unit, { equivalents: [], estimated: false, kind: 'equivalent_dollars', reason: null, usd: 0.0048 }, `${position} ${JSON.stringify(costEquivalent)}`);
+      assert.deepEqual(d.costCellOf(unit), { main: '$0.0048', sub: 'equivalent', title: '$0.0048 equivalent' }, `${position} ${JSON.stringify(costEquivalent)}`);
+    }
+  }
+});
+
+test('under Billed dollars a plan request reads a dash titled nothing billed, with no mark where estimated', () => {
+  assert.equal(d.NOTHING_BILLED_TITLE, 'Nothing billed: a subscription request');
+  for (const estimated of [false, true]) {
+    const unit = d.costUnitOf(request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: { five_hour: 0.014667 }, estimated }), 'usd');
+    assert.deepEqual(unit, { estimated, kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0.0048 }, `estimated ${estimated}: the flag stays on the unit`);
+    assert.deepEqual(d.costCellOf(unit), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, `estimated ${estimated}: a dash shows no figure, so it reads no tilde and no estimate`);
+  }
+});
+
+test('the Cost header names what a subscription and a billed request read under each position', () => {
+  assert.deepEqual(Object.fromEntries(POSITIONS.map((position) => [position, d.costHeaderTitle(position)])), {
+    all: 'Dollar equivalent for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+    equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an overage, fast mode or API key request',
+    native: '20x window equivalents for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+    share: 'Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+    usd: 'A dash for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+  });
 });
 
 test('a plan request the route priced no share for reads dollars over equivalent with the no-share title', () => {
@@ -80,6 +138,14 @@ test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {
   const native = d.costUnitOf(free, 'native');
   assert.deepEqual(native, { equivalents: zero, estimated: false, kind: 'equivalent', reason: 'client_classifier', usd: 0.0012 });
   assert.deepEqual(d.costCellOf(native), { main: '0% 20x 5h', sub: '0% 20x 7d', title: `${d.FREE_SHARE_TITLE}. 0%, 0%, $0.0012 equivalent` }, 'native: the zero equivalents read as figures, the title says why ahead of the estimate');
+  for (const position of EQUIVALENT_DOLLAR_POSITIONS) {
+    const unit = d.costUnitOf(free, position);
+    assert.deepEqual(unit, { equivalents: zero, estimated: false, kind: 'equivalent_dollars', reason: 'client_classifier', usd: 0.0012 }, position);
+    assert.deepEqual(d.costCellOf(unit), { main: '$0.0012', sub: 'equivalent', title: `${d.FREE_SHARE_TITLE}. 0%, 0%, $0.0012 equivalent` }, `${position}: the dollar equivalent reads over equivalent, the title says why its equivalents read zero ahead of the estimate`);
+  }
+  const billed = d.costUnitOf(free, 'usd');
+  assert.deepEqual(billed, { estimated: false, kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0.0012 });
+  assert.deepEqual(d.costCellOf(billed), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, 'usd: a plan-funded call bills nothing, so it reads the dash every subscription request reads');
 });
 
 test('a plan request priced on the 5-hour window alone reads it once, and one priced on its week alone reads the week', () => {
@@ -146,7 +212,7 @@ test('a figure the route marked estimated reads a tilde before its main line and
   assert.deepEqual(d.costCellOf(share), { main: '~0.061% 7d', sub: '0.42% 5h', title: markedTitle('0.42% of 5-hour, 0.061% of 7-day, $0.0048 equivalent') });
 });
 
-test('a billed request the route marked estimated reads the tilde and the estimate under usd, and every kind carries the mark', () => {
+test('a billed request the route marked estimated reads the tilde and the estimate under usd, and every kind with a figure carries the mark', () => {
   const billed = d.costUnitOf(request(null, [attempt('api_key', null, 'standard')], 1.25, { estimated: true }), 'usd');
   assert.deepEqual(billed, { estimated: true, funding: 'api_key', kind: 'dollars', usd: 1.25 });
   assert.deepEqual(d.costCellOf(billed), { main: '~$1.25', sub: 'API key', title: markedTitle('Billed in dollars: API key') });
@@ -191,6 +257,26 @@ test("the Dashboard's glance cell reads every other unit as the Requests cell do
   }
 });
 
+test("the Dashboard's glance cell reads a plan and a billed request under each dollar position as the Requests cell does, a dash with no mark", () => {
+  const revisions = 'Priced at the API prices of Oct 08, 2026 and the cost model of Oct 05, 2026';
+  const plan = request({ five_hour: 0.0042, seven_day: 0.00061 }, [PLAN], 0.0048, { costEquivalent: { five_hour: 0.014667, seven_day: 0.002444 }, estimated: true });
+  const billed = request(null, [attempt('oauth', true, 'standard')], 1.25, { estimated: true });
+  const equivalent = { main: '~$0.0048', sub: 'equivalent', title: markedTitle('1.47% of 20x 5-hour, 0.244% of 20x 7-day, $0.0048 equivalent') };
+  for (const [r, position, cell] of [
+    [plan, 'all', equivalent],
+    [plan, 'equivalent', equivalent],
+    [plan, 'usd', { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }],
+    [billed, 'all', { main: '~$1.25', sub: 'overage', title: markedTitle('Billed in dollars: overage') }],
+    [billed, 'equivalent', { main: '-', sub: '', title: d.NO_EQUIVALENT_TITLE }],
+    [billed, 'usd', { main: '~$1.25', sub: 'overage', title: markedTitle('Billed in dollars: overage') }],
+  ]) {
+    const unit = d.costUnitOf(r, position);
+    const what = `${r === plan ? 'plan' : 'billed'} under ${position}`;
+    assert.deepEqual(d.glanceCellOf(unit, revisions), cell, what);
+    assert.deepEqual(d.glanceCellOf(unit, revisions), d.costCellOf(unit), `${what}: the Requests cell's reading`);
+  }
+});
+
 test("a held row reads waited with each wait's reason, and a row without waits reads waited alone", () => {
   const hold = (waits, more = {}) => ({ cohort: null, heldMs: waits.reduce((n, w) => n + w.heldMs, 0), waitedOn: ['acct-a'], waits, ...more });
   assert.deepEqual(d.heldWords(hold([{ heldMs: 42_000, reason: 'slow_down' }, { heldMs: 3_000, reason: 'cap' }])), { badge: 'waited 45 s', title: 'waited for the slow-down 42 s, for a slot 3 s on acct-a' }, 'the waits read in their order');
@@ -201,6 +287,15 @@ test("a held row reads waited with each wait's reason, and a row without waits r
   assert.deepEqual(d.heldWords({ ...hold([]), heldMs: 1_250 }), { badge: 'waited 1 s', title: 'waited 1 s on acct-a' }, 'a row from before the waits names no reason');
   assert.deepEqual(d.heldWords(hold([{ heldMs: 300, reason: 'cap' }, { heldMs: 100, reason: 'cap' }])), { badge: 'waited 1 s', title: 'waited for a slot 1 s, for a slot 1 s on acct-a' }, 'a wait that happened reads at least a second');
   assert.deepEqual(d.heldWords({ ...hold([]), heldMs: 400 }), { badge: 'waited 1 s', title: 'waited 1 s on acct-a' }, 'a row from before the waits reads at least a second too');
+});
+
+test('a held row whose waits span two accounts names each wait with its own, and waits on one account keep the one-account form', () => {
+  const waits = [{ heldMs: 42_000, reason: 'slow_down' }, { heldMs: 3_000, reason: 'cap' }];
+  const hold = (more) => ({ cohort: null, heldMs: 45_000, waitedOn: ['studio', 'primary'], waits, ...more });
+  assert.deepEqual(d.heldWords(hold({})), { badge: 'waited 45 s', title: 'waited for the slow-down 42 s on studio, for a slot 3 s on primary' }, 'each account read from the waits at its position');
+  assert.deepEqual(d.heldWords(hold({ cohort: 'primary' })), { badge: 'waited 45 s', title: 'waited for the slow-down 42 s on studio, for a slot 3 s on primary' }, 'under a cohort each wait still names its own account');
+  assert.deepEqual(d.heldWords(hold({ waitedOn: ['studio', 'studio'] })), { badge: 'waited 45 s', title: 'waited for the slow-down 42 s, for a slot 3 s on studio' }, 'two waits on one account');
+  assert.deepEqual(d.heldWords(hold({ waitedOn: [] })), { badge: 'waited 45 s', title: 'waited for the slow-down 42 s, for a slot 3 s on an account' }, 'a row that names no account');
 });
 
 test('the_codec_reads_and_writes_the_guardrails_list', () => {

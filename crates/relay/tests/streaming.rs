@@ -462,11 +462,7 @@ async fn a_gzipped_response_is_decoded_for_a_caller_that_refuses_it() {
 async fn gzip_upstream(body: Vec<u8>) -> FakeUpstream {
     FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![("Content-Encoding".into(), "gzip".into())],
-            body,
-        },
+        respond: gzipped_json(body),
     }])
     .await
 }
@@ -1146,12 +1142,18 @@ async fn a_stream_silent_past_the_idle_bound_reads_stream_stalled() {
 }
 
 #[tokio::test]
-async fn a_stream_whose_parser_overflowed_keeps_the_heads_outcome() {
-    // One event far past the parser's bound: the parser is dropped there and cannot see whether a message_stop
-    // came, so a clean close proves nothing either way.
+async fn a_stream_whose_oversized_event_is_skipped_keeps_its_later_events() {
+    // A held 200 that commits at its message_start, so the bus copy goes on with the hold's parser: the one event
+    // far past the bound is skipped there, and the delta and the stop after it still reach the completion.
     let events = vec![
         message_start_event(),
         text_delta_event(&"x".repeat(4 * phoebis_relay::INSPECT_BUFFER)),
+        SseEvent {
+            event: "message_delta".into(),
+            data: r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#
+                .into(),
+        },
+        message_stop_event(),
     ];
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -1172,11 +1174,48 @@ async fn a_stream_whose_parser_overflowed_keeps_the_heads_outcome() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(body.len(), rendered(&events).len());
-    let complete = completion(&mut sub).await;
+    // Compared without `assert_eq!`, whose failure would print both 2 MiB bodies.
+    assert!(
+        body.as_ref() == rendered(&events).as_bytes(),
+        "the client gets every byte the upstream sent"
+    );
+    let published = common::drain_until_complete(&mut sub).await;
+    let complete = published
+        .iter()
+        .find_map(|e| match e {
+            phoebis_bus::Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .unwrap();
+    let usage = complete.usage.as_ref().expect("the completion has a usage");
     assert_eq!(
-        (complete.outcome, complete.error_code.as_deref()),
-        (phoebis_bus::Outcome::Succeeded, None)
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            usage.input_tokens,
+            usage.output_tokens,
+            complete.response.stop_reason.as_deref(),
+            complete.skipped_events,
+        ),
+        (
+            phoebis_bus::Outcome::Succeeded,
+            None,
+            Some(5),
+            Some(7),
+            Some("end_turn"),
+            1
+        ),
+        "the head's usage merged with the delta's, the delta's stop, and the one skipped event"
+    );
+    assert!(
+        published.iter().any(|e| matches!(
+            e,
+            phoebis_bus::Event::ResponseChunk(phoebis_bus::ResponseChunk {
+                phase: Some(phoebis_bus::Phase::MessageStop),
+                ..
+            })
+        )),
+        "the stop's phase is on the bus"
     );
     up.shutdown().await;
 }
@@ -1636,7 +1675,8 @@ async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus(
     let events = [
         SseEvent {
             event: "weird_future_event".into(),
-            data: "y".repeat(100 * 1024),
+            // Past `INSPECT_BUFFER`, and under the 1 MiB the bus copy decodes of one wire chunk.
+            data: "y".repeat(600 * 1024),
         },
         message_start,
         text_delta_event("hi"),

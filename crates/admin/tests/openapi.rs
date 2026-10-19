@@ -170,6 +170,72 @@ const EXAMPLE_FILES: &[&str] = &[
     "system",
 ];
 
+/// Every file under `web/test/fixtures/` and its `routing/` directory by stem, with the operation and the status whose
+/// answer schema the file's `body` member validates against. A file the table does not name fails the corpus case,
+/// so a new fixture adds its row.
+const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
+    ("account", Some(("account_show", 200))),
+    ("account_catalog", Some(("account_catalog", 200))),
+    ("account_quota", Some(("account_quota", 200))),
+    ("account_usage", Some(("account_usage", 200))),
+    ("accounts", Some(("accounts_list", 200))),
+    ("analytics_accounts", Some(("analytics_accounts", 200))),
+    ("analytics_breakdown", Some(("analytics_breakdown", 200))),
+    (
+        "analytics_breakdown_accounts",
+        Some(("analytics_breakdown", 200)),
+    ),
+    (
+        "analytics_breakdown_speed",
+        Some(("analytics_breakdown", 200)),
+    ),
+    ("analytics_budgets", Some(("analytics_budgets", 200))),
+    ("analytics_burn", Some(("analytics_burn", 200))),
+    ("analytics_guardrails", Some(("analytics_guardrails", 200))),
+    ("analytics_placements", Some(("analytics_placements", 200))),
+    (
+        "analytics_reconciliations",
+        Some(("analytics_reconciliations", 200)),
+    ),
+    ("analytics_rewrites", Some(("analytics_rewrites", 200))),
+    ("analytics_series", Some(("analytics_series", 200))),
+    ("analytics_series_accounts", Some(("analytics_series", 200))),
+    ("attention", Some(("attention_show", 200))),
+    ("dashboard", Some(("dashboard_show", 200))),
+    ("decision", Some(("request_decision", 200))),
+    ("guardrail_created", Some(("guardrails_create", 201))),
+    ("guardrail_presets", Some(("guardrail_presets", 200))),
+    ("guardrail_show", Some(("guardrail_show", 200))),
+    ("guardrail_test", Some(("guardrails_test", 200))),
+    ("guardrails", Some(("guardrails_list", 200))),
+    ("keepalive_overview", Some(("keepalive_overview", 200))),
+    ("keepalive_recipes", Some(("keepalive_recipes", 200))),
+    ("key_created", Some(("keys_create", 201))),
+    ("key_models", Some(("key_models", 200))),
+    ("keys", Some(("keys_list", 200))),
+    ("models_state", Some(("models_state", 200))),
+    ("pairing_started", Some(("pairing_start", 201))),
+    ("pool_traffic", Some(("pool_traffic", 200))),
+    ("pools", Some(("pools_list", 200))),
+    ("pricing", Some(("pricing_show", 200))),
+    ("replay", Some(("ledger_replay_parked", 200))),
+    ("replay_held", Some(("ledger_replay_parked", 503))),
+    ("request", Some(("request_show", 200))),
+    ("request_bodies", Some(("request_bodies", 200))),
+    ("requests", Some(("requests_list", 200))),
+    ("routing_log", Some(("routing_log_list", 200))),
+    ("session", Some(("session_show", 200))),
+    ("sessions", Some(("sessions_list", 200))),
+    ("sessions_costs", Some(("sessions_costs", 200))),
+    ("settings", Some(("settings_show", 200))),
+    ("system", Some(("system_show", 200))),
+    // No route's answer: the bound probes' inputs and statuses, a test's own tables and the routing walk's steps.
+    ("bound_refusals", None),
+    ("test_tables", None),
+    ("walk_steps", None),
+    ("walk_steps_v1", None),
+];
+
 /// Every handler module that reads a query map, with its source, for the check that the names it reads are the
 /// names its parameter types declare.
 const QUERY_MODULES: &[(&str, &str)] = &[
@@ -277,6 +343,33 @@ fn example_of<'a>(operation: &'a Value, status: &str, stem: &str) -> &'a Value {
     } else {
         &content["examples"][stem]["value"]
     }
+}
+
+/// The first error of `body` against the answer schema of the operation at `status`, its instance path first. The
+/// schema compiles inside a root that carries the document's `components`, so every `$ref` the document writes
+/// resolves in place.
+fn schema_error(document: &Value, operation_id: &str, status: u16, body: &Value) -> Option<String> {
+    let (_, _, operation) = operations(document)
+        .into_iter()
+        .find(|(_, _, operation)| operation["operationId"] == operation_id)
+        .unwrap_or_else(|| panic!("no operation is {operation_id}"));
+    let schema =
+        &operation["responses"][status.to_string()]["content"]["application/json"]["schema"];
+    assert!(
+        schema.is_object(),
+        "{operation_id} {status} declares no JSON schema"
+    );
+    let root = serde_json::json!({
+        "components": document["components"],
+        "$defs": { "answer": schema },
+        "$ref": "#/$defs/answer",
+    });
+    let validator = jsonschema::validator_for(&root)
+        .unwrap_or_else(|e| panic!("{operation_id} {status}: the schema does not compile: {e}"));
+    validator
+        .validate(body)
+        .err()
+        .map(|e| format!("at {:?}: {e}", e.instance_path().as_str()))
 }
 
 /// The names a handler module reads off its query map, as the literal of each read. A helper handed the map takes it
@@ -451,7 +544,7 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     let mut rest = ROUTES_RS;
     while let Some(at) = rest.find(".route(") {
         let after = &rest[at + ".route(".len()..];
-        let literal = after.trim_start().trim_start_matches(['\n', ' ']);
+        let literal = after.trim_start();
         if let Some(path) = literal.strip_prefix('"') {
             plain.insert(path[..path.find('"').unwrap()].to_string());
         }
@@ -771,6 +864,72 @@ async fn every_hand_written_example_parses_and_fits_its_schema() {
         seen >= 3,
         "the three login refusals at least carry a hand-written example, {seen} found"
     );
+}
+
+#[tokio::test]
+async fn every_fixture_validates_against_the_answer_schema_its_table_row_names() {
+    let (_app, _up, document) = document().await;
+    let table: BTreeMap<&str, Option<(&str, u16)>> = CORPUS.iter().copied().collect();
+    let mut files = Vec::new();
+    for dir in [fixtures_dir(), fixtures_dir().join("routing")] {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|x| x == "json") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut seen = BTreeSet::new();
+    for path in &files {
+        let stem = path.file_stem().unwrap().to_str().unwrap();
+        seen.insert(stem);
+        let row = table
+            .get(stem)
+            .unwrap_or_else(|| panic!("add {stem} to the corpus table"));
+        let Some((operation_id, status)) = *row else {
+            continue;
+        };
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let route = file["route"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{stem}.json names no route"));
+        let (method, at) = route.split_once(' ').unwrap();
+        let at = at.split('?').next().unwrap();
+        // A literal segment wins over a parameter, as the router matches, so `/guardrails/presets` reads its own
+        // operation rather than the one at `/guardrails/{id}`.
+        let served = operations(&document)
+            .into_iter()
+            .filter(|(pattern, m, _)| m.eq_ignore_ascii_case(method) && matches(pattern, at))
+            .min_by_key(|(pattern, _, _)| pattern.chars().filter(|c| *c == '{').count())
+            .map(|(_, _, operation)| operation["operationId"].clone());
+        assert_eq!(
+            served,
+            Some(Value::from(operation_id)),
+            "{stem}.json: its row names the operation that serves its route, {route}"
+        );
+        if let Some(error) = schema_error(&document, operation_id, status, &file["body"]) {
+            panic!("{stem}.json does not fit {operation_id} {status} {error}");
+        }
+    }
+    let rows: BTreeSet<&str> = table.keys().copied().collect();
+    assert_eq!(rows, seen, "every row of the corpus table names a file");
+
+    // A captured body with one member renamed must fail, which proves the root reaches the schema it names rather
+    // than accepting every body.
+    let file: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixtures_dir().join("key_models.json")).unwrap(),
+    )
+    .unwrap();
+    let mut renamed = file["body"].clone();
+    let rule = renamed["rules"][1]
+        .as_object_mut()
+        .expect("key_models.json carries a second rule");
+    let pattern = rule.remove("pattern").unwrap();
+    rule.insert("glob".to_string(), pattern);
+    let error = schema_error(&document, "key_models", 200, &renamed)
+        .expect("a body with a renamed member fails its schema");
+    assert!(error.starts_with("at \"/rules/1\""), "{error}");
 }
 
 #[tokio::test]
@@ -1169,10 +1328,14 @@ async fn the_reload_route_answers_each_listener_as_exactly_one_of_the_three_clos
         let cookie = login(&app, "admin-secret").await;
         let answer = json(post(&app, "/admin/tls/reload", "", Some(&cookie)).await).await;
         let listeners = answer["listeners"].as_array().unwrap();
+        assert_eq!(listeners.len(), 2, "one object per listener");
         assert_eq!(
-            listeners.len(),
-            2,
-            "one object per listener, proxy then admin"
+            listeners
+                .iter()
+                .map(|listener| listener["listener"].as_str())
+                .collect::<Vec<_>>(),
+            [Some("proxy"), Some("admin")],
+            "proxy then admin"
         );
         for (listener, (serving, reloaded)) in listeners.iter().zip(expected) {
             let keys: BTreeSet<&str> = listener

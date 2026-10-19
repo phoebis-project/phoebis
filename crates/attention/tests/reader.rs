@@ -1395,6 +1395,7 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
                 id: "business".into()
             }),
             &json!({
+                "early_ms": null,
                 "projection_error": 1.0 - 0.97,
                 "setting": ["shed_cap", "window_ceiling"],
                 "walls": 1,
@@ -1423,6 +1424,7 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
             false,
             None,
             &json!({
+                "early_ms": null,
                 "projection_error": null,
                 "setting": ["shed_cap", "window_ceiling"],
                 "walls": 0,
@@ -1430,6 +1432,55 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
             })
         ),
         "the condition clears once the trailing day holds no wall"
+    );
+}
+
+#[tokio::test]
+async fn an_account_that_reached_its_wall_under_a_stretch_round_holds_the_condition_with_how_early_it_came(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    // The stretch fired a round two hours before the wall, which came 25 minutes before the reset its event names.
+    routing_event(
+        &rig,
+        NOW - 2 * HOUR,
+        "shedding_round",
+        "business",
+        Some("main"),
+        json!({
+            "window": "five_hour",
+            "projection": 1.3,
+            "trigger": "slow_down",
+            "outcome": "marked 1",
+            "reason": null,
+        }),
+    );
+    routing_event(
+        &rig,
+        NOW - HOUR,
+        "window_spent",
+        "business",
+        None,
+        json!({ "window": "five_hour", "source": "poll", "reset": NOW - HOUR + 25 * MINUTE }),
+    );
+    fold_at(&rig, NOW).await;
+    let held = find(&read(&attention, NOW), Kind::WallReached, "business")
+        .cloned()
+        .expect("the wall holds the condition");
+    assert_eq!(
+        (held.holds, held.since, &held.detail),
+        (
+            true,
+            Some(NOW - HOUR),
+            &json!({
+                "early_ms": 25 * MINUTE,
+                "projection_error": null,
+                "setting": ["shed_cap", "window_ceiling"],
+                "walls": 1,
+                "windows": ["five_hour"],
+            })
+        ),
+        "a stretch round's wall reads how early it came, and its projection measures nothing at the reset"
     );
 }
 

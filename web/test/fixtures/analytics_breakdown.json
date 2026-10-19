@@ -49,7 +49,8 @@
           "guardrail_blocked": 1
         },
         "cache_miss_reasons": {
-          "none": 7
+          "none": 6,
+          "pending": 1
         },
         "histograms": {
           "duration_ms": [
@@ -346,13 +347,17 @@
         "kept_warm": {
           "requests": 0,
           "tokens_5m": 0,
-          "tokens_1h": 0
+          "tokens_1h": 0,
+          "plan_requests": 0,
+          "plan_tokens_5m": 0,
+          "plan_tokens_1h": 0
         },
         "probes": {
           "failed": 0,
           "held": 0,
           "migrated": 0,
           "ok": 0,
+          "plan_ok": 0,
           "skipped": 0
         },
         "probe_cost_usd": 0.0,
@@ -368,6 +373,10 @@
           "five_hour": 0.0000393625,
           "seven_day": 0.000010496666666666667
         },
+        "unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        },
         "cache_equivalent": {
           "five_hour": {
             "read": 2.7916666666666666e-7,
@@ -379,10 +388,14 @@
           }
         },
         "probe_equivalent": {},
+        "probe_unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        },
         "saving_usd": 0.0,
         "saving_shares": null,
         "saving_equivalent": {},
-        "billed_usd": 0.0107,
+        "billed_usd": 0.010700000000000001,
         "billed": {
           "cache_read": 0.0002,
           "cache_write": 0.0015,
@@ -395,7 +408,8 @@
           "cache_write": 1.488888888888889e-6,
           "output": 2.977777777777778e-6
         },
-        "estimated": true
+        "estimated": true,
+        "probe_estimated": false
       },
       {
         "key": "desktop@1791720940000",
@@ -733,13 +747,17 @@
         "kept_warm": {
           "requests": 0,
           "tokens_5m": 0,
-          "tokens_1h": 0
+          "tokens_1h": 0,
+          "plan_requests": 0,
+          "plan_tokens_5m": 0,
+          "plan_tokens_1h": 0
         },
         "probes": {
           "failed": 0,
           "held": 0,
           "migrated": 0,
           "ok": 0,
+          "plan_ok": 0,
           "skipped": 0
         },
         "probe_cost_usd": 0.0,
@@ -755,6 +773,10 @@
           "five_hour": 8.8125e-6,
           "seven_day": 2.35e-6
         },
+        "unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        },
         "cache_equivalent": {
           "five_hour": {
             "read": 6.25e-8,
@@ -762,10 +784,14 @@
           },
           "seven_day": {
             "read": 1.6666666666666667e-8,
-            "write": 3.333333333333334e-7
+            "write": 3.3333333333333335e-7
           }
         },
         "probe_equivalent": {},
+        "probe_unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        },
         "saving_usd": 0.0,
         "saving_shares": null,
         "saving_equivalent": {},
@@ -779,10 +805,11 @@
         "equivalent_split": {
           "input": 1.3333333333333334e-6,
           "cache_read": 1.6666666666666667e-8,
-          "cache_write": 3.333333333333334e-7,
+          "cache_write": 3.3333333333333335e-7,
           "output": 6.666666666666667e-7
         },
-        "estimated": false
+        "estimated": false,
+        "probe_estimated": false
       }
     ]
   }

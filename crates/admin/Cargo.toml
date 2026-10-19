@@ -36,8 +36,12 @@ utoipa-axum = { workspace = true }
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
+jsonschema = { workspace = true }
 # The test tables, kept off the dependency above so a release build carries none.
 phoebis-ledger = { path = "../ledger", features = ["test-support"] }
+# The seed the fixture capture mints its ids and secrets from, kept off the dependency above so a release build
+# carries none.
+phoebis-oauth = { path = "../oauth", features = ["test-support"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }

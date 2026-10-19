@@ -98,9 +98,11 @@ export const LANES: Lane[] = [
 ];
 
 /**
- * The account that serves the story's unpriced traffic: Sonnet 4.6 alone, which the cost model has no weight for,
- * whatever the lane drew, so its buckets read no share. The sessions the story moves off it carry Sonnet 4.6 to primary,
- * whose 11:00 and 14:00 buckets read no share either. Every other subscription bucket stays priced.
+ * The account that serves Sonnet 4.6 alone, whatever the lane drew: the cost model has no weight of its own for it, so
+ * its buckets price through its model tier's latest weighted model as an estimate. The sessions the story moves off it
+ * carry Sonnet 4.6 to primary, whose 11:00 and 14:00 buckets read the estimate too. The story's one unpriced row is a
+ * plan request on a model the cost model lists in no tier, `UNPRICED_REQUEST`, which the mock adds behind its unpriced
+ * switch.
  */
 const UNPRICED_ACCOUNT = 'secondary';
 const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-4-6' : drawn);
@@ -326,10 +328,14 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
 /** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
 const SERVED_FACTOR = 0.8;
 
+/** When nightly's spend cap was raised, the instant the story fixes for the start of its overage. */
+export const NIGHTLY_CAP_RAISED = clock(11, 30, 12);
+
 /**
  * The order the engine takes a token count's members in: the best tier first, then under Pace the highest score off
  * the walk back. A count takes no slot, so no cap passes a member over for it and a draw cannot stand where the
- * engine picks another. Nightly reads in overage from its spend cap's raise, the earliest its overage starts. An API
+ * engine picks another. Nightly reads in overage from its spend cap's raise: `OVERAGE_FROM` is built from the attempts
+ * this order places, and no attempt starts between the two instants, so both read nightly's overage alike. An API
  * key shares its tier with no other member here, so it keeps the pool's order, and outside Pace the drawn account
  * leads its tier.
  */
@@ -337,7 +343,7 @@ function countOrder(ids: string[], poolId: string, atMs: number, model: string, 
   const pool = poolById.get(poolId);
   if (!pool) return ids;
   const tierOf = (id: string): number[] => {
-    const overage = id === 'nightly' && atMs >= clock(11, 30, 12) ? 1 : 0;
+    const overage = id === 'nightly' && atMs >= NIGHTLY_CAP_RAISED ? 1 : 0;
     return [pool.preferSubscription ? (kindOf(id) === 'api_key' ? 2 : overage) : 0, pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage];
   };
   const windowId = model.includes('fable') ? '7d_fable' : '7d';
@@ -859,6 +865,8 @@ interface StorySeed {
   kind?: RequestKind;
   model: string;
   outcome?: RequestOutcome;
+  /** The upstream's comparison was still running when its one attempt's answer went out. */
+  pending?: true;
   /** The router refused the request before any account was asked, which the ledger's landing would have flagged. */
   refused?: true;
   /** The class header as the client sent it, null for a request that sent none. */
@@ -882,14 +890,15 @@ export const STORY_IDS = new Set([
   'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84',
   'req_4a9c3e7b-a27', 'req_4b0e9d17-c31',
   'req_4d9a1e6b-c20',
-  'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d6f1b3a-e27',
-  'req_5e2f7a19-b03',
+  'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d1f8c3a-b27',
+  'req_5d6f1b3a-e27', 'req_5e2f7a19-b03',
   'req_63a8d2f5-b17',
   'req_69e30548-32e', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
   'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
   'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
   'req_b72e9d05-c14', 'req_b8c3e9d4-e61', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c90d3f61-a28', 'req_d2a8f6c1-d50',
-  'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e5a1c093-4d7', 'req_ef099b34-453',
+  'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e2c7a4f9-d13', 'req_e5a1c093-4d7',
+  'req_ef099b34-453',
   'req_f1c8e3a5-29d',
   'req_f3b6d218-85a', 'req_f6a1d3e8-e47', 'req_f8085653-422',
 ]);
@@ -939,7 +948,7 @@ function storyRow(seed: StorySeed): RequestLog {
       accountId: a.accountId,
       accountKind: kindOf(a.accountId),
       // A failover lands on an account that never saw the turn before this one.
-      cacheMissReason: a.status !== 200 || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 ? 'previous_message_not_found' : 'none',
+      cacheMissReason: a.status !== 200 || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 ? 'previous_message_not_found' : seed.pending ? 'pending' : 'none',
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
@@ -1079,7 +1088,7 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     // The same client's next request carried no class header, so the contract refused it before any account was chosen.
     { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
-    { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
+    { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
     // A token count follows its subagent's pin to secondary before its window is spent, so it never meets the cooldown
@@ -1289,6 +1298,12 @@ function storyRequests(): RequestLog[] {
       session: IDLE_NOTEBOOK_SESSION_ID,
       usage: { cacheWrite1h: 150_000, input: 3_100, output: 1_700 },
     },
+    // The shed session's next turn inside all's affinity window, which renews the pin the round's move wrote on primary
+    // and reads the source the move left on it.
+    { agentId: 'e90b', at: t(11, 13, 40), attempts: [{ accountId: 'primary', at: t(11, 13, 40), ms: 5_600, status: 200 }], id: 'req_5d1f8c3a-b27', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'subagent', session: 'c64358b5', usage: { cacheRead: 75_000, cacheWrite5m: 1_900, input: 1_400, output: 820 } },
+    // The failed-over session's next turn inside the window, which renews the pin the failover landed on primary and
+    // reads the source the landing left on it.
+    { agentId: 'main', at: t(14, 13, 5), attempts: [{ accountId: 'primary', at: t(14, 13, 5), ms: 6_100, status: 200 }], id: 'req_e2c7a4f9-d13', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheRead: 56_700, cacheWrite1h: 1_300, input: 1_500, output: 760 } },
     // Two auto-mode classifier calls of the laptop session the summary forks run in, each judging a subagent's tool
     // call on primary's plan. They read no cache, so the rollups' draws for the hour stay where they were.
     { agentId: 'a5e1', at: t(12, 41, 8), attempts: [{ accountId: 'primary', at: t(12, 41, 8), ms: 1_100, status: 200 }], classifier: 'client', id: 'req_4d9a1e6b-c20', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_400, output: 14 } },
@@ -1379,6 +1394,36 @@ function traceForks() {
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 
+/**
+ * The story's late request, an arrival among the rows a page of 50 shows that ran long, so the ledger writes it a few
+ * seconds after the load, below rows a page read at the load already shows.
+ */
+const LATE_REQUEST_ID = 'req_7a3f0c26-d81';
+/** Past the first auto reload poll of a page read as the mock loads, so that poll lands nothing and a later one lands it. */
+const LATE_LANDING_MS = 6_000;
+let landings: Map<string, number> | null = null;
+
+/**
+ * The instant the ledger wrote a story row: its finish on the story's clock, strictly increasing in the order the rows
+ * finished, one past the row before where two land in one millisecond, as the ledger's writer stamps them, and the late
+ * request's after every other. Read on first use, once the story's passes have set each row's last fields.
+ */
+export function landedAt(row: RequestLog): number {
+  if (landings === null) {
+    const finish = (r: RequestLog) => (r.id === LATE_REQUEST_ID ? NOW + LATE_LANDING_MS : Date.parse(r.at) + (r.durationMs ?? 0));
+    let previous = 0;
+    landings = new Map(
+      [...REQUESTS]
+        .sort((a, b) => finish(a) - finish(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map((r) => {
+          previous = Math.max(finish(r), previous + 1);
+          return [r.id, previous];
+        }),
+    );
+  }
+  return landings.get(row.id) ?? Date.parse(row.at) + (row.durationMs ?? 0);
+}
+
 // The ci key's last use is its newest request the key check let through: a send after the revocation is refused as an
 // unknown key and uses nothing.
 keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.errorCode !== 'auth_unknown')?.at ?? null;
@@ -1391,9 +1436,8 @@ keyById.get('notebook')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'notebook
  * at 11:30:12, or a minute past the raise where the draws sent none. The account's own overage reads from it.
  */
 export const OVERAGE_FROM = ((): number => {
-  const raised = clock(11, 30, 12);
-  const after = REQUESTS.flatMap((r) => r.attempts).map((a) => (a.accountId === 'nightly' ? Date.parse(a.startedAt) : Number.NaN)).filter((at) => at >= raised);
-  return after.length ? Math.min(...after) : raised + MINUTE;
+  const after = REQUESTS.flatMap((r) => r.attempts).map((a) => (a.accountId === 'nightly' ? Date.parse(a.startedAt) : Number.NaN)).filter((at) => at >= NIGHTLY_CAP_RAISED);
+  return after.length ? Math.min(...after) : NIGHTLY_CAP_RAISED + MINUTE;
 })();
 const nightly = ACCOUNTS.find((a) => a.id === 'nightly');
 if (nightly?.overage) nightly.overage.since = iso(OVERAGE_FROM);
@@ -1445,7 +1489,7 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   if (!pool || !head || r.kind === 'count_tokens' || pinned?.accountId !== from || !serves(from, r.canonicalModel)) return null;
   const at = Date.parse(head.startedAt);
   const fast = fastTurn(r.keyId, r.model, r.kind);
-  const registryKind = (id: string) => ACCOUNTS.find((a) => a.id === id)?.kind;
+  const registryKind = (id: string) => accountById.get(id)?.kind;
   const inOverage = (id: string) => id === 'nightly' && at >= OVERAGE_FROM;
   const spent = (windows: AttemptWindow[]) => spentWindows(windows).length > 0;
   const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);
@@ -2399,21 +2443,28 @@ const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
 const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
 /** Rollups' billed dollars, their plan rows' 20x equivalents on the two shared windows and whether a plan row priced
- *  at the fallback weight, as the keys route sums a key's rows. A window a row could not price adds nothing. */
+ *  at the fallback weight, as the keys route sums a key's rows. A window a row could not price adds nothing and is
+ *  flagged: an hour's equivalent is null where a request with tokens priced nothing on it. */
 const sidesOf = (rows: HourlyRollup[]): Pick<ApiKey['usage7d'], 'billedUsd' | 'equivalent' | 'estimated'> => {
   const plan = rows.filter((r) => r.funding === 'plan');
   return {
     billedUsd: sumOf(rows.filter((r) => r.funding !== 'plan'), (r) => r.costUsd),
-    equivalent: { fiveHour: sumOf(plan, (r) => r.equivalents.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.equivalents.seven_day ?? 0) },
+    equivalent: {
+      fiveHour: sumOf(plan, (r) => r.equivalents.five_hour ?? 0),
+      sevenDay: sumOf(plan, (r) => r.equivalents.seven_day ?? 0),
+      unpriced: { fiveHour: plan.some((r) => r.equivalents.five_hour === null), sevenDay: plan.some((r) => r.equivalents.seven_day === null) },
+    },
     estimated: plan.some((r) => r.estimated),
   };
 };
-/** The same over request rows, as the pools and dashboard routes sum theirs. */
+/** The same over request rows, as the pools and dashboard routes sum theirs: a request carries a null window whatever
+ *  its tokens, so only one with tokens flags it. */
 export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedUsd' | 'equivalent' | 'estimated'> => {
   const plan = rows.filter((r) => r.costEquivalent !== null);
+  const flagged = (window: 'five_hour' | 'seven_day') => plan.some((r) => tokensTotal(r.usage) > 0 && r.costEquivalent?.[window] === null);
   return {
     billedUsd: sumOf(rows.filter((r) => r.costEquivalent === null), (r) => r.costUsd),
-    equivalent: { fiveHour: sumOf(plan, (r) => r.costEquivalent?.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.costEquivalent?.seven_day ?? 0) },
+    equivalent: { fiveHour: sumOf(plan, (r) => r.costEquivalent?.five_hour ?? 0), sevenDay: sumOf(plan, (r) => r.costEquivalent?.seven_day ?? 0), unpriced: { fiveHour: flagged('five_hour'), sevenDay: flagged('seven_day') } },
     estimated: plan.some((r) => r.estimated),
   };
 };
@@ -2446,7 +2497,11 @@ function deriveFigures() {
       lifetime: {
         billedUsd: Math.max(k.lifetime.billedUsd, life.billedUsd),
         cost: Math.max(k.lifetime.cost, sumOf(mine, (r) => r.costUsd)),
-        equivalent: { fiveHour: Math.max(k.lifetime.equivalent.fiveHour, life.equivalent.fiveHour), sevenDay: Math.max(k.lifetime.equivalent.sevenDay, life.equivalent.sevenDay) },
+        equivalent: {
+          fiveHour: Math.max(k.lifetime.equivalent.fiveHour, life.equivalent.fiveHour),
+          sevenDay: Math.max(k.lifetime.equivalent.sevenDay, life.equivalent.sevenDay),
+          unpriced: { fiveHour: k.lifetime.equivalent.unpriced.fiveHour || life.equivalent.unpriced.fiveHour, sevenDay: k.lifetime.equivalent.unpriced.sevenDay || life.equivalent.unpriced.sevenDay },
+        },
         estimated: k.lifetime.estimated || life.estimated,
         requests: Math.max(k.lifetime.requests, sumOf(mine, requestsIn)),
       },
@@ -2474,6 +2529,24 @@ function deriveFigures() {
 }
 
 deriveFigures();
+
+/** The session of the request below, one of its own. */
+const UNPRICED_SESSION_ID = '0f7c3a92-5e18-4d6b-b2a4-9c8e1d7f3a60';
+/**
+ * One plan request on a model the cost model lists in no tier, so it prices no window, kept out of the story the
+ * views draw: the mock's unpriced switch adds it to the dashboard's day and to the rollups the analytics fold, where
+ * the flags derive from it by the rows' own rule. It copies primary's answer of the story hour on desktop, in a
+ * session and a rollup row of its own, and is built after every seeded draw, so it moves none.
+ */
+export const UNPRICED_REQUEST: RequestLog = (() => {
+  const template = requestById.get('req_f8085653-422');
+  if (template === undefined) throw new Error('the story lacks the request the unpriced one copies');
+  const model = 'claude-unlisted-1';
+  const usage: Usage = { ...template.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 18_400, input: 2_600, output: 940 };
+  const row: RequestLog = { ...template, canonicalModel: model, costUsd: costOf(model, usage, false, template.at), id: 'req_0d6b3f82-c47', model, sessionId: UNPRICED_SESSION_ID, usage };
+  return { ...row, ...costFiguresOf(row) };
+})();
+export const UNPRICED_ROLLUPS: HourlyRollup[] = rollups([UNPRICED_REQUEST]);
 
 /** The ledger's id of each window the quota samples carry, which the Accounts cards key an hour's samples by. */
 const LEDGER_WINDOW: Partial<Record<string, string>> = { '5h': 'five_hour', '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
@@ -2575,6 +2648,32 @@ const FORK_QUESTION = 'Describe your most recent action in 3-5 words using prese
 /** A cut answer ran a megabyte past the cap before the ledger stopped storing it. */
 const DROPPED_BYTES = 1_048_576;
 
+/**
+ * The page an edge answers an upstream 502 with in place of the API's JSON error, indented with tabs, so a captured
+ * body holds a line whose tab stops draw it wider than its character count.
+ */
+const EDGE_PAGE = [
+  '<!DOCTYPE html>',
+  '<html lang="en">',
+  '<head>',
+  '\t<meta charset="utf-8">',
+  '\t<title>502 Bad Gateway</title>',
+  '</head>',
+  '<body>',
+  '\t<div class="page">',
+  '\t\t<main>',
+  '\t\t\t<section class="notice">',
+  '\t\t\t\t<div class="notice__text">',
+  '\t\t\t\t\t<h1>502 Bad Gateway</h1>',
+  "\t\t\t\t\t<p>The edge reached no healthy origin for this request. Try it again in a few moments, and contact the site's owner if it persists.</p>",
+  '\t\t\t\t</div>',
+  '\t\t\t</section>',
+  '\t\t</main>',
+  '\t</div>',
+  '</body>',
+  '</html>',
+].join('\n');
+
 export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
   if (!request.capturedBodies) return null;
   const isClaude = request.model.startsWith('claude');
@@ -2642,12 +2741,13 @@ export function capturedBodiesFor(request: RequestLog): CapturedBodies | null {
             : []),
         ].join('')
       : { ...message, content: [{ type: 'text', text: ANSWER_TEXT }] };
+  const stored = request.attempts[request.attempts.length - 1]?.upstreamStatus === 502 ? EDGE_PAGE : response;
   // Counted once here, as the router counts the vectors it stored; the drawer reads these and measures nothing.
   const requestBytes = byteLength(bodies.request);
-  const responseBytes = byteLength(response);
+  const responseBytes = byteLength(stored);
   return {
     ...bodies,
-    response,
+    response: stored,
     requestBytesSeen: requestBytes,
     requestBytesStored: requestBytes,
     requestTruncated: request.requestTruncated,

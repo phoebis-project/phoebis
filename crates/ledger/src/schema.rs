@@ -324,7 +324,13 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// classifier call's usage files on rows of its own and the share readers price it at no plan share. The rollup
 /// table is rebuilt once with `-` in the new position, as the band and the tier were added.
 ///
-/// Version 41: the request row flags a refusal the router issued before it asked any account for the client's or a
+/// Version 41: a request row carries the instant the ledger wrote it, strictly increasing across the writer's rows,
+/// indexed so a list read filters on it, and a poll that passes back the newest stamp of its last answer reads exactly
+/// the rows written since. No backfill: a row from before reads NULL, which no such filter answers. The same step gives
+/// each account hour the longest time a wall on the account arrived before its window's reset under a stretch round,
+/// so the figure outlives the trailing day the `wall_reached` condition covers. An hour from before reads 0.
+///
+/// Version 42: the request row flags a refusal the router issued before it asked any account for the client's or a
 /// policy's cause, and an hourly rollup row counts such requests by error code in a map of their own, apart from every
 /// other figure, so a reader that sums the row's requests, outcomes, cache figures, histograms and errors sees none of
 /// them. The flag is set on every stored rejected row other than a probe with one of the refusal codes and no attempt,
@@ -1051,5 +1057,11 @@ ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
 CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);
 CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
     ),
-    (41, crate::refusals::REFUSED_STEP_SQL),
+    (
+        41,
+        "ALTER TABLE requests ADD COLUMN landed_at INTEGER;
+CREATE INDEX requests_landed_at ON requests(landed_at);
+ALTER TABLE account_rollups_hourly ADD COLUMN wall_early_ms INTEGER NOT NULL DEFAULT 0;",
+    ),
+    (42, crate::refusals::REFUSED_STEP_SQL),
 ];

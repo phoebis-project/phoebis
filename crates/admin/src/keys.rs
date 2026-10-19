@@ -15,7 +15,6 @@ use phoebis_routing::RegistrySnapshot;
 use phoebis_store::{
     stamp_token, ApiKeyRow, AttachmentSubject, StoreError, GUARDRAIL_BOUND, ROTATION_GRACE_MS,
 };
-use rand::Rng;
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -55,7 +54,7 @@ pub(crate) struct KeyInput {
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<i64>, nullable)]
     expires_at: Option<Option<i64>>,
-    /// An ordered list of `{pattern, not}`, at most 256, each pattern checked as the routing page's model rules say.
+    /// An ordered list of `{pattern, not}`, at most 256.
     #[serde(default)]
     model_rules: Option<Vec<RuleInput>>,
     /// `extend` or `replace`.
@@ -80,13 +79,13 @@ pub(crate) struct KeyInput {
     #[serde(default)]
     guardrails: Option<Vec<String>>,
     /// Optional, the `revision` the row was read at. The write lands only while the key still carries it, and a body
-    /// without it fences on the route's own read. A create accepts it and ignores it, since a create has no row to
-    /// fence on. `revision` names one state of one key: an edit, a rotation or a revocation moves it, and a key
-    /// deleted and created again under the same id never answers a token its predecessor did, so an edit read
-    /// before the deletion answers `409` and writes nothing.
+    /// without it fences on the route's own read. A malformed value answers `400`, a stale one `409` under
+    /// `stale_edit`. A create accepts it and ignores it, since a create has no row to fence on. `revision` names one
+    /// state of one key: an edit, a rotation or a revocation moves it, and a key deleted and created again under the
+    /// same id never answers a token its predecessor did, so an edit read before the deletion answers `409` and
+    /// writes nothing.
     // The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
-    // its own sentence rather than read as "not sent" or refused with the body's. A create reads nothing of it,
-    // since there is no row to fence on.
+    // its own sentence rather than read as "not sent" or refused with the body's.
     #[serde(default, deserialize_with = "present")]
     #[schema(value_type = u64)]
     expected_revision: Option<Value>,
@@ -215,7 +214,7 @@ pub(crate) struct KeyCreated {
 
 fn new_secret() -> String {
     let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
+    phoebis_oauth::random::fill(&mut bytes);
     format!("phoebis-{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 

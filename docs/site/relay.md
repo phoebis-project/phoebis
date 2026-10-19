@@ -292,8 +292,12 @@ Every upstream response head is classified before a byte reaches the client, by 
 until its `message_start` or its first `error` event, at most 64 KiB and 30 seconds, so a rate-limit error delivered as
 a `200` stream can still fail over without a byte having reached the client. A stream that has not reached its first
 committing event by then is forwarded as it stands, because the client is waiting and a longer hold buys no better
-verdict. Every cooldown deadline carries a second of margin, so a request sent at the reset is not refused by a clock a
-hair behind.
+verdict. Past the commit, the router's own reading of a stream, the copy the ledger and the other bus readers take their
+phases and usage from, holds at most 512 KiB of one event while that event is still arriving. An event that outgrows
+the bound before its end is skipped in that copy and the events after it are still read, while one that arrives whole
+in one decoded piece is parsed whatever its size. The relay logs one warning at the end of a stream that had an event
+skipped, and the client receives every byte as sent either way. Every cooldown deadline carries a second of margin, so
+a request sent at the reset is not refused by a clock a hair behind.
 
 | Head | Verdict | What follows |
 | --- | --- | --- |
@@ -487,8 +491,8 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 | Wait | Bound | Why |
 | --- | --- | --- |
 | The upstream connect and TLS handshake | 10 seconds | A first handshake on a cold host runs well under it, and a stalled one costs at most twice it before the `502` |
-| The upstream response head | 600 seconds | The native client gives a request ten minutes (`X-Stainless-Timeout: 600`), so the router does not give up before the client itself would |
-| The gap between two stream events | 600 seconds | The same ten minutes |
+| The upstream response head | 600 seconds | The relay's own ceiling on a silent upstream, above the client's wait with the client's default timeouts: Claude Code gives the head 180 seconds plus 1 second per 32 KiB of body under its own 600-second cap, so the client leaves no later than this guard |
+| The gap between two stream events | 600 seconds | The same ceiling: Claude Code aborts a stream after 180 seconds without a byte while its watchdog is on, so the client leaves no later than this guard |
 | The pre-commit hold | 30 seconds and 64 KiB | The client is waiting, and a longer hold buys no better verdict |
 | A retry in place | The pool's `retry_in_place_seconds`, 0 to 300, default 60 | The operator's bound on waiting out a throttle on the same account |
 | The slow-down's hold | The pool's `slow_down_hold_seconds`, 1 to 300, default 120 | Before the head, so the client's first-byte window covers it |

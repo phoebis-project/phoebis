@@ -475,7 +475,7 @@ impl Store {
         })
     }
 
-    /// Every stamp written from here on reads `clock`. The admin fixture capture sets it once, before it seeds the
+    /// Every stamp written from here on reads `clock`. The admin fixture capture sets it before it seeds the
     /// registry, so two captures stamp the same instants.
     pub fn set_clock(&self, clock: Clock) {
         *self.clock.lock().expect(LOCK_POISONED) = clock;
@@ -921,11 +921,10 @@ impl HoldGate {
 }
 
 /// The registry opened for a key recovery: the process lock taken (so a running router refuses the open with
-/// `Locked`), the schema checked but not migrated until the discard, and no canary proof, since the key is the one
-/// thing being replaced.
+/// `Locked`), the schema checked but not migrated until `prepare_recovery` runs before the discard, and no canary
+/// proof, since the key is the one thing being replaced.
 pub struct RecoveryStore {
     conn: Connection,
-    created_lock: Option<PathBuf>,
     _lock: lock::ProcessLock,
 }
 
@@ -942,40 +941,35 @@ pub enum KeyMatch {
 }
 
 impl Store {
-    /// Takes the data directory's lock, then opens the registry file that is already there. A missing file is
-    /// refused rather than created, since a recovery has nothing to discard in it and SQLite would create it at the
-    /// umask's mode.
+    /// Takes the data directory's lock, then opens the registry file that is already there. A missing file is refused
+    /// rather than created, since a recovery has nothing to discard in it and SQLite would create it at the umask's
+    /// mode. A recovery run with `--owner` creates the lock file and hands it to that user before it calls this, and
+    /// without `--owner` this open creates the file where it is missing, as every open does.
     pub fn open_for_recovery(db_path: &Path) -> Result<RecoveryStore, StoreError> {
         let data_dir = permissions::data_dir_of(db_path);
-        let lock_file = lock::path(data_dir);
-        let lock_missing = matches!(
-            std::fs::symlink_metadata(&lock_file),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound
-        );
         let process_lock = lock::acquire(data_dir)?;
-        let conn = Connection::open_with_flags(
-            db_path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        // The key check, the counts and the prompt read the file as it is: a run that stops before the discard leaves
-        // the registry at the version it found, which the build that wrote it still opens.
-        conn.busy_timeout(BUSY_TIMEOUT)?;
-        check_schema(&conn)?;
+        let open = || -> Result<Connection, StoreError> {
+            let conn = Connection::open_with_flags(
+                db_path,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?;
+            // The key check, the counts and the prompt read the file as it is: a run that stops before the
+            // preparation leaves the registry at the version it found, which the build that wrote it still opens.
+            conn.busy_timeout(BUSY_TIMEOUT)?;
+            check_schema(&conn)?;
+            Ok(conn)
+        };
+        // A refused open keeps the lock file it created: a start that opened it meanwhile locks that file, and an
+        // unlinked one would let a later start create and lock a second file at the path.
+        let conn = open()?;
         Ok(RecoveryStore {
             conn,
-            created_lock: lock_missing.then_some(lock_file),
             _lock: process_lock,
         })
     }
 }
 
 impl RecoveryStore {
-    /// The lock file this open created, absent from a data directory no router has opened, such as a registry restored
-    /// onto a new host. A recovery run as root hands it to the service's user, whose next start opens it.
-    pub fn created_lock(&self) -> Option<&Path> {
-        self.created_lock.as_deref()
-    }
-
     /// How `key` meets the registry. A canary that does not open proves nothing about the rows a discard would
     /// erase, so every sealed row is tried before the answer licenses one, never a sample: a canary that fails while
     /// rows open is corrupt. Without a canary the same scan proves the key, and a registry holding nothing sealed
@@ -1003,10 +997,17 @@ impl RecoveryStore {
         sealed_counts_on(&self.conn)
     }
 
-    /// One transaction: the canary, the credentials, the API-key secrets and the recipe bodies go, every oauth
-    /// account reads `disconnected` and every api_key account `unpaired` under `cause` with its lifecycle
-    /// generation and revision stepped, open and uncertain refresh attempts settle `failed` with the detail
-    /// `disconnected`, and a canary is sealed under `key`.
+    /// Runs the schema and every migration above the stored version, the step `discard_sealed` needs before its
+    /// statements meet the columns they name. A failure here moved nothing the discard would, so the caller says
+    /// nothing was discarded.
+    pub fn prepare_recovery(&mut self) -> Result<(), StoreError> {
+        prepare(&mut self.conn, true)
+    }
+
+    /// One transaction over a schema `prepare_recovery` moved: the canary, the credentials, the API-key secrets and
+    /// the recipe bodies go, every oauth account reads `disconnected` and every api_key account `unpaired` under
+    /// `cause` with its lifecycle generation and revision stepped, open and uncertain refresh attempts settle
+    /// `failed` with the detail `disconnected`, and a canary is sealed under `key`.
     ///
     /// The operations page prints these statements as the sequence an operator runs by hand, so the two change
     /// together.
@@ -1016,8 +1017,6 @@ impl RecoveryStore {
         cause: StateCause,
     ) -> Result<SealedCounts, StoreError> {
         let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
-        // The schema moves only once the recovery proceeds, so the statements below meet the columns they name.
-        prepare(&mut self.conn, true)?;
         // No `Store` clock exists here: the wall clock stamps the rows, as it does every write outside a test rig.
         let now = jiff::Timestamp::now().as_millisecond();
         let tx = self

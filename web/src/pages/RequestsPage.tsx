@@ -4,7 +4,7 @@ import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
-import { type Paging, useFollow } from '@/app/useFollow';
+import { useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
 import { Chips } from '@/components/ChipView';
 import { FilterBar } from '@/components/FilterBar';
@@ -23,12 +23,12 @@ import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, FOLLOW_OVERRUN, readEnd, spanEnded } from '@/lib/follow';
+import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, readEnd, spanEnded } from '@/lib/follow';
 import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { planLabel } from '@/lib/quota';
-import { costCellOf, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
+import { costCellOf, costHeaderTitle, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink } from '@/lib/routingLog';
 import type { UnitPosition } from '@/lib/unit';
@@ -142,7 +142,8 @@ function CostCell({ request, unit }: { request: RequestLog; unit: UnitPosition }
 }
 
 /**
- * The drawer's cost row: the equivalent or share chips with the dollar equivalent muted after them, or the dollars.
+ * The drawer's cost row: the equivalent or share chips with the dollar equivalent muted after them, the dollars, the
+ * dollar equivalent with `equivalent` muted after it, or the dash of a position that reads nothing for the request.
  * An estimated figure reads a tilde before its first value, and the row's title says why.
  */
 function costRowValue(unit: CostUnit) {
@@ -163,6 +164,8 @@ function costRowValue(unit: CostUnit) {
           <span className="muted">{fmtUsd(unit.usd)} equivalent</span>
         </span>
       );
+    case 'dash':
+      return <b>-</b>;
     case 'dollars':
       return (
         <b>
@@ -170,6 +173,7 @@ function costRowValue(unit: CostUnit) {
           {fmtUsd(unit.usd)}
         </b>
       );
+    case 'equivalent_dollars':
     case 'unpriced':
       return (
         <b>
@@ -188,15 +192,15 @@ function costRowValue(unit: CostUnit) {
 }
 
 /**
- * The drawer's cost value under one title: why a dollar figure or a free call's zero shares stand where they do, the
- * serving account's tier by its plan, the price list and the cost model in force at the request's instant while the
- * settings are at hand, and the estimate. A title on an element inside the cell would hide the row's own wherever the
- * figure is hovered.
+ * The drawer's cost value under one title: why a dollar figure, a dash or a free call's figures stand where they do,
+ * the serving account's tier by its plan, the price list and the cost model in force at the request's instant while
+ * the settings are at hand, and the estimate of a figure. A title on an element inside the cell would hide the row's
+ * own wherever the figure is hovered.
  */
 function CostRowCell({ request: r, settings, unit }: { request: RequestLog; settings: Settings | null; unit: UnitPosition }) {
   const cost = costUnitOf(r, unit);
-  const why = (cost.kind === 'shares' || cost.kind === 'equivalent') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : null;
-  const title = withEstimate([why, r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated);
+  const why = (cost.kind === 'shares' || cost.kind === 'equivalent' || cost.kind === 'equivalent_dollars') && cost.reason !== null ? FREE_SHARE_TITLE : cost.kind === 'dollars' ? `Billed in dollars: ${FUNDING_WORD[cost.funding]}` : cost.kind === 'unpriced' ? NO_SHARE_TITLE : cost.kind === 'dash' ? cost.title : null;
+  const title = withEstimate([why, r.tier === null ? null : `Account tier ${planLabel(r.tier)}`, revisionsTitle(settings, r.at)].filter((part) => part !== null).join('. '), cost.estimated && cost.kind !== 'dash');
   return (
     <td className="right num" title={title || undefined}>
       {costRowValue(cost)}
@@ -225,7 +229,7 @@ function keyOptions(keys: ApiKey[] | null, selected: string[]): Option[] {
 /** The route's order, which a poll's merge keeps: newest first, and the higher id first at one instant. */
 const newestFirst = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 /** The route answers its rows as `requests`, and the poll reads a list's as `rows`. */
-const listed = (page: RequestPage) => ({ nextCursor: page.nextCursor, rows: page.requests });
+const listed = (page: RequestPage) => ({ landedThrough: page.landedThrough, nextCursor: page.nextCursor, rows: page.requests });
 
 export function RequestsPage() {
   const { requestId } = useParams();
@@ -251,9 +255,7 @@ export function RequestsPage() {
   // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
-  const cursor = paging.for === address ? paging.cursor : undefined;
-  const stack = paging.for === address ? paging.stack : [];
-  const pagedTo = paging.for === address ? paging.to : undefined;
+  const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
@@ -288,7 +290,7 @@ export function RequestsPage() {
     list: requests.data && listed(requests.data),
     paging,
     paused: Boolean(requestId) || barOpen,
-    read: (c, to) => api.listRequests({ ...query, cursor: c, to: iso(readEnd(custom, span.to, to)) }).then(listed),
+    read: (c, to, landedAfter) => api.listRequests(pollQuery(query, custom, span.to, to, c, landedAfter)).then(listed),
     setPaging,
     stale: requests.stale,
   });
@@ -382,7 +384,7 @@ export function RequestsPage() {
                   {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
                   {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
                   {shown.has('cost') && (
-                    <th className="right col-fit" title={unit === 'native' ? '20x window equivalents for a request a subscription window paid, dollars for an overage, fast mode or API key request' : 'Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request'}>
+                    <th className="right col-fit" title={costHeaderTitle(unit)}>
                       Cost
                     </th>
                   )}

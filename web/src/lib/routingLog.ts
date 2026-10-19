@@ -14,7 +14,7 @@ export { ageWord };
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
 
-export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'rewrite in flight' | 'runway' | 'slow-down' | 'slowest' | 'speed' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
+export type FactLabel = '5h' | '7d' | 'Fable' | 'answer' | 'attempt' | 'capture' | 'cause' | 'client' | 'depth' | 'epoch' | 'field' | 'fields' | 'fit' | 'gap' | 'held' | 'idle' | 'in flight' | 'key' | 'lasted' | 'models' | 'next' | 'over' | 'pick' | 'pins' | 'prefix' | 'rank' | 'resets' | 'retry' | 'rewrite in flight' | 'runway' | 'secret' | 'slow-down' | 'slowest' | 'speed' | 'spent' | 'state' | 'to' | 'turn' | 'until' | 'was';
 
 const LABELS = {
   answer: 'answer',
@@ -47,6 +47,7 @@ const LABELS = {
   retry: 'retry',
   rewrite: 'rewrite in flight',
   runway: 'runway',
+  secret: 'secret',
   seven_day: '7d',
   seven_day_fable: 'Fable',
   slow_down: 'slow-down',
@@ -166,6 +167,7 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   slow_down_started: 'slow-down started',
   warm_prefix_expired: 'warm prefix expired',
   wind_down_started: 'wind-down started',
+  window_cleared: 'window cleared',
   window_reset: 'window reset',
   window_spent: 'window spent',
 };
@@ -181,14 +183,14 @@ export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired', 'reservation_expired'] },
   { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started', 'slow_down_started', 'slow_down_ended'] },
   { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached'] },
-  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'refresh_succeeded', 'refresh_uncertain'] },
+  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'refresh_succeeded', 'refresh_uncertain'] },
   { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
   { label: 'keepalive', members: ['probe', 'warm_prefix_expired'] },
   { label: 'registry changes', members: ['registry_changed', 'catalog_changed', 'model_permitted', 'model_rejected'] },
   { label: 'router life cycle', members: ['router_started', 'ledger_gap'] },
 ];
 
-/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 32 event kinds. */
+/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 33 event kinds. */
 export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
 
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
@@ -429,11 +431,23 @@ const registryBy = (kind: string) => {
   return at < 0 ? words(kind) : `${kind.slice(0, at)} ${wordOf(REGISTRY_VERB, kind.slice(at + 1))}`;
 };
 
-const fieldValue = (field: string, value: unknown) => {
+/** The registry fields that hold an instant: a key's expiry and an account's subscription end. */
+const TIME_FIELDS = new Set(['expires_at', 'subscription_ends_at']);
+
+const fieldValue = (field: string, value: unknown, now: number): string => {
   if (value === null || value === undefined) return 'none';
+  // A list, such as the guardrails a pool or a key runs, reads as the console's lists do elsewhere.
+  if (Array.isArray(value)) return value.length === 0 ? 'none' : value.map((item) => fieldValue(field, item, now)).join(', ');
   if (typeof value === 'boolean') return value ? 'on' : 'off';
   if (typeof value === 'number' && SHARE_FIELDS.has(field)) return fmtPct(value);
+  if (typeof value === 'number' && TIME_FIELDS.has(field)) return formatFact(value, 'time', now);
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
+};
+
+/** A registry change's field entries without the flag a staged secret sets, and whether it stands. */
+const registryDiff = (diff: unknown): { entries: [string, unknown][]; secret: boolean } => {
+  const { secret_replaced: secret, ...rest } = rec(diff);
+  return { entries: Object.entries(rest), secret: secret === true };
 };
 
 function cooldownBy(e: RoutingEvent): string {
@@ -521,6 +535,12 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     }
     case 'wind_down_started':
       return { value: 'subscription ends' };
+    // The sentence runs past the By column, so the chip draws its first words and its title carries it whole.
+    case 'window_cleared': {
+      const window = wordOf(WINDOW_WORD, str(d.window) ?? '');
+      const reading = num(d.utilization);
+      return reading === null ? { value: `${window} cleared` } : { title: `${window} cleared to ${fmtPct(reading)} under its reset`, value: `${window} cleared` };
+    }
     case 'window_reset':
       return { value: `${wordOf(WINDOW_WORD, str(d.window) ?? '')} reset` };
     case 'window_spent':
@@ -625,13 +645,13 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
     case 'refresh_succeeded':
       return time('until', d.access_expires_at);
     case 'registry_changed': {
-      // Only a diff whose every entry is a change names its fields, and the whole row the store writes on an edit names
-      // none.
-      const diff = Object.entries(rec(d.diff));
-      if (diff.length === 0 || !diff.every(([, change]) => isChange(change))) return [];
+      // Only a diff whose every entry is a change names its fields: a creation's snapshot names none.
+      const { entries: diff, secret } = registryDiff(d.diff);
+      if (diff.length === 0) return secret ? [pair('secret', 'replaced', 'text', now)] : [];
+      if (!diff.every(([, change]) => isChange(change))) return [];
       if (diff.length > 1) return [pair('fields', diff.length, 'count', now)];
       const [field, change] = diff[0];
-      return [pair('field', fieldLabel(field), 'text', now), pair('to', fieldValue(field, rec(change).to), 'text', now)];
+      return [pair('field', fieldLabel(field), 'text', now), pair('to', fieldValue(field, rec(change).to, now), 'text', now)];
     }
     case 'router_started':
       return count('pins', d.pins_loaded);
@@ -1808,18 +1828,20 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const target = str(d.target);
       const subject = kind.slice(0, kind.indexOf('_'));
       add('Change', plain(registryBy(kind)), target === null ? null : subject === 'pool' || subject === 'key' || subject === 'account' ? { entity: { id: target, kind: subject }, value: target } : plain(target));
-      const diff = Object.entries(rec(d.diff));
-      const primitive = (v: unknown) => v === null || ['boolean', 'number', 'string'].includes(typeof v);
+      const { entries: diff, secret } = registryDiff(d.diff);
+      const primitive = (v: unknown): boolean => v === null || ['boolean', 'number', 'string'].includes(typeof v) || (Array.isArray(v) && v.every(primitive));
       if (diff.every(([, change]) => isChange(change) && primitive(rec(change).from) && primitive(rec(change).to))) {
-        for (const [field, change] of diff) add(fieldLabel(field), plain(fieldValue(field, rec(change).from), 'from'), plain(fieldValue(field, rec(change).to), 'to'));
+        for (const [field, change] of diff) add(fieldLabel(field), plain(fieldValue(field, rec(change).from, now), 'from'), plain(fieldValue(field, rec(change).to, now), 'to'));
       } else {
         add('Fields', plain(fmtInt(diff.length)));
       }
+      if (secret) add('Secret', plain('replaced'));
       add('Actor', row.actor === null ? null : plain(row.actor));
-      // A record holds the settings it was decided under, so one written before the edit reads each field's old value.
-      if (diff.every(([, change]) => isChange(change))) {
+      // A record holds the pool's settings it was decided under, so one written before a pool's edit reads each field's
+      // old value.
+      if (kind === 'pool_updated' && diff.every(([, change]) => isChange(change))) {
         const before = formatFact(atOf(row), 'time', now);
-        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${fieldLabel(field)} ${fieldValue(field, rec(change).from)}`)));
+        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${fieldLabel(field)} ${fieldValue(field, rec(change).from, now)}`)));
       }
       break;
     }
@@ -2022,6 +2044,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('End from', text(d.end_source));
       break;
     }
+    case 'window_cleared':
+      add('Window', window === null ? null : plain(wordOf(WINDOW_WORD, window)));
+      add('Before', pct(d.utilization_before));
+      add('After', pct(d.utilization));
+      add('Reset', time(d.reset));
+      add('Read from', text(d.source, SOURCE_WORD));
+      break;
     case 'window_reset':
       add('Window', window === null ? null : plain(wordOf(WINDOW_WORD, window)));
       add('Before the reset', pct(d.utilization_before));
@@ -2093,7 +2122,9 @@ export function pinRows(record: DecisionRecord, now: number): CardRow[] {
     // A version 1 record carried the mark alone, with no account, instant or window.
     const trigger = p.markedWindow === null ? [] : [plain(`by the ${wordOf(WINDOW_WORD, p.markedWindow)} trigger`)];
     const marked = p.markedOn !== null && p.markedAt !== null ? [accountChip(p.markedOn, 'marked on'), plain(formatFact(p.markedAt, 'time', now), 'at'), ...trigger] : [plain('marked by a round')];
-    rows.push({ chips: [...(p.marked ? marked : []), ...(p.shed !== null ? [accountChip(p.shed.from, 'shed from'), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
+    // A failover's landing stamps the pin as a round's move does, so the reason picks the word the status page uses.
+    const origin = p.shed?.reason === 'round' ? 'shed from' : 'failed over from';
+    rows.push({ chips: [...(p.marked ? marked : []), ...(p.shed !== null ? [accountChip(p.shed.from, origin), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
   }
   return [...rows, ...released];
 }

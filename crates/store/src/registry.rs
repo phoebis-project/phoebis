@@ -1006,6 +1006,14 @@ impl Store {
         self.park_on_pool_write_hold();
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let before = tx
+            .query_row(
+                &format!("{POOL_SELECT} WHERE id = ?1"),
+                params![row.id],
+                row_to_pool,
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::PoolNotFound(row.id.clone()))?;
         let held = match guardrails {
             Some(ids) => {
                 let keys = pool_key_ids(&tx, &row.id)?
@@ -1062,21 +1070,14 @@ impl Store {
                 row.incarnation as i64
             ],
         )?;
+        // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM pools WHERE id = ?1",
-                params![row.id],
-                |r| r.get(0),
-            )?;
-            return Err(if exists > 0 {
-                StoreError::Stale
-            } else {
-                StoreError::PoolNotFound(row.id.clone())
-            });
+            return Err(StoreError::Stale);
         }
+        let pairs = pool_pairs(&before, row);
         let diff = match guardrails {
-            Some(ids) => with_guardrails_change(pool_diff(row), &held, ids)?,
-            None => pool_diff(row),
+            Some(ids) => with_guardrails_change(pairs, &held, ids)?,
+            None => pairs,
         };
         record_change(&tx, at, actor, "pool_updated", &row.id, &diff)?;
         if let Some(members) = members {
@@ -1274,6 +1275,11 @@ impl Store {
         {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
+        let key_row = format!("{KEY_SELECT} WHERE id = ?1");
+        let before = tx
+            .query_row(&key_row, params![row.id], row_to_key)
+            .optional()?
+            .ok_or_else(|| StoreError::KeyNotFound(row.id.clone()))?;
         let held = subject_guardrails(&tx, "key", &row.id)?;
         // The pool the row names, the new one on a move, so a key moving into a pool cannot run more than the bound.
         let pool_list = subject_guardrails(&tx, "pool", &row.pool_id)?;
@@ -1300,21 +1306,16 @@ impl Store {
                 row.incarnation as i64
             ],
         )?;
+        // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM api_keys WHERE id = ?1",
-                params![row.id],
-                |r| r.get(0),
-            )?;
-            return Err(if exists > 0 {
-                StoreError::Stale
-            } else {
-                StoreError::KeyNotFound(row.id.clone())
-            });
+            return Err(StoreError::Stale);
         }
+        // Read back rather than taken from `row`: the edit leaves the display prefix, which the pairs name too.
+        let after = tx.query_row(&key_row, params![row.id], row_to_key)?;
+        let pairs = key_pairs(&before, &after);
         let diff = match guardrails {
-            Some(ids) => with_guardrails_change(key_diff(row), &held, ids)?,
-            None => key_diff(row),
+            Some(ids) => with_guardrails_change(pairs, &held, ids)?,
+            None => pairs,
         };
         record_change(&tx, at, actor, "key_updated", &row.id, &diff)?;
         if let Some(ids) = guardrails {
@@ -1599,6 +1600,9 @@ impl Store {
     pub fn commit_account_update(&self, u: &AccountUpdate<'_>) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let absent = || StoreError::AccountNotFound(u.id.to_string());
+        let before = crate::accounts::account_in(&tx, u.id)?.ok_or_else(absent)?;
+        let term = crate::accounts::subscription_term_in(&tx, u.id)?.ok_or_else(absent)?;
         let cancelled = u.cancellation.map(|(cancelled, _)| cancelled);
         let ends_at = u.cancellation.and_then(|(_, ends_at)| ends_at);
         let (state, cause) = u.state.unzip();
@@ -1624,17 +1628,9 @@ impl Store {
                 cause,
             ],
         )?;
+        // The row stands, read above, so a fence that matched nothing means another write moved it.
         if updated == 0 {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM accounts WHERE id = ?1",
-                params![u.id],
-                |r| r.get(0),
-            )?;
-            return Err(if exists > 0 {
-                StoreError::Stale
-            } else {
-                StoreError::AccountNotFound(u.id.to_string())
-            });
+            return Err(StoreError::Stale);
         }
         if let Some(secret) = u.secret {
             store_api_key_secret(&tx, &self.key, u.id, secret)?;
@@ -1645,15 +1641,7 @@ impl Store {
             u.actor,
             "account_updated",
             u.id,
-            &serde_json::json!({
-                "label": u.label,
-                "secret": u.secret.is_some(),
-                "state": state.map(AccountState::as_str),
-                "enabled": u.enabled,
-                "cancelled": cancelled,
-                "subscription_ends_at": ends_at,
-            })
-            .to_string(),
+            &account_pairs(&before, u, &term),
         )?;
         tx.commit()?;
         Ok(())
@@ -2319,6 +2307,16 @@ fn unknown_word(column: usize, word: &str) -> rusqlite::Error {
 }
 
 fn pool_diff(row: &PoolRow) -> String {
+    pool_fields(row).to_string()
+}
+
+/// The pairs of the fields whose value differs between `before` and `after`, over the fields `pool_diff` names,
+/// `{}` when none does.
+fn pool_pairs(before: &PoolRow, after: &PoolRow) -> String {
+    serde_json::Value::Object(changed(&pool_fields(before), &pool_fields(after))).to_string()
+}
+
+fn pool_fields(row: &PoolRow) -> serde_json::Value {
     serde_json::json!({
         "label": row.label,
         "enabled": row.enabled,
@@ -2352,11 +2350,18 @@ fn pool_diff(row: &PoolRow) -> String {
         "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
         "auto_mode_server": row.auto_mode_server,
     })
-    .to_string()
+}
+
+fn key_diff(row: &ApiKeyRow) -> String {
+    key_fields(row).to_string()
+}
+
+fn key_pairs(before: &ApiKeyRow, after: &ApiKeyRow) -> String {
+    serde_json::Value::Object(changed(&key_fields(before), &key_fields(after))).to_string()
 }
 
 /// Never the digest: the change log is read by the ledger and the UI.
-fn key_diff(row: &ApiKeyRow) -> String {
+fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
     serde_json::json!({
         "label": row.label,
         "pool_id": row.pool_id,
@@ -2370,7 +2375,54 @@ fn key_diff(row: &ApiKeyRow) -> String {
         "prefix": row.prefix,
         "auto_mode_server": row.auto_mode_server,
     })
-    .to_string()
+}
+
+/// The account's pairs over the five editable fields, `secret_replaced` beside them when a secret was staged. The
+/// row holds the label, the state and the switch, and the term row the flag and the end.
+fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &SubscriptionTerm) -> String {
+    // As the update's `CASE` writes them: the end goes with the flag, dropped the moment the flag is off.
+    let (cancelled, ends_at) = match u.cancellation {
+        None => (term.cancelled, term.ends_at),
+        Some((true, ends_at)) => (true, ends_at),
+        Some((false, _)) => (false, None),
+    };
+    let old = serde_json::json!({
+        "label": before.label,
+        "enabled": before.enabled,
+        "state": before.state.as_str(),
+        "cancelled": term.cancelled,
+        "subscription_ends_at": term.ends_at,
+    });
+    let new = serde_json::json!({
+        "label": u.label,
+        "enabled": u.enabled.unwrap_or(before.enabled),
+        "state": u.state.map_or(before.state, |(state, _)| state).as_str(),
+        "cancelled": cancelled,
+        "subscription_ends_at": ends_at,
+    });
+    let mut pairs = changed(&old, &new);
+    // A secret's value never reaches the log, which the ledger and the UI read.
+    if u.secret.is_some() {
+        pairs.insert("secret_replaced".into(), serde_json::Value::Bool(true));
+    }
+    serde_json::Value::Object(pairs).to_string()
+}
+
+/// Each member whose value differs between two snapshots of one row, as `{"from": old, "to": new}`.
+fn changed(
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> serde_json::Map<String, serde_json::Value> {
+    let (Some(before), Some(after)) = (before.as_object(), after.as_object()) else {
+        return serde_json::Map::new();
+    };
+    before
+        .iter()
+        .filter_map(|(field, from)| {
+            let to = after.get(field).unwrap_or(&serde_json::Value::Null);
+            (from != to).then(|| (field.clone(), serde_json::json!({ "from": from, "to": to })))
+        })
+        .collect()
 }
 
 fn guardrail_diff(row: &GuardrailRow, pools: &[String], keys: &[String]) -> String {

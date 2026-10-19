@@ -743,6 +743,180 @@ async fn the_completion_event_names_the_members_source_and_the_writers_follow_it
     up.shutdown().await;
 }
 
+/// A JSON 200 whose `diagnostics` member is `member`, written as its raw JSON value.
+fn answer_with_diagnostics(id: &str, member: &str) -> Respond {
+    json_answer(
+        200,
+        &format!(
+            r#"{{"id":"{id}","type":"message","content":[],"usage":{{"input_tokens":1,"output_tokens":1}},"diagnostics":{member}}}"#
+        ),
+    )
+}
+
+/// A streamed 200 whose `message_start` and `message_delta` end with `head` and `delta`, each empty or a
+/// `diagnostics` member led by its comma.
+fn stream_with_diagnostics(id: &str, head: &str, delta: &str) -> Respond {
+    Respond::Sse {
+        status: 200,
+        headers: vec![],
+        events: vec![
+            ev(
+                "message_start",
+                &format!(
+                    r#"{{"type":"message_start","message":{{"id":"{id}","usage":{{"input_tokens":1}}{head}}}}}"#
+                ),
+            ),
+            ev(
+                "message_delta",
+                &format!(
+                    r#"{{"type":"message_delta","delta":{{"stop_reason":"end_turn"}},"usage":{{"output_tokens":1}}{delta}}}"#
+                ),
+            ),
+            ev("message_stop", r#"{"type":"message_stop"}"#),
+        ],
+        delay_between: Duration::from_millis(1),
+    }
+}
+
+#[tokio::test]
+async fn a_null_diagnostics_member_reads_none_only_where_the_body_named_a_message_and_a_null_reason_reads_pending(
+) {
+    const PENDING: &str = r#"{"cache_miss_reason":null}"#;
+    const NULL_MEMBER: &str = r#","diagnostics":null"#;
+    const PENDING_MEMBER: &str = r#","diagnostics":{"cache_miss_reason":null}"#;
+    let up = FakeUpstream::start(vec![]).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    // The pool's switch stays off, so a pass carries the member only where the client sent it.
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let named = || {
+        let mut value: serde_json::Value = serde_json::from_slice(body(BodyFixture::Oauth))
+            .expect("the fixture body is valid JSON");
+        value["diagnostics"] = serde_json::json!({ "previous_message_id": "msg_prev" });
+        let mut req = request_from_fixture(
+            inference_head(FixtureKind::OauthNonFirstParty),
+            &serde_json::to_vec(&value).expect("a Value always re-encodes"),
+            KEY,
+        );
+        set_header(&mut req, "x-claude-code-session-id", "s-named");
+        req
+    };
+    // The captured first-party body carries the member with a null id: a first turn, naming no message.
+    let unnamed = || {
+        request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            body(BodyFixture::FirstParty9b244),
+            KEY,
+        )
+    };
+    let sourceless = |session: &str| request_for(KEY, "claude-sonnet-4-5", session);
+    let read = |complete: &RequestComplete| {
+        (
+            complete.diagnostics,
+            complete
+                .usage
+                .as_ref()
+                .and_then(|u| u.cache_miss_reason.clone()),
+        )
+    };
+    let client = Some(DiagnosticsSource::Client);
+    let cases = [
+        (
+            named(),
+            answer_with_diagnostics("msg_named_null", "null"),
+            client,
+            Some("none"),
+            "a null member answering a body that named a message",
+        ),
+        (
+            unnamed(),
+            answer_with_diagnostics("msg_unnamed_null", "null"),
+            client,
+            None,
+            "a null member answering a body whose member named no message",
+        ),
+        (
+            sourceless("s-null"),
+            answer_with_diagnostics("msg_sourceless_null", "null"),
+            None,
+            None,
+            "a null member answering a body with no member",
+        ),
+        (
+            unnamed(),
+            answer_with_diagnostics("msg_unnamed_pending", PENDING),
+            client,
+            Some("pending"),
+            "the pending shape answering a body that named no message",
+        ),
+        (
+            sourceless("s-pending"),
+            answer_with_diagnostics("msg_sourceless_pending", PENDING),
+            None,
+            Some("pending"),
+            "the pending shape answering a body with no member",
+        ),
+        (
+            sourceless("s-typed"),
+            answer_with_diagnostics(
+                "msg_sourceless_typed",
+                r#"{"cache_miss_reason":{"type":"none"}}"#,
+            ),
+            None,
+            Some("none"),
+            "a type the upstream names",
+        ),
+        (
+            named(),
+            stream_with_diagnostics("msg_named_head", NULL_MEMBER, ""),
+            client,
+            Some("none"),
+            "a streamed head's null member on a body that named a message",
+        ),
+        (
+            unnamed(),
+            stream_with_diagnostics("msg_unnamed_head", NULL_MEMBER, ""),
+            client,
+            None,
+            "a streamed head's null member on a body that named no message",
+        ),
+        (
+            unnamed(),
+            stream_with_diagnostics("msg_unnamed_head_pending", PENDING_MEMBER, ""),
+            client,
+            Some("pending"),
+            "a streamed head's pending shape on a body that named no message",
+        ),
+        (
+            named(),
+            stream_with_diagnostics("msg_named_delta", "", NULL_MEMBER),
+            client,
+            Some("none"),
+            "a delta's null member on a body that named a message",
+        ),
+        (
+            unnamed(),
+            stream_with_diagnostics("msg_unnamed_delta", "", NULL_MEMBER),
+            client,
+            None,
+            "a delta's null member on a body that named no message",
+        ),
+    ];
+    let count = cases.len();
+    for (request, respond, source, reason, case) in cases {
+        up.push_credential_rule(A, "/v1/messages", respond);
+        let (status, complete) = completion_of(&h, &mut sub, request).await;
+        assert_eq!(status, 200, "{case}");
+        assert_eq!(
+            read(&complete),
+            (source, reason.map(str::to_string)),
+            "{case}"
+        );
+    }
+    assert_eq!(up.requests().len(), count, "one pass per case");
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_request_whose_account_left_after_its_head_completes_with_the_legs_source() {
     let up = FakeUpstream::start(vec![Rule {

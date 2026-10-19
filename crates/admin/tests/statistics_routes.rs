@@ -79,7 +79,13 @@ fn keys_in_order(object: &serde_json::Value) -> Vec<&str> {
 
 #[tokio::test]
 async fn settings_and_system_show_effective_values_ledger_health_and_gaps_without_secrets() {
-    let parts = common::admin_parts_full().await;
+    // Two day counts apart, so each member reads its own key's figure.
+    let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
+        retention_days: 400,
+        rollup_retention_days: 500,
+        ..phoebis_ledger::LedgerConfig::default()
+    })
+    .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
     let keys_of = |member: &serde_json::Value| {
@@ -107,7 +113,14 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             &["content", "effective", "revisions", "source"],
         ),
         ("listeners", &["metrics", "proxy", "proxy_tls"]),
-        ("retention", &["body_capture_max_hours"]),
+        (
+            "retention",
+            &[
+                "body_capture_max_hours",
+                "retention_days",
+                "rollup_retention_days",
+            ],
+        ),
         ("sessions", &["expire_after_seconds"]),
         (
             "storage",
@@ -143,6 +156,14 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             settings["listeners"]["proxy_tls"].as_bool(),
         ),
         (Some(72), Some(86_400), Some("127.0.0.1:9464"), Some(false))
+    );
+    assert_eq!(
+        (
+            settings["retention"]["retention_days"].as_u64(),
+            settings["retention"]["rollup_retention_days"].as_u64(),
+        ),
+        (Some(400), Some(500)),
+        "the two day counts the rig's ledger runs under, each under its own key"
     );
     let revisions = phoebis_ledger::PriceRevisions::shipped();
     let shipped = revisions.in_force(common::NOW);
@@ -287,7 +308,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(41), Some(0), Some(4_096)),
+        (Some(42), Some(0), Some(4_096)),
         "the ledger schema is at the migration that flags the router's refusals before any account"
     );
     assert_eq!(
@@ -1190,6 +1211,342 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
     assert!(rows[0]["epoch"].is_null() && rows[0]["created_at"].is_null());
 }
 
+/// The harness on the ledger's test cost model, where `claude-mystery-2` sits in a tier that weighs no model, so it
+/// prices on no window, `claude-opus-5` prices at its tier's latest weight and `claude-sonnet-5-5` at its own.
+async fn on_test_costs() -> (common::Full, String) {
+    let parts =
+        common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    (parts, cookie)
+}
+
+/// The entry of `list` whose `field` reads `value`.
+fn entry_of(list: &serde_json::Value, field: &str, value: serde_json::Value) -> serde_json::Value {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e[field] == value)
+        .cloned()
+        .unwrap_or_else(|| panic!("an entry with {field} {value}: {list}"))
+}
+
+/// Two hours ago a priced plan request alone, an hour ago a priced one beside one the cost model cannot weigh, on
+/// `business` through the `desktop` key of the `main` pool.
+async fn an_hour_with_an_unweighted_plan_row() -> (common::Full, String) {
+    let (parts, cookie) = on_test_costs().await;
+    let now = common::NOW;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
+    for (id, ago, model) in [
+        ("early", 2, "claude-sonnet-5-5"),
+        ("priced", 1, "claude-sonnet-5-5"),
+        ("unweighted", 1, "claude-mystery-2"),
+    ] {
+        parts
+            .ledger
+            .record(record_at(id, now - ago * HOUR, model, "s1", generation));
+    }
+    landed(&parts, &["early", "priced", "unweighted"]).await;
+    (parts, cookie)
+}
+
+/// The hour `ago` hours before the rig's clock, as a point's or a bucket's `at`.
+fn hour_ago(ago: i64) -> serde_json::Value {
+    serde_json::json!(phoebis_ledger::hour_of(common::NOW - ago * HOUR) * 1_000)
+}
+
+#[tokio::test]
+async fn a_plan_row_the_cost_model_cannot_weigh_flags_its_windows_on_every_route_that_sums_them() {
+    let (parts, cookie) = an_hour_with_an_unweighted_plan_row().await;
+    let at = hour_ago;
+    let both = serde_json::json!({"five_hour": true, "seven_day": true});
+    let neither = serde_json::json!({"five_hour": false, "seven_day": false});
+
+    let board = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
+    assert!(
+        positive(&board["equivalent_24h"]["five_hour"])
+            && board["equivalent_24h"]["unpriced"] == both,
+        "the day keeps the priced rows' sum and flags both windows: {board}"
+    );
+    assert_eq!(
+        (
+            &entry_of(&board["hourly"], "at", at(1))["equivalent"]["unpriced"],
+            &entry_of(&board["hourly"], "at", at(2))["equivalent"]["unpriced"]
+        ),
+        (&both, &neither),
+        "the hour holding the unweighted row flags it, the hour before reads priced: {board}"
+    );
+
+    let keys = json(get(&parts.app, "/admin/keys", Some(&cookie)).await).await;
+    let key = entry_of(&keys["keys"], "id", serde_json::json!("desktop"));
+    assert_eq!(
+        (
+            &key["usage_7d"]["equivalent"]["unpriced"],
+            &key["lifetime"]["equivalent"]["unpriced"]
+        ),
+        (&both, &both),
+        "the key's week and lifetime flag both windows: {key}"
+    );
+
+    let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    let pool = entry_of(&pools["pools"], "id", serde_json::json!("main"));
+    assert_eq!(
+        (
+            &pool["equivalent_24h"]["unpriced"],
+            &entry_of(&pool["traffic_24h"], "at", at(1))["equivalent"]["unpriced"],
+            &entry_of(&pool["traffic_24h"], "at", at(2))["equivalent"]["unpriced"]
+        ),
+        (&both, &both, &neither),
+        "the pool's day and its traffic buckets flag the windows the same way: {pool}"
+    );
+    let traffic = json(
+        get(
+            &parts.app,
+            "/admin/pools/main/traffic?range=24h",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            &entry_of(&traffic["buckets"], "at", at(1))["equivalent"]["unpriced"],
+            &entry_of(&traffic["buckets"], "at", at(2))["equivalent"]["unpriced"]
+        ),
+        (&both, &neither),
+        "{traffic}"
+    );
+
+    let breakdown = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=model",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let unweighted = row_of(&breakdown, "claude-mystery-2");
+    assert!(
+        unweighted["unpriced"] == both
+            && unweighted["cost_equivalent"]
+                .as_object()
+                .is_some_and(|m| m.is_empty()),
+        "the unweighted model's group flags the windows it left out of its equivalent: {unweighted}"
+    );
+    let sonnet = row_of(&breakdown, "claude-sonnet-5-5");
+    assert!(
+        sonnet["unpriced"] == neither && positive(&sonnet["cost_equivalent"]["five_hour"]),
+        "a group whose plan rows all priced reads both windows priced: {sonnet}"
+    );
+
+    let series = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=all",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let group_at = |ago: i64| entry_of(&series["points"], "at", at(ago))["groups"][0].clone();
+    assert_eq!(
+        (&group_at(1)["unpriced"], &group_at(2)["unpriced"]),
+        (&both, &neither),
+        "a series bucket's group flags the windows its own rows left out: {series}"
+    );
+}
+
+#[tokio::test]
+async fn the_burn_flags_a_bucket_holding_a_plan_row_the_cost_model_cannot_weigh_and_never_an_idle_one(
+) {
+    let (parts, cookie) = an_hour_with_an_unweighted_plan_row().await;
+    let at = hour_ago;
+    let burn = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let point = |ago: i64| {
+        burn["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["group"] == "business" && p["at"] == at(ago))
+            .cloned()
+            .unwrap_or_else(|| panic!("a business point {ago} hours ago: {burn}"))
+    };
+    let flags = |p: &serde_json::Value| {
+        [
+            p["five_hour_unpriced"].clone(),
+            p["seven_day_unpriced"].clone(),
+            p["model_week_unpriced"].clone(),
+        ]
+    };
+    let unpriced = point(1);
+    assert!(
+        null_field(&unpriced, "five_hour_equivalent")
+            && flags(&unpriced) == [true, true, false].map(serde_json::Value::from),
+        "the bucket holding the unweighted row flags both shared windows and no model week: {unpriced}"
+    );
+    let priced = point(2);
+    assert!(
+        positive(&priced["five_hour_equivalent"])
+            && flags(&priced) == [false; 3].map(serde_json::Value::from),
+        "a bucket whose rows priced reads no flag: {priced}"
+    );
+    let idle = point(5);
+    assert!(
+        null_field(&idle, "five_hour_equivalent")
+            && null_field(&idle, "seven_day_equivalent")
+            && flags(&idle) == [false; 3].map(serde_json::Value::from),
+        "an idle bucket's null equivalent carries no flag: {idle}"
+    );
+}
+
+#[tokio::test]
+async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_marks_a_probe_estimate_on_its_own(
+) {
+    let (parts, cookie) = on_test_costs().await;
+    let at = common::NOW - HOUR;
+    // Two credits a plan account served, one at each TTL, and one an API key account served.
+    for (account, five_minutes, hour, kind) in [
+        ("business", 1_000, 0, None),
+        ("business", 0, 500, None),
+        ("direct", 300, 0, Some(AccountKind::ApiKey)),
+    ] {
+        parts
+            .ledger
+            .record(Record::Keepalive(phoebis_ledger::KeepaliveDelta {
+                at,
+                key_id: "desktop".into(),
+                pool_id: "main".into(),
+                account_id: account.into(),
+                canonical_model: "claude-sonnet-5-5".into(),
+                kind: "inference".into(),
+                kept_warm_requests: 1,
+                kept_warm_5m_tokens: five_minutes,
+                kept_warm_1h_tokens: hour,
+                account_kind: kind,
+                ..Default::default()
+            }));
+    }
+    // On the plan, a request the cost model weighs, a probe it prices at its tier's latest weight and one it cannot
+    // weigh. Through the API key account, one probe.
+    let probe = |id: &str, model: &str, account: &str, account_kind: &str| {
+        let mut row = record(id, at, model, "s1");
+        if let Record::Request {
+            request, attempts, ..
+        } = &mut row
+        {
+            request.kind = "probe".into();
+            attempts[0].account_id = account.into();
+            attempts[0].account_kind = account_kind.into();
+        }
+        row
+    };
+    parts
+        .ledger
+        .record(record("plain", at, "claude-sonnet-5-5", "s1"));
+    parts.ledger.record(probe(
+        "probe-fallback",
+        "claude-opus-5",
+        "business",
+        "oauth",
+    ));
+    parts.ledger.record(probe(
+        "probe-unweighted",
+        "claude-mystery-2",
+        "business",
+        "oauth",
+    ));
+    parts.ledger.record(probe(
+        "probe-billed",
+        "claude-sonnet-5-5",
+        "direct",
+        "api_key",
+    ));
+    landed(
+        &parts,
+        &[
+            "plain",
+            "probe-fallback",
+            "probe-unweighted",
+            "probe-billed",
+        ],
+    )
+    .await;
+    let body = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let both = serde_json::json!({"five_hour": true, "seven_day": true});
+    let neither = serde_json::json!({"five_hour": false, "seven_day": false});
+    let business = row_of(&body, "business");
+    assert_eq!(
+        (
+            &business["unpriced"],
+            &business["probe_unpriced"],
+            &business["probe_estimated"],
+            &business["estimated"]
+        ),
+        (
+            &neither,
+            &both,
+            &serde_json::json!(true),
+            &serde_json::json!(true)
+        ),
+        "the plan probes flag the windows the unweighted probe left out and the fallback the other priced at, and \
+         the request row, priced at its own weight, flags neither: {business}"
+    );
+    assert_eq!(
+        (&business["kept_warm"], &business["probes"]),
+        (
+            &serde_json::json!({
+                "requests": 2, "tokens_5m": 1_000, "tokens_1h": 500,
+                "plan_requests": 2, "plan_tokens_5m": 1_000, "plan_tokens_1h": 500
+            }),
+            &serde_json::json!({"failed": 0, "held": 0, "migrated": 0, "ok": 2, "plan_ok": 2, "skipped": 0})
+        ),
+        "every credit and answered probe of the plan account counts as plan-served: {business}"
+    );
+    let direct = row_of(&body, "direct");
+    assert_eq!(
+        (
+            &direct["kept_warm"],
+            &direct["probes"],
+            &direct["probe_estimated"],
+            &direct["probe_unpriced"]
+        ),
+        (
+            &serde_json::json!({
+                "requests": 1, "tokens_5m": 300, "tokens_1h": 0,
+                "plan_requests": 0, "plan_tokens_5m": 0, "plan_tokens_1h": 0
+            }),
+            &serde_json::json!({"failed": 0, "held": 0, "migrated": 0, "ok": 1, "plan_ok": 0, "skipped": 0}),
+            &serde_json::json!(false),
+            &neither
+        ),
+        "the API key account's credit and probe count as billed, and its probe marks and flags nothing: {direct}"
+    );
+}
+
 #[tokio::test]
 async fn a_plan_request_on_a_model_the_cost_model_does_not_weight_reads_an_estimated_equivalent() {
     let parts = common::admin_parts_full().await;
@@ -1325,6 +1682,7 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 cache_ttl_ms: 300_000,
                 shed_from: None,
                 shed_at: None,
+                shed_reason: None,
                 static_hash: None,
                 tail_hash: None,
                 lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
@@ -1421,6 +1779,7 @@ async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
             cache_ttl_ms: 300_000,
             shed_from: None,
             shed_at: None,
+            shed_reason: None,
             static_hash: None,
             tail_hash: None,
             lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
@@ -1660,17 +2019,20 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             "estimated",
             "five_hour_equivalent",
             "five_hour_share",
+            "five_hour_unpriced",
             "group",
             "model_week_equivalent",
             "model_week_share",
+            "model_week_unpriced",
             "seven_day_equivalent",
             "seven_day_share",
+            "seven_day_unpriced",
             "tokens",
             "uncached_tokens",
             "unit",
             "usd"
         ],
-        "a point carries its shares, its 20x equivalents and the estimated flag: {point}"
+        "a point carries its shares, its 20x equivalents with their unpriced flags and the estimated flag: {point}"
     );
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -2182,11 +2544,14 @@ async fn the_breakdown_answers_shares_for_an_oauth_group_under_the_account_group
             .map(String::as_str)
             .collect::<std::collections::BTreeSet<_>>()),
         Some(std::collections::BTreeSet::from([
+            "plan_requests",
+            "plan_tokens_1h",
+            "plan_tokens_5m",
             "requests",
             "tokens_1h",
             "tokens_5m"
         ])),
-        "the kept-warm requests and their tokens per TTL, with no sum: {business}"
+        "the kept-warm requests and their tokens per TTL, each beside its plan-funded part, with no sum: {business}"
     );
     assert!(
         business["saving_usd"].is_number()
@@ -3932,6 +4297,25 @@ async fn routed(parts: &common::Full, cookie: &str) {
 /// One selection through the harness's router as the relay asks for it, at `at`: no session, so no pin and no pin
 /// event beside the decision.
 async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, at: i64) {
+    let answer = parts
+        .router
+        .select(select_request(parts, request_id, seq, attempt, at))
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, phoebis_routing::SelectResult::Selected(_)),
+        "the pool's member answers a selection"
+    );
+}
+
+/// The selection `decide` asks the harness's router for.
+fn select_request(
+    parts: &common::Full,
+    request_id: &str,
+    seq: u32,
+    attempt: u32,
+    at: i64,
+) -> phoebis_routing::SelectRequest {
     let snapshot = parts.router.snapshot();
     let key = snapshot
         .key("desktop")
@@ -3944,51 +4328,43 @@ async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, 
         "claude-sonnet-5",
     )
     .expect("the pool allows the model");
-    let answer = parts
-        .router
-        .select(phoebis_routing::SelectRequest {
-            request_id: request_id.into(),
-            attempt,
-            seq,
-            key_id: "desktop".into(),
-            key_generation: common::generation(&parts.store, "desktop"),
-            agent_id: "main".into(),
-            session_id: None,
-            canonical_model: "claude-sonnet-5".into(),
-            folded_model: "claude-sonnet-5".into(),
-            candidates,
-            portable: true,
-            attempted: Vec::new(),
-            now: at,
-            received_at: at,
-            fallback_ms: 60_000,
-            revision: snapshot.revision,
-            probe: false,
-            count: false,
-            request_class: None,
-            context_compacted: false,
-            static_hash: None,
-            boundaries: std::sync::Arc::from([]),
-            client: phoebis_routing::ClientClass::ClaudeCode,
-            entrypoint: None,
-            static_boundaries: std::sync::Arc::from([]),
-            marker: false,
-            parent_agent_id: None,
-            failed_over: None,
-            holds: Vec::new(),
-            dialed: false,
-            held_out: false,
-            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
-            fast: false,
-            classifier: false,
-            body_tokens: 0,
-        })
-        .await
-        .unwrap();
-    assert!(
-        matches!(answer.result, phoebis_routing::SelectResult::Selected(_)),
-        "the pool's member answers a selection"
-    );
+    phoebis_routing::SelectRequest {
+        request_id: request_id.into(),
+        attempt,
+        seq,
+        key_id: "desktop".into(),
+        key_generation: common::generation(&parts.store, "desktop"),
+        agent_id: "main".into(),
+        session_id: None,
+        canonical_model: "claude-sonnet-5".into(),
+        folded_model: "claude-sonnet-5".into(),
+        candidates,
+        portable: true,
+        attempted: Vec::new(),
+        now: at,
+        received_at: at,
+        fallback_ms: 60_000,
+        revision: snapshot.revision,
+        probe: false,
+        count: false,
+        request_class: None,
+        context_compacted: false,
+        static_hash: None,
+        boundaries: std::sync::Arc::from([]),
+        client: phoebis_routing::ClientClass::ClaudeCode,
+        entrypoint: None,
+        static_boundaries: std::sync::Arc::from([]),
+        marker: false,
+        parent_agent_id: None,
+        failed_over: None,
+        holds: Vec::new(),
+        dialed: false,
+        held_out: false,
+        lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+        fast: false,
+        classifier: false,
+        body_tokens: 0,
+    }
 }
 
 fn routing_event(at: i64, kind: &str) -> Record {
@@ -4348,6 +4724,89 @@ async fn a_decision_seq_that_is_no_sequence_number_answers_400() {
             "{path}"
         );
     }
+}
+
+#[tokio::test]
+async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped() {
+    // The router loads the pins at spawn, so the pool, the key and the pin are written through one harness and the
+    // store is handed to the one under test.
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    routed(&seed, &seeding).await;
+    let now = common::NOW;
+    seed.store
+        .upsert_pin(&phoebis_store::PinRow {
+            key_id: "desktop".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            account_id: "direct".into(),
+            epoch: 1,
+            created_at: now - 60_000,
+            last_used_at: now - 5,
+            key_generation: common::generation(&seed.store, "desktop"),
+            incarnation: 1,
+            burn: phoebis_store::PinBurn::default(),
+            burn_at: None,
+            burn_banded: phoebis_store::PinBurn::default(),
+            burn_fast: phoebis_store::PinBurn::default(),
+            burn_unmetered: phoebis_store::PinBurn::default(),
+            last_input_tokens: 0,
+            last_classifier: false,
+            last_refresh_at: now - 5,
+            cache_ttl_ms: 300_000,
+            shed_from: Some("business".into()),
+            shed_at: Some(now - 60_000),
+            shed_reason: Some("cooldown".into()),
+            static_hash: None,
+            tail_hash: None,
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            entrypoint: String::new(),
+            marked_at: None,
+            marked_on: None,
+            marked_window: None,
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_id"] == "s1")
+        .unwrap_or_else(|| panic!("no row for s1: {sessions}"))
+        .clone();
+    assert_eq!(
+        (&row["shed_from"], &row["shed_reason"]),
+        (
+            &serde_json::json!("business"),
+            &serde_json::json!("cooldown")
+        ),
+        "the row names the stamp's word beside the account the pin left"
+    );
+    let answer = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            session_id: Some("s1".into()),
+            marker: true,
+            ..select_request(&parts, "r1", 1, 1, now)
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, phoebis_routing::SelectResult::Selected(_)),
+        "the pin renews"
+    );
+    let record = wait_json(&parts.app, "/admin/requests/r1/decisions/1", &cookie, |v| {
+        !v["pin"].is_null()
+    })
+    .await;
+    assert_eq!(
+        record["pin"]["shed"],
+        serde_json::json!({ "from": "business", "at": now - 60_000, "reason": "cooldown" }),
+        "the record's pin block carries the word on the wire"
+    );
 }
 
 #[tokio::test]

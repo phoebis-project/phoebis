@@ -8,7 +8,6 @@ use std::time::Duration;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use phoebis_store::{digest_with, Secret};
-use rand::Rng;
 use subtle::ConstantTimeEq;
 
 // A poisoned sessions mutex means a prior panic happened while the session map was being mutated, so
@@ -62,7 +61,7 @@ pub struct Sessions {
 impl Sessions {
     pub fn new(idle: Duration, absolute: Duration) -> Self {
         let mut compare_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut compare_key);
+        phoebis_oauth::random::fill(&mut compare_key);
         Sessions {
             absolute,
             compare_key,
@@ -170,7 +169,7 @@ impl Sessions {
 /// 32 random bytes base64url, the same size the pairing sessions use for their own unguessable handles.
 fn random_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
+    phoebis_oauth::random::fill(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 

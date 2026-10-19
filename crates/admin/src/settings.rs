@@ -48,10 +48,17 @@ pub(crate) struct Listeners {
     pub proxy_tls: bool,
 }
 
+/// The retention bounds the router runs under: file settings of the `stats` section the console shows and never
+/// edits. The two day counts read 0 for forever.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Retention {
     pub body_capture_max_hours: u32,
+    /// `stats.retention_days`: the requests with their attempts, the kept-warm marks, the events, the decisions,
+    /// the quota and extra-usage samples, the registry's settled refresh attempts and its change log.
+    pub retention_days: u32,
+    /// `stats.rollup_retention_days`: the hourly rollups and the account rollups.
+    pub rollup_retention_days: u32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -102,6 +109,8 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         },
         retention: Retention {
             body_capture_max_hours: s.body_capture_max_hours,
+            retention_days: s.retention_days,
+            rollup_retention_days: s.rollup_retention_days,
         },
         sessions: SessionsSettings {
             expire_after_seconds: s.session_expire_after_seconds,

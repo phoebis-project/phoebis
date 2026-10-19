@@ -144,8 +144,25 @@ interface ShedRound {
   pins: RoundPin[];
 }
 
-/** The pool's settings as the record names them, by the pool fields they are read from. */
-function settingsOf(pool: PoolSeed): RecordSettings {
+/**
+ * The settings a pool's edit at its `updatedAt` moved, each at its value before the edit, which the edit's registry
+ * change carries as each pair's old value, and the instant the settings before it took force. The story's other rows
+ * read neither, so no row before the edit contradicts them.
+ */
+const BEFORE_EDIT: Record<string, Partial<RecordSettings>> = { all: { minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 } };
+
+/**
+ * The pool's settings as the record decided at `at` names them, by the pool fields they are read from: a
+ * record decided before the pool's edit carries the values the edit moved.
+ */
+function settingsOf(pool: PoolSeed, at: number): RecordSettings {
+  return {
+    ...settingsNow(pool),
+    ...(at < Date.parse(pool.updatedAt) ? BEFORE_EDIT[pool.id] : {}),
+  };
+}
+
+function settingsNow(pool: PoolSeed): RecordSettings {
   return {
     affinityMode: pool.affinityMode,
     affinityTtlSeconds: pool.affinityTtlSeconds,
@@ -246,7 +263,7 @@ const startOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d
 const endOfMonth = (at: number) => { const d = new Date(at); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); };
 
 /** A member's spend as the ledger reported it at `at`: research crossed its day's budget at 12:41:07. */
-function budgetsAt(pool: PoolSeed, accountId: string, at: number): RecordBudget[] {
+export function budgetsAt(pool: PoolSeed, accountId: string, at: number): RecordBudget[] {
   const member = pool.members.find((m) => m.accountId === accountId);
   if (!member) return [];
   const spentOf = (period: 'day' | 'month') => {
@@ -284,7 +301,7 @@ const inOverageAt = (accountId: string, at: number) => accountId === 'nightly' &
  * cooldown that holds the request, the fast credits, the budget, the fast lane's own limit, and last the attempt this
  * request already made, so a member it tried reads the cooldown that answered rather than the attempt.
  */
-function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
+export function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
   const state = stateAt(a, at);
   if (state !== 'ready' || !a.routingEnabled) return { name: 'operator', reason: null, until: null, window: null };
   const endsAt = a.subscription?.endsAt ? Date.parse(a.subscription.endsAt) : null;
@@ -998,6 +1015,8 @@ interface PinState {
   epoch: number;
   lastRefreshAt: number;
   lastUsedAt: number;
+  /** The source a shed move or a failover's landing left, which a renewal keeps and any other write clears. */
+  shed: { at: number; from: string; reason: string } | null;
 }
 const pins = new Map<string, PinState>();
 let epochs = 0;
@@ -1066,7 +1085,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     // A drawn trace names where the pin lived. A pin the day's rows last left past its window was used by a request
     // the day does not hold, so the trace's own idle age stands.
     const recent = held !== undefined && held.accountId === on && spec.at - held.lastUsedAt <= pool.affinityTtlSeconds * 1_000;
-    const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs };
+    const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, shed: null };
     pins.set(pinKey, found);
     const idleMs = spec.at - found.lastUsedAt;
     const released = spec.failover ? [spec.failover === 'fast_lane' ? 'fast_rate_limit' : 'cooldown'] : [];
@@ -1074,7 +1093,8 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     const mark = spec.rule === 'shed' ? markOf(found.accountId, spec.at) : null;
     pin = {
       accountId: found.accountId, createdAt: iso(found.createdAt), cycleMs: spec.pinPace?.cycleMs ?? null, epoch: found.epoch, found: 'live', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(spec.at - idleMs), lastUsedAt: iso(spec.at - idleMs),
-      marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released, shed: null,
+      marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released,
+      shed: found.shed === null ? null : { at: iso(found.shed.at), from: found.shed.from, reason: found.shed.reason },
       slowDownUntil: spec.pinPace?.slowDownUntil === null || spec.pinPace?.slowDownUntil === undefined ? null : iso(spec.pinPace.slowDownUntil), warmth: spec.pin.warmth, warmthCause: spec.pin.cause,
     };
     walk.push(step('pin', 'match', [fact('found', 'live'), fact('account_id', found.accountId, null, found.accountId), fact('epoch', found.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', idleMs, 'ms'), fact('warmth', spec.pin.warmth), fact('cause', spec.pin.cause), fact('marked', pin.marked)]));
@@ -1203,7 +1223,11 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     const action = spec.kind === 'renewed' ? 'renewed' : pin?.found === 'live' || spec.failover ? 'moved' : 'created';
     const prior = pins.get(pinKey);
     const epoch = action === 'renewed' && prior ? prior.epoch : (epochs += 1);
-    pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at });
+    // The engine stamps the row a shed move or a failover's landing writes with its source, a renewal keeps the row's
+    // stamp, and every other write clears it.
+    const source = spec.from ?? '';
+    const shed = action === 'renewed' ? (prior?.shed ?? null) : spec.failover ? { at: spec.at, from: source, reason: spec.failover } : spec.kind === 'moved' && spec.rule === 'shed' ? { at: spec.at, from: source, reason: 'round' } : null;
+    pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at, shed });
     pinWritten = action === 'renewed' ? { action, epoch, hashesStamped: stamps.hashes, lane: laneOf(r), refreshStamped: stamps.refresh } : { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
   }
   const usage = r.usage;
@@ -1286,7 +1310,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     },
     requestId: r.id,
     seq: spec.seq,
-    settings: settingsOf(pool),
+    settings: settingsOf(pool, spec.at),
     version: 2,
     walk,
   };
@@ -1640,6 +1664,8 @@ function storySpecs(): Spec[] {
       prefix: { secondary: { content: message('c64358b5', 10, 72_000, t(11, 8, 30), t(11, 6, 2), FIVE_MINUTES), contentMatch: null } },
       rule: 'shed',
     }),
+    // The moved session's next turn renews its pin on primary, whose row carries the source the move left.
+    at('req_5d1f8c3a-b27', 1, 1, t(11, 13, 40), 'renewed', 'primary', { pin: live('continues_pin', 310_000) }),
     // The hour's sessions placed on secondary before its spent edge.
     at('req_a1f04c2e-7b3', 1, 1, t(14, 0, 10), 'placed', 'secondary'),
     at('req_b72e9d05-c14', 1, 1, t(14, 1, 30), 'placed', 'secondary'),
@@ -1767,6 +1793,8 @@ function storySpecs(): Spec[] {
     at('req_d2a8f6c1-d50', 1, 1, t(14, 1, 45), 'placed', 'secondary'),
     at('req_b8c3e9d4-e61', 1, 1, t(14, 7, 50), 'renewed', 'secondary', { pin: live('continues_pin', 365_000) }),
     at('req_b8c3e9d4-e61', 2, 2, t(14, 7, 51), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live() }),
+    // Its next turn renews the pin the landing wrote on primary, whose row carries the source the failover left.
+    at('req_e2c7a4f9-d13', 1, 1, t(14, 13, 5), 'renewed', 'primary', { pin: live('continues_pin', 314_000) }),
     // Studio's closed span in work: a placement reads no entry, so the session placed at 09:11:24 opens the span at
     // its first turn after the placement, which reads the factor at 0.91 in the last 77 minutes of the window that
     // resets at 10:29.
@@ -1901,8 +1929,17 @@ function expiries(): EventSeed[] {
 
 const ttlRulesDiff = (r: PoolSeed['cacheTtl']['plan']) => ({ main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
 
-/** A pool edit's diff as the store's `pool_diff` writes it: the whole row after the save, under its column names. */
-function poolDiff(p: PoolSeed): Record<string, unknown> {
+/**
+ * A pool edit's diff as the store writes it: each field the save changed under its column name, with the value
+ * `before` names and the one the pool holds now.
+ */
+function poolDiff(p: PoolSeed, before: Record<string, unknown>): Record<string, unknown> {
+  const row = poolRow(p);
+  return Object.fromEntries(Object.entries(before).map(([field, from]) => [field, { from, to: row[field] }]));
+}
+
+/** A pool's row as the store's `pool_diff` writes it on a creation, under its column names. */
+function poolRow(p: PoolSeed): Record<string, unknown> {
   return {
     affinity_mode: p.affinityMode,
     affinity_ttl_seconds: p.affinityTtlSeconds,
@@ -2125,6 +2162,12 @@ function expiredReservations(): EventSeed[] {
 }
 
 /**
+ * The story's late event, studio's token refresh, which the ledger writes a few seconds after the mock loads: past the
+ * first auto reload poll of a log read as the mock loads, so that poll lands nothing and a later one lands it on top.
+ */
+const LATE_EVENT_AT = NOW + 6_000;
+
+/**
  * The events beside the decisions: every pin event and model answer the requests' windows hold, the pins the
  * placements created, the cooldowns the attempts' answers set, and the story's own rows, at least one of every kind.
  */
@@ -2146,6 +2189,17 @@ function buildEvents(): RoutingEvent[] {
   // within the hour of the least-bad move onto it.
   const nightlyReset = clock(13, 11);
   seeds.push({ accountId: 'nightly', at: iso(clock(12, 1, 5)), detail: { reset: nightlyReset, source: 'poll', source_request_id: null, utilization: 1, window: 'five_hour' }, kind: 'window_spent' });
+  // Legacy's 5-hour window, spent at a poll and read back under its limit under the same reset by its last clean poll,
+  // the reading its account still answers, so no reading at the limit follows the clear.
+  const legacy = accountOf.get('legacy')?.windows.find((w) => w.id === '5h');
+  if (legacy?.resetsAt && legacy.utilization !== null && legacy.utilization < 1) {
+    const reset = Date.parse(legacy.resetsAt);
+    const read = { reset, source: 'poll', source_request_id: null, window: 'five_hour' };
+    seeds.push(
+      { accountId: 'legacy', at: iso(reset - 5 * HOUR + 40 * MINUTE), detail: { ...read, utilization: 1 }, kind: 'window_spent' },
+      { accountId: 'legacy', at: legacy.observedAt, detail: { ...read, utilization: legacy.utilization, utilization_before: 1 }, kind: 'window_cleared' },
+    );
+  }
   // A window's spent edge is the first head of any answer that reads it at its limit, once per account and window.
   const heads = REQUESTS.flatMap((r) => r.attempts.map((a) => ({ a, at: Date.parse(a.startedAt) + (a.durationMs ?? 0), r }))).sort((x, y) => x.at - y.at);
   const spent = new Set<string>([`nightly|five_hour|${iso(nightlyReset)}`]);
@@ -2206,6 +2260,7 @@ function buildEvents(): RoutingEvent[] {
   const secondary = accountOf.get('secondary')!;
   const endsAt = Date.parse(secondary.subscription?.endsAt ?? '');
   const pool = poolById.get('all')!;
+  const annex = accountOf.get('annex')!;
   const beforeReset = oauthWindows('primary', fiveHourReset - 1, () => OLDER_FACTOR).find((w) => w.id === '5h')?.utilization ?? null;
   seeds.push(
     ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS)].flatMap((e) => (e === null ? [] : [e])),
@@ -2231,9 +2286,26 @@ function buildEvents(): RoutingEvent[] {
       kind: 'fast_credits_changed',
     },
     { accountId: 'nightly', at: iso(OVERAGE_FROM), detail: {}, kind: 'overage_started' },
-    { accountId: null, actor: 'admin', at: iso(t(9, 5, 12)), detail: { diff: poolDiff(pool), kind: 'pool_updated', target: 'all' }, kind: 'registry_changed', poolId: 'all' },
+    // The edit that raised the pool's shared prefix floor and its slow-down hold, at the stamp the pool carries.
+    {
+      accountId: null,
+      actor: 'admin',
+      at: pool.updatedAt,
+      detail: { diff: poolDiff(pool, { min_shared_prefix_tokens: BEFORE_EDIT.all.minSharedPrefixTokens, slow_down_hold_seconds: BEFORE_EDIT.all.slowDownHoldSeconds }), kind: 'pool_updated', target: 'all' },
+      kind: 'registry_changed',
+      poolId: 'all',
+    },
+    // The annex unpaused and renamed with its secret replaced: the store records the secret as its flag alone, and the
+    // ledger's row names the account in its target alone.
+    {
+      accountId: null,
+      actor: 'admin',
+      at: iso(t(9, 8, 30)),
+      detail: { diff: { enabled: { from: false, to: annex.routingEnabled }, label: { from: 'annex', to: annex.label }, secret_replaced: true }, kind: 'account_updated', target: 'annex' },
+      kind: 'registry_changed',
+    },
     // The ci key's revocation, after the last request it reached selection with.
-    { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, keyId: 'ci', kind: 'registry_changed' },
+    { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, kind: 'registry_changed' },
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },
     { accountId: null, at: iso(t(6, 12, 40)), detail: { affinity_entries_loaded: 34, down_since: t(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, kind: 'router_started' },
     // Once each outside the hour.
@@ -2252,6 +2324,9 @@ function buildEvents(): RoutingEvent[] {
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
+  // The story's access tokens run eight hours from their refresh.
+  const studioRefresh = accountOf.get('studio')?.credential.refreshTokenExpiresAt ?? null;
+  seeds.push({ accountId: 'studio', at: iso(LATE_EVENT_AT), detail: { access_expires_at: LATE_EVENT_AT + 8 * HOUR, refresh_expires_at: studioRefresh === null ? null : Date.parse(studioRefresh), until: LATE_EVENT_AT + 8 * HOUR }, kind: 'refresh_succeeded' });
   return seeds
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.kind.localeCompare(b.kind))
     .map((e, i) => ({ type: 'event', accountId: e.accountId, actor: e.actor ?? null, agentId: e.agentId ?? null, at: e.at, detail: e.detail, id: i + 1, keyId: e.keyId ?? null, kind: e.kind, model: e.model ?? null, poolId: e.poolId ?? null, requestId: e.requestId ?? null, sessionId: e.sessionId ?? null }));
@@ -2259,6 +2334,8 @@ function buildEvents(): RoutingEvent[] {
 
 /** Every event kind of the ledger at least once, oldest first by id. */
 export const ROUTING_EVENTS: RoutingEvent[] = buildEvents();
+/** The late event's id: the route lists it once its clock reaches the event, as the ledger has written it by then. */
+const LATE_EVENT_ID = ROUTING_EVENTS.find((e) => Date.parse(e.at) === LATE_EVENT_AT)?.id;
 
 const DECISION_KINDS: readonly string[] = ['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed'];
 /** Every event kind the ledger writes, as the route validates `kinds` against them. */
@@ -2266,7 +2343,7 @@ const EVENT_KINDS: readonly string[] = [
   'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
   'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
   'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
-  'window_reset', 'window_spent',
+  'window_cleared', 'window_reset', 'window_spent',
 ];
 
 /** The route's merged order: newest first, a decision before an event at one instant. */
@@ -2321,6 +2398,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number): RoutingLogP
   const events = ROUTING_EVENTS.filter(
     (e) =>
       within(e.at) &&
+      (e.id !== LATE_EVENT_ID || now >= LATE_EVENT_AT) &&
       (!query.request || e.requestId === query.request) &&
       session(e.sessionId) &&
       inList(query.keyIds, e.keyId) &&

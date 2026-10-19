@@ -1965,7 +1965,7 @@ fn stats_and_cooldown_settings_are_validated_with_the_specs_bounds() {
             config.stats.metrics_listen.to_string().as_str(),
             config.stats.ledger_path.to_str().unwrap()
         ),
-        (90, "127.0.0.1:9464", "./data/ledger.sqlite")
+        (365, "127.0.0.1:9464", "./data/ledger.sqlite")
     );
     let path =
         |p: &Option<std::path::PathBuf>| p.as_deref().and_then(|p| p.to_str()).map(str::to_string);
@@ -3025,6 +3025,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                 cache_ttl_ms: 300_000,
                 shed_from: None,
                 shed_at: None,
+                shed_reason: None,
                 static_hash: None,
                 tail_hash: None,
                 lane: String::new(),
@@ -4220,6 +4221,14 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         },
     )
     .await;
+    // The release took `e2e-ui`'s pin and the exhaustion below pins nothing, so this session of its own is the pin
+    // the pool's member holds when the pass reads `/pools`, where the members' pins must sum to more than 0.
+    let pinned = fixture_request(&client, proxy_port, &secret, "e2e-pinned")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pinned.status(), 200);
+    let _ = pinned.text().await.unwrap();
     // The pool's only member answers a unified 429 once: the router cools it, finds no sibling, answers the
     // exhaustion 429, and the attention reader holds the pool's pool_exhausted condition. The standing answer
     // under this credential stays the 200, so a keepalive probe after the 429 is still served.
@@ -4265,21 +4274,42 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .spawn()
         .expect("node runs");
     // Each line is passed on as the pass writes it, so a pass that hangs under `--nocapture` shows the view it
-    // reached. Both pipes drain together, or a full stderr pipe would stall the pass behind a stdout read.
+    // reached. Both pipes drain together, or a full stderr pipe would stall the pass behind a stdout read. The
+    // readers take bytes, so a byte that is not UTF-8 prints lossily instead of failing the read.
     use tokio::io::AsyncBufReadExt;
-    let mut out = tokio::io::BufReader::new(pass.stdout.take().expect("piped stdout")).lines();
-    let mut err = tokio::io::BufReader::new(pass.stderr.take().expect("piped stderr")).lines();
+    let mut out = tokio::io::BufReader::new(pass.stdout.take().expect("piped stdout"));
+    let mut err = tokio::io::BufReader::new(pass.stderr.take().expect("piped stderr"));
+    fn text_of(buf: &[u8]) -> String {
+        let line = buf
+            .strip_suffix(b"\r\n")
+            .or_else(|| buf.strip_suffix(b"\n"))
+            .unwrap_or(buf);
+        String::from_utf8_lossy(line).into_owned()
+    }
     let kept = async {
         let mut kept = Vec::new();
-        while let Some(line) = out.next_line().await.expect("the pass's stdout reads") {
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            let read = out.read_until(b'\n', &mut buf).await;
+            if read.expect("the pass's stdout reads") == 0 {
+                break;
+            }
+            let line = text_of(&buf);
             println!("{line}");
             kept.push(line);
         }
         kept
     };
     let forwarded = async {
-        while let Some(line) = err.next_line().await.expect("the pass's stderr reads") {
-            eprintln!("{line}");
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            let read = err.read_until(b'\n', &mut buf).await;
+            if read.expect("the pass's stderr reads") == 0 {
+                break;
+            }
+            eprintln!("{}", text_of(&buf));
         }
     };
     let (printed, ()) = tokio::join!(kept, forwarded);

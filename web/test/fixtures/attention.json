@@ -111,6 +111,7 @@
         ],
         "since": 1791719800000,
         "detail": {
+          "early_ms": null,
           "projection_error": 0.04,
           "setting": [
             "shed_cap",

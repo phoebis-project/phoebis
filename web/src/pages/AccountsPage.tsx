@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
+import type { Account, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
 import { useSession } from '@/app/session';
 import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -15,6 +15,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { ACCOUNTS_CODEC } from '@/lib/address';
+import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
@@ -29,6 +30,9 @@ const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LA
 /** A save the router refused, as the editor's callout draws it. `stale` marks a row that moved under the editor. */
 type EditorRefusal = { message: string; stale: boolean };
 const END_HINT = "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.";
+/** With auto reload off, how often the page reads the list while a pairing's first reading is in flight, and for how long. */
+const FIRST_READING_EVERY_MS = 2_000;
+const FIRST_READING_FOR_MS = 30_000;
 
 export function AccountsPage() {
   const { accountId } = useParams();
@@ -73,6 +77,33 @@ export function AccountsPage() {
       if (!created.reading) setCreated({ ...created, reading: true });
     } else if (created.reading) setCreated(null);
   }
+  // The account whose first usage poll a confirm started, whether the pairing created its row or filled a slot, until
+  // the list's row for it carries a window or the list no longer holds it. It stands apart from `created`, which the
+  // confirm's reload ends before the reading lands, and a row that reload has yet to bring in counts as held while
+  // `created` names it.
+  const [awaiting, setAwaiting] = useState<string | null>(null);
+  if (awaiting !== null && accounts.data !== null && created?.id !== awaiting) {
+    const row = accounts.data.find((a) => a.id === awaiting);
+    if (row === undefined || row.windows.length > 0 || row.fableWindow !== null) setAwaiting(null);
+  }
+  // With auto reload off nothing else reads the row again, so the page reads the list on its own while the reading is in
+  // flight. A read that falls due under a dialog, an editor or a menu is skipped, as the auto reload holds there, and the
+  // timer reads the pause and the reload through a ref, so a pause neither restarts the span nor shifts the cadence.
+  const reread = useRef({ paused: dialogOpen || barOpen, reload: accounts.reload });
+  useLayoutEffect(() => {
+    reread.current = { paused: dialogOpen || barOpen, reload: accounts.reload };
+  });
+  useEffect(() => {
+    if (awaiting === null || intervalMs !== 0) return;
+    const from = clock.now();
+    let timer = 0;
+    const step = () => {
+      if (!reread.current.paused) reread.current.reload();
+      if (clock.now() - from < FIRST_READING_FOR_MS) timer = clock.setTimeout(step, FIRST_READING_EVERY_MS);
+    };
+    timer = clock.setTimeout(step, FIRST_READING_EVERY_MS);
+    return () => clock.clearTimeout(timer);
+  }, [awaiting, intervalMs]);
   // A bare /accounts, and a deleted account's URL that names a row the reloaded list no longer holds, lead to the
   // router's first account the list shows, so the detail never opens on a row the filters hide. Where they hide every
   // row it is the router's first. The query and the hash go along, since the address hook keeps the location for its
@@ -152,7 +183,7 @@ export function AccountsPage() {
           <Descriptions>
             {/* Keyed by the account, so a save still running when the operator moves on answers into its own
                 unmounted detail and never moves the token of an editor another account opened. */}
-            <AccountDetail key={selected.id} account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} />
+            <AccountDetail key={selected.id} account={selected} awaitingReading={awaiting === selected.id} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ start: { accountId: selected.id }, label: selected.label, repair })} onChanged={accounts.reload} />
           </Descriptions>
         ) : accounts.data === null ? (
           <Skeleton height={400} />
@@ -180,11 +211,12 @@ export function AccountsPage() {
         label={pairing?.label ?? ''}
         repair={pairing?.repair ?? false}
         onClose={() => setPairing(null)}
-        onPaired={(preview) => {
+        onPaired={(preview, confirmed) => {
           const start = pairing?.start ?? null;
           setPairing(null);
           accounts.reload();
           notify(`Paired ${preview.email}`);
+          if (confirmed.firstPollInFlight) setAwaiting(confirmed.accountId);
           if (start !== null && 'id' in start) {
             setCreated({ id: start.id, reading: false });
             navigate({ hash: location.hash, pathname: `/accounts/${start.id}`, search: location.search });
@@ -223,7 +255,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   );
 }
 
-function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged }: { account: Account; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
+function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, onPair, onChanged }: { account: Account; awaitingReading: boolean; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
   const [busy, setBusy] = useState(false);
@@ -616,7 +648,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
 
         <Card title="Usage" subtitle="Remaining share of each window" className="card--fill">
           {account.windows.length === 0 && !account.fableWindow ? (
-            <p className="muted">This account does not report quota windows.</p>
+            awaitingReading ? <p className="muted">The first quota reading is in flight</p> : <p className="muted">This account does not report quota windows.</p>
           ) : (
             <WindowTriple account={account} now={now} others />
           )}
@@ -924,7 +956,7 @@ const PAIR_STEPS: { label: string; step: PairStep }[] = [
  */
 type PairingTarget = { accountId: string } | { id: string; session: PairingSession };
 
-function PairingDialog({ open, start, label, repair, onClose, onPaired }: { label: string; onClose: () => void; onPaired: (p: PairingPreview) => void; open: boolean; repair: boolean; start: PairingTarget }) {
+function PairingDialog({ open, start, label, repair, onClose, onPaired }: { label: string; onClose: () => void; onPaired: (p: PairingPreview, confirmed: PairingConfirmed) => void; open: boolean; repair: boolean; start: PairingTarget }) {
   const [session, setSession] = useState<PairingSession | null>(null);
   const [step, setStep] = useState<PairStep>(1);
   const [callback, setCallback] = useState('');
@@ -1000,8 +1032,8 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
     setBusy(true);
     setError(null);
     try {
-      await api.confirmPairing(session.id);
-      onPaired(preview);
+      const confirmed = await api.confirmPairing(session.id);
+      onPaired(preview, confirmed);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

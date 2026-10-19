@@ -41,14 +41,16 @@ const LISTENER_DRAIN: Duration = Duration::from_secs(30);
 /// A first TLS handshake on a cold host runs well under this; a stalled one costs at most twice it before the 502.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The native client gives a request ten minutes (`X-Stainless-Timeout: 600`), so neither the wait for the
-/// response head nor the wait between stream events gives up before the caller itself would.
+/// The relay's own ceiling on a silent upstream, above any client's wait: Claude Code 2.1.296 aborts a stream
+/// after 180 s without a byte and gives the head 180 s plus 1 s per 32 KiB of body under its own 600 s cap, so,
+/// with its watchdog on, the client leaves no later than these two guards, which catch a dead upstream behind a
+/// client that already left.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(600);
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
-// A completion is never dropped now, so an in-flight entry silent this long belongs to a stream the relay
-// itself ended at its idle timeout: the assembler's TTL must outwait it, or a still-open stream would be aged
-// out from under a request that has not finished.
+// A completion is published on every path, the handler's drop guard included, so an in-flight entry silent this
+// long belongs to a stream the relay itself ended at its idle timeout: the assembler's TTL must outwait it, or a
+// still-open stream would be aged out from under a request that has not finished.
 const _: () = assert!(phoebis_ledger::IN_FLIGHT_TTL_MS as u128 > IDLE_TIMEOUT.as_millis());
 
 /// A stream that has not reached its first committing event by then is forwarded as it stands, because the
@@ -823,6 +825,8 @@ fn settings_view(config: &Config, profile: &phoebis_profile::Profile) -> Setting
         profile: profile.name.to_string(),
         proxy_listen: config.proxy.listen.to_string(),
         proxy_tls: config.proxy.tls.is_some(),
+        retention_days: config.stats.retention_days,
+        rollup_retention_days: config.stats.rollup_retention_days,
         session_expire_after_seconds: config.sessions.expire_after_seconds,
         storage_path: config.storage.path.display().to_string(),
         subscription_costs_path: config
@@ -1138,8 +1142,8 @@ mod tests {
 
     /// The equivalent prices on the anchor tier through the model week's own capacity factor, so on tables whose Fable
     /// week holds a quarter of the 7-day window's capacity, a write's Fable-week figure reads four times its 7-day one.
-    /// The test model's regime `desk` holds twice the base 5-hour capacity on Max 20x, so outside the band a write under
-    /// it reads half the base figure.
+    /// The test model's regime `desk` holds twice the base 5-hour capacity on Max 20x, so outside the band a write
+    /// under it reads half the base figure.
     #[test]
     fn the_router_configs_equivalent_closure_prices_a_write_through_the_tables() {
         let quarter_week = phoebis_ledger::test_tables::first_entry_costs_text().replacen(
@@ -1719,6 +1723,19 @@ revisions:
             profile,
         );
         assert_eq!((plain.proxy_tls, paired.proxy_tls), (false, true));
+    }
+
+    #[test]
+    fn the_settings_view_mirrors_the_stats_sections_two_retention_keys() {
+        let config: Config = serde_norway::from_str(
+            "admin:\n  listen: 127.0.0.1:8081\n  secret_env: TEST_SETTINGS_ADMIN\n\
+             proxy:\n  listen: 0.0.0.0:8317\n\
+             stats:\n  retention_days: 30\n  rollup_retention_days: 0\n\
+             storage:\n  encryption_key_file: storage.key\n  path: router.sqlite\n",
+        )
+        .unwrap();
+        let view = settings_view(&config, phoebis_profile::claude_code_2_1_269_linux_x64());
+        assert_eq!((view.retention_days, view.rollup_retention_days), (30, 0));
     }
 
     /// The anchor tier carries a capacity on both windows, so every model the cost model names has a burn rate on

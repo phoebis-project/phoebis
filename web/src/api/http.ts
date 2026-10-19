@@ -1,7 +1,7 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -153,7 +153,7 @@ export class HttpApi implements Api {
     const r = await call<{ pending: { email: string; organization_name: string | null } }>('POST', `/admin/oauth/sessions/${enc(pairingId)}/callback`, input);
     return { email: r.pending.email, organization: r.pending.organization_name ?? 'Personal', state: pairingId };
   };
-  confirmPairing = (pairingId: string) => call<void>('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`);
+  confirmPairing = async (pairingId: string): Promise<PairingConfirmed> => d.decodePairingConfirmed(await call('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`));
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, false, DIALOG_WRITE));
   createGuardrail = async (input: GuardrailInput) => d.decodeGuardrail(await call('POST', '/admin/guardrails', { ...d.encodeGuardrail(input), id: slug(input.name) }, false, DIALOG_WRITE));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
@@ -238,7 +238,7 @@ export class HttpApi implements Api {
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
-      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, cache_miss_reasons: q.cacheMissReasons, classifiers: q.classifiers, client: q.client, cursor: q.cursor, efforts: q.efforts, from: q.from ? Date.parse(q.from) : undefined, guardrails: q.guardrails, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, request: q.request, request_classes: q.requestClasses, session: q.session, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
+      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, cache_miss_reasons: q.cacheMissReasons, classifiers: q.classifiers, client: q.client, cursor: q.cursor, efforts: q.efforts, from: q.from ? Date.parse(q.from) : undefined, guardrails: q.guardrails, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, landed_after: q.landedAfter, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, request: q.request, request_classes: q.requestClasses, session: q.session, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
     );
   // The route reads RFC 3339 instants, so the two times pass through as the page wrote them.
   listRoutingLog = async (q: RoutingLogQuery = {}) =>

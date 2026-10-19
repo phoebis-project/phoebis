@@ -26,6 +26,9 @@ url = { workspace = true }
 # The refresh test seam. Enabled through the self dev-dependency below, so it is on for this crate's own
 # tests and absent from anything else that depends on it.
 debug-hooks = []
+# The seed of `random`'s source, turned on by a dependent's dev-dependency for a capture that must repeat, so a
+# release build mints from the process CSPRNG alone.
+test-support = []
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }

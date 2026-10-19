@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::catalog::CatalogService;
+use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
 use crate::messages::{Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
 use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
@@ -126,9 +127,9 @@ pub(crate) struct Publish {
     /// Set once the decoder above rejected a piece, and never cleared: what follows it is no more readable
     /// than the piece that failed.
     pub decode_failed: bool,
-    /// Parses the decoded copy for phases on an event stream; `None` for any other body, and dropped on
-    /// overflow so a malformed stream costs a bounded buffer and no phases rather than the chunks. A held stream's
-    /// is the hold's own, already past the held events.
+    /// Parses the decoded copy for phases on an event stream, and is `None` for any other body. It skips an event
+    /// past its bound and keeps parsing, so an oversized event costs a bounded buffer and its own phase while the
+    /// events after it still reach the completion. A held stream's is the hold's own, already past the held events.
     pub parser: Option<SseParser>,
     /// The held bytes' text and events when the hold handed its decoder and parser over, taken by the prefix.
     pub held: Option<HeldText>,
@@ -486,7 +487,8 @@ impl Publish {
     fn phase_of(&mut self, event: &SseEvent, waiting: &mut Waiting) -> Option<Phase> {
         match event.name.as_deref() {
             Some(b"message_start") => {
-                let answer = answer_from_json(&event.data, &["message"]);
+                let answer =
+                    answer_from_json(&event.data, &["message"], self.outcome.diagnostics_named);
                 self.usage.merge(&answer.usage);
                 self.response.merge(&answer.response);
                 if let Some(id) = message_id_from_json(&event.data, &["message"]) {
@@ -508,7 +510,7 @@ impl Publish {
                 None
             }
             Some(b"message_delta") => {
-                let answer = answer_from_json(&event.data, &[]);
+                let answer = answer_from_json(&event.data, &[], self.outcome.diagnostics_named);
                 self.usage.merge(&answer.usage);
                 self.response.merge(&answer.response);
                 Some(Phase::MessageDelta {
@@ -544,8 +546,18 @@ impl Publish {
                 self.emit(Bytes::new(), Some(phase));
             }
         }
+        let (skipped, largest) = self.parser.as_ref().map_or((0, 0), SseParser::skipped);
+        if skipped > 0 {
+            tracing::warn!(
+                request_id = %self.trace.request_id,
+                skipped,
+                largest_bytes = largest,
+                bound = INSPECT_BUFFER,
+                "stream events past the parser's bound were skipped"
+            );
+        }
         if let Some(json) = self.json.take() {
-            let answer = answer_from_json(&json, &[]);
+            let answer = answer_from_json(&json, &[], self.outcome.diagnostics_named);
             self.usage.merge(&answer.usage);
             self.response.merge(&answer.response);
             if let Some(id) = message_id_from_json(&json, &[]) {
@@ -613,6 +625,7 @@ impl Publish {
                 Some(self.index),
                 outcome,
                 self.message_id.clone(),
+                skipped,
                 (self.clock)(),
             )
             .await;

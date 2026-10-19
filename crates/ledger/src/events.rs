@@ -362,6 +362,33 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             request_id: source_request_id.clone(),
             ..Default::default()
         },
+        RouterEvent::WindowCleared {
+            account_id,
+            window,
+            utilization_before,
+            utilization,
+            reset,
+            source,
+            source_request_id,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "window_cleared".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "window": window,
+                    "utilization_before": utilization_before,
+                    "utilization": utilization,
+                    "reset": reset,
+                    "source": source.as_str(),
+                    "source_request_id": source_request_id,
+                })
+                .to_string(),
+            ),
+            request_id: source_request_id.clone(),
+            ..Default::default()
+        },
         RouterEvent::WindowReset {
             account_id,
             window,
@@ -1392,6 +1419,40 @@ mod tests {
                 "window": "five_hour", "utilization": 1.0, "reset": 9_000, "source": "head",
                 "source_request_id": "r2"
             })
+        );
+
+        let row = event_of(&RouterEvent::WindowCleared {
+            account_id: "a".into(),
+            window: "five_hour".into(),
+            utilization_before: 1.0,
+            utilization: 0.0,
+            reset: Some(9_000),
+            source: WindowSource::Head,
+            source_request_id: Some("r3".into()),
+            at: 4_000,
+        })
+        .expect("a cleared row");
+        assert_eq!(
+            columns(&row),
+            (
+                "window_cleared",
+                Some("a"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("r3")
+            ),
+            "the head that read the window under its limit names the request"
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "window": "five_hour", "utilization_before": 1.0, "utilization": 0.0, "reset": 9_000,
+                "source": "head", "source_request_id": "r3"
+            }),
+            "the readings and the reset alone, with no cause"
         );
 
         let row = event_of(&RouterEvent::WindowReset {

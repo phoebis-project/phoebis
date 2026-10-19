@@ -34,17 +34,21 @@ pub struct UnifiedHeaders {
 }
 
 impl UnifiedHeaders {
-    pub fn parse(head: &ResponseHead) -> Option<UnifiedHeaders> {
-        if !head
-            .headers
+    /// The unified headers of a head given as its header list, for a reader that holds no transport head (the
+    /// keepalive reads the bus's copy of it).
+    pub fn parse_list(headers: &[(String, String)]) -> Option<UnifiedHeaders> {
+        if !headers
             .iter()
             .any(|(n, _)| n.to_ascii_lowercase().starts_with(PREFIX))
         {
             return None;
         }
         let text = |suffix: &str| {
-            head.get(&format!("{PREFIX}{suffix}"))
-                .map(|v| v.trim().to_string())
+            let name = format!("{PREFIX}{suffix}");
+            headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+                .map(|(_, v)| v.trim().to_string())
         };
         let secs = |suffix: &str| text(suffix).as_deref().and_then(epoch_millis);
         let float = |suffix: &str| {
@@ -69,6 +73,11 @@ impl UnifiedHeaders {
             overage_reset: secs("overage-reset"),
             overage_disabled_reason: text("overage-disabled-reason"),
         })
+    }
+
+    /// Delegates to `parse_list` with the head's headers.
+    pub fn parse(head: &ResponseHead) -> Option<UnifiedHeaders> {
+        UnifiedHeaders::parse_list(&head.headers)
     }
 
     /// Whether the shared window headers are present, which is what makes an absent overage flag mean "off".
@@ -706,6 +715,25 @@ mod tests {
             None
         );
         assert!(head_sample(&h, AccountKind::Oauth, "claude-opus-5", 0).is_none());
+    }
+
+    // The HTTP parser strips the spaces around a value before either reader sees it, so a list built here is the one
+    // way to reach the trim.
+    #[test]
+    fn parse_list_trims_each_value_and_reads_a_name_in_any_case() {
+        let parsed = UnifiedHeaders::parse_list(&[
+            (
+                "Anthropic-Ratelimit-Unified-Overage-In-Use".to_string(),
+                " TRUE ".to_string(),
+            ),
+            (
+                "ANTHROPIC-RATELIMIT-UNIFIED-STATUS".to_string(),
+                " allowed ".to_string(),
+            ),
+        ])
+        .expect("a mixed-case unified name opens the read");
+        assert_eq!(parsed.overage_in_use, Some(true));
+        assert_eq!(parsed.status.as_deref(), Some("allowed"));
     }
 
     #[test]

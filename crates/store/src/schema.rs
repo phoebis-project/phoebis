@@ -88,11 +88,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (56, V56),
     (57, V57),
     (58, V58),
+    (59, V59),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 58;
+pub const SCHEMA_VERSION: u32 = 59;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -845,3 +846,7 @@ ALTER TABLE pins ADD COLUMN burn_unmetered_write_1h REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN burn_unmetered_write_5m REAL NOT NULL DEFAULT 0;
 ALTER TABLE pins ADD COLUMN last_classifier INTEGER NOT NULL DEFAULT 0;
 "#;
+
+// Why the pin's stamp was written, beside its source and instant: a round's move or the failover's word. Nullable with
+// no backfill, since a stamped row from before reads as shed, the one word its readers had.
+const V59: &str = "ALTER TABLE pins ADD COLUMN shed_reason TEXT;";

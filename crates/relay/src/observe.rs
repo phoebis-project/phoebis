@@ -35,7 +35,9 @@ pub(crate) struct Answer {
 /// The usage block, the cache diagnostics beside it, and what the answer says about itself, from one parse.
 /// `path` names the object that holds them (`["message"]` for `message_start`, empty for a JSON answer or
 /// `message_delta`). A document that does not parse, or has none of them, yields empty members, never zeros.
-pub(crate) fn answer_from_json(body: &[u8], path: &[&str]) -> Answer {
+/// `named` says whether the pass's body carried a `diagnostics` member naming a previous message, the one case where
+/// a null answer member reads `none`.
+pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answer {
     let empty = || Answer {
         usage: Usage::default(),
         response: ResponseFacts::default(),
@@ -77,11 +79,16 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str]) -> Answer {
         usage.web_search_requests = count(tools.and_then(|t| t.get("web_search_requests")));
         usage.web_fetch_requests = count(tools.and_then(|t| t.get("web_fetch_requests")));
     }
-    usage.cache_miss_reason = text(
-        at.get("diagnostics")
-            .and_then(|d| d.get("cache_miss_reason"))
-            .and_then(|r| r.get("type")),
-    );
+    usage.cache_miss_reason = match at.get("diagnostics") {
+        None => None,
+        // A null member answers the message the body named, and says nothing where the body named none.
+        Some(Value::Null) => named.then(|| "none".to_string()),
+        Some(diagnostics) => match diagnostics.get("cache_miss_reason") {
+            // The upstream's comparison was still running when the answer went out.
+            Some(Value::Null) => Some("pending".to_string()),
+            reason => text(reason.and_then(|r| r.get("type"))),
+        },
+    };
     // A `message_delta` nests the stop under `delta`; a whole answer carries it at its own level.
     let stop =
         |key: &str| text(at.get(key)).or_else(|| text(at.get("delta").and_then(|d| d.get(key))));
@@ -137,7 +144,7 @@ mod tests {
     #[test]
     fn usage_is_read_from_the_root_or_under_message_and_a_missing_block_is_empty() {
         let json = br#"{"type":"message","usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":4,"cache_creation_input_tokens":6,"service_tier":"standard"},"diagnostics":{"cache_miss_reason":{"type":"tools_changed"}}}"#;
-        let usage = answer_from_json(json, &[]).usage;
+        let usage = answer_from_json(json, &[], false).usage;
         assert_eq!(
             (
                 usage.input_tokens,
@@ -156,22 +163,61 @@ mod tests {
             (Some("standard"), Some("tools_changed"))
         );
         let start = br#"{"type":"message_start","message":{"usage":{"input_tokens":1,"cache_creation":{"ephemeral_5m_input_tokens":8,"ephemeral_1h_input_tokens":9}}}}"#;
-        let usage = answer_from_json(start, &["message"]).usage;
+        let usage = answer_from_json(start, &["message"], false).usage;
         assert_eq!(
             (usage.cache_write_5m_tokens, usage.cache_write_1h_tokens),
             (Some(8), Some(9)),
             "the split object wins over the total"
         );
-        assert!(answer_from_json(br#"{"type":"message"}"#, &[])
+        assert!(answer_from_json(br#"{"type":"message"}"#, &[], false)
             .usage
             .is_empty());
-        assert!(answer_from_json(b"not json", &[]).usage.is_empty());
+        assert!(answer_from_json(b"not json", &[], false).usage.is_empty());
+    }
+
+    #[test]
+    fn a_null_diagnostics_member_reads_none_where_the_body_named_a_message_and_a_null_reason_reads_pending(
+    ) {
+        let reason =
+            |json: &[u8], named: bool| answer_from_json(json, &[], named).usage.cache_miss_reason;
+        let absent = br#"{"type":"message","usage":{"input_tokens":1}}"#;
+        let null = br#"{"type":"message","usage":{"input_tokens":1},"diagnostics":null}"#;
+        let pending = br#"{"type":"message","usage":{"input_tokens":1},"diagnostics":{"cache_miss_reason":null}}"#;
+        let typed = br#"{"type":"message","usage":{"input_tokens":1},"diagnostics":{"cache_miss_reason":{"type":"none"}}}"#;
+        for named in [true, false] {
+            assert_eq!(reason(absent, named), None, "named {named}");
+            assert_eq!(
+                reason(pending, named).as_deref(),
+                Some("pending"),
+                "named {named}"
+            );
+            assert_eq!(
+                reason(typed, named).as_deref(),
+                Some("none"),
+                "a type the upstream names is recorded as sent, named {named}"
+            );
+        }
+        assert_eq!(reason(null, true).as_deref(), Some("none"));
+        assert_eq!(
+            reason(null, false),
+            None,
+            "a null member answering a body that named no message says nothing"
+        );
+        let start = br#"{"type":"message_start","message":{"usage":{"input_tokens":1},"diagnostics":null}}"#;
+        assert_eq!(
+            answer_from_json(start, &["message"], true)
+                .usage
+                .cache_miss_reason
+                .as_deref(),
+            Some("none"),
+            "the head carries the member under its message"
+        );
     }
 
     #[test]
     fn the_answers_own_facts_are_read_from_the_head_the_delta_and_a_json_answer() {
         let start = br#"{"type":"message_start","message":{"id":"msg_1","model":"claude-opus-5","usage":{"input_tokens":1,"speed":"fast","inference_geo":"us"}}}"#;
-        let head = answer_from_json(start, &["message"]);
+        let head = answer_from_json(start, &["message"], false);
         assert_eq!(
             (
                 head.response.model.as_deref(),
@@ -185,7 +231,7 @@ mod tests {
             "the head has not stopped yet"
         );
         let delta = br#"{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":40,"output_tokens_details":{"thinking_tokens":25},"server_tool_use":{"web_search_requests":2,"web_fetch_requests":1}},"context_management":{"applied_edits":[{"type":"clear_tool_uses_20250919","cleared_tool_uses":3,"cleared_input_tokens":1200},{"type":"clear_thinking_20251015","cleared_thinking_turns":2}]}}"#;
-        let tail = answer_from_json(delta, &[]);
+        let tail = answer_from_json(delta, &[], false);
         assert_eq!(
             (
                 tail.usage.output_tokens,
@@ -207,7 +253,7 @@ mod tests {
             "the edit with no token count adds nothing"
         );
         let refused = br#"{"id":"msg_2","type":"message","model":"claude-fable-5-1","stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber","recommended_model":"claude-opus-5"},"usage":{"input_tokens":5,"output_tokens":0}}"#;
-        let answer = answer_from_json(refused, &[]);
+        let answer = answer_from_json(refused, &[], false);
         assert_eq!(
             (
                 answer.response.stop_reason.as_deref(),
@@ -216,7 +262,7 @@ mod tests {
             ),
             (Some("refusal"), Some("cyber"), Some("claude-opus-5"))
         );
-        assert!(answer_from_json(br#"{"type":"message"}"#, &[])
+        assert!(answer_from_json(br#"{"type":"message"}"#, &[], false)
             .response
             .is_empty());
     }
@@ -224,7 +270,7 @@ mod tests {
     #[test]
     fn a_deltas_refusal_details_are_read_from_delta_stop_details_not_the_root() {
         let delta = br#"{"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null,"stop_details":{"type":"refusal","category":"cyber","recommended_model":"claude-opus-5"}},"usage":{"output_tokens":3}}"#;
-        let answer = answer_from_json(delta, &[]);
+        let answer = answer_from_json(delta, &[], false);
         assert_eq!(
             (
                 answer.response.stop_reason.as_deref(),
@@ -236,7 +282,7 @@ mod tests {
         // A root `stop_details` beside a `delta` object is never a whole answer's own member landing on a
         // delta by coincidence, so it must not be read once the delta has its own (possibly empty) member.
         let root_only = br#"{"type":"message_delta","delta":{"stop_reason":"refusal"},"stop_details":{"type":"refusal","category":"root-leaked"}}"#;
-        let answer = answer_from_json(root_only, &[]);
+        let answer = answer_from_json(root_only, &[], false);
         assert_eq!(answer.response.refusal_category, None);
     }
 

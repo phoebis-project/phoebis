@@ -7,7 +7,7 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::{IdleReturns, Wasted, IDLE_AGE_BOUNDS_SECONDS};
-use phoebis_ledger::{hour_of, read_rollups, RollupSelect, UNATTRIBUTED};
+use phoebis_ledger::{hour_of, read_rollups, Funding, RollupSelect, UNATTRIBUTED};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
@@ -29,8 +29,9 @@ pub(crate) struct KeepaliveOverview {
     /// holds no slot, beside the `max` the bootstrap file's `keepalive` block sets.
     pub limits: OverviewLimits,
     pub pools: Vec<PoolKeepalive>,
-    /// `ok`, `failed`, `held`, `migrated`, `skipped`, where `held` counts the probes the router refused with `503
-    /// ledger_behind` while its ledger caught up, outside `failed`.
+    /// `ok`, `plan_ok`, `failed`, `held`, `migrated`, `skipped`, where `plan_ok` counts the plan-funded probes of
+    /// `ok` and `held` the probes the router refused with `503 ledger_behind` while its ledger caught up, outside
+    /// `failed`.
     #[schema(value_type = crate::openapi::ProbeCountsView)]
     pub probes_24h: phoebis_ledger::ProbeCounts,
 }
@@ -56,8 +57,8 @@ pub(crate) struct Limit {
 pub(crate) struct PoolKeepalive {
     /// The requests a probe kept warm.
     pub credited_24h: u64,
-    /// The ten buckets of the return rate by idle age, each `from_seconds`, `reached`, `returned` and
-    /// `to_seconds`.
+    /// The ten buckets of the return rate by idle age (the keepalive page's section of that name), each
+    /// `from_seconds`, `reached`, `returned` and `to_seconds`.
     pub idle_returns: Vec<IdleReturn>,
     pub pool_id: String,
     /// The probes the upstream served.
@@ -144,6 +145,9 @@ pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
             .unwrap_or(0);
         if row.kind == "probe" {
             probes.ok += row.succeeded;
+            if Funding::of_rollup(&row.funding) == Funding::Plan {
+                probes.plan_ok += row.succeeded;
+            }
             probes.failed +=
                 row.failed + row.rate_limited + row.exhausted + row.rejected + row.incomplete;
             probes.held += row.probes_held;

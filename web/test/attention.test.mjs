@@ -204,6 +204,13 @@ test('the four routing conditions read the count, the setting and the start on t
   assert.equal(words('destination_spent', account, { fits: { least_bad: 1 }, moves: 1, setting: ['window_ceiling'], windows: ['five_hour', 'seven_day'] }), `primary: 1 move landed and the 5h and 7d windows were spent within the hour, window_ceiling, since ${at}`);
   assert.equal(words('wall_reached', account, { projection_error: 0.04, setting: ['shed_cap', 'window_ceiling'], walls: 1, windows: ['five_hour'] }), `primary: 1 wall reached on the 5h window, the last round projected 96 %, shed_cap and window_ceiling, since ${at}`);
   assert.equal(words('wall_reached', account, { projection_error: null, setting: ['shed_cap', 'window_ceiling'], walls: 2, windows: ['seven_day', 'seven_day_fable'] }), `primary: 2 walls reached on the 7d and Fable windows, shed_cap and window_ceiling, since ${at}`, 'a wall no round projected names no error');
+  // After a slow-down round the wall reads how long before its reset it came, since that round's projection measures
+  // nothing there.
+  const early = { early_ms: 1_500_000, projection_error: null, setting: ['shed_cap', 'window_ceiling'], walls: 1, windows: ['five_hour'] };
+  assert.equal(words('wall_reached', account, early), `primary: 1 wall reached on the 5h window, the wall came 25 min before the reset, shed_cap and window_ceiling, since ${at}`);
+  assert.equal(words('wall_reached', account, { ...early, early_ms: 40_000 }), `primary: 1 wall reached on the 5h window, the wall came 40 s before the reset, shed_cap and window_ceiling, since ${at}`, 'a span under a minute');
+  assert.equal(words('wall_reached', account, { ...early, early_ms: 0 }), `primary: 1 wall reached on the 5h window, the wall came at the reset, shed_cap and window_ceiling, since ${at}`, 'a wall at or after the reset');
+  assert.equal(words('wall_reached', account, { ...early, early_ms: null }), `primary: 1 wall reached on the 5h window, shed_cap and window_ceiling, since ${at}`, 'neither figure where both are null');
   const studio = { ...account, link: { id: 'studio', page: 'accounts' }, pools: ['work'], subject: { id: 'studio', label: 'studio', type: 'account' } };
   const slowed = { bar_ms: 3_600_000, factor_min: 0.35, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, slowed_ms: 7_700_000, spans: 2 };
   assert.equal(words('slowed_long', studio, slowed), `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since ${at}`);

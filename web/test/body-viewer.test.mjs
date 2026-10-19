@@ -72,3 +72,13 @@ test('the viewer draws the rows in view and 20 rows above and below them, each a
     'each row holds its own line',
   );
 });
+
+test('the width floor copies the line of the most graphemes, so combining marks take no column of their own', () => {
+  // 700 letters each under a combining acute are 1,400 code units drawn in 700 columns, beside a line of 1,000.
+  const marks = 'e\u0301'.repeat(700);
+  const ascii = 'x'.repeat(1000);
+  const container = render(h(BodyViewer, { highlight: false, lines: [marks, ascii] }));
+  const probe = container.querySelector('.body-rows > [aria-hidden="true"]');
+  assert.ok(probe, 'the viewer holds its hidden copy');
+  assert.equal(probe.textContent, ascii, 'the ASCII line is the wider one as drawn');
+});

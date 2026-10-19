@@ -23,6 +23,7 @@ import type {
   ModelsState,
   OveragePolicy,
   Overview,
+  PairingConfirmed,
   PairingInput,
   PairingPreview,
   PairingSession,
@@ -197,7 +198,7 @@ export interface Api {
   clearCooldown(accountId: string, scope: string): Promise<void>;
   clearFunding(accountId: string): Promise<void>;
   completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview>;
-  confirmPairing(pairingId: string): Promise<void>;
+  confirmPairing(pairingId: string): Promise<PairingConfirmed>;
   createAccount(input: AccountInput): Promise<Account>;
   createGuardrail(input: GuardrailInput): Promise<Guardrail>;
   createKey(input: CreateKeyInput): Promise<CreatedApiKey>;

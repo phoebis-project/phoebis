@@ -83,8 +83,8 @@ pub struct LedgerConfig {
 impl Default for LedgerConfig {
     fn default() -> Self {
         LedgerConfig {
-            retention_days: 90,
-            rollup_retention_days: 400,
+            retention_days: 365,
+            rollup_retention_days: 365,
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
@@ -617,6 +617,7 @@ async fn writer(
         &metrics,
         &tiers,
         clock(),
+        &clock,
     )
     .await;
     // The start's budget rows wait for the first batch and follow its records: the start row `spawn` recorded is the
@@ -698,6 +699,7 @@ async fn writer(
                     &metrics,
                     &tiers,
                     now,
+                    &clock,
                 )
                 .await
                 {
@@ -760,6 +762,7 @@ async fn writer(
             &tiers,
             &batch,
             0..batch.len(),
+            &clock,
         )
         .await
         {
@@ -812,6 +815,7 @@ async fn writer(
                     &tiers,
                     &gap,
                     0..1,
+                    &clock,
                 )
                 .await
                 {
@@ -949,6 +953,7 @@ async fn retry_held(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
             &tiers,
             &held.records,
             rest,
+            ctx.clock,
         )
         .await
         {
@@ -984,6 +989,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
             &tiers,
             &held.records,
             one,
+            ctx.clock,
         )
         .await
         {
@@ -1040,6 +1046,7 @@ async fn replay(ctx: &mut WriterCtx<'_>, held: Held) -> Retry {
                     &tiers,
                     &gap,
                     0..1,
+                    ctx.clock,
                 )
                 .await;
             }
@@ -1132,6 +1139,7 @@ async fn land_parked(
     metrics: &Arc<Metrics>,
     tiers: &AccountTiers,
     now: i64,
+    clock: &Clock,
 ) -> Result<(u64, u64), LedgerError> {
     let rows = blocking(db, |db| db.parked_rows()).await.inspect_err(|error| {
         tracing::warn!(%error, "the parked records could not be read, so they wait for the next start or replay");
@@ -1164,6 +1172,7 @@ async fn land_parked(
                     &batch,
                     0..1,
                     Some(row.id),
+                    clock,
                 )
                 .await
             }
@@ -1513,6 +1522,7 @@ impl Spends {
             &tiers,
             &batch,
             0..batch.len(),
+            &self.clock,
         )
         .await;
         // A refused batch keeps its rows for the next batch or refresh, as a held batch keeps its records.
@@ -1694,9 +1704,10 @@ async fn land(
     tiers: &AccountTiers,
     batch: &Batch,
     range: Range<usize>,
+    clock: &Clock,
 ) -> Landed {
     land_acknowledging(
-        db, pricing, tables, unweighted, stats, metrics, tiers, batch, range, None,
+        db, pricing, tables, unweighted, stats, metrics, tiers, batch, range, None, clock,
     )
     .await
 }
@@ -1716,8 +1727,10 @@ async fn land_acknowledging(
     batch: &Batch,
     range: Range<usize>,
     parked: Option<i64>,
+    clock: &Clock,
 ) -> Landed {
     let db = db.clone();
+    let clock = clock.clone();
     let revisions = pricing.revisions();
     let tiers = tiers.clone();
     let records = batch.clone();
@@ -1748,7 +1761,8 @@ async fn land_acknowledging(
                         for a in &mut attempts {
                             a.tier = tiers.get(&a.account_id).cloned().flatten();
                         }
-                        let previous = insert_request_in(&tx, request, &attempts, bodies.as_ref())?;
+                        let previous =
+                            insert_request_in(&tx, request, &attempts, bodies.as_ref(), clock())?;
                         crate::rollup::fold_request(
                             &tx,
                             request,
@@ -2032,6 +2046,15 @@ mod tests {
             retention_days: LedgerConfig::default().retention_days,
         };
         (ledger, rx)
+    }
+
+    #[test]
+    fn the_default_ledger_keeps_the_raw_rows_and_the_rollups_365_days() {
+        let config = LedgerConfig::default();
+        assert_eq!(
+            (config.retention_days, config.rollup_retention_days),
+            (365, 365)
+        );
     }
 
     #[tokio::test]

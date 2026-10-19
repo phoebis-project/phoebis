@@ -1769,6 +1769,414 @@ async fn an_unpriced_row_nulls_the_window_it_could_not_price_and_leaves_the_othe
     assert!(close(cost.get(FIVE_HOUR), want), "{cost:?} vs {want}");
 }
 
+/// The ledger's test cost model: `claude-mystery-2` sits in a tier that weighs no model and `claude-unlisted-1` in no
+/// tier, so neither prices on any window, `claude-opus-5` prices at its tier's latest weight and `claude-sonnet-5-5`
+/// at its own.
+fn test_costs() -> PlanTables {
+    phoebis_ledger::test_tables::subscription_costs()
+}
+
+/// Every planted row's group under `group_by`, priced in the equivalent on `test_costs`, the probe rows joining the
+/// request side where `probes_counted`.
+fn test_cost_groups(db: &LedgerDb, group_by: &str, probes_counted: bool) -> Vec<GroupRow> {
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    breakdown(
+        &rows,
+        group_by,
+        probes_counted,
+        &LiveKeys::default(),
+        &[],
+        None,
+        &PRICES,
+        &test_costs(),
+    )
+}
+
+/// A flag map's windows and flags in the order it keys them.
+fn flags_of<'a>(
+    flags: impl IntoIterator<Item = (&'a &'static str, &'a bool)>,
+) -> Vec<(&'static str, bool)> {
+    flags.into_iter().map(|(w, f)| (*w, *f)).collect()
+}
+
+#[test]
+fn a_plan_row_on_a_model_the_cost_model_cannot_weigh_flags_the_windows_it_left_out_of_the_equivalent(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (id, account, model) in [
+        ("r-priced", "a", "claude-sonnet-5-5"),
+        ("r-tierless", "a", "claude-unlisted-1"),
+        ("r-unweighted-tier", "b", "claude-mystery-2"),
+    ] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                account,
+                model,
+                ..ShareRow::default()
+            },
+        );
+    }
+    let groups = test_cost_groups(&db, "account", false);
+    for (key, why) in [
+        ("a", "a model with no tier"),
+        ("b", "a tier with no weighted model"),
+    ] {
+        let g = group(&groups, key);
+        assert_eq!(
+            flags_of(&g.unpriced),
+            [(FIVE_HOUR, true), (SEVEN_DAY, true)],
+            "{why} leaves both windows unpriced: {g:?}"
+        );
+        assert!(
+            !g.cost_equivalent.contains_key(SEVEN_DAY)
+                && !g.cache_equivalent.contains_key(SEVEN_DAY),
+            "and the window stays out of the equivalent: {g:?}"
+        );
+    }
+}
+
+#[test]
+fn a_group_whose_plan_rows_all_priced_reads_every_window_it_keys_priced() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // A row at its own weight, one at its tier's latest weight and a Fable row with a week of its own.
+    for (id, model) in [
+        ("r-sonnet", "claude-sonnet-5-5"),
+        ("r-fallback", "claude-opus-5"),
+        ("r-fable", "claude-fable-5-1"),
+    ] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                model,
+                ..ShareRow::default()
+            },
+        );
+    }
+    let groups = test_cost_groups(&db, "account", false);
+    let a = group(&groups, "a");
+    assert_eq!(
+        flags_of(&a.unpriced),
+        [
+            (FIVE_HOUR, false),
+            (SEVEN_DAY, false),
+            (SEVEN_DAY_FABLE, false)
+        ],
+        "{a:?}"
+    );
+    assert!(
+        [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
+            .iter()
+            .all(|w| a.cost_equivalent.contains_key(w)),
+        "{a:?}"
+    );
+}
+
+#[test]
+fn a_group_of_billed_rows_alone_reads_both_windows_priced_and_no_equivalent() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-overage",
+            model: "claude-unlisted-1",
+            overage: Some(true),
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-api",
+            account: "k",
+            account_kind: "api_key",
+            model: "claude-unlisted-1",
+            ..ShareRow::default()
+        },
+    );
+    let groups = test_cost_groups(&db, "model", false);
+    let g = group(&groups, "claude-unlisted-1");
+    assert_eq!(
+        flags_of(&g.unpriced),
+        [(FIVE_HOUR, false), (SEVEN_DAY, false)],
+        "no plan row reached a window, so none reads unpriced: {g:?}"
+    );
+    assert!(g.cost_equivalent.is_empty(), "{g:?}");
+}
+
+#[test]
+fn a_plan_probe_the_cost_model_cannot_weigh_flags_the_probe_windows_and_not_the_request_windows() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-request",
+            model: "claude-sonnet-5-5",
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-probe",
+            kind: "probe",
+            model: "claude-mystery-2",
+            ..ShareRow::default()
+        },
+    );
+    let groups = test_cost_groups(&db, "account", false);
+    let a = group(&groups, "a");
+    assert_eq!(
+        (flags_of(&a.unpriced), flags_of(&a.probe_unpriced)),
+        (
+            vec![(FIVE_HOUR, false), (SEVEN_DAY, false)],
+            vec![(FIVE_HOUR, true), (SEVEN_DAY, true)]
+        ),
+        "the request row priced and the probe row did not: {a:?}"
+    );
+    assert!(a.probe_equivalent.is_empty(), "{a:?}");
+    let counted = test_cost_groups(&db, "account", true);
+    assert_eq!(
+        flags_of(&group(&counted, "a").unpriced),
+        [(FIVE_HOUR, true), (SEVEN_DAY, true)],
+        "a probe row the request side counts flags its windows there too"
+    );
+}
+
+#[test]
+fn a_probe_priced_through_the_fallback_marks_the_probe_estimate_and_a_request_row_alone_does_not() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // On `a` the probe prices at its tier's latest weight, on `b` the request does, and on `c` a stopped probe's
+    // wasted counts do.
+    for (id, account, kind, model) in [
+        ("r-a-request", "a", "inference", "claude-sonnet-5-5"),
+        ("r-a-probe", "a", "probe", "claude-opus-5"),
+        ("r-b-request", "b", "inference", "claude-opus-5"),
+        ("r-b-probe", "b", "probe", "claude-sonnet-5-5"),
+        ("r-c-request", "c", "inference", "claude-sonnet-5-5"),
+        ("r-d-request", "d", "inference", "claude-sonnet-5-5"),
+    ] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                account,
+                kind,
+                model,
+                ..ShareRow::default()
+            },
+        );
+    }
+    // On `d` a credit prices at its tier's latest weight: a credit files under its request's kind, never a probe's.
+    db.write(|c| {
+        let tx = c.transaction()?;
+        for (account, kind, wasted, kept) in [("c", "probe", 500, 0), ("d", "inference", 0, 2_000)]
+        {
+            fold_keepalive(
+                &tx,
+                &KeepaliveDelta {
+                    at: WEEKDAY_OFF_PEAK,
+                    key_id: "k".into(),
+                    pool_id: "p".into(),
+                    account_id: account.into(),
+                    canonical_model: "claude-opus-5".into(),
+                    kind: kind.into(),
+                    wasted_probes: u64::from(wasted > 0),
+                    wasted_cache_read_tokens: wasted,
+                    kept_warm_requests: u64::from(kept > 0),
+                    kept_warm_5m_tokens: kept,
+                    ..Default::default()
+                },
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let groups = test_cost_groups(&db, "account", false);
+    let marks = |key: &str| {
+        let g = group(&groups, key);
+        (g.estimated, g.probe_estimated)
+    };
+    assert_eq!(marks("a"), (true, true), "the fallback probe marks both");
+    assert_eq!(
+        marks("b"),
+        (true, false),
+        "the fallback request marks the group's estimate alone"
+    );
+    assert_eq!(
+        marks("c"),
+        (true, true),
+        "the wasted counts are the probe row's own"
+    );
+    assert_eq!(
+        marks("d"),
+        (true, false),
+        "the credit marks the group's estimate alone"
+    );
+}
+
+#[test]
+fn the_kept_warm_and_probe_counts_count_what_a_plan_account_served_apart() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Two plan probes and a request on `a`, and a probe through the API key account `k`.
+    for (id, account, account_kind, kind) in [
+        ("r-request", "a", "oauth", "inference"),
+        ("r-probe-1", "a", "oauth", "probe"),
+        ("r-probe-2", "a", "oauth", "probe"),
+        ("r-probe-billed", "k", "api_key", "probe"),
+    ] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                account,
+                account_kind,
+                kind,
+                model: "claude-sonnet-5-5",
+                ..ShareRow::default()
+            },
+        );
+    }
+    // Two plan credits at either TTL, one in overage and one through the API key account.
+    db.write(|c| {
+        let tx = c.transaction()?;
+        for (account, account_kind, overage, five_minutes, hour) in [
+            ("a", None, None, 1_000, 0),
+            ("a", None, None, 0, 400),
+            ("a", None, Some(true), 200, 0),
+            ("k", Some(phoebis_store::AccountKind::ApiKey), None, 300, 0),
+        ] {
+            fold_keepalive(
+                &tx,
+                &KeepaliveDelta {
+                    at: WEEKDAY_OFF_PEAK,
+                    key_id: "k".into(),
+                    pool_id: "p".into(),
+                    account_id: account.into(),
+                    canonical_model: "claude-sonnet-5-5".into(),
+                    kind: "inference".into(),
+                    kept_warm_requests: 1,
+                    kept_warm_5m_tokens: five_minutes,
+                    kept_warm_1h_tokens: hour,
+                    account_kind,
+                    overage_in_use: overage,
+                    ..Default::default()
+                },
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let groups = test_cost_groups(&db, "model", false);
+    let g = group(&groups, "claude-sonnet-5-5");
+    let kept = &g.kept_warm;
+    assert_eq!(
+        (kept.requests, kept.tokens_5m, kept.tokens_1h),
+        (4, 1_500, 400),
+        "{kept:?}"
+    );
+    assert_eq!(
+        (kept.plan_requests, kept.plan_tokens_5m, kept.plan_tokens_1h),
+        (2, 1_000, 400),
+        "the plan-served credits alone: {kept:?}"
+    );
+    assert_eq!(
+        (g.probes.ok, g.probes.plan_ok),
+        (3, 2),
+        "the answered probes and the plan-served ones: {:?}",
+        g.probes
+    );
+}
+
+/// The two shared windows of every reader that sums them over the hour of `WEEKDAY_OFF_PEAK`, priced on `costs`.
+async fn shared_sums(
+    db: &std::sync::Arc<LedgerDb>,
+    costs: &PlanTables,
+) -> Vec<(&'static str, phoebis_ledger::SharedEquivalent)> {
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let live = LiveKeys(BTreeMap::from([("k".to_string(), 0)]));
+    let day = phoebis_ledger::dashboard(db, WEEKDAY_OFF_PEAK, &PRICES, costs)
+        .await
+        .unwrap();
+    let point = day
+        .hourly
+        .iter()
+        .find(|h| h.at == hour * 1_000)
+        .expect("the planted hour")
+        .equivalent
+        .clone();
+    let traffic = phoebis_ledger::pool_traffic(db, "p", hour, hour + 3_600, 3_600, &PRICES, costs)
+        .await
+        .unwrap();
+    let (pools, keys) = db
+        .read_blocking(|c| {
+            Ok((
+                request_totals(c, "pool_id", hour, hour + 3_600, &PRICES, costs)?,
+                key_request_totals(c, hour, hour + 3_600, &live, &PRICES, costs)?,
+            ))
+        })
+        .unwrap();
+    vec![
+        ("the day", day.equivalent_24h),
+        ("the hour", point),
+        ("the pool's bucket", traffic[0].equivalent.clone()),
+        ("the pool's totals", pools["p"].equivalent.clone()),
+        ("the key's totals", keys["k"].equivalent.clone()),
+    ]
+}
+
+/// A plan row the cost model cannot weigh adds nothing to either shared window and flags both, so the dashboard, a
+/// pool's traffic and the keys' and pools' totals read "nothing priced" apart from "no plan rows". A model in no tier
+/// and a tier that weighs no model each meet the sums on a ledger of their own.
+#[tokio::test]
+async fn the_shared_sums_flag_a_window_a_plan_row_priced_nothing_on_and_keep_their_figures() {
+    let costs = test_costs();
+    for (model, why) in [
+        ("claude-unlisted-1", "a model with no tier"),
+        ("claude-mystery-2", "a tier with no weighted model"),
+    ] {
+        let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+        plant_share(
+            &db,
+            ShareRow {
+                id: "r-priced",
+                model: "claude-sonnet-5-5",
+                ..ShareRow::default()
+            },
+        );
+        let priced = shared_sums(&db, &costs).await;
+        for (what, sum) in &priced {
+            assert!(
+                sum.five_hour > 0.0 && !sum.unpriced.five_hour && !sum.unpriced.seven_day,
+                "{what} prices its one plan row: {sum:?}"
+            );
+        }
+        plant_share(
+            &db,
+            ShareRow {
+                id: "r-unpriced",
+                model,
+                ..ShareRow::default()
+            },
+        );
+        for ((what, before), (_, after)) in priced.iter().zip(shared_sums(&db, &costs).await) {
+            assert!(
+                after.unpriced.five_hour
+                    && after.unpriced.seven_day
+                    && after.five_hour == before.five_hour
+                    && after.seven_day == before.seven_day,
+                "{what} flags both windows under {why} and keeps the priced row's figure: {after:?} vs {before:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_haiku_row_adds_nothing_to_the_fable_week_and_never_nulls_it() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -5720,8 +6128,8 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
         .unwrap();
     assert_eq!(before[0].spent_usd, 50.0);
 
-    // A retention window shorter than the month purges the raw request and its attempt; the rollup that
-    // folded them keeps its default 400-day life, so the query still answers the same spend.
+    // A retention window shorter than the month purges the raw request and its attempt. The rollup that
+    // folded them keeps its default 365-day life, so the query still answers the same spend.
     let purged = run_retention_blocking(
         &db,
         &LedgerConfig {

@@ -199,9 +199,10 @@ impl LedgerDb {
                 "injected ledger read failure",
             )));
         }
-        // A read never opens a transaction, so a closure that panics mid-row leaves the connection exactly as
-        // consistent as it was before the call; recovering the guard here, rather than propagating the
-        // poisoning, keeps one panicked read from turning every later read into a `ReadCancelled`.
+        // A read opens no transaction but a read one, such as `list_request_page`'s, which rolls back as it drops
+        // while the panic unwinds, so a closure that panics mid-row leaves the connection as consistent as it was
+        // before the call. Recovering the guard here, rather than propagating the poisoning, keeps one panicked read
+        // from turning every later read into a `ReadCancelled`.
         match &self.reader {
             Some(reader) => f(&reader.lock().unwrap_or_else(PoisonError::into_inner)),
             None => f(&self.writer.lock().unwrap_or_else(PoisonError::into_inner)),
@@ -223,7 +224,8 @@ impl LedgerDb {
     }
 
     /// Writes the request and its attempts and folds them into the rollups in one transaction, each answered attempt
-    /// under the prompt-length band `prices` selects at the revision in force at the request's `received_at`.
+    /// under the prompt-length band `prices` selects at the revision in force at the request's `received_at`. The
+    /// handle holds no clock, so the row's `landed_at` is one past the newest the ledger holds.
     pub fn insert_request_at(
         &self,
         request: &RequestRecord,
@@ -233,7 +235,7 @@ impl LedgerDb {
     ) -> Result<(), LedgerError> {
         self.write(|conn| {
             let tx = begin_write(conn)?;
-            let previous = insert_request_in(&tx, request, attempts, bodies)?;
+            let previous = insert_request_in(&tx, request, attempts, bodies, 0)?;
             crate::rollup::fold_request(
                 &tx,
                 request,
@@ -504,13 +506,28 @@ pub(crate) fn insert_samples_in(
     Ok(())
 }
 
+/// The instant the ledger wrote the row, from the writer's clock and strictly increasing across its rows
+/// (`max(now, previous + 1)`), so two rows written in one millisecond still order. Null on a row from before the
+/// column, which no `landed_after` filter answers. The previous stamp is read in the row's own transaction, so a
+/// writer that starts again under a clock set back still stamps above every row written before.
+fn landing_stamp(tx: &Transaction<'_>, now: i64) -> Result<i64, LedgerError> {
+    let previous: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(landed_at), 0) FROM requests",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(now.max(previous + 1))
+}
+
 /// Writes the request and its attempts, answering the rows the id held before, if any: a replacement has to
-/// take its earlier contribution out of every aggregate that was folded from it.
+/// take its earlier contribution out of every aggregate that was folded from it. `now` is the writer's clock, which
+/// the row's `landed_at` is stamped from.
 pub(crate) fn insert_request_in(
     tx: &Transaction<'_>,
     request: &RequestRecord,
     attempts: &[AttemptRecord],
     bodies: Option<&BodyRecord>,
+    now: i64,
 ) -> Result<Option<(RequestRecord, Vec<AttemptRecord>)>, LedgerError> {
     let previous = tx
         .query_row(
@@ -542,9 +559,10 @@ pub(crate) fn insert_request_in(
         .optional()?
         .is_some();
     let kept_warm = request.kept_warm || marked;
+    let landed_at = landing_stamp(tx, now)?;
     tx.execute(
-        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, request_truncated, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, identified_by, identity_root, identity_depth, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, refused) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, NULL, NULL, NULL, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59)",
+        "INSERT OR REPLACE INTO requests (id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, request_truncated, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, identified_by, identity_root, identity_depth, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, landed_at, refused) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, NULL, NULL, NULL, ?50, ?51, ?52, ?53, ?54, ?55, ?56, ?57, ?58, ?59, ?60)",
         params![
             request.id, request.received_at, request.finished_at, request.key_id, request.key_generation, request.pool_id, request.session_id, request.agent_id,
             request.parent_agent_id, request.model, request.canonical_model, request.stream, request.kind, request.origin,
@@ -558,7 +576,7 @@ pub(crate) fn insert_request_in(
             request.client, request.agent_type, request.compaction, request.context_compacted, request.prev_tool_ms, request.turn_origin,
             request.request_class,
             request.forked_from, request.fork_depth.map(|n| n as i64), request.auto_mode, request.held, request.stream_end_at,
-            request.diagnostics_source, request.guardrail_id, request.classifier, request.client_contract, request.refused,
+            request.diagnostics_source, request.guardrail_id, request.classifier, request.client_contract, landed_at, request.refused,
         ],
     )?;
     tx.execute(
@@ -957,7 +975,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 41);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -1048,7 +1066,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 41, "and answered what the connection holds");
+        assert_eq!(version, 42, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -1063,7 +1081,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            41,
+            42,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }
@@ -1104,7 +1122,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 41,
+                    supported: 42,
                     ..
                 }
             ),

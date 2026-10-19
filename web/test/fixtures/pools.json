@@ -60,7 +60,7 @@
           },
           "idle_share": {
             "min": 0.013888888888888886,
-            "max": 0.92
+            "max": 0.9199999999999999
           },
           "parked_seconds": {
             "min": 2760.0,
@@ -85,8 +85,8 @@
         "auto_mode_server": true,
         "body_capture_hours": 24,
         "created_at": 1791721000000,
-        "updated_at": 1791721000000,
-        "revision": 6189767511104,
+        "updated_at": 1791721000001,
+        "revision": 6189767511105,
         "members": [
           {
             "account_id": "business",
@@ -133,17 +133,21 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "90BVqEpP",
+            "prefix": "KxtrG2cq",
             "enabled": true
           }
         ],
         "status": "active",
         "requests_24h": 8,
         "cost_24h": 0.028450000000000007,
-        "billed_24h": 0.0107,
+        "billed_24h": 0.010700000000000001,
         "equivalent_24h": {
           "five_hour": 0.000048175000000000005,
-          "seven_day": 0.000012846666666666668
+          "seven_day": 0.000012846666666666667,
+          "unpriced": {
+            "five_hour": false,
+            "seven_day": false
+          }
         },
         "estimated_24h": true,
         "active_pins": 1,
@@ -157,7 +161,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -170,7 +178,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -183,7 +195,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -196,7 +212,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -209,7 +229,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -222,7 +246,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -235,7 +263,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -248,7 +280,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -261,7 +297,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -274,7 +314,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -287,7 +331,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -300,7 +348,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -313,7 +365,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -326,7 +382,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -339,7 +399,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -352,7 +416,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -365,7 +433,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -378,7 +450,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -391,7 +467,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -404,7 +484,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -417,7 +501,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -430,7 +518,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -443,7 +535,11 @@
             "billed_usd": 0.0,
             "equivalent": {
               "five_hour": 0.0,
-              "seven_day": 0.0
+              "seven_day": 0.0,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -456,7 +552,11 @@
             "billed_usd": 0.0071,
             "equivalent": {
               "five_hour": 0.000017625,
-              "seven_day": 4.7e-6
+              "seven_day": 4.7e-6,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": false
           },
@@ -465,11 +565,15 @@
             "requests": 4,
             "failed": 1,
             "tokens": 7200,
-            "cost_usd": 0.0107,
+            "cost_usd": 0.010700000000000001,
             "billed_usd": 0.0036,
             "equivalent": {
               "five_hour": 0.000030550000000000004,
-              "seven_day": 8.146666666666666e-6
+              "seven_day": 8.146666666666666e-6,
+              "unpriced": {
+                "five_hour": false,
+                "seven_day": false
+              }
             },
             "estimated": true
           }

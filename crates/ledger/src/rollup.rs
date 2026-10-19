@@ -785,6 +785,10 @@ pub struct AccountRollupRow {
     /// Moves that landed on the account in the hour, keyed `{reason}/{fit}` by the `pin_migrated` reason and the
     /// destination's fit, `unknown` for a move whose event names no fit.
     pub migrations: BTreeMap<String, u64>,
+    /// The longest time a wall on the account arrived before its window's reset in the hour under a `slow_down`
+    /// round, 0 where none: the stretch paces the demand to reach the ceiling at the reset, so an early wall is its
+    /// failure, and the figure outlives the trailing day the `wall_reached` condition covers.
+    pub wall_early_ms: u64,
 }
 
 impl AccountRollupRow {
@@ -804,6 +808,7 @@ impl AccountRollupRow {
         self.pins_migrated_out += o.pins_migrated_out;
         self.rewrite_tokens += o.rewrite_tokens;
         add_counts(&mut self.migrations, &o.migrations);
+        self.wall_early_ms = self.wall_early_ms.max(o.wall_early_ms);
     }
 }
 
@@ -1083,6 +1088,21 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
                 None => Ok(()),
             }
         }
+        ("window_spent", Some(account)) => {
+            let window = detail["window"].as_str().unwrap_or("unknown");
+            let round = newest_round(tx, account, window, event.at)?;
+            // A wall at or after its reset came early by nothing, which the hour's longest already holds.
+            match early_ms(round.as_ref(), &detail, event.at).filter(|early| *early > 0) {
+                Some(early) => fold_account(
+                    tx,
+                    &AccountRollupRow {
+                        wall_early_ms: early as u64,
+                        ..row(account)
+                    },
+                ),
+                None => Ok(()),
+            }
+        }
         ("cooldown_set", Some(account)) => {
             let scope = detail["scope"].as_str().unwrap_or("account");
             let accounted = read_span(tx, account, scope)?;
@@ -1173,6 +1193,40 @@ const SLOWED_LONG_STRETCHES: i64 = 2;
 /// The bar's floor, so a pool near the threshold's own floor raises nothing on a few minutes of slow-down.
 const SLOWED_LONG_FLOOR_MS: i64 = 3_600_000;
 
+/// The detail of the newest `shedding_round` on the account's `window` inside the window's length before the wall at
+/// `at`, read on the wall's own window since a round projects the window that fired it. A round a weekly window's
+/// length back can sit outside the trailing day.
+fn newest_round(
+    tx: &Transaction<'_>,
+    account: &str,
+    window: &str,
+    at: i64,
+) -> Result<Option<serde_json::Value>, LedgerError> {
+    let length = if window == FIVE_HOUR {
+        FIVE_HOURS_MS
+    } else {
+        WEEK_MS
+    };
+    Ok(tx
+        .query_row(
+            "SELECT detail FROM events WHERE kind = 'shedding_round' AND account_id = ?1 \
+             AND at >= ?2 AND at <= ?3 AND json_extract(detail, '$.window') = ?4 \
+             ORDER BY at DESC, rowid DESC LIMIT 1",
+            params![account, at - length, at, window],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+        .and_then(|d| serde_json::from_str(&d).ok()))
+}
+
+/// How long before the reset its `window_spent` detail names a wall at `at` arrived, 0 at or after it, after a round
+/// the stretch fired, and `None` after any other round, with none, or where the detail names no reset.
+fn early_ms(round: Option<&serde_json::Value>, spent: &serde_json::Value, at: i64) -> Option<i64> {
+    round.filter(|round| round["trigger"] == "slow_down")?;
+    spent["reset"].as_i64().map(|reset| (reset - at).max(0))
+}
+
 /// One condition of the fold before it is written.
 struct Held {
     pool_id: Option<String>,
@@ -1188,13 +1242,14 @@ struct Held {
 /// account from its slow-down spans, summed across its pools, once their parts inside the day pass the bar:
 /// `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row, at least
 /// `SLOWED_LONG_FLOOR_MS`. `since` is the oldest qualifying event's time, and for `slowed_long` the own start of the
-/// oldest span counted, which a span open from before the cutoff dates before the day. A wall's `projection_error` is
-/// one less the projection of the newest round on the account's newest wall's window inside that window's length before
-/// the wall, null with none. The fifth, `meter_drift`, reads the reconciled windows: per account, the newest row of
-/// each window with a rise of at least `MIN_RISE`, held while any reads outside `RATIO_LOW` to `RATIO_HIGH`, `since`
-/// the oldest off row's `window_end`, its detail naming the off windows and the cost model `tables` holds, since the
-/// fix is that file rather than a pool setting. The ledger reads no registry, so a detail names its settings and the
-/// reader adds a pool's values.
+/// oldest span counted, which a span open from before the cutoff dates before the day. A wall reads the newest round on
+/// the account's newest wall's window inside that window's length before the wall: after a projection round its
+/// `projection_error` is one less the round's projection, after a stretch round its `early_ms` is the reset the wall's
+/// `window_spent` names less the wall's instant, 0 at or after the reset, and with no round both are null. The fifth,
+/// `meter_drift`, reads the reconciled windows: per account, the newest row of each window with a rise of at least
+/// `MIN_RISE`, held while any reads outside `RATIO_LOW` to `RATIO_HIGH`, `since` the oldest off row's `window_end`, its
+/// detail naming the off windows and the cost model `tables` holds, since the fix is that file rather than a pool
+/// setting. The ledger reads no registry, so a detail names its settings and the reader adds a pool's values.
 pub fn fold_routing_conditions(
     tx: &Transaction<'_>,
     tables: &PlanTables,
@@ -1257,7 +1312,7 @@ pub fn fold_routing_conditions(
         );
     }
 
-    let spent: Vec<(&str, i64, &str)> = events
+    let spent: Vec<(&str, i64, &str, &serde_json::Value)> = events
         .iter()
         .filter(|e| e.kind == "window_spent")
         .filter_map(|e| {
@@ -1266,6 +1321,7 @@ pub fn fold_routing_conditions(
                 account,
                 e.at,
                 e.detail["window"].as_str().unwrap_or("unknown"),
+                &e.detail,
             ))
         })
         .collect();
@@ -1277,10 +1333,10 @@ pub fn fold_routing_conditions(
         };
         let followed: Vec<&str> = spent
             .iter()
-            .filter(|(account, at, _)| {
+            .filter(|(account, at, _, _)| {
                 *account == to && *at >= event.at && *at - event.at <= SPENT_AFTER_MOVE_MS
             })
-            .map(|(_, _, window)| *window)
+            .map(|(_, _, window, _)| *window)
             .collect();
         if followed.is_empty() {
             continue;
@@ -1312,38 +1368,32 @@ pub fn fold_routing_conditions(
         );
     }
 
-    // Per account: the oldest wall, the count, the windows and the newest wall with its window.
-    type Walls<'a> = (i64, u64, BTreeSet<&'a str>, (i64, &'a str));
+    // Per account: the oldest wall, the count, the windows and the newest wall with its window and detail.
+    type Walls<'a> = (
+        i64,
+        u64,
+        BTreeSet<&'a str>,
+        (i64, &'a str, &'a serde_json::Value),
+    );
     let mut walls: BTreeMap<&str, Walls> = BTreeMap::new();
-    for (account, at, window) in &spent {
-        let entry = walls
-            .entry(account)
-            .or_insert((*at, 0, BTreeSet::new(), (*at, window)));
+    for (account, at, window, detail) in &spent {
+        let entry =
+            walls
+                .entry(account)
+                .or_insert((*at, 0, BTreeSet::new(), (*at, window, detail)));
         entry.1 += 1;
         entry.2.insert(window);
-        entry.3 = (*at, window);
+        entry.3 = (*at, window, detail);
     }
-    for (account, (since, count, windows, (newest, window))) in walls {
-        // A round's projection that came true reads 1.0 at the wall, so the error is how far under the wall the newest
-        // round on the account projected it, read on the wall's own window since a round projects the window that
-        // fired it. A round a weekly window's length back can sit outside the trailing day.
-        let length = if window == FIVE_HOUR {
-            FIVE_HOURS_MS
-        } else {
-            WEEK_MS
-        };
-        let projection: Option<f64> = tx
-            .query_row(
-                "SELECT detail FROM events WHERE kind = 'shedding_round' AND account_id = ?1 \
-                 AND at >= ?2 AND at <= ?3 AND json_extract(detail, '$.window') = ?4 \
-                 ORDER BY at DESC, rowid DESC LIMIT 1",
-                params![account, newest - length, newest, window],
-                |r| r.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten()
-            .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
-            .and_then(|d| d["projection"].as_f64());
+    for (account, (since, count, windows, (newest, window, detail))) in walls {
+        let round = newest_round(tx, account, window, newest)?;
+        // A projection round's projection that came true reads 1.0 at the wall, so the error is how far under the wall
+        // the round projected it. A stretch round's projection is the demand's at a moved horizon and measures nothing
+        // at the reset, where the slow-down paces the window to arrive, so its wall reads how early it came instead.
+        let projection = round
+            .as_ref()
+            .filter(|round| round["trigger"] != "slow_down")
+            .and_then(|round| round["projection"].as_f64());
         held.insert(
             ("wall_reached", "account", account.to_string()),
             Held {
@@ -1351,6 +1401,7 @@ pub fn fold_routing_conditions(
                 since,
                 count,
                 detail: serde_json::json!({
+                    "early_ms": early_ms(round.as_ref(), detail, newest),
                     "projection_error": projection.map(|p| 1.0 - p),
                     "setting": setting(WALL_SETTINGS),
                     "walls": count,
@@ -1618,12 +1669,13 @@ fn account_row(
 
 fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), LedgerError> {
     tx.execute(
-        "INSERT OR REPLACE INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT OR REPLACE INTO account_rollups_hourly (hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             row.hour, row.account_id, row.utilization_5h_max, row.utilization_7d_max, row.utilization_7d_oi_max,
             row.overage_seconds as i64, row.cooldown_seconds as i64, row.pins_created as i64, row.pins_migrated_in as i64,
             row.pins_migrated_out as i64, row.rewrite_tokens as i64,
             serde_json::to_string(&row.migrations).unwrap_or_else(|_| "{}".into()),
+            row.wall_early_ms as i64,
         ],
     )?;
     Ok(())
@@ -1739,7 +1791,7 @@ fn take_segments(
 }
 
 const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json";
-const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json FROM account_rollups_hourly";
+const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
     conn: &Connection,
@@ -1874,6 +1926,7 @@ fn row_to_account(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccountRollupRow> {
         pins_migrated_out: r.get::<_, i64>(9)? as u64,
         rewrite_tokens: r.get::<_, i64>(10)? as u64,
         migrations: serde_json::from_str(&r.get::<_, String>(11)?).unwrap_or_default(),
+        wall_early_ms: r.get::<_, i64>(12)? as u64,
     })
 }
 
@@ -2390,7 +2443,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 41);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2454,7 +2507,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 41);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2550,7 +2603,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 41);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -2921,6 +2974,23 @@ mod tests {
             ),
             (Some(&1), Some(&1)),
             "a none with no cache read expired between turns"
+        );
+        let d = one_delta(
+            &request("succeeded", Some(200), Some("k")),
+            &[AttemptRecord {
+                cache_miss_reason: Some("pending".into()),
+                ..attempt(1, "a", None, Some(3), None)
+            }],
+            &prices(),
+        );
+        assert_eq!(
+            (
+                d.cache_miss_reasons.get("pending"),
+                d.cache_miss_reasons.get("none"),
+                d.cache_miss_reasons.get("expired_between_turns")
+            ),
+            (Some(&1), None, None),
+            "a comparison still running is counted under its own word and expired nothing"
         );
         let d = one_delta(
             &request("canceled", Some(503), Some("k")),
@@ -4153,7 +4223,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 41);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

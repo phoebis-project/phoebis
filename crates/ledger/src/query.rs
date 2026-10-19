@@ -73,8 +73,8 @@ pub fn parse_range(range: Option<&str>, now: i64) -> Result<(i64, i64), String> 
     }
 }
 
-/// The widest custom range: rollups are kept for 400 days, so a wider one reads nothing more and would only
-/// size the chart.
+/// The widest custom range, 400 days, which outlasts the rollups' 365-day default retention: under the default a
+/// wider one reads nothing more and would only size the chart.
 pub const MAX_RANGE_MS: i64 = 400 * DAY_MS;
 
 /// The most points one series or traffic answer may carry; every allowed range at its bucket size stays
@@ -115,6 +115,8 @@ pub struct RequestFilter {
     pub request: Option<String>,
     /// Keep the requests whose session id equals the value, literally.
     pub session: Option<String>,
+    /// Keep the rows whose `landed_at` is above the value.
+    pub landed_after: Option<i64>,
     pub keys: Vec<String>,
     pub pools: Vec<String>,
     /// Keep the requests whose serving attempt, the last one, ran on an account in the list: the account the
@@ -295,15 +297,10 @@ fn pattern_any(
     clauses.push(format!("({})", parts.join(" OR ")));
 }
 
-/// The request log's key filter reads the selectors the analytics do, against the row's `(key_id,
-/// key_generation)`; `live` says which generation a bare id names.
-pub fn list_requests(
-    conn: &Connection,
-    filter: &RequestFilter,
-    live: &LiveKeys,
-    cursor: Option<&str>,
-    limit: usize,
-) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
+/// The `WHERE` clauses `filter` sets on the requests table with the values they bind, numbered in the order bound.
+/// The key filter reads the selectors the analytics do, against the row's `(key_id, key_generation)`, and `live` says
+/// which generation a bare id names.
+fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql>>, Vec<String>) {
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
     if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
@@ -318,6 +315,10 @@ pub fn list_requests(
     if let Some(session) = filter.session.as_deref().filter(|s| !s.is_empty()) {
         args.push(Box::new(session.to_string()));
         clauses.push(format!("session_id = ?{}", args.len()));
+    }
+    if let Some(landed_after) = filter.landed_after {
+        args.push(Box::new(landed_after));
+        clauses.push(format!("landed_at > ?{}", args.len()));
     }
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
@@ -464,6 +465,18 @@ pub fn list_requests(
         args.push(Box::new(to));
         clauses.push(format!("received_at <= ?{}", args.len()));
     }
+    (args, clauses)
+}
+
+/// The request log's page under `filter`, newest first, from `cursor` on.
+pub fn list_requests(
+    conn: &Connection,
+    filter: &RequestFilter,
+    live: &LiveKeys,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<RequestWithAttempts>, Option<String>), LedgerError> {
+    let (mut args, mut clauses) = filter_clauses(filter, live);
     if let Some(cursor) = cursor {
         let (at, id) = cursor
             .split_once(':')
@@ -518,6 +531,59 @@ pub fn list_requests(
         })
         .flatten();
     Ok((out, next))
+}
+
+/// One page of `list_request_page`.
+#[derive(Clone, Debug)]
+pub struct RequestPage {
+    pub rows: Vec<RequestWithAttempts>,
+    /// The cursor past the page's last row, set only while a row lies beyond it.
+    pub next: Option<String>,
+    /// The newest `landed_at` among the rows the page's filters admit at this read, `landed_after` itself where none
+    /// above it has landed and 0 where neither is set, capped at `to` where the read names one, read in the page's
+    /// transaction.
+    pub landed_through: i64,
+}
+
+/// `list_requests` with the newest write instant among the rows its filters admit. Both reads share one transaction,
+/// so every row written after this read carries a stamp above `landed_through`, and a poll that passes it back as
+/// `landed_after` misses no row.
+pub fn list_request_page(
+    conn: &Connection,
+    filter: &RequestFilter,
+    live: &LiveKeys,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<RequestPage, LedgerError> {
+    // A read hands a shared connection, which only the unchecked form opens a transaction on.
+    let tx = conn.unchecked_transaction()?;
+    let (rows, next) = list_requests(&tx, filter, live, cursor, limit)?;
+    // A row the filters leave out, such as one received after `to` and written before this read, stays above the
+    // watermark, so the next poll's later bound still finds it. The writer stamps a row from its clock, so a row
+    // received after `to` lands after it: the cap at `to` keeps a later admitted row's stamp from passing it.
+    let (mut args, clauses) = filter_clauses(filter, live);
+    args.push(Box::new(filter.landed_after.unwrap_or(0)));
+    let r#where = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+    let landed_through: i64 = tx.query_row(
+        &format!(
+            "SELECT COALESCE(MAX(landed_at), ?{}) FROM requests{where}",
+            args.len()
+        ),
+        params_from_iter(args.iter().map(|a| a.as_ref())),
+        |r| r.get(0),
+    )?;
+    let landed_through = filter
+        .to
+        .map_or(landed_through, |to| landed_through.min(to));
+    Ok(RequestPage {
+        rows,
+        next,
+        landed_through,
+    })
 }
 
 /// The same three queries `LedgerDb::request` runs, over a connection the caller already holds.
@@ -808,6 +874,7 @@ pub const EVENT_KINDS: &[&str] = &[
     "slow_down_started",
     "warm_prefix_expired",
     "wind_down_started",
+    "window_cleared",
     "window_reset",
     "window_spent",
 ];
@@ -1510,6 +1577,11 @@ pub struct KeptWarm {
     pub requests: u64,
     pub tokens_5m: u64,
     pub tokens_1h: u64,
+    /// The credits whose request a plan account served, so a reader tells an unpriced plan credit from billed ones.
+    pub plan_requests: u64,
+    /// The plan-served credits' reads, split by TTL as `tokens_5m` and `tokens_1h` are.
+    pub plan_tokens_5m: u64,
+    pub plan_tokens_1h: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1518,6 +1590,8 @@ pub struct ProbeCounts {
     pub held: u64,
     pub migrated: u64,
     pub ok: u64,
+    /// The answered probes a plan account served.
+    pub plan_ok: u64,
     pub skipped: u64,
 }
 
@@ -1588,19 +1662,36 @@ pub struct ProbeEquivalent {
 pub struct SharedEquivalent {
     pub five_hour: f64,
     pub seven_day: f64,
+    /// Set where a plan row with tokens priced nothing on the window, so a reader tells "nothing priced" from "no
+    /// plan rows" with no plan count beside the sum.
+    pub unpriced: SharedUnpriced,
+}
+
+/// Per shared window, whether a plan row with tokens priced nothing on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct SharedUnpriced {
+    pub five_hour: bool,
+    pub seven_day: bool,
 }
 
 impl SharedEquivalent {
     /// A priced row's two shared windows added in: a window the row could not be priced on adds nothing, as a model
-    /// the revision lacks adds no dollar.
-    fn add_windows(&mut self, windows: &WindowShares) {
-        self.five_hour += windows.get(FIVE_HOUR).copied().flatten().unwrap_or(0.0);
-        self.seven_day += windows.get(SEVEN_DAY).copied().flatten().unwrap_or(0.0);
+    /// the revision lacks adds no dollar, and flags the window where the row had `tokens`, since the model refuses a
+    /// model it has no weight for before it reads the usage and a row with no token charged nothing.
+    fn add_windows(&mut self, windows: &WindowShares, tokens: u64) {
+        let five_hour = windows.get(FIVE_HOUR).copied().flatten();
+        let seven_day = windows.get(SEVEN_DAY).copied().flatten();
+        self.five_hour += five_hour.unwrap_or(0.0);
+        self.seven_day += seven_day.unwrap_or(0.0);
+        self.unpriced.five_hour |= tokens > 0 && five_hour.is_none();
+        self.unpriced.seven_day |= tokens > 0 && seven_day.is_none();
     }
 
     fn add(&mut self, other: &SharedEquivalent) {
         self.five_hour += other.five_hour;
         self.seven_day += other.seven_day;
+        self.unpriced.five_hour |= other.unpriced.five_hour;
+        self.unpriced.seven_day |= other.unpriced.seven_day;
     }
 }
 
@@ -1615,7 +1706,7 @@ fn shared_figures(
     let usd = priced.usd.map_or(0.0, |usd| usd.total());
     let mut equivalent = SharedEquivalent::default();
     if let Some(windows) = &priced.equivalent {
-        equivalent.add_windows(windows);
+        equivalent.add_windows(windows, tokens_of(row.usage()));
     }
     let billed = if Funding::of_rollup(&row.funding) == Funding::Plan {
         0.0
@@ -1683,10 +1774,17 @@ pub struct GroupRow {
     /// The plan rows' 20x window equivalent per window, under every grouping. A window is absent where a plan row
     /// could not be priced on it.
     pub cost_equivalent: Equivalent,
+    /// Keyed `five_hour`, `seven_day` and the model week where a plan row named one: true where a plan row of the
+    /// group with tokens could not be priced on the window (a model with no tier, or a tier with no weighted model),
+    /// false otherwise. The window stays absent from `cost_equivalent` and `cache_equivalent`.
+    pub unpriced: IndexMap<&'static str, bool>,
     /// The plan rows' cache reads and writes in the equivalent, keyed and latched as `cost_equivalent`.
     pub cache_equivalent: IndexMap<&'static str, CacheEquivalent>,
     /// The plan-funded probe rows and their wasted counts in the equivalent, keyed and latched as `cost_equivalent`.
     pub probe_equivalent: IndexMap<&'static str, ProbeEquivalent>,
+    /// The same as `unpriced` for the group's plan probe rows and their wasted counts, the window absent from
+    /// `probe_equivalent`.
+    pub probe_unpriced: IndexMap<&'static str, bool>,
     /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
     /// read it paid, summed over the group's rows.
     pub saving_usd: f64,
@@ -1704,6 +1802,9 @@ pub struct GroupRow {
     pub equivalent_split: IndexMap<&'static str, f64>,
     /// True when any plan row priced through the model tier's fallback weight.
     pub estimated: bool,
+    /// True when any plan probe row priced through the model tier's fallback weight. `estimated` keeps covering every
+    /// plan row.
+    pub probe_estimated: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2065,6 +2166,9 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
             requests: sum.kept_warm_requests,
             tokens_5m: sum.kept_warm_5m_tokens,
             tokens_1h: sum.kept_warm_1h_tokens,
+            plan_requests: plan.kept_warm_requests,
+            plan_tokens_5m: plan.kept_warm_5m_tokens,
+            plan_tokens_1h: plan.kept_warm_1h_tokens,
         },
         // Derived from the group's probe rows alone: a probe's own request row carries its outcome, and the
         // engine's deltas carry what never ran.
@@ -2077,6 +2181,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
             held: probes.probes_held,
             migrated: probes.probe_migrated,
             ok: probes.succeeded,
+            plan_ok: plan.probes_ok,
             skipped: probes.probes_skipped,
         },
         // From the probe rows: what the cache cost to keep warm is not a request the filter can drop.
@@ -2090,8 +2195,10 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         plan_requests: Some(plan.requests),
         plan_output_tokens: Some(plan.output_tokens),
         cost_equivalent: equivalent.cost,
+        unpriced: equivalent.unpriced,
         cache_equivalent: equivalent.cache,
         probe_equivalent: equivalent.probe,
+        probe_unpriced: equivalent.probe_unpriced,
         saving_usd: dollars.saving_usd,
         saving_shares: shares.saving_shares,
         saving_equivalent: equivalent.saving,
@@ -2099,6 +2206,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         billed: cost_split_json(&dollars.billed),
         equivalent_split: plan.split.finish(),
         estimated: plan.estimated,
+        probe_estimated: plan.probe_estimated,
     }
 }
 
@@ -2137,12 +2245,27 @@ struct GroupShares {
     saving_shares: Option<IndexMap<&'static str, f64>>,
 }
 
-/// The four equivalent members of a `GroupRow`, folded from a group's `ShareSums` priced in the 20x equivalent.
+/// The four equivalent members of a `GroupRow` and the two flag maps beside them, folded from a group's `ShareSums`
+/// priced in the 20x equivalent.
 struct GroupEquivalent {
     cost: Equivalent,
+    unpriced: IndexMap<&'static str, bool>,
     cache: IndexMap<&'static str, CacheEquivalent>,
     probe: IndexMap<&'static str, ProbeEquivalent>,
+    probe_unpriced: IndexMap<&'static str, bool>,
     saving: IndexMap<&'static str, f64>,
+}
+
+/// Each window a latch reached, true where it latched, after the two shared windows, which every group keys so a
+/// reader tells a window no plan row reached (false) from one a row could not be priced on.
+fn unpriced_of(
+    latches: impl IntoIterator<Item = (&'static str, bool)>,
+) -> IndexMap<&'static str, bool> {
+    let mut flags = IndexMap::from([(FIVE_HOUR, false), (SEVEN_DAY, false)]);
+    for (window, latched) in latches {
+        *flags.entry(window).or_default() |= latched;
+    }
+    flags
 }
 
 /// A group's shares, or its 20x equivalent, summed row by row as the rows arrive: the summed keys of `GroupSum`
@@ -2356,12 +2479,26 @@ impl ShareSums {
             saving,
             ..
         } = self;
+        // Each flag reads every latch that leaves its window out of a map, so a window absent with the flag false is
+        // one no plan row reached.
+        let unpriced = unpriced_of(
+            cost.iter()
+                .map(|(w, s)| (*w, s.unpriced))
+                .chain(cache.iter().map(|(w, s)| (*w, s.unpriced))),
+        );
+        let probe_unpriced = unpriced_of(
+            probe_cost
+                .iter()
+                .map(|(w, s)| (*w, s.unpriced))
+                .chain(wasted.iter().map(|(w, s)| (*w, s.unpriced))),
+        );
         GroupEquivalent {
             cost: cost
                 .into_iter()
                 .filter(|(_, s)| !s.unpriced)
                 .map(|(w, s)| (w, s.sum))
                 .collect(),
+            unpriced,
             cache: cache
                 .into_iter()
                 .filter(|(_, s)| !s.unpriced)
@@ -2393,6 +2530,7 @@ impl ShareSums {
                     ))
                 })
                 .collect(),
+            probe_unpriced,
             saving: saving
                 .into_iter()
                 .filter(|(_, s)| !s.unpriced)
@@ -2477,7 +2615,8 @@ impl SplitSum {
 }
 
 /// A group's plan-funded side under every grouping: the counts the shares and the equivalent are summed over, the
-/// 20x equivalent, its 7-day split by token kind, and whether a row priced through the model tier's fallback weight.
+/// 20x equivalent, its 7-day split by token kind, whether a row priced through the model tier's fallback weight and
+/// whether a probe row did, and the kept-warm credits and answered probes the plan served.
 #[derive(Default)]
 struct PlanSums {
     requests: u64,
@@ -2485,6 +2624,11 @@ struct PlanSums {
     equivalent: ShareSums,
     split: SplitSum,
     estimated: bool,
+    probe_estimated: bool,
+    kept_warm_requests: u64,
+    kept_warm_5m_tokens: u64,
+    kept_warm_1h_tokens: u64,
+    probes_ok: u64,
 }
 
 impl PlanSums {
@@ -2503,6 +2647,7 @@ impl PlanSums {
             return;
         }
         self.estimated |= priced.estimated;
+        self.probe_estimated |= row.kind == PROBE_KIND && priced.estimated;
         if counted {
             self.split.add(
                 row.classifier == Classifier::Client.as_str(),
@@ -2578,6 +2723,7 @@ impl GroupSums {
         let row_priced = priced(row, prices, costs);
         let usd = row_priced.usd.clone().unwrap_or_default();
         let plan = Funding::of_rollup(&row.funding) == Funding::Plan;
+        let plan_probe = plan && row.kind == PROBE_KIND;
         if row.kind == PROBE_KIND {
             entry.probes.add(row);
             entry.dollars.probe_usd += usd.total();
@@ -2596,6 +2742,7 @@ impl GroupSums {
             let wasted = price_row(prices, costs, &row_key(row), row.wasted_usage());
             entry.dollars.wasted_usd += wasted.usd.map_or(0.0, |usd| usd.total());
             entry.plan.estimated |= plan && wasted.estimated;
+            entry.plan.probe_estimated |= plan_probe && wasted.estimated;
         }
         if tokens_of(row.kept_warm_usage()) > 0 {
             let kept = price_row(prices, costs, &row_key(row), row.kept_warm_usage());
@@ -2604,8 +2751,19 @@ impl GroupSums {
                 .map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);
             // A credit's row carries no request token, so `PlanSums::add` never reads its fallback mark.
             entry.plan.estimated |= plan && kept.estimated;
+            entry.plan.probe_estimated |= plan_probe && kept.estimated;
         }
         if plan {
+            // The summed rows `group_row` reads key no funding, so the plan-served counts fold here per row, the
+            // credits under the gate `kept_warm` takes and ahead of the token test that skips a credit's row.
+            if counted {
+                entry.plan.kept_warm_requests += row.kept_warm_requests;
+                entry.plan.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
+                entry.plan.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
+            }
+            if row.kind == PROBE_KIND {
+                entry.plan.probes_ok += row.succeeded;
+            }
             entry.plan.add(row, row_priced, costs, counted);
         }
         // The caller passes `pricing` only where each group holds one account's rows, and each row prices under the
@@ -3192,7 +3350,7 @@ fn price_group(
     let usd = priced.usd.map_or(0.0, |usd| usd.total());
     let mut equivalent = SharedEquivalent::default();
     if let Some(windows) = &priced.equivalent {
-        equivalent.add_windows(windows);
+        equivalent.add_windows(windows, tokens_of(usage));
     }
     Ok(Totals {
         cost_usd: usd,

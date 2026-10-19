@@ -22,8 +22,8 @@ use crate::record::{
     GuardrailMatchRecord, KeepaliveDelta, QuotaSampleRecord, RequestRecord,
 };
 
-/// A completion is never dropped, so an entry silent this long belongs to a stream the relay itself ended at
-/// its idle timeout; the router asserts this exceeds that timeout.
+/// A completion is published on every path, the handler's drop guard included, so an entry silent this long belongs
+/// to a stream the relay itself ended at its idle timeout. The router asserts this exceeds that timeout.
 pub const IN_FLIGHT_TTL_MS: i64 = 15 * 60 * 1_000;
 
 /// Four times the proxy's own connection cap, so the cap is reached only by a flood the listener never admits
@@ -513,8 +513,13 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         last.cleared_input_tokens = response.cleared_input_tokens;
         last.refusal_category = response.refusal_category.clone();
         last.refusal_recommended_model = response.refusal_recommended_model.clone();
+        // No transport failed a headless attempt that the account's removal or the client's leaving cut short, so
+        // it files as canceled over its row's `transport_error` default.
         if last.upstream_status.is_none()
-            && complete.error_code.as_deref() == Some("account_cancelled")
+            && matches!(
+                complete.error_code.as_deref(),
+                Some("account_cancelled" | "client_gone")
+            )
         {
             last.outcome = "canceled".into();
         }
@@ -883,6 +888,7 @@ mod tests {
             held: None,
             diagnostics: None,
             message_id: None,
+            skipped_events: 0,
             finished_at: 1_500,
         })
     }
@@ -924,6 +930,7 @@ mod tests {
             held: None,
             diagnostics: None,
             message_id: None,
+            skipped_events: 0,
             finished_at: 1_500,
         }
     }

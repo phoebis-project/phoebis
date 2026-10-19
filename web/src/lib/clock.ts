@@ -7,16 +7,18 @@ export interface Clock {
   setTimeout(fn: () => void, ms: number): number;
 }
 
-// The window is read inside each arrow, so a bundle that loads this module without a DOM never touches it.
-const wall: Clock = {
+// The window is read inside each interval arrow, so a bundle that loads this module without a DOM never touches it.
+// The timeout pair reads the global, since the mock's answers wait on this timeout under Node's test runner too: there
+// the handle is a timer object, and the global clear takes its number form.
+export const wallClock: Clock = {
   clearInterval: (id) => window.clearInterval(id),
-  clearTimeout: (id) => window.clearTimeout(id),
+  clearTimeout: (id) => globalThis.clearTimeout(id),
   now: () => Date.now(),
   setInterval: (fn, ms) => window.setInterval(fn, ms),
-  setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+  setTimeout: (fn, ms) => Number(globalThis.setTimeout(fn, ms)),
 };
 
-let current: Clock = wall;
+let current: Clock = wallClock;
 
 /** Delegates to the installed clock on every call, so a module that imported it early still follows a swap. */
 export const clock: Clock = {
@@ -29,5 +31,5 @@ export const clock: Clock = {
 
 /** The test seam: `null` puts the wall clock back. */
 export function installClock(next: Clock | null): void {
-  current = next ?? wall;
+  current = next ?? wallClock;
 }

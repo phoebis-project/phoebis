@@ -797,6 +797,7 @@ fn routing_conditions(
             (
                 Kind::WallReached,
                 json!({
+                    "early_ms": null,
                     "projection_error": null,
                     "setting": ["shed_cap", "window_ceiling"],
                     "walls": 0,

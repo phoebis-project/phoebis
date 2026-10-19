@@ -49,22 +49,22 @@ Each operation names its request (path segments, query parameters, or body field
         (name = "Accounts"),
         (name = "Analytics", description = "`GET /admin/analytics/breakdown` and `/series` share `range` (default \
             `24h`), `group_by` (`account`, `all`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, \
-            `request_class`, `speed`, or `user_agent`), and filters `keys`, `pools`, `accounts`, `models`, `kinds` \
+            `request_class`, `speed`, or `user_agent`), the filters `keys`, `pools`, `accounts`, `models`, `kinds` \
             (comma-separated lists), `user_agents` (newline-separated patterns over the agent's first product token, \
             `claude-cli/2.1.286` for `claude-cli/2.1.286 (external, cli)`: `*` matches any run of characters, `?` one, \
             and a backslash quotes either, so a value with no wildcard matches in full), `user_agent_groups` \
             (newline-separated patterns. Under `group_by=user_agent` each names a group, a row falls in the first that \
             matches its agent's token, and the rest group under `other`), `clients` (newline-separated patterns over \
-            the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`), and \
-            `/accounts` takes `range` alone. `/breakdown` and `/series` also take `funding` (`billed` keeps the \
-            overage and fast rows and every row an API key account served, `plan` the rows a subscription window paid \
-            for and the rows of a request no account served. Each row files under the funding its serving attempt \
-            had when the ledger recorded it, so deleting an account, or recreating its id as the other kind, moves \
-            none of its rows. A probe's cost files under the funding of the probe's own request, while a recipe's \
-            settlement, which carries the probes' waste, files under the kind its record carries: `billed` for an API \
-            key account, else `fast` for a fast recipe, else `plan`. Absent keeps every row. The two subsets \
-            partition the rows). `GET /admin/analytics/budgets`, `/burn`, `/placements`, `/reconciliations`, and \
-            `/rewrites`, elsewhere under this tag, take their own request shapes."),
+            the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`). Both also \
+            take `funding` (`billed` keeps the overage and fast rows and every row an API key account served, `plan` \
+            the rows a subscription window paid for and the rows of a request no account served. Each row files under \
+            the funding its serving attempt had when the ledger recorded it, so deleting an account, or recreating its \
+            id as the other kind, moves none of its rows. A probe's cost files under the funding of the probe's own \
+            request, while a recipe's settlement, which carries the probes' waste, files under the kind its record \
+            carries: `billed` for an API key account, else `fast` for a fast recipe, else `plan`. Absent keeps every \
+            row. The two subsets partition the rows). `/accounts` takes `range` alone. `GET /admin/analytics/budgets`, \
+            `/burn`, `/placements`, `/reconciliations`, and `/rewrites`, elsewhere under this tag, take their own \
+            request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
         (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \
@@ -181,6 +181,9 @@ pub(crate) struct ProbeCountsView {
     pub held: u64,
     pub migrated: u64,
     pub ok: u64,
+    /// The plan-funded answered probes, a part of `ok`, so a reader tells a zero plan saving from an unavailable
+    /// price.
+    pub plan_ok: u64,
     pub skipped: u64,
 }
 
@@ -341,8 +344,6 @@ pub(crate) struct TtlRulesView {
     pub subagent: String,
 }
 
-// No captured pool carries a per-model override, so the round trip never reaches this type: its fields are held to
-// the relay crate's `ModelTtl` by reading the two side by side.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ModelTtlView {
@@ -379,6 +380,18 @@ pub(crate) struct TrafficBucketView {
 pub(crate) struct SharedEquivalentView {
     pub five_hour: f64,
     pub seven_day: f64,
+    /// Per window, whether a plan-funded row with tokens priced nothing on it, so a reader tells "nothing priced"
+    /// from "no plan-funded rows" with no count beside the figure. A window stays unpriced only for a model with no
+    /// tier, or a tier with no weighted model.
+    pub unpriced: SharedUnpricedView,
+}
+
+/// Whether a plan-funded row with tokens priced nothing on each of the two shared windows.
+#[derive(Default, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SharedUnpricedView {
+    pub five_hour: bool,
+    pub seven_day: bool,
 }
 
 impl From<&phoebis_ledger::SharedEquivalent> for SharedEquivalentView {
@@ -386,6 +399,10 @@ impl From<&phoebis_ledger::SharedEquivalent> for SharedEquivalentView {
         SharedEquivalentView {
             five_hour: equivalent.five_hour,
             seven_day: equivalent.seven_day,
+            unpriced: SharedUnpricedView {
+                five_hour: equivalent.unpriced.five_hour,
+                seven_day: equivalent.unpriced.seven_day,
+            },
         }
     }
 }
@@ -531,8 +548,6 @@ pub(crate) struct RegimePeakView {
     pub capacity_factor: PerWindowView,
 }
 
-// The shipped cost model carries no override, so the round trip never reaches this type or `TypeOverrideView`:
-// their fields are held to the ledger's `Override` and `TypeOverride` by reading the two side by side.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OverrideView {
@@ -616,8 +631,8 @@ pub(crate) struct BreakdownRow {
     pub histograms: HistogramsView,
     pub percentiles: PercentilesView,
     pub kept_warm: KeptWarmView,
-    /// `ok`, `failed`, `held`, `migrated`, and `skipped`, where `held` counts the probes the router refused with
-    /// `503 ledger_behind` while its ledger caught up, outside `failed`, the row's `requests` and its error codes.
+    /// `ok`, `plan_ok`, `failed`, `held`, `migrated`, and `skipped`, where `held` counts the probes the router refused
+    /// with `503 ledger_behind` while its ledger caught up, outside `failed`, the row's `requests` and its error codes.
     pub probes: ProbeCountsView,
     pub probe_cost_usd: f64,
     pub wasted_probes: u64,
@@ -645,10 +660,18 @@ pub(crate) struct BreakdownRow {
     /// `cost_shares` and summed under every grouping, the probe rows joining under the `include_probes` rule, and a
     /// window absent where a row could not be priced on it.
     pub cost_equivalent: BTreeMap<String, f64>,
+    /// Keyed `five_hour`, `seven_day` and the model's own week where a plan-funded row's model has one: true for a
+    /// window a plan-funded row of the group with tokens could not be priced on, false otherwise, so a window absent
+    /// from `cost_equivalent` and `cache_equivalent` with the flag false is one no plan-funded row reached. A window
+    /// stays unpriced only for a model with no tier, or a tier with no weighted model.
+    pub unpriced: BTreeMap<String, bool>,
     /// Each `read` and `write`, keyed and summed as `cost_equivalent`.
     pub cache_equivalent: BTreeMap<String, CacheEquivalentView>,
     /// Each `cost` and `wasted`, keyed and summed as `cost_equivalent`, the probe rows always joining.
     pub probe_equivalent: BTreeMap<String, ProbeEquivalentView>,
+    /// The same as `unpriced` for the group's plan-funded probe rows and their wasted counts, the window absent from
+    /// `probe_equivalent`.
+    pub probe_unpriced: BTreeMap<String, bool>,
     /// The kept-warm requests' saving, gross of the probes: the write each count avoided at its TTL's rate less the
     /// read it paid, summed over the group's rows.
     pub saving_usd: f64,
@@ -668,6 +691,9 @@ pub(crate) struct BreakdownRow {
     /// Whether a plan-funded row of the group priced at its model tier's latest weight, for a model the cost model
     /// does not weight.
     pub estimated: bool,
+    /// Whether a plan-funded probe row of the group was priced through the fallback, its own counts or its wasted
+    /// counts, so a probe figure is marked apart from the request rows'. `estimated` covers the probe rows too.
+    pub probe_estimated: bool,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -730,6 +756,13 @@ pub(crate) struct KeptWarmView {
     pub tokens_5m: u64,
     /// The kept-warm requests' cache reads booked under an hour's TTL.
     pub tokens_1h: u64,
+    /// The plan-funded kept-warm requests, a part of `requests`, so a reader tells an unpriced plan-funded credit from
+    /// billed ones.
+    pub plan_requests: u64,
+    /// Their cache reads, a part of `tokens_5m`.
+    pub plan_tokens_5m: u64,
+    /// Their cache reads, a part of `tokens_1h`.
+    pub plan_tokens_1h: u64,
 }
 
 /// The read and write halves of a window's cache share, as fractions of the window.
@@ -741,8 +774,6 @@ pub(crate) struct CacheShareView {
 }
 
 /// The probe rows' share of a window and the wasted probes' part of it.
-// No captured row carries a probe share, so the round trip never reaches this type: its fields are held to the
-// ledger's `ProbeShare` by reading the two side by side.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProbeShareView {
@@ -1028,14 +1059,70 @@ pub(crate) mod round_trip {
             );
         }
     }
+
+    /// A fully set `source` serializes and deserializes through the mirror `T` with no unknown field and back to the
+    /// same value, so a mirror the capture never reaches is still held to its source type.
+    pub(crate) fn round_trips_source<S: Serialize, T: DeserializeOwned + Serialize>(source: S) {
+        let value = serde_json::to_value(&source).unwrap();
+        let typed: T = serde_json::from_value(value.clone())
+            .unwrap_or_else(|e| panic!("the source does not fit the mirror: {e}"));
+        assert_eq!(serde_json::to_value(&typed).unwrap(), value);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::round_trip::round_trips;
+    use super::round_trip::{round_trips, round_trips_source};
+    use super::{ModelTtlView, OverrideView, ProbeShareView, TypeOverrideView};
+    use indexmap::IndexMap;
+    use phoebis_ledger::{Override, ProbeShare, TypeOverride};
+    use phoebis_relay::{CacheTtl, ModelTtl};
+
+    fn every_cell() -> TypeOverride {
+        TypeOverride {
+            cache_read: Some(0.1),
+            cache_write_1h: Some(2.0),
+            cache_write_5m: Some(1.25),
+            input: Some(1.5),
+            output: Some(5.0),
+        }
+    }
 
     #[test]
     fn the_session_answer_round_trips_through_its_declared_type() {
         round_trips::<crate::routes::SessionView>("session");
+    }
+
+    #[test]
+    fn a_model_ttl_with_every_field_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, ModelTtlView>(ModelTtl {
+            main: CacheTtl::OneHour,
+            model: "claude-opus-4-6".to_string(),
+            subagent: CacheTtl::FiveMinutes,
+        });
+    }
+
+    #[test]
+    fn an_override_with_both_members_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, OverrideView>(Override {
+            type_multiplier: Some(every_cell()),
+            weight_by_window: Some(IndexMap::from([
+                ("five_hour".to_string(), 1.5),
+                ("seven_day".to_string(), 0.75),
+            ])),
+        });
+    }
+
+    #[test]
+    fn a_type_override_with_every_cell_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, TypeOverrideView>(every_cell());
+    }
+
+    #[test]
+    fn a_probe_share_with_every_field_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, ProbeShareView>(ProbeShare {
+            cost: 0.25,
+            wasted: Some(0.4),
+        });
     }
 }

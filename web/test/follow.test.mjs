@@ -12,7 +12,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const d = await import('./dist/api.js');
-const { act, createElement: h, createRoot, fakeClock, installClock, useFollow, useRangeTakenAt, useState } = await import('./dist/ui.js');
+const { act, api, createElement: h, createRoot, fakeClock, installClock, setHooks, useFollow, useRangeTakenAt, useState } = await import('./dist/ui.js');
 
 const at = (s) => new Date(Date.UTC(2026, 8, 16, 14, 0, s)).toISOString();
 const byId = (r) => r.id;
@@ -78,6 +78,18 @@ test("a merge keeps one row per identity, the polled row winning, in the order o
   assert.equal(rows[0].read, 'polled');
 });
 
+test('a merge keys a row by the identity it is given, so two rows of different ids under one identity merge to the polled one', () => {
+  // The routing log keys a decision by its request and sequence, which a row read again keeps whatever else it carries.
+  const identity = (r) => `${r.requestId}/${r.seq}`;
+  const shown = [
+    { at: at(3), id: 'shown_1', requestId: 'req_1', seq: 1 },
+    { at: at(2), id: 'shown_2', requestId: 'req_2', seq: 1 },
+  ];
+  const polled = [{ at: at(3), id: 'polled_1', requestId: 'req_1', seq: 1 }];
+  const rows = d.merged(shown, polled, identity, newestFirst);
+  assert.deepEqual(rows.map(byId), ['polled_1', 'shown_2']);
+});
+
 test('an auto reload poll reads on past a page bringing a row below known ones, which the merge sets in place', async () => {
   // The request ledger writes a row when its request finishes, so a long request lands between rows the list already
   // shows: row 10 of the 50 shown, on the first page.
@@ -99,6 +111,51 @@ test("an auto reload poll that reaches past the list's last row stops there and 
   assert.deepEqual(r.reads, [undefined, '25']);
   assert.equal(polled.overrun, null);
   assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 27).map(byId), 'no row past row 26 lands');
+});
+
+/**
+ * `route(count)` as a watermark reads it, every row one the ledger wrote since: each read answers the newest stamp, the
+ * first `base` and each later read one more, as a row that lands between two pages moves it.
+ */
+function watermarked(count, base = 1_000) {
+  const r = route(count);
+  const read = async (cursor) => ({ ...(await r.read(cursor)), landedThrough: base + r.reads.length - 1 });
+  return { ...r, read };
+}
+
+test('under a watermark the poll reads on past known rows and sets the overrun when its eighth page still answers a next cursor', async () => {
+  // A row the list shows can land again, so a page of known rows says nothing about what lies below it.
+  const r = watermarked(325);
+  const polled = await d.followPages(r.read, new Set(r.rows.map(byId)), byId, belowOf(r.rows), false);
+  assert.equal(r.reads.length, d.FOLLOW_PAGES);
+  assert.equal(polled.overrun, '200');
+  assert.equal(polled.landedThrough, 1_000, "the first page's stamp, a later page's ignored");
+});
+
+test('under a watermark eight pages whose last answers no next cursor set no overrun', async () => {
+  const r = watermarked(200);
+  const polled = await d.followPages(r.read, new Set(r.rows.map(byId)), byId, belowOf(r.rows), false);
+  assert.deepEqual([r.reads.length, polled.overrun, polled.rows.length], [d.FOLLOW_PAGES, null, 200]);
+});
+
+test("under a watermark a page that reaches past the list's last row ends the poll and leaves the rows below to Next", async () => {
+  const r = watermarked(300);
+  const shown = r.rows.slice(0, 27);
+  const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown), false);
+  assert.deepEqual(r.reads, [undefined, '25']);
+  assert.equal(polled.overrun, null);
+  assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 27).map(byId), 'no row past row 26 lands');
+});
+
+test('an auto reload poll whose caller is gone after its first page reads no more and answers that page with no overrun', async () => {
+  // No row the list shows is on the route's first eight pages, so a poll that read on would answer an overrun.
+  const r = route(325);
+  const shown = r.rows.slice(300);
+  const alive = () => r.reads.length < 1;
+  const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown), true, alive);
+  assert.deepEqual(r.reads, [undefined]);
+  assert.equal(polled.overrun, null);
+  assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 25).map(byId));
 });
 
 test('the overrun names auto reload', () => {
@@ -133,7 +190,7 @@ async function settled() {
 /** The page's side of the hook: the paging state it holds over one address. */
 function Host({ input, seen }) {
   const [paging, setPaging] = useState({ for: 'q', stack: [] });
-  seen.push(useFollow({ ...input, paging, setPaging }));
+  seen.push({ ...useFollow({ ...input, paging, setPaging }), paging });
   return null;
 }
 
@@ -233,6 +290,21 @@ test('an older page pauses the poll and keeps the followed rows, and the first p
   await settled();
 });
 
+test("the pager's state reads under its own address, and another address reads the first page with nothing before it", () => {
+  const paging = { for: 'q', cursor: 'c2', stack: [undefined, 'c1'], to: 5_000 };
+  assert.deepEqual(d.pagingFor(paging, 'q'), { cursor: 'c2', stack: [undefined, 'c1'], to: 5_000 });
+  assert.deepEqual(d.pagingFor(paging, 'other'), { cursor: undefined, stack: [], to: undefined });
+});
+
+test("Next from the first page keeps the first page's cursor on the stack, and Previous returns to the first page", () => {
+  frozen();
+  const f = follow();
+  act(() => f.last().goNext());
+  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: '26', stack: [undefined], to: undefined }, 'the stack holds the first page, whose cursor is undefined');
+  act(() => f.last().goPrevious());
+  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: undefined, stack: [], to: undefined }, 'Previous pops it and reads the first page');
+});
+
 test('an ended span polls nothing', () => {
   assert.equal(d.effectiveInterval(5_000, true), 0);
   assert.equal(d.effectiveInterval(5_000, false), 5_000);
@@ -287,6 +359,34 @@ test('a poll and an older page on a custom span read to the span\'s own end, and
   assert.equal(d.readEnd(false, end, polled), polled);
 });
 
+test("a preset poll under a watermark sends no end, so the route reads to its own clock, and a custom range's poll keeps its end", async () => {
+  const end = Date.UTC(2026, 8, 16, 13, 0);
+  const polled = Date.UTC(2026, 8, 16, 14, 30, 5);
+  const wire = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(new URL(String(url), 'http://x').searchParams);
+    return { headers: { get: () => null }, ok: true, status: 200, text: async () => JSON.stringify({ landed_through: 0, next_cursor: null, requests: [] }) };
+  };
+  try {
+    const query = { limit: 50, to: new Date(end).toISOString() };
+    await new d.HttpApi().listRequests(d.pollQuery(query, false, end, polled, undefined, 101));
+    await new d.HttpApi().listRequests(d.pollQuery(query, true, end, polled, undefined, 101));
+    await new d.HttpApi().listRequests(d.pollQuery(query, false, end, polled, 'c1', undefined));
+  } finally {
+    globalThis.fetch = wire;
+  }
+  assert.deepEqual(
+    urls.map((params) => [params.get('landed_after'), params.get('to'), params.get('cursor')]),
+    [
+      ['101', null, null],
+      ['101', String(end), null],
+      [null, String(polled), 'c1'],
+    ],
+    'the preset reads to the router, the custom range to its end, and a preset with no stamp to the poll',
+  );
+});
+
 test('turning auto reload off clears the fresh tint, since no poll follows to take it away', async () => {
   const clock = frozen();
   const f = follow();
@@ -297,4 +397,117 @@ test('turning auto reload off clears the fresh tint, since no poll follows to ta
   assert.deepEqual([[...f.last().fresh], f.last().rows[0].id], [[], 'row_000'], 'the rows stay and the tint goes');
   act(() => clock.tick(10_000));
   assert.deepEqual(f.polls(), [ORIGIN + 5_000], 'off reads nothing');
+});
+
+test('an interval change resets the failing streak before the read it runs at once, so that read toasts again', async () => {
+  const clock = frozen();
+  const toasts = [];
+  setHooks({ onFailure: (failure) => toasts.push(failure.path), onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
+  const wire = globalThis.fetch;
+  let down = false;
+  globalThis.fetch = async () => {
+    if (down) throw new Error('connection refused');
+    return { headers: { get: () => null }, ok: true, status: 200, text: async () => JSON.stringify({ landed_through: 0, next_cursor: null, requests: [] }) };
+  };
+  try {
+    let reads = 0;
+    // Through the shell's own transport, so a read the streak keeps quiet reports nothing to the hooks.
+    const read = (cursor) => {
+      reads += 1;
+      return api.listRequests({ cursor }).then((page) => ({ nextCursor: page.nextCursor, rows: [] }));
+    };
+    const f = follow({ read });
+    act(() => clock.tick(5_000));
+    await settled();
+    down = true;
+    act(() => clock.tick(5_000));
+    await settled();
+    act(() => clock.tick(5_000));
+    await settled();
+    assert.deepEqual([reads, toasts.length], [3, 1], 'the streak toasts once and the poll after it runs quiet');
+    // Ten seconds after the last answer, so the new interval's effect reads at once.
+    f.render({ intervalMs: 10_000 });
+    assert.equal(reads, 4, 'the interval change reads at once');
+    await settled();
+    assert.equal(toasts.length, 2, 'the reset ran first, so the read at once toasts');
+  } finally {
+    globalThis.fetch = wire;
+    setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
+  }
+});
+
+test("under a watermark the first poll reads at the list's stamp and the next at the poll's, and a late row lands in place under the fresh tint", async () => {
+  const clock = frozen();
+  const r = route(60);
+  // Row 10 ran long: the list was read before it finished, and it lands below rows the list shows as row 0 arrives
+  // above them.
+  const shown = r.rows.slice(1, 26).filter((row) => row.id !== 'row_010');
+  const landed = [
+    { row: r.rows[0], stamp: 101 },
+    { row: r.rows[10], stamp: 102 },
+  ];
+  const sent = [];
+  const read = async (cursor, to, landedAfter) => {
+    sent.push(landedAfter);
+    const rows = landed.filter((l) => landedAfter === undefined || l.stamp > landedAfter).map((l) => l.row);
+    return { landedThrough: 102, nextCursor: null, rows };
+  };
+  const f = follow({ list: { landedThrough: 100, nextCursor: '26', rows: shown }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [100], "the first poll reads at the list's stamp");
+  assert.deepEqual(f.last().rows.map(byId), r.rows.slice(0, 26).map(byId), 'the late row sits between rows 9 and 11');
+  assert.deepEqual([...f.last().fresh].sort(), ['row_000', 'row_010'], 'in the same tint as the row that arrived above');
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [100, 102], "the next poll reads at the first poll's stamp");
+  assert.deepEqual([...f.last().fresh], [], 'a poll that brings nothing takes the tint away');
+});
+
+test("every page of one poll reads at one stamp, and the next poll reads at the first page's, a later page's ignored", async () => {
+  const clock = frozen();
+  const r = route(60);
+  // Thirty rows arrived above the 25 the list shows, two pages of them.
+  const answers = [
+    { landedThrough: 104, nextCursor: 'p2', rows: r.rows.slice(0, 25) },
+    // A row landed between the two pages, so this read holds a newer stamp than the first, and the row it names
+    // carries a stamp above 104 that the next poll reads.
+    { landedThrough: 105, nextCursor: null, rows: r.rows.slice(25, 30) },
+  ];
+  const sent = [];
+  const read = async (cursor, to, landedAfter) => {
+    sent.push({ cursor, landedAfter });
+    return answers.shift() ?? { landedThrough: 105, nextCursor: null, rows: [] };
+  };
+  const f = follow({ list: { landedThrough: 100, nextCursor: '55', rows: r.rows.slice(30, 55) }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(
+    sent,
+    [
+      { cursor: undefined, landedAfter: 100 },
+      { cursor: 'p2', landedAfter: 100 },
+    ],
+    "both pages of the first poll read at the list's stamp",
+  );
+  assert.equal(f.last().rows.length, 55);
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent.slice(2), [{ cursor: undefined, landedAfter: 104 }], "the next poll reads at the first page's stamp");
+});
+
+test("a poll that stands in for a failed list read takes its page's stamp as the watermark", async () => {
+  const clock = frozen();
+  const sent = [];
+  const read = async (cursor, to, landedAfter) => {
+    sent.push(landedAfter);
+    return { landedThrough: 7, nextCursor: null, rows: [{ at: at(1), id: 'a' }] };
+  };
+  const f = follow({ error: 'ledger locked', list: null, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual([f.last().rows.map(byId), f.last().error], [['a'], null], 'the newest page stands in for the list');
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [undefined, 7], 'the first read has no stamp to read at, and the next reads at its page');
 });

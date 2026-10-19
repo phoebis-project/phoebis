@@ -44,6 +44,8 @@ hyper = { version = "1.11.1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1.20", features = ["server", "server-auto", "server-graceful", "service", "tokio"] }
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = { version = "0.2.37", features = ["tzdb-bundle-always"] }
+# Without the default features, so the test binary carries no resolver that fetches a remote reference.
+jsonschema = { version = "0.59.0", default-features = false }
 libc = "0.2.189"
 mime_guess = "2.0.5"
 rand = "0.10.2"

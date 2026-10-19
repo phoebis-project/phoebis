@@ -7,12 +7,16 @@ the admin routes that serve their figures are in the [API reference](api-referen
 
 ## The ledger
 
-Every request that finished lands in the ledger, a second SQLite file beside the registry (`stats.ledger_path`): one
-row for the client request and one row for each upstream attempt it took. The relay waits for the ledger's queue when
-it must, so a row is never lost to a busy moment. Captured bodies are the one best-effort part, since a stream may
+Every request that finished lands in the ledger, a second SQLite file beside the registry (`stats.ledger_path`): one row
+for the client request, stamped with the instant the ledger wrote it, and one row for each upstream attempt it took.
+`GET /admin/requests` filters on the stamp as `landed_after` and answers the newest one among the rows its filters admit
+as `landed_through`, at most the read's `to` where it names one, and the Requests view's auto reload polls a preset
+range by it with no `to`, so the route reads to its own clock. The relay waits for the ledger's queue when it must, so a
+row is never lost to a busy moment. A request whose client leaves before the head lands as a canceled request with the
+code `client_gone`, keeping the attempts it reached. Captured bodies are the one best-effort part, since a stream may
 outrun its recorder, and a capture whose chunks were lost is stored as truncated with a `ledger_gap` event naming the
-request. Once a request finishes, it is folded into the hour's rollup in the same transaction as its rows, which is
-what the analytics routes report, so a long range costs one row per hour rather than one per request.
+request. Once a request finishes, it is folded into the hour's rollup in the same transaction as its rows, which is what
+the analytics routes report, so a long range costs one row per hour rather than one per request.
 
 Every routing decision lands as its own row in a decisions table beside the attempt rows: one zstd-compressed record per
 decision holding the request's facts, the settings in force, every pool member's standing at decision time, the rule
@@ -126,8 +130,9 @@ last run, predicted forward, and its backoff starts at once. One whose first ans
 error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each account five
 minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile an hour
 after, on every twelfth poll. A pairing's confirm and the Quota view's Refresh read the endpoint at once, outside the
-cadence, and hand the reading to the router and the ledger as a scheduled read does, under the same hold and
-coalescing.
+cadence, and hand the reading to the router and the ledger as a scheduled read does, under the same hold and coalescing,
+and the card draws the reading the refresh took the moment it answers, its time the reading's own instant, and the
+Accounts view shows the first reading once the poll lands, a few seconds after the confirm.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honored up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
@@ -371,11 +376,11 @@ refusal drops it.
 
 | Data | Kept for |
 | --- | --- |
-| Requests, attempts, events, decisions, kept-warm marks | `stats.retention_days` (90 days by default, 0 keeps them forever) |
-| Quota and extra-usage samples | `stats.retention_days` (90 days by default, 0 keeps them forever) |
-| Resolved credential refresh attempts and registry changes | `stats.retention_days` (90 days by default, 0 keeps them forever) |
+| Requests, attempts, events, decisions, kept-warm marks | `stats.retention_days` (365 days by default, 0 keeps them forever) |
+| Quota and extra-usage samples | `stats.retention_days` (365 days by default, 0 keeps them forever) |
+| Resolved credential refresh attempts and registry changes | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Captured bodies | The hours the capture named |
-| Hourly rollups | `stats.rollup_retention_days` (400 days by default, 0 keeps them forever, otherwise at least `stats.retention_days`) |
+| Hourly rollups and account rollups | `stats.rollup_retention_days` (365 days by default, 0 keeps them forever, otherwise at least `stats.retention_days`) |
 
 A routing decision leaves in the purge that takes its request. One whose request never landed leaves at the same age.
 
@@ -607,11 +612,13 @@ announced once per reset cycle, since a newer head of the same cycle within two 
 nor repeats it, and two points cover a head, which reads the share up to a point under the poll's whole percent, with
 one point of room. The ledger folds the four routing conditions from its events once an hour and at start into one
 table, which the gauge and `GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds
-none of its events. The
-subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls, names their
-windows and the settings `shed_cap` and `window_ceiling`, and gives the projection error: one less the projection of the
-newest shedding round on the wall's window within that window's length before the wall, null with none. The item opens
-the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
+none of its events. The subject is the account, and the item dates from the oldest wall of the day. The detail counts
+the walls, names their windows and the settings `shed_cap` and `window_ceiling`, and names one figure by the trigger of
+the newest shedding round on the wall's window within that window's length before the wall: after a projection round the
+projection error, one less the round's projection, after a slow-down round the time the wall arrived before the reset (0
+at or after it), and neither with no round. The ledger also keeps each account's longest early wall of the hour under a
+slow-down round, so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on
+the account's spent windows since the condition began.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour. It is folded as `wall_reached` is. The subject is the destination account, and

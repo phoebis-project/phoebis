@@ -203,6 +203,9 @@ pub struct RelayOutcome {
     /// The source of the `diagnostics` member on the answering leg's body; `None` for an answer the relay built
     /// before any leg and for a leg that sent none.
     pub diagnostics: Option<DiagnosticsSource>,
+    /// Whether that member's `previous_message_id` named a message. A null `diagnostics` member in the answer reads
+    /// `none` only then, since a member that named no message gave the upstream nothing to compare.
+    pub diagnostics_named: bool,
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
     /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
@@ -501,6 +504,14 @@ pub(crate) struct Trace {
     /// stopped draining fills the bus queue behind its channel and a refusal that waited there would hold its
     /// connection. Shared across the trace's clones, which the body task and the awaits each hold.
     facts_best_effort: Arc<AtomicBool>,
+    /// The relay's clock, which stamps a completion the guard's drop publishes.
+    clock: Clock,
+    /// The relay's body tracker, under which the guard's drop spawns its publish, so the shutdown's drain waits for
+    /// the completion a handler it cut still owes the ledger.
+    bodies: TaskTracker,
+    /// The handler's armed guard. The handler's own trace holds the slot, and the stream body's copy is detached
+    /// after the hand-off emptied it, so the handler future's drop is the guard's drop.
+    completion: Arc<Mutex<Option<CompletionGuard>>>,
 }
 
 impl Trace {
@@ -537,6 +548,43 @@ impl Trace {
 
     fn facts_best_effort(&self) {
         self.facts_best_effort.store(true, Ordering::Relaxed);
+    }
+
+    /// Called by `observed` right after it published the request's first fact. A second call keeps the guard
+    /// already armed, whose drop would otherwise publish a completion for a request still running.
+    fn arm_completion(&self) {
+        self.completion
+            .lock()
+            .expect("completion lock poisoned")
+            .get_or_insert_with(|| CompletionGuard::arm(self));
+    }
+
+    /// A no-op once the guard left the slot.
+    fn on_leg(&self, attempt: u8, account_id: Option<&str>) {
+        if let Some(guard) = self
+            .completion
+            .lock()
+            .expect("completion lock poisoned")
+            .as_mut()
+        {
+            guard.on_leg(attempt, account_id);
+        }
+    }
+
+    /// The armed guard, by value, leaving the slot empty.
+    fn take_completion(&self) -> Option<CompletionGuard> {
+        self.completion
+            .lock()
+            .expect("completion lock poisoned")
+            .take()
+    }
+
+    /// A clone with an empty slot of its own.
+    fn detached(&self) -> Trace {
+        Trace {
+            completion: Arc::new(Mutex::new(None)),
+            ..self.clone()
+        }
     }
 
     pub(crate) fn publish_chunk(&self, chunk: ResponseChunk) {
@@ -612,6 +660,8 @@ impl Trace {
             received_at: self.received_at,
         }))
         .await;
+        // The assembler holds an entry for the request from this fact on, and only a completion closes it.
+        self.arm_completion();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -681,8 +731,12 @@ impl Trace {
         response_chunks: Option<u32>,
         end: Option<(Outcome, Option<String>)>,
         message_id: Option<String>,
+        skipped_events: u32,
         finished_at: i64,
     ) {
+        // Held by value across the publish: a handler dropped while a durable slot is full drops the guard still
+        // armed, and its `Drop` publishes the completion this await never delivered.
+        let guard = self.take_completion();
         let (final_outcome, error_code) = match end {
             Some((o, code)) => (o, code.or_else(|| outcome.error_code.clone())),
             None => (outcome_of(outcome), outcome.error_code.clone()),
@@ -709,9 +763,92 @@ impl Trace {
                 .and_then(|h| serde_json::to_string(h).ok()),
             diagnostics: outcome.diagnostics,
             message_id,
+            skipped_events,
             finished_at,
         }))
         .await;
+        if let Some(mut guard) = guard {
+            guard.disarm();
+        }
+    }
+}
+
+/// Armed once the request's first fact opened the assembler's entry, disarmed by `Trace::complete` once its
+/// awaited publish returns or by the hand-off to the stream body, which completes on its own path. A drop while
+/// armed is a client that left before the completion landed: hyper dropped the handler future, or the keepalive
+/// dropped a probe's exchange at its deadline or its cancel, so the completion is published from here, with what
+/// the handler knew (the attempt it was on and the account of the leg in flight), and the entry lands rather than
+/// aging out as a `ledger_gap`.
+struct CompletionGuard {
+    /// `Trace::detached`: the guard sits in the trace's slot, so a clone holding that slot would keep itself alive.
+    trace: Trace,
+    /// The last leg a `Responding` named, `(attempt, account_id)`, and `(0, None)` before the first. A client that
+    /// leaves between legs or during the `selected` fact's await is completed on it.
+    leg: (u8, Option<String>),
+    armed: bool,
+}
+
+impl CompletionGuard {
+    fn arm(trace: &Trace) -> CompletionGuard {
+        CompletionGuard {
+            trace: trace.detached(),
+            leg: (0, None),
+            armed: true,
+        }
+    }
+
+    fn on_leg(&mut self, attempt: u8, account_id: Option<&str>) {
+        self.leg = (attempt, account_id.map(str::to_string));
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CompletionGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (attempt, account_id) = std::mem::take(&mut self.leg);
+        let event = Event::RequestComplete(RequestComplete {
+            request_id: self.trace.request_id.clone(),
+            attempt,
+            account_id,
+            outcome: Outcome::Canceled,
+            status: 0,
+            usage: None,
+            response: ResponseFacts::default(),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: Some("client_gone".into()),
+            client_drift: None,
+            client_contract: None,
+            client_version: None,
+            response_bytes: None,
+            response_chunks: None,
+            held: self
+                .trace
+                .held()
+                .and_then(|h| serde_json::to_string(&h).ok()),
+            diagnostics: None,
+            message_id: None,
+            skipped_events: 0,
+            finished_at: (self.trace.clock)(),
+        });
+        // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
+        // tracker the shutdown drains. With no handle current (a trace dropped outside a runtime) the bus's counted
+        // drop is the fallback.
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let trace = self.trace.clone();
+                self.trace
+                    .bodies
+                    .spawn_on(async move { trace.publish_fact(event).await }, &handle);
+            }
+            Err(_) => self.trace.publish(event),
+        }
     }
 }
 
@@ -1016,6 +1153,9 @@ impl Relay {
             probe_generation: probe.as_ref().map(|p| p.key_generation),
             held: Arc::new(Mutex::new(None)),
             facts_best_effort: Arc::new(AtomicBool::new(false)),
+            clock: self.clock.clone(),
+            bodies: self.bodies.clone(),
+            completion: Arc::new(Mutex::new(None)),
         };
         let (parts, body) = request.into_parts();
         let original = parts.extensions.get::<OriginalHead>();
@@ -2114,6 +2254,12 @@ impl Relay {
                     // wait, and so does the completion when no attempt follows.
                     hold.held_ms = started.elapsed().as_millis() as u64;
                     hold.ran_out = !freed;
+                    // The admission dispatches the request, so the selection that follows moves the pin's last
+                    // dispatch here and the slot wait never joins the pin's next gap. A wait that ran out leaves the
+                    // account and names no end.
+                    if freed {
+                        hold.until = Some((self.clock)());
+                    }
                     holds.push(hold);
                     trace.waited(&holds);
                     held_for.push(account_id.clone());
@@ -2663,6 +2809,16 @@ impl Relay {
             } else {
                 None
             };
+            // Read off the body this pass sends, so the client's own member and the router's insertion are judged
+            // alike.
+            let diagnostics_named = diagnostics.is_some()
+                && phoebis_cch::string_member_span(
+                    &edited,
+                    &["diagnostics", "previous_message_id"],
+                )
+                .is_some();
+            // After the selection's fact, so a client that leaves from here completes an attempt the ledger holds.
+            admitted.trace.on_leg(*attempt, Some(&account.id));
             let responding = Responding {
                 account,
                 attempt: *attempt,
@@ -2678,6 +2834,7 @@ impl Relay {
                 credential_generation: credential.generation,
                 deadline: admitted.deadline,
                 diagnostics,
+                diagnostics_named,
                 end_guard: &mut *end_guard,
                 fallback_ms: admitted.fallback_ms,
                 fast: admitted.fast,
@@ -2936,6 +3093,7 @@ impl Relay {
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         outcome.overage_in_use = UnifiedHeaders::parse(&head).and_then(|u| u.overage_in_use);
         outcome.diagnostics = ctx.diagnostics;
+        outcome.diagnostics_named = ctx.diagnostics_named;
         self.report_overage(ctx.account, &head, head_at).await;
         self.report_head_sample(
             ctx.account,
@@ -4021,6 +4179,7 @@ impl Relay {
                 None,
                 None,
                 None,
+                0,
                 (self.clock)(),
             )
             .await;
@@ -4139,6 +4298,7 @@ impl Relay {
         // The upstream compared this leg's body before the account left, so the canceled completion names the
         // member's source as the head's outcome does.
         outcome.diagnostics = ctx.diagnostics;
+        outcome.diagnostics_named = ctx.diagnostics_named;
         self.answer(
             ctx.trace,
             ACCOUNT_CANCELLED.response(ctx.request_id),
@@ -4191,6 +4351,7 @@ impl Relay {
             overage_in_use: None,
             account_kind: None,
             diagnostics: None,
+            diagnostics_named: false,
             obstacle: None,
             held: trace.held(),
         }
@@ -4320,6 +4481,11 @@ impl Relay {
             }
             _ => None,
         };
+        // The body completes on its own path, a client that leaves mid-body included, so the handler's guard stands
+        // down here, before the body takes its copy of the trace.
+        if let Some(mut guard) = trace.take_completion() {
+            guard.disarm();
+        }
         // Without a bus every emit and the completion are no-ops; a hook with no bus still needs the parse run
         // for it, a committed 200 needs it too, since the served-model check reads the answer, and so does a
         // renewal, which carries the usage the parse assembles.
@@ -4331,9 +4497,11 @@ impl Relay {
         .then(|| {
             // A copy that stopped following the stream, and a body no hold read, are read afresh.
             let (bus_decoder, parser, held) = match handover {
-                Some((bus_decoder, parser, held)) => {
-                    (bus_decoder, event_stream.then_some(parser), Some(held))
-                }
+                Some((bus_decoder, parser, held)) => (
+                    bus_decoder,
+                    event_stream.then_some(parser.into_skipping(INSPECT_BUFFER)),
+                    Some(held),
+                ),
                 None => (
                     (!caller_decodes)
                         .then(|| {
@@ -4343,12 +4511,12 @@ impl Relay {
                                 .map(|coding| self.copy_decoder(coding))
                         })
                         .flatten(),
-                    event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
+                    event_stream.then(|| SseParser::skipping(INSPECT_BUFFER)),
                     None,
                 ),
             };
             Publish {
-                trace: trace.clone(),
+                trace: trace.detached(),
                 clock: self.clock.clone(),
                 outcome: outcome.clone(),
                 catalog: self.catalog.clone(),
@@ -4444,7 +4612,8 @@ impl Relay {
                 chunk_published = true;
                 // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read
                 // by the body task; the 200 arm guards a caller that would buffer one, whose usage still counts.
-                (head.status == 200).then(|| answer_from_json(&text, &[]))
+                (head.status == 200)
+                    .then(|| answer_from_json(&text, &[], outcome.diagnostics_named))
             }
         };
         let (usage, facts) = match answer {
@@ -4492,6 +4661,7 @@ impl Relay {
                 None,
                 // An error document carries no message `id`.
                 None,
+                0,
                 (self.clock)(),
             )
             .await;
@@ -4576,6 +4746,8 @@ struct Responding<'a> {
     /// The source of the member on this pass's body, read for the completion event, the session memory's hook and
     /// the affinity report's id: an answer is remembered only for a request that carried or received the member.
     diagnostics: Option<DiagnosticsSource>,
+    /// `RelayOutcome::diagnostics_named` for this pass's body.
+    diagnostics_named: bool,
     /// The request's end report, which a committed stream takes into its body with the permit and the ticket.
     end_guard: &'a mut Option<EndGuard>,
     fallback_ms: i64,
@@ -5343,6 +5515,7 @@ mod tests {
             overage_in_use: None,
             account_kind: None,
             diagnostics: None,
+            diagnostics_named: false,
             obstacle: None,
             held: None,
         };

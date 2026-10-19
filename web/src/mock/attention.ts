@@ -57,8 +57,10 @@ function unweighted(model: string): Pick<AttentionItem, 'detail' | 'since'> | nu
 const sonnetUnweighted = unweighted('claude-sonnet-4-6');
 
 /**
- * An account's walls over the day as the reader dates them, with the error of the newest round's projection on the
- * newest wall's window inside that window's length before it. Null where no window of the account was spent.
+ * An account's walls over the day as the reader dates them, read by the newest round on the newest wall's window
+ * inside that window's length before it: after a projection round the error of its projection, after a slow-down round
+ * how long before the reset its `window_spent` names the wall came, 0 at or after it. Null where no window of the
+ * account was spent.
  */
 function walls(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
   const spent = lastDay('window_spent').filter((e) => e.accountId === accountId);
@@ -68,9 +70,12 @@ function walls(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
   const wallAt = Date.parse(newest.at);
   const length = window === 'five_hour' ? 5 * HOUR : 7 * DAY;
   const round = ROUTING_EVENTS.filter((e) => e.kind === 'shedding_round' && e.accountId === accountId && e.detail.window === window && Date.parse(e.at) <= wallAt && wallAt - Date.parse(e.at) <= length).pop();
-  const projection = typeof round?.detail.projection === 'number' ? round.detail.projection : null;
+  // A slow-down round's projection is the demand's at a moved horizon and measures nothing at the reset.
+  const slowed = round?.detail.trigger === 'slow_down';
+  const projection = !slowed && typeof round?.detail.projection === 'number' ? round.detail.projection : null;
+  const reset = typeof newest.detail.reset === 'number' ? newest.detail.reset : null;
   return {
-    detail: { projection_error: projection === null ? null : Math.round((1 - projection) * 1_000) / 1_000, setting: ['shed_cap', 'window_ceiling'], walls: spent.length, windows: sorted(spent.map((e) => e.detail.window)) },
+    detail: { early_ms: slowed && reset !== null ? Math.max(0, reset - wallAt) : null, projection_error: projection === null ? null : Math.round((1 - projection) * 1_000) / 1_000, setting: ['shed_cap', 'window_ceiling'], walls: spent.length, windows: sorted(spent.map((e) => e.detail.window)) },
     since: spent[0].at,
   };
 }

@@ -272,6 +272,19 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
+    /// A plan window read under 1.0 after a reading at 1.0 or above under the same reset: the readings before and
+    /// after and the unchanged reset, nothing of why, since a reset grant and an upstream correction read alike
+    /// and the router infers no cause.
+    WindowCleared {
+        account_id: String,
+        window: String,
+        utilization_before: f64,
+        utilization: f64,
+        reset: Option<i64>,
+        source: WindowSource,
+        source_request_id: Option<String>,
+        at: i64,
+    },
     /// A window's reset passed: a sample named a later reset, or none once it was read past the stored one
     /// (`observed` `sample`), or the purge tick found the clock past a stored reset with no newer sample (`clock`),
     /// once per account, window and reset.
@@ -419,23 +432,16 @@ impl Default for BurnRates {
 }
 
 impl BurnRates {
-    /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage as the row's `burn_fast` holds
-    /// it and `unmetered` the usage of the client's own classifier calls as the row's `burn_unmetered` holds it.
-    /// Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through the fast
-    /// table plus the unmetered usage through the dollar table at the set the last prompt selects. On a row with fast
-    /// cells the fast table carries them whatever the prompt, so a prompt that crosses the threshold reprices the
-    /// ordinary usage alone, and on a row without them it carries the row's own sets, so the fast usage reprices with
-    /// the row, as the ledger prices a fast answer there. Under `WindowShare` the banded copy alone, through the table
-    /// of the pin's regime: fast usage draws usage credits and a classifier call takes no share of a plan window, so
-    /// neither reaches the plan's figure, while an account in overage or on an API key pays the dollars of both. `None`
-    /// where a type the pin burns has no rate.
-    pub fn price_pin(
-        &self,
-        unit: BurnUnit,
-        pin: &PinRow,
-        fast: &PinBurn,
-        unmetered: &PinBurn,
-    ) -> Option<f64> {
+    /// One second of the pin's burn in `unit`, with the fast usage read from the row's own `burn_fast` and the usage
+    /// of the client's own classifier calls from the row's own `burn_unmetered`. Under `Usd` the row's plain copy at
+    /// the set the pin's last prompt selects plus the fast usage through the fast table plus the unmetered usage
+    /// through the dollar table at the set the last prompt selects. On a row with fast cells the fast table carries
+    /// them whatever the prompt, so a prompt that crosses the threshold reprices the ordinary usage alone, and on a row
+    /// without them it carries the row's own sets, so the fast usage reprices with the row, as the ledger prices a fast
+    /// answer there. Under `WindowShare` the banded copy alone, through the table of the pin's regime: fast usage draws
+    /// usage credits and a classifier call takes no share of a plan window, so neither reaches the plan's figure, while
+    /// an account in overage or on an API key pays the dollars of both. `None` where a type the pin burns has no rate.
+    pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow) -> Option<f64> {
         let own = unit.table(self, entrypoint_of(pin)).price_burn(
             &pin.model,
             &unit.read(pin),
@@ -445,10 +451,12 @@ impl BurnRates {
             BurnUnit::Usd => Some(
                 own + self
                     .fast
-                    .price_burn(&pin.model, fast, pin.last_input_tokens)?
-                    + self
-                        .dollars
-                        .price_burn(&pin.model, unmetered, pin.last_input_tokens)?,
+                    .price_burn(&pin.model, &pin.burn_fast, pin.last_input_tokens)?
+                    + self.dollars.price_burn(
+                        &pin.model,
+                        &pin.burn_unmetered,
+                        pin.last_input_tokens,
+                    )?,
             ),
             BurnUnit::WindowShare => Some(own),
         }
@@ -925,6 +933,7 @@ enum Command {
         account_id: String,
         window: String,
         at: i64,
+        reset: Option<i64>,
         reply: oneshot::Sender<()>,
     },
     Resolve {
@@ -934,6 +943,9 @@ enum Command {
         reply: oneshot::Sender<()>,
     },
     Samples {
+        reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
+    },
+    ReportedSamples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
     },
     /// The funding marks a writer wake finished, sent ahead of the reload a landed one asks for.
@@ -1416,9 +1428,9 @@ impl RouterHandle {
         self.ask(|reply| Command::Projections { pool_id, reply })
             .await
     }
-    /// Each pin's fast usage by key, the copy `BurnRates::price_pin` sums beside the row under `BurnUnit::Usd`.
-    /// A pin without fast usage has no entry. The fast-mode tests probe the copy through it and no production path
-    /// reads it, so it is compiled under `test` and the `debug-hooks` feature alone.
+    /// Each pin's fast usage by key, the row's own copy, for a test or a debug hook that reads a pin's burn apart
+    /// from its row. A pin without fast usage has no entry. The fast-mode tests probe the copy through it and no
+    /// production path reads it, so it is compiled under `test` and the `debug-hooks` feature alone.
     #[cfg(any(test, feature = "debug-hooks"))]
     pub async fn fast_burns(&self) -> Result<HashMap<PinKey, PinBurn>, RouterGone> {
         self.ask(|reply| Command::FastBurns { reply }).await
@@ -1463,6 +1475,11 @@ impl RouterHandle {
     /// a rule sweep never queues one command per account in front of selection.
     pub async fn samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::Samples { reply }).await
+    }
+    /// One ask for every account's stored sample, each window as the poll or a head reported it with its own reset:
+    /// no charge added and no passed reset rolled, for a view that shows the reading itself.
+    pub async fn reported_samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
+        self.ask(|reply| Command::ReportedSamples { reply }).await
     }
     /// `rotated_at` is the key's rotation the caller authenticated under, so a touch that lands after a later
     /// rotation stamps nothing on the new grace. Waits for a slot as a report does; a stopped task takes none.
@@ -1517,21 +1534,23 @@ impl RouterHandle {
         }
     }
 
-    /// Stamps `window` of the projection test on the account as over the ceiling since `at`, as
-    /// `RoutingState::stamp_projection_over` does, answering once the task has the stamp, so a selection sent after it
-    /// reads it.
+    /// Stamps `window` of the projection test on the account as over the ceiling since `at` under the reading's
+    /// `reset`, as `RoutingState::stamp_projection_over` does, answering once the task has the stamp, so a selection
+    /// sent after it reads it.
     pub async fn stamp_projection_over(
         &self,
         pool_id: &str,
         account_id: &str,
         window: &str,
         at: i64,
+        reset: Option<i64>,
     ) {
         self.ask(|reply| Command::StampProjectionOver {
             pool_id: pool_id.to_string(),
             account_id: account_id.to_string(),
             window: window.to_string(),
             at,
+            reset,
             reply,
         })
         .await
@@ -1914,11 +1933,12 @@ struct MovedState {
     detail: Option<String>,
 }
 
-/// A funding mark's write as the writer finished it, for the retry the loop stamped: the row's revision after it,
-/// `None` when the fences refused it.
+/// A funding mark's write as the writer finished it, for the retry the loop stamped at `stamped_at`: the row's
+/// revision after it, `None` when the fences refused it.
 struct FundingWritten {
     account_id: String,
     incarnation: u64,
+    stamped_at: i64,
     revision: Option<u64>,
 }
 
@@ -1948,6 +1968,7 @@ impl Marks {
             incarnation,
             cause,
             detail,
+            marked_at,
             ..
         } = write
         else {
@@ -1957,6 +1978,9 @@ impl Marks {
             .then(|| FundingWritten {
                 account_id: account_id.clone(),
                 incarnation: *incarnation,
+                // An unstamped mark, a superseded verdict's, names no entry: the loop's clock reads epoch
+                // milliseconds, so no entry carries the stamp 0 and `funding_written` credits nothing for it.
+                stamped_at: marked_at.unwrap_or(0),
                 revision: answer.map(|(revision, _)| revision),
             })
             .into_iter()
@@ -2421,6 +2445,16 @@ fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, windo
         (None, Some(reset)) => at <= reset && reset <= bound,
         (None, None) => now <= bound,
         (Some(_), None) => false,
+    }
+}
+
+/// The reset `reading` stands under: its own, or where it names none and was taken before `stored`'s reset passed,
+/// the stored one's, since such a reading is of the stored reset's cycle. A reading with none taken past the stored
+/// reset is another cycle, as `window_edges` reads that reset passed.
+fn reset_under(stored: Option<&WindowReading>, reading: &WindowReading) -> Option<i64> {
+    match (reading.reset, stored.and_then(|stored| stored.reset)) {
+        (None, Some(stored_reset)) if reading.observed_at < stored_reset => Some(stored_reset),
+        (reset, _) => reset,
     }
 }
 
@@ -3134,8 +3168,12 @@ impl Task {
             Command::Coalesced => {}
             Command::FundingWritten { rows } => {
                 for row in rows {
-                    self.state
-                        .funding_written(&row.account_id, row.incarnation, row.revision);
+                    self.state.funding_written(
+                        &row.account_id,
+                        row.incarnation,
+                        row.stamped_at,
+                        row.revision,
+                    );
                 }
             }
             Command::StateMoved { rows } => self.state_moved(rows),
@@ -3161,10 +3199,11 @@ impl Task {
                 account_id,
                 window,
                 at,
+                reset,
                 reply,
             } => {
                 self.state
-                    .stamp_projection_over(&pool_id, &account_id, &window, at);
+                    .stamp_projection_over(&pool_id, &account_id, &window, at, reset);
                 let _ = reply.send(());
             }
             Command::Resolve {
@@ -3341,6 +3380,9 @@ impl Task {
                     })
                     .collect();
                 let _ = reply.send(samples);
+            }
+            Command::ReportedSamples { reply } => {
+                let _ = reply.send(self.state.samples());
             }
             Command::Touch {
                 key_id,
@@ -3882,7 +3924,7 @@ impl Task {
                     })
                     .collect();
                 let now = (self.clock)();
-                let sample = self.held_at_the_wall(&account_id, sample, &stored, now);
+                let sample = self.held_at_the_wall(sample, &stored, now);
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: a head and a poll can cross, and the older one's reading is one
@@ -4037,6 +4079,7 @@ impl Task {
                 }
                 // The store keeps no instant for a mark, so the retry is stamped here. A verdict about a holder the
                 // id no longer has moves no retry, as its write moves no state.
+                let mut marked_at = None;
                 if !self.superseded(
                     &account_id,
                     incarnation,
@@ -4046,12 +4089,12 @@ impl Task {
                     if state == AccountState::FundingRequired {
                         let interval = i64::try_from(self.config.funding_retry.as_millis())
                             .unwrap_or(i64::MAX);
-                        self.state.funding_marked(
+                        marked_at = Some(self.state.funding_marked(
                             &account_id,
                             incarnation,
                             (self.clock)(),
                             interval,
-                        );
+                        ));
                     } else {
                         self.state.funding_cleared(&account_id);
                     }
@@ -4070,6 +4113,7 @@ impl Task {
                     credential_generation,
                     cause,
                     detail,
+                    marked_at,
                 }]);
             }
         }
@@ -4383,8 +4427,9 @@ impl Task {
     }
 
     /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
-    /// reset names, or no reset on a reading taken past it, then the window spent, which a reading at 1.0 or above
-    /// names over one under it.
+    /// reset names, or no reset on a reading taken past it, then the window cleared, which a reading under 1.0 names
+    /// over one at 1.0 or above with no reset passed, or the window spent, which a reading at 1.0 or above names over
+    /// one under it.
     fn window_edges(
         &mut self,
         account_id: &str,
@@ -4420,11 +4465,33 @@ impl Task {
                 });
             }
         }
-        // The prediction may have announced this wall already: the reading then names the reset it did.
+        // The clear leaves the reset to the next sample or the clock walk, and the wall's announcement, the
+        // prediction's or a sample's, leaves with it, so a reading back at the limit under the same reset is spent
+        // again.
+        if let Some(stored) = stored.filter(|stored| stored.utilization >= 1.0) {
+            if reading.utilization < 1.0 && passed.is_none() {
+                self.spent_announced
+                    .remove(&(account_id.to_string(), window.to_string()));
+                self.emit(RouterEvent::WindowCleared {
+                    account_id: account_id.to_string(),
+                    window: window.to_string(),
+                    utilization_before: stored.utilization,
+                    utilization: reading.utilization,
+                    // A reading that names no reset before the stored one passed stands under the stored reset.
+                    reset: reading.reset.or(stored.reset),
+                    source: reading.source,
+                    source_request_id: source_request_id.map(String::from),
+                    at: now,
+                });
+            }
+        }
+        // The prediction may have announced this wall already: the reading then names the reset it did, or names none
+        // before the stored reset passed and stands under that one.
+        let reset = reset_under(stored.as_ref(), &reading);
         let announced = self
             .spent_announced
             .get(&(account_id.to_string(), window.to_string()))
-            .is_some_and(|announced| same_cycle(*announced, reading.reset, now, window));
+            .is_some_and(|announced| same_cycle(*announced, reset, now, window));
         if stored.is_none_or(|stored| stored.utilization < 1.0)
             && reading.utilization >= 1.0
             && !announced
@@ -4447,16 +4514,17 @@ impl Task {
         }
     }
 
-    /// The sample as the routing reads it: a plan window's reading within `SPENT_MARGIN` of 1.0 over a stored
-    /// reading at the wall under the same reset cycle is raised to the stored utilization, with its own instant,
-    /// reset and source, so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the
-    /// wall again. A reading under the margin is a real clear and forgets the announcement, so the next crossing
-    /// announces anew. A reading of another cycle lands as read. Only a reading newer than the stored one counts,
-    /// since the fold drops any other: an older reading, or one of the stored instant, goes to the fold as read and
-    /// touches no announcement.
+    /// The sample as the routing reads it. A plan window's reading that names no reset, taken before the stored
+    /// reading's reset passed, is of that reset's cycle and takes that reset, raised or not, so the reading the fold
+    /// stores keeps it and the next edge reads it passed. A reading within `SPENT_MARGIN` of 1.0 over a stored reading
+    /// at the wall under the same reset cycle is then raised to the stored utilization with its own instant and source,
+    /// so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the wall again. A
+    /// reading under the margin is a real clear and lands at its own utilization, so `window_edges` reads the window
+    /// cleared and forgets the announcement, and the next crossing announces anew. A reading of another cycle lands as
+    /// read. Only a reading newer than the stored one counts, since the fold drops any other: an older reading, or one
+    /// of the stored instant, goes to the fold as read.
     fn held_at_the_wall(
-        &mut self,
-        account_id: &str,
+        &self,
         mut sample: UtilizationSample,
         stored: &HashMap<String, WindowReading>,
         now: i64,
@@ -4465,24 +4533,18 @@ impl Task {
             let Some(stored) = stored.get(window) else {
                 continue;
             };
-            if reading.observed_at <= stored.observed_at
-                || stored.utilization < 1.0
-                || reading.utilization >= 1.0
-            {
+            if reading.observed_at <= stored.observed_at {
                 continue;
             }
-            if reading.utilization >= 1.0 - SPENT_MARGIN {
-                if same_cycle(
-                    (stored.reset, stored.observed_at),
-                    reading.reset,
-                    now,
-                    window,
-                ) {
-                    reading.utilization = stored.utilization;
-                }
-            } else {
-                self.spent_announced
-                    .remove(&(account_id.to_string(), window.clone()));
+            let reset = reset_under(Some(stored), reading);
+            reading.reset = reset;
+            if stored.utilization < 1.0 || reading.utilization >= 1.0 {
+                continue;
+            }
+            if reading.utilization >= 1.0 - SPENT_MARGIN
+                && same_cycle((stored.reset, stored.observed_at), reset, now, window)
+            {
+                reading.utilization = stored.utilization;
             }
         }
         sample
@@ -4840,6 +4902,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             credential_generation,
             cause,
             detail,
+            marked_at,
         } => one(
             DeferredKey::AccountState {
                 account_id: account_id.clone(),
@@ -4855,6 +4918,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 credential_generation,
                 cause,
                 detail,
+                marked_at,
             },
         ),
         StateWrite::DeleteAffinity(keys) => Ok(keys
@@ -5131,6 +5195,73 @@ mod tests {
             RegimeRates::unit().for_entrypoint(Some("desk")),
             &RateTable::unit(),
             "the unit tables list no regime"
+        );
+    }
+
+    #[test]
+    fn a_pins_price_adds_its_rows_fast_usage_under_usd_and_leaves_it_out_under_window_share() {
+        let flat = |rate: f64| RateTable {
+            fallback: crate::state::Rates {
+                input: Some(rate),
+                cache_read: Some(rate),
+                write_5m: Some(rate),
+                write_1h: Some(rate),
+                output: Some(rate),
+            },
+            ..RateTable::unit()
+        };
+        let rates = BurnRates {
+            dollars: flat(0.25),
+            five_hour: RegimeRates {
+                base: flat(0.125),
+                ..RegimeRates::unit()
+            },
+            fast: flat(0.5),
+        };
+        let input = |input: f64| PinBurn {
+            input,
+            ..PinBurn::default()
+        };
+        let pin = PinRow {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            account_id: "a".into(),
+            epoch: 1,
+            created_at: 0,
+            last_used_at: 0,
+            key_generation: 0,
+            incarnation: 1,
+            burn: input(4.0),
+            burn_at: None,
+            burn_banded: input(16.0),
+            burn_fast: input(6.0),
+            burn_unmetered: PinBurn::default(),
+            last_input_tokens: 0,
+            last_classifier: false,
+            last_refresh_at: 0,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            shed_reason: None,
+            static_hash: None,
+            tail_hash: None,
+            lane: crate::lane_key("m", "standard", "none", "-"),
+            entrypoint: String::new(),
+            marked_at: None,
+            marked_on: None,
+            marked_window: None,
+        };
+        assert_eq!(
+            rates.price_pin(BurnUnit::Usd, &pin),
+            Some(4.0 * 0.25 + 6.0 * 0.5),
+            "the row's plain copy at the dollar rate plus its fast usage at the fast rate"
+        );
+        assert_eq!(
+            rates.price_pin(BurnUnit::WindowShare, &pin),
+            Some(16.0 * 0.125),
+            "the banded copy alone, since fast usage draws usage credits and never the plan's window"
         );
     }
 

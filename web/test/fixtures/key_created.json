@@ -21,7 +21,7 @@
     "effective_body_capture_hours": 24,
     "auto_mode_server": null,
     "effective_auto_mode_server": true,
-    "prefix": "u-s5A9Dn",
+    "prefix": "KxtrG2cq",
     "created_at": 1791721000000,
     "updated_at": 1791721000000,
     "revision": 6189767511104,
@@ -36,7 +36,11 @@
       "cost_usd": 0.0,
       "equivalent": {
         "five_hour": 0.0,
-        "seven_day": 0.0
+        "seven_day": 0.0,
+        "unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        }
       },
       "estimated": false,
       "requests": 0,
@@ -47,7 +51,11 @@
       "cost_usd": 0.0,
       "equivalent": {
         "five_hour": 0.0,
-        "seven_day": 0.0
+        "seven_day": 0.0,
+        "unpriced": {
+          "five_hour": false,
+          "seven_day": false
+        }
       },
       "estimated": false,
       "requests": 0

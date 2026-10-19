@@ -5,10 +5,11 @@ import { GUARDRAIL_MODE_VALUES } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
-  ModelRule, ModelsState, Overview, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, ModelsState, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
+import { type Clock, wallClock } from '@/lib/clock';
 import { foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -21,7 +22,7 @@ import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById, requestSidesOf } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
@@ -31,24 +32,43 @@ import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 // Fixed, so a pass over the mock reads the same secrets every run.
 const MOCK_SEED = 4_211;
 
+/** The clock the mock's answers wait on and its landings read. */
+type MockClock = Pick<Clock, 'now' | 'setTimeout'>;
+
+let mockClock: MockClock = wallClock;
+
+/**
+ * The test seam: a harness that moves time hands the mock its clock, so a step of it lands the mock's answers and
+ * moves its landings. `null` puts the wall clock back.
+ */
+export function installMockClock(next: MockClock | null): void {
+  mockClock = next ?? wallClock;
+}
+
 let pending = 0;
 // A short delay keeps loading states honest without making the mock feel slow. The answers in flight are counted so
 // a harness settles on the mock's own signal rather than on a fixed wait.
 const latency = <T,>(value: T, ms = 120): Promise<T> => {
   pending += 1;
-  return new Promise((resolve) => setTimeout(() => { pending -= 1; resolve(value); }, ms));
+  return new Promise((resolve) => mockClock.setTimeout(() => { pending -= 1; resolve(value); }, ms));
 };
 /** How many mock answers are still on their timer. */
 export const inFlight = (): number => pending;
 
+/** How long a confirm's first usage poll takes to land, on the mock's clock: the few seconds its answer names. */
+const FIRST_POLL_MS = 2_000;
+/** The windows a paired account's first poll reads: the shape the story gives primary's plan windows. */
+const FIRST_READING = ACCOUNTS.find((a) => a.id === 'primary')?.windows ?? [];
+
 // The routes' own wording, so a page draws the text the router would have sent.
 const ACCOUNT_TAKEN = 'an account with this id exists';
 const KEY_TAKEN = 'a key with this id exists';
+const PAIRING_NOT_FOUND = 'pairing session not found';
 const POOL_TAKEN = 'a pool with this id exists';
 
 /** Strictly later than the stamp it replaces, as the route's fence stamps, so a save inside one millisecond still
  * moves it and an edit read before it cannot pass. */
-const stamped = (previous: string) => iso(Math.max(Date.now(), Date.parse(previous) + 1));
+const stamped = (previous: string) => iso(Math.max(mockClock.now(), Date.parse(previous) + 1));
 
 /** One past the row's, as every store write of the account row moves the counter, so an edit read before it cannot
  * pass. */
@@ -238,6 +258,23 @@ const heldWriter = (): boolean => {
   }
 };
 
+/**
+ * Set to add the one plan request on a model the cost model lists in no tier: the dashboard's day and the analytics'
+ * folds read it beside the story, so the figures it moves read a window priced nothing, while without the switch the
+ * served story's figures stay as they are.
+ */
+export const UNPRICED_STORY_KEY = 'phoebis.mockUnpriced';
+const unpricedStory = (): boolean => {
+  try {
+    return localStorage.getItem(UNPRICED_STORY_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+/** The rollups the analytics routes fold: none for a fresh installation, the unpriced request's beside the story's
+ *  under its switch. */
+const ledgerRollups = () => (emptyStore() ? [] : unpricedStory() ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS);
+
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
@@ -390,6 +427,8 @@ export class MockApi implements Api {
   private buriedKeys = new Map<string, number>([['desktop', 1]]);
   /** The incarnation each deleted pool id reached, which its next pool starts above. */
   private buriedPools = new Map<string, number>();
+  /** The instant each confirm started its account's first poll, held until a list read lands that reading. */
+  private firstPolls = new Map<string, number>();
   // The attachments live on the guardrails alone, as one table holds them in the registry, and every pool and key view
   // reads its lists from here.
   private guardrails: Guardrail[] = GUARDRAILS.map((g) => ({ ...g, revision: stampToken(1, g.updatedAt) }));
@@ -535,6 +574,21 @@ export class MockApi implements Api {
     return next;
   }
 
+  /**
+   * A list read at least `FIRST_POLL_MS` after a confirm lands that confirm's first reading on its row, where the row
+   * reads no window yet. Keyed on the clock rather than a count of reads, since the confirm's reload and the refresh
+   * the closing dialog resumes read the list at once on a live clock.
+   */
+  private landFirstPolls() {
+    const at = mockClock.now();
+    for (const [id, confirmedAt] of this.firstPolls) {
+      if (at - confirmedAt < FIRST_POLL_MS) continue;
+      this.firstPolls.delete(id);
+      const a = this.accounts.find((x) => x.id === id);
+      if (a && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w })) });
+    }
+  }
+
   /** The row the create route builds, and the row the confirm of a pairing started for a new account writes. */
   private newAccountRow(input: AccountInput, status: Account['status'], email: string | null): Account {
     return {
@@ -623,18 +677,20 @@ export class MockApi implements Api {
     return latency({ email: existing?.email ?? 'operator+new@example.com', organization: 'Personal', state: submitted.state }, 500);
   }
 
-  async confirmPairing(pairingId: string) {
+  async confirmPairing(pairingId: string): Promise<PairingConfirmed> {
     const pairing = this.pairings.get(pairingId);
     // Deleted either way: the router fails the session on a refused confirm.
     this.pairings.delete(pairingId);
-    if (pairing?.label !== undefined) {
+    if (pairing === undefined) throw new ApiError(404, PAIRING_NOT_FOUND, null);
+    if (pairing.label !== undefined) {
       // The backstop for a create that landed between the start and the confirm.
       if (this.accounts.some((a) => a.id === pairing.accountId)) throw new ApiError(409, ACCOUNT_TAKEN, null);
       const row = this.newAccountRow({ id: pairing.accountId, kind: 'oauth', label: pairing.label, secret: null }, 'ready', 'operator+new@example.com');
       // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
       this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) } }];
     }
-    return latency(undefined, 250);
+    this.firstPolls.set(pairing.accountId, mockClock.now());
+    return latency({ accountId: pairing.accountId, firstPollInFlight: true, status: 'confirmed' }, 250);
   }
 
   async createAccount(input: AccountInput): Promise<Account> {
@@ -726,8 +782,8 @@ export class MockApi implements Api {
       lastUsedAt: null,
       notes: input.notes,
       bodyCaptureHours: input.bodyCaptureHours,
-      usage7d: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0, tokens: 0 },
-      lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0 },
+      usage7d: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 0, tokens: 0 },
+      lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 0 },
     };
     this.keys = [key, ...this.keys];
     return latency({ key: this.keyView(key), secret }, 300);
@@ -832,11 +888,11 @@ export class MockApi implements Api {
   }
 
   getAnalyticsBreakdown(query: AnalyticsQuery) {
-    return latency(breakdownOf(emptyStore() ? [] : ALL_ROLLUPS, query));
+    return latency(breakdownOf(ledgerRollups(), query));
   }
 
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>) {
-    return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy, filters));
+    return latency(burnOf(ledgerRollups(), range, groupBy, filters));
   }
 
   /**
@@ -875,7 +931,7 @@ export class MockApi implements Api {
   }
 
   getAnalyticsSeries(query: AnalyticsQuery) {
-    return latency(seriesOf(emptyStore() ? [] : ALL_ROLLUPS, query));
+    return latency(seriesOf(ledgerRollups(), query));
   }
 
   /** The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them. */
@@ -941,7 +997,7 @@ export class MockApi implements Api {
   getOverview() {
     const empty = emptyStore();
     // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
-    const last24h = empty ? [] : DAY_ROWS;
+    const last24h = empty ? [] : unpricedStory() ? [...DAY_ROWS, UNPRICED_REQUEST] : DAY_ROWS;
     const hourlyMap = new Map<string, Overview['hourly'][number]>();
     for (let i = 23; i >= 0; i -= 1) {
       const startMs = Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000;
@@ -1027,6 +1083,7 @@ export class MockApi implements Api {
   }
 
   listAccounts() {
+    this.landFirstPolls();
     return latency(emptyStore() ? [] : this.accounts.map((a) => this.withPool(a)));
   }
 
@@ -1070,15 +1127,23 @@ export class MockApi implements Api {
   }
 
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
-    if (emptyStore()) return latency({ nextCursor: null, requests: [] });
+    if (emptyStore()) return latency({ landedThrough: 0, nextCursor: null, requests: [] });
     const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
-    const matched = REQUESTS.filter((r) => matchesQuery(r, query, live)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    // The ledger lists a request once it has written it, so a row whose landing the mock's clock has not reached
+    // stays out. The newest stamp is over the rows the query's filters admit, its `to` included, with its
+    // `landedAfter` as the floor and capped at its `to`, as the route reads it.
+    const now = mockClock.now();
+    const written = REQUESTS.filter((r) => landedAt(r) <= now);
+    const since = query.landedAfter;
+    const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
+    const landedThrough = query.to ? Math.min(newest, Date.parse(query.to)) : newest;
     const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!)) : matched;
     const limit = query.limit ?? 50;
     const page = after.slice(0, limit);
     const last = page[page.length - 1];
     // A cursor only rides along while rows are left, which is how the route signals the end of the list.
-    return latency({ nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
+    return latency({ landedThrough, nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
   }
 
   listRoutingLog(query: RoutingLogQuery = {}): Promise<RoutingLogPage> {

@@ -1078,6 +1078,174 @@ async function routingLogDatedTime(theme) {
 }
 
 /**
+ * The Account cell of a registry change that edited an account, under the 24-hour range on the registry and state
+ * changes: the link the cell reads off the change's target against the account link of a state change (its type, ink,
+ * height, left edge and top in its cell), and against the pool's and the key's links of the other registry rows in all
+ * but the left edge, which their muted word moves. The router's seed edits no account, so its pass records that the
+ * read stands down. The bare log loads again after.
+ */
+async function routingLogRegistryTarget(theme) {
+  try {
+    await loadAtOrigin('/routing-log?range=24h&kinds=account_state_changed,registry_changed', '.routing-log__table');
+    const read = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.routing-log__table tbody tr.routing-log__row')];
+      const text = (tr, name) => tr.querySelector(`td.routing-log__${name}`)?.textContent?.trim() ?? '';
+      const link = (tr, href) => tr?.querySelector(`td.routing-log__account a[href^="${href}"]`) ?? null;
+      const box = (a) => {
+        if (a === null) return null;
+        const td = a.closest('td');
+        const at = a.getBoundingClientRect();
+        const cell = td.getBoundingClientRect();
+        const style = getComputedStyle(a);
+        const round = (n) => Math.round(n * 10) / 10;
+        return {
+          height: round(at.height),
+          ink: style.color,
+          left: round(at.left - cell.left - parseFloat(getComputedStyle(td).paddingLeft)),
+          text: a.textContent ?? '',
+          top: round(at.top - cell.top),
+          type: `${style.fontSize} ${style.fontWeight} ${style.fontFamily}`,
+        };
+      };
+      const by = (word) => rows.find((tr) => text(tr, 'by') === word);
+      return {
+        account: box(link(by('account edited'), '/accounts/')),
+        key: box(link(by('key revoked'), '/keys')),
+        pool: box(link(by('pool edited'), '/pools')),
+        state: box(link(rows.find((tr) => text(tr, 'kind') === 'account state changed'), '/accounts/')),
+      };
+    });
+    if (!mock && read.account === null) {
+      measurements.push(`${theme} /routing-log registry target skipped: the seed edits no account (${JSON.stringify(read)})`);
+      return;
+    }
+    measurements.push(`${theme} /routing-log registry target ${JSON.stringify(read)}`);
+    const what = (neighbor) => `${theme} /routing-log: an account edit's Account link against the ${neighbor}`;
+    failures.push(...compare(read.account, read.state, ['height', 'ink', 'left', 'top', 'type'], what("state change's account link")));
+    failures.push(...compare(read.account, read.pool, ['height', 'ink', 'top', 'type'], what("pool edit's pool link")));
+    failures.push(...compare(read.account, read.key, ['height', 'ink', 'top', 'type'], what("key revocation's key link")));
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
+ * A cleared window's By chip against a spent window's, under the 7-day range on the two kinds: each chip's type, ink,
+ * height, padding and top in its cell, with its text, its title, the width it draws and the width its text needs, so a
+ * chip cut behind its ellipsis is recorded. The page's column read holds the By column to its longest cell, as the bare
+ * log's does. The router's seed clears no window, so its pass records that the read stands down. The bare log loads
+ * again after.
+ */
+async function routingLogClearedChip(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  try {
+    await loadAtOrigin('/routing-log?range=7d&kinds=window_cleared,window_spent', '.routing-log__table');
+    const read = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.routing-log__table tbody tr.routing-log__row')];
+      const kind = (tr) => tr.querySelector('td.routing-log__kind')?.textContent?.trim() ?? '';
+      const box = (tr) => {
+        const chip = tr?.querySelector('td.routing-log__by .routing-log__chip') ?? null;
+        if (chip === null) return null;
+        const at = chip.getBoundingClientRect();
+        const style = getComputedStyle(chip);
+        const round = (n) => Math.round(n * 10) / 10;
+        return {
+          drawn: round(at.width),
+          height: round(at.height),
+          ink: style.color,
+          need: chip.scrollWidth,
+          padding: `${style.paddingLeft} ${style.paddingRight}`,
+          text: chip.textContent ?? '',
+          title: chip.getAttribute('title'),
+          top: round(at.top - chip.closest('td').getBoundingClientRect().top),
+          type: `${style.fontSize} ${style.fontWeight} ${style.fontFamily}`,
+        };
+      };
+      return { cleared: box(rows.find((tr) => kind(tr) === 'window cleared')), spent: box(rows.find((tr) => kind(tr) === 'window spent')) };
+    });
+    if (!mock && read.cleared === null) {
+      measurements.push(`${theme} /routing-log cleared chip skipped: the seed clears no window (${JSON.stringify(read)})`);
+      return;
+    }
+    const got = await page.evaluate(routingLogCells, []);
+    const by = got?.longest.find(([name]) => name === 'by') ?? null;
+    measurements.push(`${theme} /routing-log cleared chip under 7d ${JSON.stringify({ ...read, by })}`);
+    failures.push(...compare(read.cleared, read.spent, ['height', 'ink', 'padding', 'top', 'type'], `${theme} /routing-log: a cleared window's By chip against a spent window's`));
+    if (by === null) say('under 7d on the window kinds the By column is not drawn');
+    else if (by[1] !== null && by[1] > by[2] + 0.5) say(`under 7d on the window kinds the By column is ${by[2]}px, narrower than its longest cell "${by[3]}" at ${by[1]}px`);
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
+ * The Pin and warmth fold's Shed mark on the story's two stamped pins, read on the next request of the shed session
+ * and of the failed-over session, each opened on its request's page a quarter hour either side of it: the origin chip
+ * opens on its word (`shed from` after a round's move, `failed over from` after a failover), holds the box, the type
+ * and the ink of the instant's chip beside it on one line, its label the type and ink of that chip's label, and needs
+ * no more width than it draws. The router's seed stamps no pin, so the mock pass reads it alone.
+ */
+async function pinShedMark(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const quarter = 15 * 60_000;
+  const read = [];
+  try {
+    for (const { ago, id, word } of [
+      { ago: (3 * 3_600 + 16 * 60 + 20) * 1_000, id: 'req_5d1f8c3a-b27', word: 'shed from' },
+      { ago: (16 * 60 + 55) * 1_000, id: 'req_e2c7a4f9-d13', word: 'failed over from' },
+    ]) {
+      const at = (await page.evaluate(() => Date.now())) - ago;
+      await page.goto(`${base}/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`);
+      await booted();
+      await advance(LOAD_MS);
+      const row = page.locator(`.routing-log__table tbody tr[data-row="${id}/1"]`);
+      if ((await row.count()) === 0 || !(await openDecision(row))) {
+        say(`the stamped pin's request ${id} opened to no card on its request's page`);
+        continue;
+      }
+      const fold = page.locator('.routing-log__panel .decision-card').last().locator('details.decision-card__fold', { has: page.locator('summary', { hasText: 'Pin and warmth' }) });
+      await fold.locator('summary').click();
+      await settle();
+      const chips = await fold.evaluate((el) => {
+        const mark = [...el.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Shed mark');
+        const round = (n) => Math.round(n * 10) / 10;
+        return [...(mark?.querySelectorAll('dd .chip') ?? [])].map((chip) => {
+          const at = chip.getBoundingClientRect();
+          const s = getComputedStyle(chip);
+          const label = chip.querySelector('.chip__label');
+          const l = label ? getComputedStyle(label) : null;
+          return {
+            background: s.backgroundColor,
+            border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`,
+            drawn: round(at.width),
+            height: round(at.height),
+            ink: s.color,
+            label: label?.textContent ?? null,
+            labelInk: l?.color ?? null,
+            labelType: l ? `${l.fontSize} ${l.fontWeight} ${l.fontFamily}` : null,
+            need: chip.scrollWidth,
+            padding: `${s.paddingLeft} ${s.paddingRight}`,
+            text: chip.textContent ?? '',
+            top: round(at.top - chip.closest('dd').getBoundingClientRect().top),
+            type: `${s.fontSize} ${s.fontWeight} ${s.fontFamily}`,
+          };
+        });
+      });
+      read.push({ chips, id, word });
+    }
+  } finally {
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+  for (const { chips, id, word } of read) {
+    const [origin, instant] = chips;
+    measurements.push(`${theme} /routing-log shed mark of ${id} ${JSON.stringify(chips)}`);
+    if (origin?.label !== word) say(`the Shed mark of ${id} opens on ${JSON.stringify(origin?.label ?? null)}, not "${word}"`);
+    failures.push(...compare(origin, instant, ['background', 'border', 'height', 'ink', 'labelInk', 'labelType', 'padding', 'top', 'type'], `${theme} /routing-log: the ${word} chip of ${id} against the instant's chip beside it`));
+    if (origin && origin.need > origin.drawn + 0.5) say(`the ${word} chip of ${id} needs ${origin.need}px and draws ${origin.drawn}px`);
+  }
+}
+
+/**
  * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
  * Routing log link, and with the log open both are drawn and the link is the active one.
  */
@@ -1352,6 +1520,56 @@ async function poolSheddingSwitch(theme) {
 }
 
 /**
+ * The Burn average field's hint in the expert view's Windows group: it closes on the sentence naming the preset that
+ * unlocks the field, and holds the type, the ink, the line height, the margin, the left edge and the offset under its
+ * field's top of the Window ceiling field's hint beside it, as wide as its own field.
+ */
+async function poolBurnAverageHint(theme) {
+  const say = (what) => failures.push(`${theme} /pools: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await expertView(true);
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await railEntry(dialog, 'Windows').click();
+  } catch (error) {
+    say(`the pool dialog never reached its Windows group (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
+    return;
+  }
+  await settle();
+  const hints = await dialog.evaluate((el) => {
+    const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Windows');
+    const read = (text) => {
+      const field = [...(section?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
+      const hint = field?.querySelector(':scope > .field__hint');
+      if (!field || !hint || section.hidden) return null;
+      const s = getComputedStyle(hint);
+      const at = hint.getBoundingClientRect();
+      const frame = field.getBoundingClientRect();
+      return {
+        color: s.color,
+        font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`,
+        left: Math.round(at.left - frame.left),
+        lineHeight: s.lineHeight,
+        margin: s.marginTop,
+        text: hint.textContent ?? '',
+        top: Math.round(at.top - frame.top),
+        wide: Math.round(at.width) === Math.round(frame.width),
+      };
+    };
+    return { average: read('Burn average (s)'), ceiling: read('Window ceiling (%)') };
+  });
+  measurements.push(`${theme} /pools burn average hint ${JSON.stringify(hints)}`);
+  if (!hints.average?.text.endsWith('. Editable under the Custom preset in Load shedding.')) say(`the Burn average hint reads ${JSON.stringify(hints.average?.text ?? null)}, not closing on the preset that unlocks it`);
+  for (const finding of compare(hints.average, hints.ceiling, ['color', 'font', 'left', 'lineHeight', 'margin', 'top', 'wide'], 'the Burn average hint against the Window ceiling hint beside it')) say(finding);
+  await closeByEscape(dialog, `${theme} /pools burn average hint dialog`, say);
+  await expertView(false).catch(() => {});
+  await atRest();
+}
+
+/**
  * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
  * pill against a session-affinity pill, the overage grace field against the window ceiling field, and a warm-sessions
  * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding and slow-down preview
@@ -1488,7 +1706,9 @@ async function utilizationCeiling(theme) {
 
 /**
  * Every pool card's member Pins cells sum to its Active pins tile. The route counts both under the pool's keys, the
- * pool's whole and each member's on its own account, so a column that drifts from the tile is a read gone wrong.
+ * pool's whole and each member's on its own account, so a column that drifts from the tile is a read gone wrong. The
+ * router's seed leaves a pin under its pool's member, so in the router pass a card whose members sum to 0 compares
+ * nothing.
  */
 async function poolMemberPins(theme) {
   const say = (what) => failures.push(`${theme} /pools member pins: ${what}`);
@@ -1512,6 +1732,7 @@ async function poolMemberPins(theme) {
     if (Number.isNaN(active)) say(`the ${card.name} card draws no Active pins figure`);
     else if (members.some(Number.isNaN)) say(`the ${card.name} card's Pins column reads ${JSON.stringify(card.members)}`);
     else if (sum !== active) say(`the ${card.name} card's members hold ${members.join(' + ')} = ${sum} pins, not its Active pins ${active}`);
+    else if (!mock && sum === 0) say(`the ${card.name} card's members hold no pin, so the sum proves nothing`);
   }
 }
 
@@ -2527,7 +2748,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
-  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret'];
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Admin secret'];
   if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
   const storage = about.types[about.labels.indexOf('Storage path')];
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
@@ -2537,6 +2758,68 @@ async function settingsOrder(theme) {
   if (read.above === null || read.below === null) say('no listener hint between the client block and the variable list');
   else if (read.above !== 10 || read.below !== 14) say(`the hint sits ${read.above} px under the block and ${read.below} px over the variable list, not 10 and 14`);
   if (read.hintSize !== null && read.hintSize !== read.subtitleSize) say(`the hint reads at ${read.hintSize}, the subtitle at ${read.subtitleSize}`);
+}
+
+/**
+ * About's two retention lines drawn in the style of the lines around them: the label's type and ink, the value's ink
+ * and the row's height of the Storage path line above, and the label's and the value's type and ink of the Admin secret
+ * line below. A path line draws its value in the mono face, so the value's type is compared with the Admin secret
+ * line's, whose value is not a path. In the 720 px strip and at 400 px the types and inks are read again, with the
+ * label column at most half the list's width.
+ */
+async function settingsRetentionLines(theme) {
+  const reading = () => page.evaluate(() => {
+    const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const list = card?.querySelector('.kv');
+    const type = (el) => (el ? `${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).fontFamily}` : null);
+    const rows = [...(card?.querySelectorAll('.kv__row') ?? [])].map((row) => {
+      const dt = row.querySelector('dt');
+      const dd = row.querySelector('dd');
+      const boxes = [dt, dd].map((el) => el?.getBoundingClientRect());
+      return {
+        height: Math.round((Math.max(...boxes.map((b) => b?.bottom ?? 0)) - Math.min(...boxes.map((b) => b?.top ?? 0))) * 10) / 10,
+        label: dt?.textContent?.trim() ?? '',
+        labelInk: dt ? getComputedStyle(dt).color : null,
+        labelType: type(dt),
+        value: dd?.textContent?.trim() ?? '',
+        valueInk: dd ? getComputedStyle(dd).color : null,
+        valueType: type(dd),
+      };
+    });
+    const at = (label) => rows.find((row) => row.label === label) ?? null;
+    const round = (px) => Math.round(px * 10) / 10;
+    return {
+      admin: at('Admin secret'),
+      labelColumn: round(Math.max(0, ...[...(list?.querySelectorAll('dt') ?? [])].map((dt) => dt.getBoundingClientRect().width))),
+      list: list ? round(list.getBoundingClientRect().width) : null,
+      requests: at('Requests, samples and the routing log'),
+      rollups: at('Rollups'),
+      storage: at('Storage path'),
+    };
+  });
+  const read = await reading();
+  measurements.push(`${theme} /settings retention lines ${JSON.stringify(read)}`);
+  for (const [name, row] of [['requests', read.requests], ['rollups', read.rollups]]) {
+    failures.push(...compare(row, read.storage, ['height', 'labelInk', 'labelType', 'valueInk'], `${theme} /settings: About's ${name} retention line against Storage path`));
+    failures.push(...compare(row, read.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings: About's ${name} retention line against Admin secret`));
+  }
+  // The retention label is the card's longest, so in a narrow card it would take the values' room unless its column
+  // stops at half the list. A wrapped label makes its row taller than a neighbor's, so the height is read wide alone.
+  for (const width of [720, 400]) {
+    await page.setViewportSize({ height: 800, width });
+    await settle();
+    const narrow = await reading();
+    measurements.push(`${theme} /settings retention lines at ${width} px ${JSON.stringify(narrow)}`);
+    for (const [name, row] of [['requests', narrow.requests], ['rollups', narrow.rollups]]) {
+      failures.push(...compare(row, narrow.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings at ${width} px: About's ${name} retention line against Admin secret`));
+    }
+    if (narrow.list === null || narrow.labelColumn > narrow.list / 2 + 0.5) {
+      failures.push(`${theme} /settings at ${width} px: About's label column is ${narrow.labelColumn} px of the list's ${narrow.list}, past half`);
+    }
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await atRest();
 }
 
 /**
@@ -3619,6 +3902,94 @@ async function recentRowsOneLine(theme) {
   }
 }
 
+/** The Cost cell's dash under Billed dollars. The pass reads no module of the console, so it spells it here. */
+const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
+
+/**
+ * The Dashboard's recent requests under the dollar positions, the mock pass's alone, since the router's seed has no
+ * subscription request: under All in dollars a subscription row's Cost cell reads its dollar equivalent over an
+ * `equivalent` line in the size, line height and ink of the Tokens cell's second line beside it, and under Billed
+ * dollars its cell reads a dash titled nothing billed. The switch returns to native, the pass's default, before the
+ * next read.
+ */
+async function recentDollarCosts(theme) {
+  const say = (what) => failures.push(`${theme} /: ${what}`);
+  const unit = page.locator('.topbar select[aria-label="Unit"]');
+  try {
+    await unit.selectOption('all');
+    await settle();
+    const all = await page.evaluate(() => {
+      const type = (el) => {
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return { color: s.color, lineHeight: s.lineHeight, size: s.fontSize, text: el.textContent?.trim() ?? '' };
+      };
+      const cost = [...document.querySelectorAll('.dash__recent tbody tr')].map((tr) => tr.lastElementChild).find((td) => td?.querySelector('.sub')?.textContent?.trim() === 'equivalent');
+      if (!cost) return null;
+      return { main: cost.firstChild?.textContent?.trim() ?? '', sub: type(cost.querySelector('.sub')), title: cost.getAttribute('title'), tokens: type(cost.previousElementSibling?.querySelector('.sub') ?? null) };
+    });
+    await unit.selectOption('usd');
+    await settle();
+    const dashes = await page.evaluate(() =>
+      [...document.querySelectorAll('.dash__recent tbody tr')]
+        .map((tr) => tr.lastElementChild)
+        .filter((td) => td?.textContent?.trim() === '-')
+        .map((td) => ({ sub: td.querySelector('.sub') !== null, text: td.textContent?.trim() ?? '', title: td.getAttribute('title') })),
+    );
+    measurements.push(`${theme} / the recent Cost cell under All in dollars ${JSON.stringify(all)}, under Billed dollars ${dashes.length} dashes ${JSON.stringify(dashes[0] ?? null)}`);
+    if (all === null) say('no recent Cost cell reads equivalent under All in dollars');
+    else {
+      if (!/^~?\$[\d,.]+$/.test(all.main)) say(`the recent Cost cell's dollar equivalent reads ${JSON.stringify(all.main)} under All in dollars`);
+      if (!(all.title ?? '').includes(`${all.main.replace(/^~/, '')} equivalent`)) say(`the recent Cost cell's title ${JSON.stringify(all.title)} does not end its reading with the dollar equivalent`);
+      for (const what of compare(all.sub, all.tokens, ['color', 'lineHeight', 'size'], "the recent Cost cell's equivalent line against the Tokens cell's second line")) say(what);
+    }
+    if (dashes.length === 0) say('no recent Cost cell reads a dash under Billed dollars');
+    for (const dash of dashes) if (dash.title !== NOTHING_BILLED_TITLE || dash.sub) say(`a recent Cost cell's dash under Billed dollars reads ${JSON.stringify(dash)}`);
+  } finally {
+    await unit.selectOption('native');
+    await settle();
+  }
+}
+
+/** The mock's switch that adds its one plan request on a model the cost model lists in no tier. */
+const UNPRICED_SWITCH = 'phoebis.mockUnpriced';
+/** The dash's title where a window priced nothing. The pass reads no module of the console, so it spells it here. */
+const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
+
+/**
+ * The Estimated cost, 24h tile under the mock's unpriced switch, whose day holds a plan request priced on no window: the
+ * subscription line reads a dash under the unpriced title, in the size, weight and ink of the billed figure beside it,
+ * and in the weight and ink of the Tokens, 24h tile's figure, whose lone figure takes the larger size a pair line gives
+ * up. The page loads again without the switch, so the shot and the measures after it read the story whole.
+ */
+async function dashboardUnpricedTile(theme) {
+  const say = (what) => failures.push(`${theme} /: ${what}`);
+  try {
+    await page.evaluate((key) => localStorage.setItem(key, '1'), UNPRICED_SWITCH);
+    await loadAtOrigin('/', '.stat-grid');
+    const read = await page.evaluate(() => {
+      const type = (el) => {
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return { color: s.color, family: s.fontFamily, size: s.fontSize, text: el.textContent?.trim() ?? '', weight: s.fontWeight };
+      };
+      const tiles = [...document.querySelectorAll('.stat-grid .stat')];
+      const tile = (label) => tiles.find((t) => t.querySelector('.stat__label')?.textContent === label);
+      const cost = tile('Estimated cost, 24h');
+      const line = (word) => [...(cost?.querySelectorAll('.stat__pair-line') ?? [])].find((l) => l.querySelector('.stat__pair-word')?.textContent === word)?.querySelector('.cost-figure') ?? null;
+      return { billed: type(line('billed')), dash: type(line('subscription')), neighbour: type(tile('Tokens, 24h')?.querySelector('.stat__value') ?? null), note: cost?.querySelector('.stat__note')?.textContent?.trim() ?? null, title: cost?.getAttribute('title') ?? null };
+    });
+    measurements.push(`${theme} / unpriced cost tile ${JSON.stringify(read)}`);
+    if (read.dash?.text !== '-') say(`under the unpriced switch the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(read.dash?.text ?? null)}, not a dash`);
+    if (read.title !== UNPRICED_TITLE) say(`under the unpriced switch the Estimated cost, 24h tile is titled ${JSON.stringify(read.title)}`);
+    for (const what of compare(read.dash, read.billed, ['color', 'family', 'size', 'weight'], 'the unpriced dash against the billed figure beside it')) say(what);
+    for (const what of compare(read.dash, read.neighbour, ['color', 'family', 'weight'], "the unpriced dash against the Tokens, 24h tile's figure")) say(what);
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), UNPRICED_SWITCH);
+    await loadAtOrigin('/', '.stat-grid');
+  }
+}
+
 /**
  * Picks an Analytics tab by its exact accessible name, since a text match on Cache also meets Cache warming and
  * Playwright's strict mode refuses the click. The page's timers stand still and a mock read lands on one, so the
@@ -3760,6 +4131,67 @@ async function savingTiles(theme) {
     }
   } finally {
     await load('?unit=native');
+  }
+}
+
+/**
+ * The Cost tab under the mock's unpriced switch, whose range holds a plan request priced on no window: the Cost tile's
+ * subscription line reads a dash under the unpriced title in the type and ink of the Cost per request tile's first
+ * figure beside it, on that tile's top, and the Cost by card's note reads on a line of its own under the subtitle's
+ * text, at its left edge, in the subtitle's type and ink. The page loads again without the switch, so the measures after
+ * it and the view's shot read the story whole.
+ */
+async function costUnpricedNote(theme) {
+  const say = (what) => failures.push(`${theme} /analytics: ${what}`);
+  try {
+    await page.evaluate((key) => localStorage.setItem(key, '1'), UNPRICED_SWITCH);
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    if (!(await tabTo(theme, 'Cost'))) return;
+    const read = await page.evaluate(() => {
+      const type = (el) => {
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return { color: s.color, family: s.fontFamily, size: s.fontSize, text: el.textContent?.trim() ?? '', weight: s.fontWeight };
+      };
+      const tiles = [...document.querySelectorAll('#cost > .tiles-row > .stat')];
+      const tile = (label) => tiles.find((t) => t.querySelector('.stat__label')?.textContent?.trim() === label);
+      const top = (el) => (el ? Math.round(el.getBoundingClientRect().top) : null);
+      const cost = tile('Cost');
+      const neighbour = tile('Cost per request');
+      const subtitle = [...document.querySelectorAll('#cost .card .card__subtitle')].find((p) => p.querySelector('.unpriced-note')) ?? null;
+      const note = subtitle?.querySelector('.unpriced-note') ?? null;
+      // The subtitle's own text, its first node, is the line the note sits under.
+      const lead = subtitle?.firstChild ?? null;
+      let leadBox = null;
+      if (lead !== null && lead.nodeType === Node.TEXT_NODE) {
+        const range = document.createRange();
+        range.selectNode(lead);
+        leadBox = range.getBoundingClientRect();
+      }
+      const noteBox = note?.getBoundingClientRect() ?? null;
+      return {
+        card: subtitle?.closest('.card')?.querySelector('.card__title')?.textContent?.trim() ?? null,
+        dash: { ...type(cost?.querySelector('.stat__pair-line .cost-figure') ?? null), top: top(cost) },
+        neighbour: { ...type(neighbour?.querySelector('.stat__pair-line .cost-figure') ?? null), top: top(neighbour) },
+        note: note ? { ...type(note), below: leadBox === null || noteBox === null ? null : noteBox.top >= leadBox.bottom - 1, left: noteBox === null ? null : Math.round(noteBox.left) } : null,
+        subtitle: subtitle ? { ...type(subtitle), left: Math.round(subtitle.getBoundingClientRect().left) } : null,
+        title: cost?.getAttribute('title') ?? null,
+      };
+    });
+    measurements.push(`${theme} /analytics unpriced cost tab ${JSON.stringify(read)}`);
+    if (read.dash.text !== '-') say(`under the unpriced switch the Cost tile's subscription line reads ${JSON.stringify(read.dash.text ?? null)}, not a dash`);
+    if (read.title !== UNPRICED_TITLE) say(`under the unpriced switch the Cost tile is titled ${JSON.stringify(read.title)}`);
+    for (const what of compare(read.dash, read.neighbour, ['color', 'family', 'size', 'top', 'weight'], "the Cost tile's unpriced dash against the Cost per request tile's first figure")) say(what);
+    if (read.note === null) {
+      say('under the unpriced switch no Cost by card draws the unpriced note');
+      return;
+    }
+    if (!/^\d+ groups? unpriced in \d+ buckets?, drawn as (a gap|gaps)$/.test(read.note.text)) say(`the ${read.card} card's note reads ${JSON.stringify(read.note.text)}`);
+    if (read.note.below !== true) say(`the ${read.card} card's note does not sit on a line under its subtitle's text`);
+    for (const what of compare(read.note, read.subtitle, ['color', 'family', 'left', 'size', 'weight'], `the ${read.card} card's note against its subtitle`)) say(what);
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), UNPRICED_SWITCH);
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
   }
 }
 
@@ -3970,7 +4402,7 @@ async function analyticsTables(theme) {
 /**
  * The Analytics tables' columns under the width rule, each read on the tab that draws it: the Traffic breakdown on the
  * landing tab (its group column the fill, Key under the default grouping) and the Guardrails card above it (Guardrail),
- * the misses-by-reason breakdown (Key again, its nine figure headers wrapped so the group column keeps its room, each
+ * the misses-by-reason breakdown (Key again, its ten figure headers wrapped so the group column keeps its room, each
  * known reason's header its short word with the full label on its title) and the placements table on Cache (Rung), and
  * the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor) with the meter
  * reconciliation (Upstream). The view returns to Traffic afterwards, as the other Analytics checks leave it.
@@ -3992,8 +4424,9 @@ async function analyticsColumns(theme) {
       ['No previous', 'Previous message not found'],
       ['Unavailable', 'Unavailable'],
       ['Not asked', 'Not requested'],
+      ['Pending', 'Pending'],
     ];
-    if (JSON.stringify(heads.slice(1, 9)) !== JSON.stringify(known)) failures.push(`${theme} /analytics: the misses headers read ${JSON.stringify(heads.slice(1, 9))}, not the short words over their full labels`);
+    if (JSON.stringify(heads.slice(1, 10)) !== JSON.stringify(known)) failures.push(`${theme} /analytics: the misses headers read ${JSON.stringify(heads.slice(1, 10))}, not the short words over their full labels`);
     await tableColumns(theme, 'analytics', '.placements-table', ['Rung']);
     if (!(await tabTo(theme, 'Burn'))) return;
     await tableColumns(theme, 'analytics', '.budgets-table', ['Pool', 'Account']);
@@ -4621,7 +5054,7 @@ async function barRow(theme, view) {
 }
 
 /**
- * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 39 kinds:
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 40 kinds:
  * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
  */
 async function kindsPopoverInside(theme) {
@@ -4640,7 +5073,7 @@ async function kindsPopoverInside(theme) {
   measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
   if (read === null) say('did not open');
   else {
-    if (read.rows !== 48) say(`lists ${read.rows} rows, not Select all, the eight presets and the 39 kinds`);
+    if (read.rows !== 49) say(`lists ${read.rows} rows, not Select all, the eight presets and the 40 kinds`);
     if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
   }
   await page.keyboard.press('Escape');
@@ -4681,6 +5114,139 @@ async function refreshControlWidth(theme) {
   if (JSON.stringify(reads.map((r) => r.data)) !== JSON.stringify(['off', 'on', 'paused'])) say(`reads the states ${JSON.stringify(reads.map((r) => r.data))}, not off, on and paused`);
   if (reads.some((r) => r.width === null || r.width !== reads[0].width)) say(`measures ${JSON.stringify(reads.map((r) => r.width))} across its states, not one width`);
   if (reads.some((r) => r.count === null || r.count !== reads[0].count)) say(`moves the count to ${JSON.stringify(reads.map((r) => r.count))} across its states`);
+}
+
+/**
+ * A request that finishes below rows already shown lands between them on the next auto reload in the tint a row that
+ * arrives at the top takes. In the mock pass the story's late request, among the rows a page of 50 shows, lands a few
+ * seconds after the load: the page reads its list without it, turns auto reload to 5 s and reads the first poll's
+ * answer, where the row lands below the first and every cell of it reads the fill a top row's cells read under the same
+ * tint, apart from the fill of an untinted row of its own stripe and in the box of the untinted row above it. The
+ * mock's story alone lands a request after the load, so the router pass records the measure as skipped. The interval
+ * returns to Off and the bare log loads again.
+ */
+async function lateRowTint(theme) {
+  if (!mock) {
+    measurements.push(`${theme} /requests late row tint skipped: the seed lands no request after the load`);
+    return;
+  }
+  const say = (what) => failures.push(`${theme} /requests: the late row ${what}`);
+  await loadAtOrigin('/requests?rows=50', '.requests__table');
+  const rows = page.locator('.requests__table > tbody > tr:not(.table__detail)');
+  const ids = () => rows.evaluateAll((trs) => trs.map((tr) => tr.querySelector('.sub.mono')?.getAttribute('title') ?? null));
+  const listed = await ids();
+  const choose = async (word) => {
+    await page.locator('.filter-bar .refresh-control__part').click();
+    await settle();
+    await page.locator('.popover[role="menu"] [role="menuitemradio"]', { hasText: new RegExp(`^${word}$`) }).click();
+    await settle();
+  };
+  await choose('5 s');
+  await atRest();
+  // Past the first poll and short of the second, which would take the tint away.
+  await advance(6_000);
+  const polled = await ids();
+  const landed = polled.filter((id) => !listed.includes(id));
+  const at = landed.length === 1 ? polled.indexOf(landed[0]) : -1;
+  const late = at > 0 ? await rowCells(rows.nth(at)) : null;
+  const above = at > 0 ? await rowCells(rows.nth(at - 1)) : null;
+  // Two rows away, so it reads the stripe the late row reads at rest: a fill that matches it is no tint.
+  const sameStripe = at > 0 ? await rowCells(rows.nth(at >= 2 ? at - 2 : at + 2)) : null;
+  // The top row as a new arrival draws it, under the class the poll sets on a row it brings.
+  await rows.first().evaluate((tr) => tr.classList.add('is-new'));
+  const fresh = await rowCells(rows.first());
+  await rows.first().evaluate((tr) => tr.classList.remove('is-new'));
+  const tinted = await page.locator('.requests__table > tbody > tr.is-new').count();
+  await choose('Off');
+  await atRest();
+  measurements.push(`${theme} /requests late row tint ${JSON.stringify({ above, at, fresh, landed, late, listed: listed.length, sameStripe, tinted })}`);
+  if (landed.length !== 1) say(`landing reads ${landed.length} new rows on the first poll, not the story's late request alone`);
+  else if (at <= 0) say(`${landed[0]} lands at row ${at + 1}, not below the first`);
+  else {
+    failures.push(...compare(late, fresh, ['backgrounds'], `${theme} /requests: the late row's cells against a new row's`));
+    failures.push(...compare(late, above, ['border', 'height', 'padding'], `${theme} /requests: the late row against the row above it`));
+    if (late !== null && sameStripe !== null && String(late.backgrounds) === String(sameStripe.backgrounds)) say(`reads the fill of an untinted row of its own stripe, ${sameStripe.backgrounds[0]}`);
+    if (tinted !== 1) say(`leaves ${tinted} rows tinted, not itself alone`);
+  }
+  await loadAtOrigin('/requests', '.requests__table');
+  await atRest();
+}
+
+/**
+ * The fresh tint on a log: a row an auto reload poll brings draws every cell in --accent-soft, read over the surface as
+ * the cell draws it, a tone more than `TONE_STEP` apart from the row's resting fill, in the row's own box. In the mock
+ * pass the story lands one row on each log a few seconds after the load: the request log's late request among the rows
+ * a page of 50 shows, and the routing log's late event above the rows the log shows. The page reads its list, turns
+ * auto reload to 5 s through the interval menu, steps the clock past the landing and the first poll, and reads the
+ * first fresh row that is not the selected one, since a selected row draws the same token, with the story's one row the
+ * only one in the tint. The router pass's seed lands no row after the load, so it records the measure as skipped. The
+ * interval returns to Off and the bare log loads again.
+ */
+async function freshRowTint(theme, path) {
+  if (!mock) {
+    measurements.push(`${theme} ${path} fresh row tint skipped: the seed lands no row after the load`);
+    return;
+  }
+  const say = (what) => failures.push(`${theme} ${path}: the fresh row ${what}`);
+  const table = path === '/requests' ? '.requests__table' : '.routing-log__table';
+  await loadAtOrigin(path === '/requests' ? '/requests?rows=50' : path, table);
+  const choose = async (word) => {
+    await page.locator('.filter-bar .refresh-control__part').click();
+    await settle();
+    await page.locator('.popover[role="menu"] [role="menuitemradio"]', { hasText: new RegExp(`^${word}$`) }).click();
+    await settle();
+  };
+  await choose('5 s');
+  await atRest();
+  // Past the landing and the first poll, short of the second, which would take the tint away.
+  await advance(6_000);
+  await page.waitForSelector(`${table} > tbody > tr.is-new`, { timeout: 5_000 }).catch(() => {});
+  const first = page.locator(`${table} > tbody > tr.is-new:not(.is-selected):not([aria-current="true"])`).first();
+  const fresh = (await first.count()) > 0 ? await first.elementHandle() : null;
+  const found = fresh !== null;
+  // The row by the name each log gives it: the routing log's identity, the request log's id on its time cell.
+  const row = found ? await fresh.evaluate((tr) => tr.getAttribute('data-row') ?? tr.querySelector('.sub.mono')?.getAttribute('title') ?? null) : null;
+  const landed = await page.locator(`${table} > tbody > tr.is-new`).count();
+  const tinted = found ? await rowCells(fresh) : null;
+  // The same row at rest, under the stripe its place in the table gives it.
+  let rest = null;
+  if (found) {
+    await fresh.evaluate((tr) => tr.classList.remove('is-new'));
+    rest = await rowCells(fresh);
+    await fresh.evaluate((tr) => tr.classList.add('is-new'));
+  }
+  const tones = await page.evaluate(() => {
+    const tone = (name) => {
+      const probe = document.createElement('div');
+      probe.style.background = `var(${name})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    };
+    return { accentSoft: tone('--accent-soft'), surface: tone('--surface') };
+  });
+  await choose('Off');
+  await atRest();
+  // A translucent tone (the dark theme's --accent-soft) composited over the surface, as the cell under it draws.
+  const surface = colorChannels(tones.surface);
+  const over = (css) => composite(colorChannels(css), surface).map((c) => Math.round(c * 10) / 10);
+  const gap = (a, b) => Math.round(Math.max(...over(a).map((c, i) => Math.abs(c - over(b)[i]))) * 10) / 10;
+  const token = over(tones.accentSoft);
+  const drawn = tinted?.backgrounds.map(over) ?? [];
+  const apart = tinted !== null && rest !== null ? gap(tinted.backgrounds[0], rest.backgrounds[0]) : null;
+  const box = (cells) => cells && { border: cells.border, height: cells.height, padding: cells.padding };
+  measurements.push(`${theme} ${path} fresh row tint ${JSON.stringify({ apart, cells: drawn.length, drawn: drawn[0] ?? null, landed, rest: rest?.backgrounds[0] ?? null, restBox: box(rest), row, tinted: tinted?.backgrounds[0] ?? null, tintedBox: box(tinted), token, tones })}`);
+  if (!found) say('never arrives: no row reads is-new after the first poll');
+  else {
+    if (landed !== 1) say(`leaves ${landed} rows tinted after the first poll, not the one row the story lands`);
+    const off = drawn.flatMap((rgb, i) => (rgb.every((c, k) => Math.abs(c - token[k]) <= 0.5) ? [] : [`cell ${i + 1} draws ${JSON.stringify(rgb)}`]));
+    if (off.length > 0) say(`draws its cells off --accent-soft (${JSON.stringify(token)} over the surface): ${off.join(', ')}`);
+    if (apart === null || apart <= TONE_STEP) say(`stands ${apart} from its resting fill ${rest?.backgrounds[0]}, within ${TONE_STEP} on every channel`);
+    failures.push(...compare(tinted, rest, ['border', 'height', 'padding'], `${theme} ${path}: the fresh row against itself at rest`));
+  }
+  await loadAtOrigin(path, table);
+  await atRest();
 }
 
 /**
@@ -5741,6 +6307,75 @@ async function wideBodyDialog(theme) {
   colorsHeld();
 }
 
+/**
+ * The wide view's width floor holds a line whose tabs draw it wider than its character count. The mock's story captures
+ * the page an edge answers an upstream 502 with, indented with tabs, so the measure lists the laptop key's requests
+ * answered 502 and opens each one's Response wide until the widest row it draws holds a tab, then reads the block of
+ * rows at least as wide as that row's text, once that text runs wider than the scroll box, where a block of no floor
+ * would read the box's width and pass alike. The rows are placed absolutely, so the block's width is what keeps the
+ * scroll area once that row leaves the window. A row's text is read through a range, since a row's box takes the
+ * block's width at the least. The floor is a whole pixel count, so a shortfall under one pixel is its rounding. The
+ * mock pass's alone, on a load of its own, since the edge's page is the mock story's.
+ */
+async function bodyWidthFloor(theme) {
+  const say = (what) => failures.push(`${theme} /requests body width floor: ${what}`);
+  const address = '/requests?keys=laptop&statuses=502';
+  await page.goto(`${base}${address}`);
+  await booted();
+  await advance(LOAD_MS);
+  const rows = page.locator('.requests__table tbody tr');
+  try {
+    await page.waitForSelector('.requests__table tbody tr', { timeout: 15_000 });
+  } catch {
+    say(`${address} lists no request`);
+    return;
+  }
+  const loaded = () => page.waitForFunction(() => document.querySelector('.drawer .skeleton') === null, null, { timeout: 5_000 }).catch(() => {});
+  const widestRow = () =>
+    page.evaluate(() => {
+      const block = document.querySelector('dialog[open].dialog--wide .body-block__pre .body-rows');
+      if (!block) return null;
+      const box = block.closest('.body-block__pre')?.clientWidth ?? 0;
+      const drawn = [...block.querySelectorAll('.body-row')].map((row) => {
+        const range = document.createRange();
+        range.selectNodeContents(row);
+        return { chars: row.textContent?.length ?? 0, tabs: row.textContent?.includes('\t') ?? false, width: range.getBoundingClientRect().width };
+      });
+      const widest = drawn.reduce((most, row) => (row.width > most.width ? row : most), { chars: 0, tabs: false, width: 0 });
+      return { box, drawn: drawn.length, floor: Math.round(block.getBoundingClientRect().width * 10) / 10, row: { chars: widest.chars, tabs: widest.tabs, width: Math.round(widest.width * 10) / 10 } };
+    });
+  let read = null;
+  let request = null;
+  for (let i = 0, n = await rows.count(); i < n && read === null; i += 1) {
+    await rows.nth(i).click();
+    await advance(LOAD_MS);
+    await loaded();
+    const opened = await page.evaluate(() => {
+      const block = [...document.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === 'Response');
+      const open = block?.querySelector('.link-btn');
+      open?.click();
+      return Boolean(open);
+    });
+    if (!opened) continue;
+    const drew = await page
+      .waitForSelector('dialog[open].dialog--wide .body-row', { timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false);
+    await settle();
+    const got = drew ? await widestRow() : null;
+    await page.keyboard.press('Escape');
+    await settle();
+    if (got?.row.tabs) {
+      read = got;
+      request = new URL(page.url()).pathname.split('/').pop();
+    }
+  }
+  measurements.push(`${theme} /requests body width floor ${JSON.stringify({ request, ...read })}`);
+  if (read === null) say(`no request ${address} lists draws a Response whose widest row holds a tab`);
+  else if (read.row.width <= read.box) say(`the widest row of ${read.row.width}px fits the ${read.box}px scroll box, so the floor reads nothing`);
+  else if (read.floor + 1 <= read.row.width) say(`the block of rows is ${read.floor}px wide under a drawn row of ${read.row.width}px`);
+}
+
 const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';
 
 /** Opens `row` beneath itself and answers whether a card with its strip arrived. */
@@ -6642,6 +7277,56 @@ async function addAccountDialog(theme) {
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
+}
+
+/**
+ * The line a confirmed pairing draws in the Usage card while the account's first reading is in flight fills the slot
+ * of the note an account without windows reads, so it takes that note's type, ink and place: the mock pass pairs a new
+ * account through Add account and reads the hint against the note on the story's API-key account annex. The mock lands
+ * the reading on a list read 2 s after the confirm on the page's clock, which the reads here stay short of. The pairing
+ * adds a row, so this runs after the view's shot.
+ */
+async function firstReadingHint(theme) {
+  const say = (what) => failures.push(`${theme} /accounts first reading: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const line = (text) =>
+    page.evaluate((wanted) => {
+      const card = [...document.querySelectorAll('.accounts__detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+      const p = [...(card?.querySelectorAll('p') ?? [])].find((el) => el.textContent?.trim() === wanted);
+      if (!card || !p) return null;
+      const s = getComputedStyle(p);
+      const box = p.getBoundingClientRect();
+      const frame = card.getBoundingClientRect();
+      return { color: s.color, font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, left: Math.round(box.left - frame.left), lineHeight: s.lineHeight, margin: s.margin, top: Math.round(box.top - frame.top) };
+    }, text);
+  await page.clock.setSystemTime(clockOrigin);
+  await page.goto(`${base}/accounts/annex`);
+  await booted();
+  await advance(LOAD_MS);
+  const note = await line('This account does not report quota windows.');
+  try {
+    await page.getByRole('button', { name: 'Add account', exact: true }).click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await dialog.locator('.field', { has: page.locator('.field__label', { hasText: /^Label$/ }) }).locator('input').fill('Fresh desk');
+    await settle();
+    await dialog.getByRole('button', { name: 'Start pairing', exact: true }).click();
+    await advance(1_000);
+    const authorize = (await dialog.locator('.pairing__url').textContent()) ?? '';
+    const state = new URLSearchParams(authorize.split('?')[1] ?? '').get('state');
+    await dialog.locator('input[placeholder^="http://localhost"]').fill(`http://localhost:54545/callback?code=abc123&state=${state}`);
+    await dialog.getByRole('button', { name: 'Submit', exact: true }).click();
+    await advance(1_000);
+    await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
+    await advance(600);
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 });
+  } catch (error) {
+    say(`the pairing never confirmed (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const hint = await line('The first quota reading is in flight');
+  measurements.push(`${theme} /accounts first reading ${JSON.stringify({ hint, note })}`);
+  for (const finding of compare(hint, note, ['color', 'font', 'left', 'lineHeight', 'margin', 'top'], 'the first reading hint against the note of an account without windows')) say(finding);
   await atRest();
 }
 
@@ -7617,6 +8302,11 @@ async function burnShot(theme) {
   measurements.push(`${theme} /analytics burn plan chart shades ${areas} band runs`);
   if (areas === 0) failures.push(`${theme} /analytics: the Burn view's 5-hour plan card shades no hour of the peak band`);
   await atRest();
+  // As the view shots do: a full-page capture paints the fixed header and sidebar at the window's scroll offset, and
+  // a shot of a scrolled page reproduces byte for byte, so no later diff would catch it.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const offset = await page.evaluate(() => window.scrollY);
+  if (offset !== 0) failures.push(`${theme} /analytics burn: the shot was taken ${offset} px down the page`);
   await page.screenshot({ fullPage: true, path: join(shots, theme, 'analytics-burn.png') });
 }
 
@@ -8230,8 +8920,11 @@ try {
         await recentRowsOneLine(theme);
         await tableColumns(theme, '', '.dash__recent', ['Key'], 0, { overflowRecorded: mock });
         if (mock) await recentUnderShares(theme);
+        if (mock) await recentDollarCosts(theme);
         await remainingCards(theme);
         await ringLinesSpan(theme);
+        // Its loads end on the bare dashboard, so the measures after it read the view as it first drew.
+        if (mock) await dashboardUnpricedTile(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
       if (['/', '/accounts'].includes(view.path)) await windowBarLines(theme, view.path);
@@ -8254,6 +8947,7 @@ try {
         await poolTooltipColumns(theme);
         await poolCachingControls(theme);
         await poolSheddingSwitch(theme);
+        await poolBurnAverageHint(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
         await poolMemberPins(theme);
@@ -8275,12 +8969,14 @@ try {
         await stickyStrip(theme);
         await unitControl(theme);
         if (mock) await accountsCardToggles(theme);
-        // Last of the view's measures: its loads set the page's clock back to the origin, and the Burn shot above reads
-        // the clock its earlier measures stepped.
+        // These two last: their loads set the page's clock back to the origin, and the Burn shot above reads the clock
+        // its earlier measures stepped.
+        if (mock) await costUnpricedNote(theme);
         await savingTiles(theme);
       }
       if (view.path === '/settings') {
         await settingsOrder(theme);
+        await settingsRetentionLines(theme);
         await settingsUnitLegend(theme);
       }
       if (view.path === '/accounts') {
@@ -8320,6 +9016,9 @@ try {
         await diagnosticsNav(theme, view.path);
         // Before the first decision opens, since the read leaves the bare log and loads it again.
         await routingLogDatedTime(theme);
+        await routingLogRegistryTarget(theme);
+        await routingLogClearedChip(theme);
+        if (mock) await pinShedMark(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
       }
@@ -8369,15 +9068,19 @@ try {
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/requests' && mock) await attemptCardAtTheBottom(theme);
       if (view.path === '/requests') await wideBodyDialog(theme);
+      if (view.path === '/requests') await lateRowTint(theme);
+      if (view.path === '/requests') await freshRowTint(theme, view.path);
       if (view.path === '/routing-log') await stripIdleContrast(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       // The bar's measure loads each address itself and leaves the bare log, where the Kinds list opens.
       if (view.path === '/routing-log') await barRow(theme, view.path);
       if (view.path === '/routing-log') await kindsPopoverInside(theme);
+      if (view.path === '/routing-log') await freshRowTint(theme, view.path);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
       if (view.path === '/keys') await keysPoolSelect(theme);
+      if (view.path === '/accounts' && mock) await firstReadingHint(theme);
       if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);
     }
@@ -8411,6 +9114,11 @@ try {
       at = `${theme} /analytics reasons panel link`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
       await reasonLink(theme);
+    }
+    for (const theme of ['light', 'dark']) {
+      at = `${theme} /requests body width floor`;
+      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+      await bodyWidthFloor(theme);
     }
   }
   // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a

@@ -110,6 +110,10 @@ pub(crate) struct PersistedAgent {
     pub unanswered: Vec<PersistedUnanswered>,
     pub kept: Vec<PersistedKept>,
     pub last_real_at: Option<i64>,
+    /// Absent from a row an earlier build saved, which loads as `None`, so a restart keeps that row's recipe and the
+    /// next successful completion sets it.
+    #[serde(default)]
+    pub last_answered_at: Option<i64>,
     pub last_stop: Option<Wasted>,
     pub last_presence_at: Option<i64>,
     pub last_probe_at: Option<i64>,
@@ -467,6 +471,7 @@ impl PersistedAgent {
                 })
                 .collect(),
             last_real_at: agent.last_real_at,
+            last_answered_at: agent.last_answered_at,
             last_stop: agent.last_stop,
             last_presence_at: agent.last_presence_at,
             last_probe_at: agent.last_probe_at,
@@ -570,6 +575,7 @@ impl PersistedAgent {
             })
             .collect::<Option<_>>()?;
         agent.last_real_at = self.last_real_at;
+        agent.last_answered_at = self.last_answered_at;
         agent.last_stop = self.last_stop;
         agent.last_presence_at = self.last_presence_at;
         agent.last_probe_at = self.last_probe_at;

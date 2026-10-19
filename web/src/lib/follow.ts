@@ -1,3 +1,5 @@
+import { iso } from '@/api/decode';
+
 /** The pages one auto reload poll reads at most, so a burst of arrivals cannot keep a poll reading without end. */
 export const FOLLOW_PAGES = 8;
 /** The intervals the split Refresh button offers, 0 for off. */
@@ -27,6 +29,18 @@ export const spanEnded = (custom: boolean, end: number, takenAt: number): boolea
  * the Custom pill prints, and a preset reads up to the instant given (the poll's clock, or the end a cursor came from).
  */
 export const readEnd = (custom: boolean, end: number, at: number): number => (custom ? end : at);
+/**
+ * The query one page of a poll reads: the list's own query with the page's cursor and the poll's stamp. A preset under
+ * a watermark sends no end, so the route reads to its own clock and every row its filters admit is inside the page,
+ * where an end at the browser's instant would leave out a row received after it and written before the read. A custom
+ * span keeps its own end, and a preset with no stamp reads up to the poll's instant.
+ */
+export const pollQuery = <Q extends object>(query: Q, custom: boolean, end: number, at: number, cursor: string | undefined, landedAfter: number | undefined): Q & { cursor?: string; landedAfter?: number; to?: string } => ({
+  ...query,
+  cursor,
+  landedAfter,
+  to: !custom && landedAfter !== undefined ? undefined : iso(readEnd(custom, end, at)),
+});
 /** What the split button's title names while auto reload waits. The hidden tab is the control's own reading. */
 export const PAUSE_CAUSE = {
   dialog: 'paused while a dialog is open',
@@ -50,6 +64,8 @@ export interface Overrun {
 export interface Followed<R> {
   for: string;
   fresh: Set<string>;
+  /** The watermark the next poll reads at: the newest stamp the last poll's first page answered. */
+  landedThrough?: number;
   overrun: Overrun | null;
   rows: R[];
   /**
@@ -57,6 +73,22 @@ export interface Followed<R> {
    * null where the route had no more, and the end of the range it read.
    */
   standIn: { cursor: string | null; to: number } | null;
+}
+
+/** A list's cursor walk and the pages before it, kept for the address (`for`) it was read under. */
+export interface Paging {
+  for: string;
+  cursor?: string;
+  stack: (string | undefined)[];
+  to?: number;
+}
+
+/**
+ * The pager's state under `address`, or the empty state where the paging belongs to another address. The stack keeps
+ * the first page's undefined cursor, which `goNext` pushes when the reader leaves the first page.
+ */
+export function pagingFor(paging: Paging, address: string): { cursor: string | undefined; stack: (string | undefined)[]; to: number | undefined } {
+  return paging.for === address ? { cursor: paging.cursor, stack: paging.stack, to: paging.to } : { cursor: undefined, stack: [], to: undefined };
 }
 
 /**
@@ -76,16 +108,27 @@ export function merged<R>(shown: R[], polled: R[], identity: (row: R) => string,
  * brings no new one. A row `below` the list's last row is on the pages Next reads, so it neither keeps the poll reading
  * nor lands. `overrun` is the cursor past the last row read when `FOLLOW_PAGES` pages ran out first, so the rows
  * between it and the list stay reachable.
+ *
+ * A reader under a watermark answers only the rows written since it, so a known row among them landed again and ends
+ * nothing: `stopOnKnown` false reads on until a page reaches below the list's last row, past which every row is
+ * Next's, or the route has no more, and only an eighth page that still answers a next cursor sets the overrun.
+ * `landedThrough` is the first page's, since a row written between two pages stamps above it and the next poll reads
+ * it, where a later page's would skip it.
+ *
+ * `alive` is read between pages: a poll whose caller is gone stops reading and answers what it read, with no overrun.
  */
-export async function followPages<R>(read: (cursor: string | undefined) => Promise<{ nextCursor: string | null; rows: R[] }>, known: ReadonlySet<string>, identity: (row: R) => string, below: (row: R) => boolean): Promise<{ overrun: string | null; rows: R[] }> {
+export async function followPages<R>(read: (cursor: string | undefined) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>, known: ReadonlySet<string>, identity: (row: R) => string, below: (row: R) => boolean, stopOnKnown = true, alive: () => boolean = () => true): Promise<{ landedThrough?: number; overrun: string | null; rows: R[] }> {
   const rows: R[] = [];
   let cursor: string | undefined;
+  let landedThrough: number | undefined;
   for (let n = 0; n < FOLLOW_PAGES; n += 1) {
     const page = await read(cursor);
+    if (n === 0) landedThrough = page.landedThrough;
     const listed = page.rows.filter((r) => !below(r));
     rows.push(...listed);
-    if (page.nextCursor === null || listed.every((r) => known.has(identity(r)))) return { overrun: null, rows };
+    const ends = stopOnKnown ? listed.every((r) => known.has(identity(r))) : listed.length < page.rows.length;
+    if (page.nextCursor === null || ends || !alive()) return { landedThrough, overrun: null, rows };
     cursor = page.nextCursor;
   }
-  return { overrun: cursor ?? null, rows };
+  return { landedThrough, overrun: cursor ?? null, rows };
 }

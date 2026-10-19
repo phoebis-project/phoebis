@@ -22,7 +22,7 @@ pub(crate) struct SessionList {
     pub sessions: Vec<Value>,
 }
 
-/// One session row. On a row with no pin the keys from `burn` to `shed_from` read null, `estimated` false.
+/// One session row. On a row with no pin the keys from `burn` to `shed_reason` read null, `estimated` false.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Session {
@@ -78,6 +78,11 @@ pub(crate) struct Session {
     pub last_refresh_at: Option<i64>,
     /// The account a shed round marked the pin's session to leave.
     pub shed_from: Option<String>,
+    /// Why the pin was stamped from `shed_from`: `round` for a shedding round's move, the failover's reason word
+    /// (`cooldown`, `fast_lane`, `mark`) for a failover's landing. Null with no stamp and on a pin stamped before the
+    /// pin carried a reason, which reads as shed.
+    #[schema(example = "round")]
+    pub shed_reason: Option<String>,
     pub historical: bool,
     /// `reporting`, `silent`, or `none`.
     #[schema(example = "reporting")]
@@ -259,9 +264,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
                 BurnUnit::of(kind, in_overage)
             });
-        let fast = p.burn_fast;
         let equivalent = (unit == Some(BurnUnit::WindowShare))
-            .then(|| rates.price_pin(BurnUnit::WindowShare, p, &fast, &p.burn_unmetered))
+            .then(|| rates.price_pin(BurnUnit::WindowShare, p))
             .flatten()
             .map(|b| b * 3_600.0);
         // The mark is the equivalent's alone: a dollar burn reads the price table's own cells.
@@ -271,9 +275,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 .is_some_and(|(_, fallback)| fallback);
         let burn = match unit {
             None => None,
-            Some(BurnUnit::Usd) => rates
-                .price_pin(BurnUnit::Usd, p, &fast, &p.burn_unmetered)
-                .map(|b| b * 3_600.0),
+            Some(BurnUnit::Usd) => rates.price_pin(BurnUnit::Usd, p).map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {
                     let tier = state
@@ -302,7 +304,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 "burn": burn, "burn_unit": unit, "burn_equivalent": equivalent, "estimated": estimated, "burn_at": p.burn_at, "runway_ms": standing.runway_ms, "runway_bounded": standing.runway_bounded, "cache_ttl_ms": p.cache_ttl_ms,
                 "speed": standing.speed,
                 "cycle_ms": standing.cycle_ms,
-                "last_input_tokens": p.last_input_tokens, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from,
+                "last_input_tokens": p.last_input_tokens, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from, "shed_reason": p.shed_reason,
             }),
         );
     }
@@ -316,7 +318,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null,
                     "speed": null,
                     "cycle_ms": null,
-                    "last_refresh_at": null, "shed_from": null,
+                    "last_refresh_at": null, "shed_from": null, "shed_reason": null,
                 })
             });
         entry["last_request_at"] = json!(a.last_request_at);
@@ -346,7 +348,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 "burn": null, "burn_unit": null, "burn_equivalent": null, "estimated": false, "burn_at": null, "runway_ms": null, "runway_bounded": null, "cache_ttl_ms": null, "last_input_tokens": null,
                 "speed": null,
                 "cycle_ms": null,
-                "last_refresh_at": null, "shed_from": null,
+                "last_refresh_at": null, "shed_from": null, "shed_reason": null,
             })
         });
         entry["companion"] = json!(view.companion);

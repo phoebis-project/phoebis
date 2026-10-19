@@ -91,8 +91,10 @@ settings they name (with the pool's values where the item carries them) and the 
 `main: 4 rounds marked nothing, no destination had runway, window_ceiling 95 %, since 14:45` for a pool whose rounds
 found no destination with runway. An account's count reads `2 moves landed and the 5h window was spent within the hour`
 where moves onto it were followed by a spent window, or `1 wall reached on the 5h window` where it reached its wall,
-followed by `the last round projected 96 %` where a round on that window came before. An account slowed past twice its
-pool's stretch threshold within the day reads, under the label "Slowed past twice the stretch",
+followed by `the last round projected 96 %` where a projection round on that window came before, or by
+`the wall came 25 min before the reset` where a slow-down round came before (`the wall came at the reset` for a wall at
+or after the reset). An account slowed past twice its pool's stretch threshold within the day reads, under the label
+"Slowed past twice the stretch",
 `studio: slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12`, the
 bar after `over`, the lowest factor of its spans and the pool's threshold. Each opens the [routing log](#routing-log) on
 the pool's shedding rounds, the account's moves and spent windows, its spent windows, or its slow-down starts and ends,
@@ -111,13 +113,15 @@ so on hover, "Requests the router asked an account for. The refused requests are
 "Errors among the requests the router asked an account for, the refused requests left out" on the second.
 Under Native the cost tile reads the subscription traffic's 20x 5-hour
 equivalent over the billed dollars, a side with no traffic left out, with `{usd} billed per hour` under them, or the
-equivalent per hour while no request was billed. Under All in dollars and Billed dollars it reads those dollars with
-`{usd} per hour`, under Dollar equivalent the subscription traffic's dollars at the API price list, and under Window
-shares a dash with the note "shares do not add across accounts", since the tile sums every account. An estimated figure
-carries the `~` and the estimate's hover. Under the tiles a line says when the figures were read, `As of {ago}`, by the
-oldest of the page's reads, or names the read whose last refresh failed and why: `Last refresh of the {read} failed:
-{error}. Showing data as of {ago}`, the read being the 24-hour figures, the accounts, the recent requests, the sessions
-or the settings.
+equivalent per hour while no request was billed. Where a subscription request of the day priced nothing on the 5-hour
+window, its model in no tier the cost model weighs, the subscription side reads a dash with the hover "No subscription
+request priced on this window: its model has no tier the cost model weighs", and the note under it reads the dash per
+hour while no request was billed. Under All in dollars and Billed dollars it reads those dollars with `{usd} per hour`,
+under Dollar equivalent the subscription traffic's dollars at the API price list, and under Window shares a dash with
+the note "shares do not add across accounts", since the tile sums every account. An estimated figure carries the `~` and
+the estimate's hover. Under the tiles a line says when the figures were read, `As of {ago}`, by the oldest of the page's
+reads, or names the read whose last refresh failed and why: `Last refresh of the {read} failed: {error}. Showing data as
+of {ago}`, the read being the 24-hour figures, the accounts, the recent requests, the sessions or the settings.
 
 Two rings, "5h remaining" and "7d remaining", show how much of the pooled 5-hour and 7-day capacity is left, under the
 subtitle "Subscription accounts, 5-hour window, weighed by tier" (and its 7-day twin), the first with a "Cost
@@ -136,12 +140,15 @@ not list draws muted.
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, "Overage active" while requests bill as extra
 usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last 10 across every pool", with
 "All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB, Tokens and Cost, the status
-badge reading `×{n}` for a request of several attempts. Cost reads a request's dollars under the three dollar positions,
-its account's shares under Window shares as the Requests view's column does, and under Native a subscription request's
-20x 5-hour equivalent alone, with the other windows, the dollar equivalent and the price list and cost model in force on
-hover. Where the table runs wider than its card it scrolls inside it. "Sessions" ("Sticky pins and cache-warming
-agents", with "Open") reads the active pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle
-and Parked. What each figure means is on [Statistics](statistics.md).
+badge reading `×{n}` for a request of several attempts. Cost reads as the Requests view's column does: under All in
+dollars and Dollar equivalent a subscription request's dollar equivalent over `equivalent`, under Billed dollars a dash
+and under Window shares its account's shares, and a billed request's dollars under each of the four but Dollar
+equivalent, where it reads a dash. Under Native a subscription request reads its 20x 5-hour equivalent alone, with the
+other windows, the dollar equivalent and the price list and cost model in force on hover, and a billed request its
+dollars. The column header's hover names what each kind of request reads under the position. Where the table runs wider
+than its card it scrolls inside it. "Sessions" ("Sticky pins and cache-warming agents", with "Open") reads the active
+pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle and Parked. What each figure means is on
+[Statistics](statistics.md).
 
 ## Quota
 
@@ -155,8 +162,9 @@ The Quota view covers the subscription accounts alone, since an API-key account 
 the scheduled poll does", and at the right edge the split Refresh button, whose body reads the account list again
 ("Reads the list again now"), and the count of the accounts, `{n} accounts`, followed in the critical ink by those
 needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section bar shows one of two sections at a time:
-Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. The readings
-are the ledger's [quota samples](statistics.md#quota-samples).
+Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. A card's
+reading is the router's reported sample where the router holds one for the window and the ledger's [quota
+sample](statistics.md#quota-samples) otherwise.
 
 Accounts draws a card per account, sorted "Default order", "Soonest recovery", "5-hour pace", "7-day pace" or "7-day
 Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the
@@ -221,14 +229,15 @@ the six status labels, its chip reading such as "status: Paused"), the Sort sele
 or Status, and "Add account", and at the right edge the split Refresh button and the count of the rows the list shows,
 `{n} accounts`. The search, the sort and the status live in the page's address, so a link or a reload keeps them, and
 they stay while an account opens. Auto reload starts at 5 s and waits while a dialog or an editor of the detail is open,
-or while its save runs. The six labels, with the state each stands for, are Cooling down (`cooldown`), Needs funding
-(`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready (`ready`) and Not paired (`unpaired`).
-A row reads the label with a badge that names the plan by its tier ("Max 20x", "Max 5x", "Pro" or "Team", none on an
-API-key row), the status badge with the speed chip beside it on a slowed account, the email, `pool {id}` or "no pool",
-"Overage" while requests bill as extra usage and "extra usage on" while it is enabled and unused. The pane reads "The
-router holds no account yet" with "Add account" before the first account, "No accounts match" with "Clear the search or
-the status filter." under a filter, and "No account to show" until a row is selected. What the states mean and how an
-account moves between them is on [Pairing an account](pairing.md).
+or while its save runs, and while it is off the page reads the list every 2 s after a pairing's confirm, with the same
+wait, until the account's first reading lands or 30 s pass. The six labels, with the state each stands for, are Cooling
+down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready
+(`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan by its tier ("Max 20x",
+"Max 5x", "Pro" or "Team", none on an API-key row), the status badge with the speed chip beside it on a slowed account,
+the email, `pool {id}` or "no pool", "Overage" while requests bill as extra usage and "extra usage on" while it is
+enabled and unused. The pane reads "The router holds no account yet" with "Add account" before the first account, "No
+accounts match" with "Clear the search or the status filter." under a filter, and "No account to show" until a row is
+selected. What the states mean and how an account moves between them is on [Pairing an account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage
@@ -255,15 +264,16 @@ the editor. The card closes on "Renewal date is not reported by the provider." F
 windows as the Quota view does, the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this
 month" with its spend meter and an "in use" badge, the reason the provider gave for disabling extra usage, and a "Fast
 mode" line with the share of the fast lane's input and output buckets used and a chip while the fast lane cools, or
-reads "This account does not report quota windows." "7-day trend" ("Utilization of each window, sampled every 5
-minutes") draws the 5-hour, 7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota
-samples appear after the first successful quota fetch." "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast
-mode credits" or the model), Reason and Until with a Clear button per row, or "Nothing cooling down", and Clear asks
-"Clear cooldown": "The account becomes eligible immediately. If the account is still rate limited, the next request
-re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads "Not a member of a pool." "Credential" lists
-Access token, Refresh token, Last refresh and Last error for a subscription account, and Secret ("stored encrypted at
-rest") and Last error for an API-key account. "Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link
-that opens the log on the account's rows over the last hour.
+reads "This account does not report quota windows.", or "The first quota reading is in flight" from a pairing's confirm
+until the account's first reading lands. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the
+5-hour, 7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota samples appear after
+the first successful quota fetch." "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the
+model), Reason and Until with a Clear button per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The
+account becomes eligible immediately. If the account is still rate limited, the next request re-enters cooldown." "Pool"
+links the pool with `priority {n}`, or reads "Not a member of a pool." "Credential" lists Access token, Refresh token,
+Last refresh and Last error for a subscription account, and Secret ("stored encrypted at rest") and Last error for an
+API-key account. "Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link that opens the log on the
+account's rows over the last hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
 tokens, Output tokens and Effort levels, or "The upstream lists no models."
@@ -292,9 +302,10 @@ The view opens on its bar, "Create pool" with the split Refresh button and the c
 when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in pools, Keys, "Requests, 24h"
 and "Cost, 24h". Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. "Cost,
 24h" and each card's Cost 24h read in the top bar's unit: under Native the day's subscription traffic as its 20x 7-day
-equivalent over its billed dollars, a side with no traffic left out, and under Window shares a dash, except on a card
-whose one member is a subscription account, which reads that account's share of its own 7-day window. Every field's
-meaning is on [Pools, keys and routing](routing.md#pools).
+equivalent over its billed dollars, a side with no traffic left out and the subscription side a dash with the
+Dashboard's hover where a request of the day priced nothing on the 7-day window, and under Window shares a dash, except
+on a card whose one member is a subscription account, which reads that account's share of its own 7-day window. Every
+field's meaning is on [Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link ("No
 keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". A strip
@@ -358,12 +369,12 @@ session's burn is averaged over." and holds `Window ceiling (%)`, from 50 to 100
 lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly
 window. A round runs on a member whose window would pass it.", and in the expert view `Burn average (s)`, from 600 to
 7200, with the hint "The time constant of each session's burn average. The projection, the slow-down and the round read
-it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it." It
-closes on the "Member utilization" bar, whose hint reads "Each tick is a member's latest 5-hour or 7-day reading, as on
-the Quota page. Drag the ceiling's handle, or focus it and use the arrow keys." The bar is one track of used shares
-holding both windows' readings, a tick per member window with the hover `{account}: {window} {used}` and the legend
-"5-hour reading" and "7-day reading", and the ceiling stands on it in every view as the "Window ceiling" handle, dragged
-or moved with the arrow keys, with the field following it.
+it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it.
+Editable under the Custom preset in Load shedding." It closes on the "Member utilization" bar, whose hint reads "Each
+tick is a member's latest 5-hour or 7-day reading, as on the Quota page. Drag the ceiling's handle, or focus it and use
+the arrow keys." The bar is one track of used shares holding both windows' readings, a tick per member window with the
+hover `{account}: {window} {used}` and the legend "5-hour reading" and "7-day reading", and the ceiling stands on it in
+every view as the "Window ceiling" handle, dragged or moved with the arrow keys, with the field following it.
 
 Load shedding opens on "A member whose window would pass the ceiling before its reset, or within five hours on a weekly
 window, runs a round that marks the sessions that cover the excess, and each moves to a sibling with runway at its next
@@ -447,27 +458,26 @@ it is saved. The card's Warnings fact counts them. The ten checks, by code:
 | `spent_moves_off` | `migrate_when_spent` is off | "With spent moves off a session stays on a spent account until the upstream refuses it, so the destination gate never runs for that move." |
 | `warm_never` | `warm_sessions` is `never` | "With warm sessions never a round stops after the cold sessions, so the excess is covered only while cold sessions carry it." |
 
-Keys holds "Create key" and the pool's keys as Key, Prefix and Status with a menu of "Move to…" and "Revoke". "Move to…"
-opens `Move key {name}` ("A key reaches only its own pool's members, so moving it ends its current session pins.") with
-the destination Pool, and "Revoke" asks `Revoke {name}`:
-`Requests with {name} are rejected immediately. The key stays in this pool and its history stays in the ledger.` A key
-created from here opens "Key created", the dialog the Keys section describes. Guardrails lists the pool's guardrails in
-the order they run, each with its name, `off` on a disabled one, its mode as a badge (enforce in the warning tone,
-observe muted), move up, move down and remove, then "Attach guardrail", a box over every guardrail of the registry with
-the pool's own ones checked, which stays open while the operator picks: a check adds its guardrail to the end of the
-list at once and an uncheck removes it, "Select all" adds every guardrail the box lists and its uncheck removes them
-all, and Escape or a click outside closes the box, the save writing the list as it stands. While the registry holds no
-guardrail the control is disabled with "No other guardrail is left to attach" on hover. Under the list the hint reads
-"Top to bottom. A pool's guardrails run before a key's own." and the link "Manage guardrails" opens the
-[Guardrails](#guardrails) view. On create the group reads "Guardrails can be attached once the pool is saved." and no
-control. Keepalive holds the switch "Keep prompt caches warm", the three ceilings and the return rate: a ceiling left
-off reads the break-even it resolves to, `Break-even: {range}`, one switched on past the break-even reads `Capped at the
-break-even, {range}`, the idle window reads its cost as a share of one re-write, `Costs {pct} of one re-write`, and
-while the field reads 0 or more than the break-even, the window in effect, `capped at the break-even, {time}`, with `at
-the saved {time}` for an unsaved edit. Return rate by idle age lists the pool's ten buckets with the windows that
-returned out of those that reached it and a bar of the rate, or "No idle windows recorded yet". The ceilings are
-explained under [The four fields](keepalive.md#the-four-fields) and the buckets under [The return rate by idle
-age](keepalive.md#the-return-rate-by-idle-age).
+Keys holds "Create key" and the pool's keys as Key, Prefix and Status with a menu of "Move to…" and "Revoke". "Move
+to…" opens `Move key {name}` ("A key reaches only its own pool's members, so moving it ends its current session
+pins.") with the destination Pool, and "Revoke" asks `Revoke {name}`: `Requests with {name} are rejected immediately.
+The key stays in this pool and its history stays in the ledger.` A key created from here opens "Key created", the dialog
+the Keys section describes. Guardrails lists the pool's guardrails in the order they run, each with its name, `off` on a
+disabled one, its mode as a badge (enforce in the warning tone, observe muted), move up, move down and remove, then
+"Attach guardrail", a box over every guardrail of the registry with the pool's own ones checked, which stays open while
+the operator picks: a check adds its guardrail to the end of the list at once and an uncheck removes it, "Select all"
+adds every guardrail the box lists and its uncheck removes them all, and Escape or a click outside closes the box, the
+save writing the list as it stands. While the registry holds no guardrail the control is disabled with "No other
+guardrail is left to attach" on hover. Under the list the hint reads "Top to bottom. A pool's guardrails run before a
+key's own." and the link "Manage guardrails" opens the [Guardrails](#guardrails) view. On create the group reads
+"Guardrails can be attached once the pool is saved." and no control. Keepalive holds the switch "Keep prompt caches
+warm", the three ceilings and the return rate: a ceiling left off reads the break-even it resolves to, `Break-even:
+{range}`, one switched on past the break-even reads `Capped at the break-even, {range}`, the idle window reads its cost
+as a share of one re-write, `Costs {pct} of one re-write`, and while the field reads 0 or more than the break-even, the
+window in effect, `capped at the break-even, {time}`, with `at the saved {time}` for an unsaved edit. Return rate by
+idle age lists the pool's ten buckets with the windows that returned out of those that reached it and a bar of the rate,
+or "No idle windows recorded yet". The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and
+the buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
 
 ## Keys
 
@@ -482,16 +492,18 @@ at 5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active,
 follow, and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's
 figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the
 subscription traffic's 20x 7-day equivalent over the billed traffic's dollars, and a bar's figure and a cost line read a
-key's equivalent beside its billed dollars, a side with no traffic left out, and under Window shares a dash, since a key
-spans its pool's accounts. The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends
-in its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or `bodies not captured`, with
-"inherited" where the key follows its pool and "keepalive off" for a key opted out of cache warming.
-Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules".
-Expiry reads the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions
-still on the previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with
-this key are rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and
-detaches its request history from the key name. This cannot be undone."). Before the first key the table reads "No keys
-yet" with "Create key". What a key's settings mean is on [Keys](routing.md#keys).
+key's equivalent beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the cost
+line each reading the subscription side as a dash with the Dashboard's hover where a request priced nothing on the 7-day
+window, and under Window shares a dash, since a key spans its pool's accounts. The columns are Name, Prefix, Pool,
+Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the capture setting,
+`bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and "keepalive off"
+for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they
+replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never". Status carries the key's state with
+`used {ago}` and, after a rotation, `{n} sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate
+{name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately. Its history stays in the ledger.")
+and Delete (`Delete {name}`: "Removes the key and detaches its request history from the key name. This cannot be
+undone."). Before the first key the table reads "No keys yet" with "Create key". What a key's settings mean is on
+[Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as
@@ -637,31 +649,39 @@ however many attempts it took: Attempts reads `2 attempts` with the trail of acc
 request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
 account was at its cap, for a reset, for the slow-down or for the rewrite in flight, whose hover names each wait with
 its reason in the row's order and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`
-or `waited for the rewrite in flight 2 s on {account}` (a row from before the
-reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit. Under
-Native a request a subscription window paid reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over
-`0.244% 20x 7d`), with every window, the model week among them, and the dollar equivalent on hover. Under the four other
-positions it reads its account's own window shares, each with its window's short word (`0.12% Fable week` over
-`0.42% 5h`, the full labels on hover). An overage, fast mode or API-key request reads dollars under every position, and
-a figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted model". A
-client classifier call on a subscription account reads `0%` with the hover "Free on the plan: a client classifier call
-takes no window share" ahead of the estimate. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First,
-Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split Refresh
-button's body brings it up to now. An empty table reads "No requests match" with "Widen the date range or clear a
-filter." and "Reset filters", which clears the filters, the search and the range. What each figure means is on
-[Statistics](statistics.md).
+or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits span two,
+`waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads
+`waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover
+naming what each kind of request reads under the position. Under Native a request a subscription window paid reads its
+20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the model week
+among them, and the dollar equivalent on hover. Under Window shares it reads its account's own window shares, each with
+its window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), under All in dollars and Dollar
+equivalent its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under Billed dollars a dash
+with the hover "Nothing billed: a subscription request". An overage, fast mode or API-key request reads dollars under
+every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no subscription
+equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted
+model", and a dash carries no mark. A client classifier call on a subscription account reads `0%` under Native and
+Window shares, its 20x equivalents and its window shares zero, with the hover "Free on the plan: a client classifier
+call takes no window share" ahead of the estimate, its dollar equivalent over `equivalent` under All in dollars and
+Dollar equivalent with the same hover ahead of its zero 20x equivalents, and a dash under Billed dollars, while on an
+overage or API-key account it reads its dollars as any billed request does. The table pages by "Rows" (10, 25, 50 or
+100, 25 by default) with First, Previous and Next, holds the requests up to the moment you opened it so paging does not
+shift, and the split Refresh button's body brings it up to now. An empty table reads "No requests match" with "Widen the
+date range or clear a filter." and "Reset filters", which clears the filters, the search and the range. What each figure
+means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
-ending now and a custom range keeping its own end, takes every row that arrived since the read before, up to eight
-pages, and lands a new row at the top in the accent tint until the next read. Past eight pages a line reads "More rows
-arrived than auto reload could fetch. Reload to read them.", and Next reads on from the last row the poll fetched. A
-filter change keeps the interval. The poll waits while the tab is hidden, while the drawer is open, on an older page
-until you go back to the first, and while a menu or popover under the bar is open, with the interval kept and the cause
-named in the dropdown's title. When the wait ends a full interval or more after its last answer, it reads at once. A
-custom range whose end lay more than a minute in the past when the page took it has nothing new to read, so the
-dropdown reads Off and stays disabled, while a link whose range ends at the moment it was made reads on, each read
-refreshing the rows inside it.
+ending at the router's clock and a custom range keeping its own end, takes every row that arrived since the read before,
+up to eight pages, and lands a new row at the top in the accent tint until the next read. A long request can finish
+below rows already shown: it lands between rows already shown, in the same tint, on the next auto reload. Past eight
+pages a line reads "More rows arrived than auto reload could fetch. Reload to read them.", and Next reads on from the
+last row the poll fetched. A filter change keeps the interval. The poll waits while the tab is hidden, while the drawer
+is open, on an older page until you go back to the first, and while a menu or popover under the bar is open, with the
+interval kept and the cause named in the dropdown's title. When the wait ends a full interval or more after its last
+answer, it reads at once. A custom range whose end lay more than a minute in the past when the page took it has nothing
+new to read, so the dropdown reads Off and stays disabled, while a link whose range ends at the moment it was made reads
+on, each read refreshing the rows inside it.
 
 Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
@@ -676,13 +696,15 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   the request carries a match ([Guardrails](guardrails.md)).
 - Phases: a waterfall over Received, Selected, Written, Head, First content, Stream end and Finished, a phase the
   ledger holds no instant for reading "not measured".
-- Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain",
-  Server tool calls and Estimated cost in the top bar's unit: a subscription request's 20x equivalents under Native, or
-  its account's window shares under the four other positions, one chip per window with the dollar equivalent after them,
-  and a billed request's dollars. Its hover names the serving account's tier (`Account tier {tier}`) and the price list
-  and cost model in force when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`).
-  A client classifier call's row reads its zero shares with the hover "Free on the plan: a client classifier call takes
-  no window share".
+- Usage: Input (uncached), Cache read, "Cache write, 5m", "Cache write, 1h", "Output, thinking", "Output, plain", Server
+  tool calls and Estimated cost in the top bar's unit: a subscription request's 20x equivalents under Native or its
+  account's window shares under Window shares, one chip per window with the dollar equivalent after them, its dollar
+  equivalent with `equivalent` under All in dollars and Dollar equivalent and a dash under Billed dollars, and a billed
+  request's dollars, or a dash under Dollar equivalent. Its hover names why a dollar figure or a dash stands, as the
+  Cost cell's hover does, the serving account's tier (`Account tier {tier}`) and the price list and cost model in force
+  when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`). A client classifier
+  call's row reads its zero figures under Native and Window shares and its dollar equivalent under All in dollars and
+  Dollar equivalent, with the hover "Free on the plan: a client classifier call takes no window share".
 - Request: Session, Agent, Client with the request class badge, User agent (such as
   `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row per attempt with the upstream's
   request id and, on the answer that served, its message id.
@@ -769,9 +791,12 @@ to it, which its head says while another filter is set. Plan per hour draws thre
 hour" and "Model week per hour", the last while a group's traffic ran on a model with a week of its own, each with one
 line per group. Under Window shares a line is the share of a subscription account's own window, which reads under the
 account grouping or with one account named in the Accounts filter, and under every other position it is the group's
-subscription traffic per hour in 20x equivalents of the window. The 5-hour card shades the peak band's hours behind its
-lines, and each card's note carries a "Cost reference" link that opens the dialog on Tiers and peak band. A hollow dot
-marks a bucket whose model has no measured weight and reads the latest weighed model of its model tier, with an
+subscription traffic per hour in 20x equivalents of the window. Under those positions a bucket whose traffic ran on no
+model with a week of its own reads zero on the Model week card, as an idle bucket reads zero on the other two, and one
+the cost model could not price stays a gap. Under Window shares such a bucket stays a gap on the Model week card, since
+the shares cannot tell it from one the cost model could not price. The 5-hour card shades the peak band's hours behind
+its lines, and each card's note carries a "Cost reference" link that opens the dialog on Tiers and peak band. A hollow
+dot marks a bucket whose model has no measured weight and reads the latest weighed model of its model tier, with an
 "estimated" entry in the legend and a `~` on the legend's and the tooltip's figures. A bucket whose traffic ran on a
 model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws
 no point, under a "model unlisted" entry, and under Window shares an account whose tier the cost model does not size
@@ -802,9 +827,11 @@ subscription requests' 20x 7-day equivalent, the card's subtitle naming the bill
 model cell carrying them on a line under it, and the card draws the billed dollars while no subscription request is in
 range. Under the three dollar positions they read the position's dollars, and under Window shares the named account's
 7-day shares, the card reading "Shares of one account's windows alone: name one account in the Accounts filter." and
-Cache by model dashes under the same note while no account is named. Every count in Misses by reason but the expired
-column links to the Requests view on those requests with the page's filters carried over, and a count the Requests view
-cannot list exactly stays plain with the reason on hover.
+Cache by model dashes under the same note while no account is named. A null diagnostics member on a request that named a
+message is recorded as "No divergence", and the per-group table lists Pending after Not requested. Pending: the
+upstream's comparison was still running when the answer went out. Every count in Misses by reason but the expired column
+links to the Requests view on those requests with the page's filters carried over, and a count the Requests view cannot
+list exactly stays plain with the reason on hover.
 
 Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' 20x 7-day equivalent
 over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output
@@ -814,15 +841,18 @@ the center and the billed requests' in dollars, and the table reads Requests, Co
 column, Per request and Per 1k output, its Cost the 20x 7-day equivalent, and Cost, Per request and Per 1k output each
 with the billed dollars on a line under the equivalent. A subscription side the route could not price on the 7-day
 window, as when a request ran on a model of no known tier, reads a dash, its bucket on the Cost by chart a gap, and the
-Cost split draws no ring for it. Under All in dollars, Billed dollars and Dollar equivalent Cost draws the tiles
-Estimated cost, Billed dollars or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the
-chosen group as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output)
-and the Cost split as one ring in dollars (Input, Cache read, Cache write, Output). Under Window shares, which reads
-under the account grouping or with one account named in the Accounts filter, the tiles read Window share, Per request
-and Per 1k output, the chart one line per group, the table Plan requests, 5-hour, 7-day, the model week, Per request and
-Per 1k output, and the Cost split the whole in dollars. Every position draws Fast mode spend, and an estimated figure
-carries the `~` and the estimate's hover. The prices behind the dollars are on [Pricing](statistics.md#pricing), and the
-cost model behind the shares and the equivalents on [Plan meter](statistics.md#plan-meter).
+Cost split draws no ring for it. The Cost tile's dash carries the Dashboard's hover, and the Cost by chart notes the
+groups it draws that read unpriced on the 7-day window on a line under its subtitle,
+`{n} groups unpriced in {m} buckets, drawn as gaps` (`1 group unpriced in 1 bucket, drawn as a gap`). Under All in
+dollars, Billed dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars or Dollar equivalent,
+Cost per request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a table (Requests, Cost,
+Input, Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in dollars (Input,
+Cache read, Cache write, Output). Under Window shares, which reads under the account grouping or with one account named
+in the Accounts filter, the tiles read Window share, Per request and Per 1k output, the chart one line per group, the
+table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k output, and the Cost split the whole in
+dollars. Every position draws Fast mode spend, and an estimated figure carries the `~` and the estimate's hover. The
+prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost model behind the shares and the
+equivalents on [Plan meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
@@ -842,7 +872,9 @@ billed side's dollars, under the three dollar positions the position's figures i
 named account's share of its 7-day window, a dash under "Shares of one account's windows alone: name one account in the
 Accounts filter." while none is named. The chart draws dollars under the three dollar positions, the 20x 7-day
 equivalent under Window shares and under Native, with the billed dollars on hover, and the billed dollars alone under
-Native where the range holds no plan side. What a probe is and when it counts as wasted is on [Keepalive](keepalive.md).
+Native where the range holds no plan side. Under Native the `~` on the Probe cost tile, the Wasted probes tiles and the
+by-pool Probe cost marks a plan probe priced through its model tier's fallback weight, which a request priced so beside
+it never marks. What a probe is and when it counts as wasted is on [Keepalive](keepalive.md).
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the
 windows the range sampled, 5-hour, 7-day, 7-day Fable and "7-day, extra usage". Pace reads "The lead over pace per
@@ -966,9 +998,10 @@ subscription request as 20x window equivalents and a billed request in dollars."
 shell reads. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and Subscription costs path
 (each as the path or "not configured", then its table's entry in force, its revision count and the next date while one
 is pending, as `effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the
-cost model reports a problem), Storage path, and Admin secret as "configured" or "not configured", each path's hover
-naming the bootstrap key that sets it, and closes on "The values the configuration file sets are on the installation
-page, and `phoebis check-config` prints this router's."
+cost model reports a problem), Storage path, "Requests, samples and the routing log" and "Rollups" (each as
+`kept for {n} days`, or "kept forever" where its key is 0), and Admin secret as "configured" or "not configured", each
+path's and each retention line's hover naming the bootstrap key that sets it, and closes on "The values the
+configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point
@@ -1021,20 +1054,21 @@ while a link whose range ends at the moment it was made reads on, each read refr
 A row reads Time (dated past a day as on the Requests view, a decision's request beneath it as a link to the request's
 drawer), Kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one),
 Session (the first eight characters with the agent beneath), Account (a move names the account it left and the one it
-landed on), Model, By, Fact, and Details, which opens the request's drawer. By names what decided the row in one chip:
-the rule that fired (`spent rule`), the rung that placed it (`static rung`), the strategy and the tier's priority
-(`Pace P0`, whose hover is the Pace hint), where a hold waited (`cohort`, `session pin`), `slow-down` for a request the
-slow-down held and for the renewal after its hold, `rewrite in flight` for a request that waited for a moved pin's first
-head and for the renewal after it, what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal
-(`client contract`, `client drift`, `key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`,
-`429 on 5h`, `slow-down` for a slow-down's start and end). Fact gives the value that made it so as a muted label with
-its value, `gap`, `idle`, `prefix`, `until`, a held request's `until 18:20` and `speed 0.5x`, the renewal's `held 42 s`,
-a slow-down start's `speed 0.5x` and an end's `slowest 0.35x`, a move's `runway` on its destination (a span such as `2 h
-10 min`, `none` or `unbounded`) followed by `least bad` or `rewrite only` where the destination did not fit, or a
-renewal's window utilization, such as `5h 96%`, where that window's projection reached the ceiling. A verdict reads in
-one color across the rows, the card and the strip: good when it served the request, warning when it changed its course,
-critical for a refusal or an exhaustion, and neutral for none and no. Every account, key, pool, model, session and
-request a row names is a link.
+landed on, and a registry change the pool, the key or the account it edited), Model, By, Fact, and Details, which opens
+the request's drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that
+placed it (`static rung`), the strategy and the tier's priority (`Pace P0`, whose hover is the Pace hint), where a hold
+waited (`cohort`, `session pin`), `slow-down` for a request the slow-down held and for the renewal after its hold,
+`rewrite in flight` for a request that waited for a moved pin's first head and for the renewal after it, what exhausted
+the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client contract`, `client drift`, `key revoked`), `no rule
+fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`, `slow-down` for a slow-down's start and end,
+`5h cleared` for a window read under its limit again, with the whole `5h cleared to 40% under its reset` on hover). Fact
+gives the value that made it so as a muted label with its value, `gap`, `idle`, `prefix`, `until`, a held request's
+`until 18:20` and `speed 0.5x`, the renewal's `held 42 s`, a slow-down start's `speed 0.5x` and an end's `slowest
+0.35x`, a move's `runway` on its destination (a span such as `2 h 10 min`, `none` or `unbounded`) followed by `least
+bad` or `rewrite only` where the destination did not fit, or a renewal's window utilization, such as `5h 96%`, where
+that window's projection reached the ceiling. A verdict reads in one color across the rows, the card and the strip: good
+when it served the request, warning when it changed its course, critical for a refusal or an exhaustion, and neutral for
+none and no. Every account, key, pool, model, session and request a row names is a link.
 
 Every row opens beneath itself. A decision row loads its record and draws the decision card. Its verdict line names the
 decision with its accounts and its pool as links ("Moved secondary to primary", "Attempt 2 of 2: placed on primary",
@@ -1077,22 +1111,24 @@ one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of $5.00`), who
 over, and beside it a badge for a destination the gate read that did not fit, `rewrite only` or `least bad` in the
 warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads why:
 not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and
-`Settings in force since {time}`, stay closed until opened. The settings fold lists the pool's twenty-four settings
-in the card's order with Load shedding and Slow-down reading `on` or `off`, Stretch and Hold as spans,
-Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key
-and its pool had left the registry". A record written before a setting existed reads `not recorded` for it, Load
-shedding and Window ceiling on a version 1 record and the five slow-down and return-to-plan settings on an older version
-2 record, and a version 1 record lists after the twenty-four, each marked `(then)`, the three settings it carried that a
-version 2 record does not. "Outcome" lists the pin written, the reservation (the account, the share per window and the
-expiry), the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its
-deepest entry, the hold, reading `for the reset at {time}` where the request waited for a reset, or
-`for the slow-down until {time}` with the chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s`
-where the slow-down held it, or `for the rewrite in flight of {request} until {time}` with `bound 2 min` where it waited
-for a moved pin's first head, a Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for
-a cooldown, `re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the
-spend against a budget. The foot offers the three widenings after "Widen to", this minute, this session and this
-account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A
-record the retention purged reads "The record left with the retention", and one still loading "Loading the record".
+`Settings in force since {time}`, stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the
+account it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant.
+The settings fold lists the pool's twenty-four settings in the card's order with Load shedding and
+Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or
+`at once` at 0, or "The key and its pool had left the registry". A record written
+before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and the
+five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
+twenty-four, each marked `(then)`, the three settings it carried that a version 2 record does not. "Outcome" lists the
+pin written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
+(`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading
+`for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips
+`speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or
+`for the rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a
+Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown,
+`re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the spend against
+a budget. The foot offers the three widenings after "Widen to", this minute, this session and this account, names the
+record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A record the retention
+purged reads "The record left with the retention", and one still loading "Loading the record".
 
 An event row opens to a panel of pairs: When to the second in UTC, the account and the pool as links, then the kind's
 own pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour
@@ -1143,7 +1179,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |
-| registry changed | An operator edited a pool, a key or an account, field by field where the change names them. |
+| registry changed | An operator changed an account, a guardrail, a key or a pool: a creation records the row's snapshot, an account's, a key's or a pool's update each changed field with its value before and after (a list, such as a pool's guardrails, as its items joined by commas, or `none` when empty), a guardrail's update its snapshot with the pools and keys it is attached to, a deletion or a revocation nothing more, a change of a pool's members the new member list, and a key's rotation the new secret's prefix with the instant the retired secret stops being accepted. |
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |
@@ -1151,6 +1187,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | slow-down started | An account's slow-down began: its factor read under 1, so requests of its sessions wait their cycle times the slow-down up to the hold. |
 | warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL. |
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
+| window cleared | A quota window read under its limit again after a reading at the limit, with the readings before and after and the reset unchanged. |
 | window reset | A quota window reset, with the reading before it. |
 | window spent | A response head, the poll or the prediction read a quota window at its limit, once per reset cycle: a newer head of the same cycle within two points of 1.0 after it neither clears nor repeats it. |
 

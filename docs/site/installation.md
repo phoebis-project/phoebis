@@ -40,11 +40,10 @@ The binary lands at `target/release/phoebis`. The build needs a Unix host, Linux
 permission checks, the backup and the bootstrap file's loader use `std::os::unix::fs`, and the service's stop signal is
 the Unix `SIGTERM`, so the router does not build on Windows. A Windows machine runs it on a Linux host or in a Linux
 runtime instead. The toolchain is pinned in `rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which
-needs cmake, clang and libclang. The embedded console needs Node 20.19 or a later 20, or 22.12 or later, and npm on the
-path: the build script checks `node --version` against that range, then runs `npm ci` and `npm run build` in `web/`
-whenever the bundle is missing or older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds
-`web/dist` as it is, and a build with no bundle on disk embeds a placeholder page, which the admin listener then serves
-in place of the console.
+needs cmake, clang and libclang. The embedded console needs Node 26 or later, and npm on the path: the build script
+checks `node --version` against that range, then runs `npm ci` and `npm run build` in `web/` whenever the bundle is
+missing or older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds `web/dist` as it is, and a
+build with no bundle on disk embeds a placeholder page, which the admin listener then serves in place of the console.
 
 ## Install as a service
 
@@ -423,10 +422,12 @@ stats:
   ledger_path: ./data/ledger.sqlite
   # Prometheus text format at /metrics. Bind it where your scraper can reach it.
   metrics_listen: 127.0.0.1:9464
-  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this. 0 keeps them forever.
-  retention_days: 90
-  # Hourly rollups are purged past this. 0 keeps them forever, otherwise at least retention_days.
-  rollup_retention_days: 400
+  # The requests with their attempts, the kept-warm marks, the events, the decisions, the quota and extra-usage
+  # samples, and the registry's settled refresh attempts and change log are purged past this. 0 keeps them forever.
+  retention_days: 365
+  # The hourly rollups and the account rollups are purged past this. 0 keeps them forever, otherwise at least
+  # retention_days.
+  rollup_retention_days: 365
   # Overrides the shipped subscription cost model. A missing file is fine.
   subscription_costs_path: ./subscription_costs.yaml
 storage:
@@ -605,8 +606,8 @@ Defaults whole.
 | `body_capture_max_hours` | `72` | 1 to 168 |
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
-| `retention_days` | `90` | 0 for forever, else a number of days, which also covers decisions and the quota and extra-usage samples |
-| `rollup_retention_days` | `400` | 0 for forever, otherwise at least `retention_days` |
+| `retention_days` | `365` | 0 for forever, else a number of days, which covers the requests with their attempts, the kept-warm marks, the events, the decisions, the quota and extra-usage samples, and the registry's settled refresh attempts and change log |
+| `rollup_retention_days` | `365` | covers the hourly rollups and the account rollups: 0 for forever, else a number of days of at least `retention_days` |
 | `subscription_costs_path` | `./subscription_costs.yaml` | a path, and a missing file is fine |
 
 Refused with:

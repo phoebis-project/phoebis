@@ -3329,6 +3329,12 @@
   font-size: 12.5px;
 }
 
+/* About's retention label is its longest, so in a narrow card a max-content column would take the values' room. The
+   column wraps its labels at half the list instead. */
+.kv.settings__about {
+  grid-template-columns: fit-content(50%) 1fr;
+}
+
 @media (max-width: 1100px) {
   .accounts,
   .dash-bottom,

@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, CostRevision, CostSplit, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, MoveCause, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
+  ModelsState, MoveCause, Overview, PairingConfirmed, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
 } from './types';
 import type { Condition, ConditionOperator, ConditionSubject, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult, MessageSelector, TestVerdict } from './types';
@@ -40,7 +40,9 @@ const costSplit = (v: unknown): CostSplit => {
   const c = rec(v);
   return { cacheRead: num(c.cache_read), cacheWrite: num(c.cache_write), input: num(c.input), output: num(c.output) };
 };
-const sharedEquivalent = (v: unknown): SharedEquivalent => ({ fiveHour: num(rec(v).five_hour), sevenDay: num(rec(v).seven_day) });
+const sharedEquivalent = (v: unknown): SharedEquivalent => ({ fiveHour: num(rec(v).five_hour), sevenDay: num(rec(v).seven_day), unpriced: { fiveHour: bool(rec(rec(v).unpriced).five_hour), sevenDay: bool(rec(rec(v).unpriced).seven_day) } });
+/** A map the route keys by window id whose values are flags, with every entry that is not a boolean dropped. */
+const flagMap = (v: unknown): Record<string, boolean> => Object.fromEntries(Object.entries(rec(v)).filter((e): e is [string, boolean] => typeof e[1] === 'boolean'));
 
 /** The wire carries Unix milliseconds; every page formats ISO strings. */
 export const iso = (ms: number): string => new Date(ms).toISOString();
@@ -208,6 +210,11 @@ export function decodeAccountCatalog(v: unknown): AccountCatalog {
 export function decodePairingSession(v: unknown): PairingSession {
   const p = rec(v);
   return { authorizeUrl: str(p.authorization_url), expiresAt: isoOr(p.expires_at, epoch), id: str(p.id), redirectUri: str(p.redirect_uri), state: new URL(str(p.authorization_url), 'http://x').searchParams.get('state') ?? '' };
+}
+
+export function decodePairingConfirmed(v: unknown): PairingConfirmed {
+  const c = rec(v);
+  return { accountId: str(c.account_id), firstPollInFlight: bool(c.first_poll_in_flight), status: str(c.status) };
 }
 
 export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
@@ -516,7 +523,7 @@ export function decodeRequest(v: unknown): RequestLog {
   };
 }
 
-export const decodeRequestPage = (v: unknown): RequestPage => ({ nextCursor: strOrNull(rec(v).next_cursor), requests: list(rec(v).requests).map(decodeRequest) });
+export const decodeRequestPage = (v: unknown): RequestPage => ({ landedThrough: num(rec(v).landed_through), nextCursor: strOrNull(rec(v).next_cursor), requests: list(rec(v).requests).map(decodeRequest) });
 // The four counts are the route's own; nothing here measures the request or the response it passes through.
 export const decodeBodies = (v: unknown): CapturedBodies => { const b = rec(v); return { request: b.request, requestBytesSeen: num(b.request_bytes_seen), requestBytesStored: num(b.request_bytes_stored), requestId: str(b.request_id), requestTruncated: bool(b.request_truncated), response: b.response, responseBytesSeen: num(b.response_bytes_seen), responseBytesStored: num(b.response_bytes_stored), responseTruncated: bool(b.response_truncated) }; };
 export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: rec(v).detail === null || rec(v).detail === undefined ? null : rec(rec(v).detail), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
@@ -680,7 +687,7 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
     pin: orNull(r.pin, (p) => ({
       accountId: strOrNull(p.account_id), createdAt: isoOrNull(p.created_at), cycleMs: numOrNull(p.cycle_ms), epoch: numOrNull(p.epoch), found: str(p.found, 'none'), idleMs: numOrNull(p.idle_ms), incarnation: numOrNull(p.incarnation), lane: strOrNull(p.lane), lastRefreshAt: isoOrNull(p.last_refresh_at), lastUsedAt: isoOrNull(p.last_used_at),
       marked: bool(p.marked), markedAt: isoOrNull(p.marked_at), markedOn: strOrNull(p.marked_on), markedWindow: strOrNull(p.marked_window), refreshAgeMs: numOrNull(p.refresh_age_ms), released: strings(p.released),
-      shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), slowDownUntil: isoOrNull(p.slow_down_until), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
+      shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from), reason: str(x.reason, 'round') })), slowDownUntil: isoOrNull(p.slow_down_until), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
     })),
     // A word this build does not know reads as none, as a poll outcome does. The raw answer still carries it.
     pinReason: PIN_REASON_VALUES.find((x) => x === r.pin_reason) ?? null,
@@ -740,7 +747,10 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     errors: counts(g.errors), estimated: bool(g.estimated), exhausted: num(g.exhausted), expiredBetweenTurns: num(g.expired_between_turns), failed: num(g.failed), failovers: num(g.failovers),
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete),
-    keptWarm: { requests: num(rec(g.kept_warm).requests), tokens1h: num(rec(g.kept_warm).tokens_1h), tokens5m: num(rec(g.kept_warm).tokens_5m) },
+    keptWarm: {
+      planRequests: num(rec(g.kept_warm).plan_requests), planTokens1h: num(rec(g.kept_warm).plan_tokens_1h), planTokens5m: num(rec(g.kept_warm).plan_tokens_5m),
+      requests: num(rec(g.kept_warm).requests), tokens1h: num(rec(g.kept_warm).tokens_1h), tokens5m: num(rec(g.kept_warm).tokens_5m),
+    },
     key: str(g.key), keyCreatedAt, keyId,
     // The route's label of an earlier holder is fixed to one zone, so the console builds it in the viewer's zone from the
     // holder's members, and keeps the wire's label where the route alone knows it (a live key's id, the reserved id's
@@ -751,13 +761,16 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     planRequests: numOrNull(g.plan_requests),
     probeCostUsd: num(g.probe_cost_usd),
     probeEquivalent: equivalentMap(g.probe_equivalent, (e) => ({ cost: num(e.cost), wasted: num(e.wasted) })),
-    probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
+    probeEstimated: bool(g.probe_estimated),
+    probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), planOk: num(rec(g.probes).plan_ok), skipped: num(rec(g.probes).skipped) },
     probeShares: shareMap(g.probe_shares, (e) => ({ cost: num(e.cost), wasted: numOrNull(e.wasted) })),
+    probeUnpriced: flagMap(g.probe_unpriced),
     rateLimited: num(g.rate_limited), refusals: counts(g.refusals), refused: num(g.refused), rejected: num(g.rejected), requests: num(g.requests),
     savingEquivalent: numberMap(g.saving_equivalent),
     savingShares: g.saving_shares === null || g.saving_shares === undefined ? null : numberMap(g.saving_shares),
     savingUsd: num(g.saving_usd),
     succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
+    unpriced: flagMap(g.unpriced),
     wastedProbeReasons: record(WASTED_PROBE_REASONS, g.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(g.wasted_probe_usd), wastedProbes: num(g.wasted_probes),
   };
 }
@@ -771,11 +784,14 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
     estimated: bool(p.estimated),
     fiveHourEquivalent: numOrNull(p.five_hour_equivalent),
     fiveHourShare: numOrNull(p.five_hour_share),
+    fiveHourUnpriced: bool(p.five_hour_unpriced),
     group: str(p.group),
     modelWeekEquivalent: numOrNull(p.model_week_equivalent),
     modelWeekShare: numOrNull(p.model_week_share),
+    modelWeekUnpriced: bool(p.model_week_unpriced),
     sevenDayEquivalent: numOrNull(p.seven_day_equivalent),
     sevenDayShare: numOrNull(p.seven_day_share),
+    sevenDayUnpriced: bool(p.seven_day_unpriced),
     tokens: num(p.tokens),
     uncachedTokens: num(p.uncached_tokens),
     unit: burnUnit(p.unit),
@@ -856,7 +872,7 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), epoch: numOrNull(s.epoch), estimated: bool(s.estimated), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), speed: numOrNull(s.speed) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnEquivalent: numOrNull(s.burn_equivalent), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), cycleMs: numOrNull(s.cycle_ms), epoch: numOrNull(s.epoch), estimated: bool(s.estimated), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), runwayBounded: typeof s.runway_bounded === 'boolean' ? s.runway_bounded : null, runwayMs: numOrNull(s.runway_ms), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from), shedReason: strOrNull(s.shed_reason), speed: numOrNull(s.speed) };
 }
 
 /** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
@@ -1069,13 +1085,14 @@ const decodeCostsEnvelope = (envelope: unknown): Settings['subscriptionCosts'] =
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
   const l = rec(s.listeners);
+  const kept = rec(s.retention);
   const store = rec(s.storage);
   return {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy), proxyTls: bool(l.proxy_tls) },
-    retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
+    retention: { bodyCaptureMaxHours: num(kept.body_capture_max_hours), retentionDays: num(kept.retention_days), rollupRetentionDays: num(kept.rollup_retention_days) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },
     subscriptionCosts: decodeCostsEnvelope(s.subscription_costs),

@@ -113,7 +113,10 @@ for (const colorScheme of ['light', 'dark']) {
     Share: page.getByText('Share', { exact: true }),
     'VS Code': page.getByText('VS Code', { exact: true }),
   };
-  for (const [name, locator] of Object.entries(offOrigin)) check((await locator.count()) === 0, `${colorScheme}: no ${name} control`);
+  const noOffOrigin = async (when) => {
+    for (const [name, locator] of Object.entries(offOrigin)) check((await locator.count()) === 0, `${colorScheme}: no ${name} control ${when}`);
+  };
+  await noOffOrigin('once the sidebar shows');
   const authorization = page.getByPlaceholder('Token');
   await authorization.waitFor();
   check((await authorization.inputValue()) === '', `${colorScheme}: the Authorization input is empty`);
@@ -142,6 +145,8 @@ for (const colorScheme of ['light', 'dark']) {
   await shown.getByText('"session_id"').waitFor();
   check(await shown.getByText('"bearer"').isVisible(), `${colorScheme}: the client shows the answer`);
   check((await client.getByText('Open API Client', { exact: true }).count()) === 0, `${colorScheme}: the client links to no hosted client`);
+  // The first look runs without a wait once the sidebar shows, so a control drawn later would pass it.
+  await noOffOrigin('once the answer shows');
 
   check(errors.length === 0, `${colorScheme}: no console error and no policy violation (${errors.join(' | ')})`);
   const elsewhere = requests.filter((url) => !url.startsWith('data:') && !url.startsWith('blob:') && new URL(url).origin !== origin);

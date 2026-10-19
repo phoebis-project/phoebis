@@ -2470,6 +2470,162 @@ async fn a_reload_between_a_funding_mark_s_stamp_and_its_commit_keeps_the_five_m
     );
 }
 
+/// A verdict formed under a key the operator then replaced, and the verdict under the new key: each stamps the
+/// account's funding retry, and each write parks behind a hold of its own. The first write's fences refuse it, and
+/// its acknowledgment names the superseded stamp, so a load that reads the account `Ready` before the newer write's
+/// commit keeps the retry, and the newer write's own acknowledgment is the one that credits it.
+#[tokio::test]
+async fn a_superseded_verdicts_refused_write_leaves_the_newer_funding_mark_unacknowledged_until_its_own_write_lands(
+) {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    // With the purge tick held, the first mark's write is the writer's first wake, so it parks on the first hold.
+    let first = store.debug_hold_next_routing_write();
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            funding_retry: Duration::from_secs(120),
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle.report(funding_mark("a")).await;
+    wait_for(WRITTEN, || first.is_parked().then_some(())).await;
+    let second = store.debug_hold_next_routing_write();
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k2"))
+        .unwrap();
+    handle.reload().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::FundingRequired,
+            lifecycle_generation: 1,
+            credential_generation: 2,
+            incarnation: 1,
+            cause: StateCause::FundingRefused,
+            detail: None,
+            dispatched_at: None,
+        })
+        .await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 2_000 + 120_000)],
+        "the verdict under the new key stamped the retry again"
+    );
+    first.release();
+    // The newer write's wake parks only once the writer has handed the loop the first write's acknowledgment.
+    wait_for(WRITTEN, || second.is_parked().then_some(())).await;
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready,
+        "the first write named the replaced key, so its fences refused it"
+    );
+    handle.reload().await.unwrap();
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 2_000 + 120_000)],
+        "the refused write's acknowledgment names the superseded stamp, so the load before the newer commit drops \
+         nothing"
+    );
+    second.release();
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        None,
+        "the two-minute wait from the newer mark holds"
+    );
+    // The operator's Clear: the newer write's acknowledgment credited the retry, so a load at a later revision
+    // drops it.
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(handle.funding_retries().await.unwrap().is_empty());
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 2_000)).await.unwrap()),
+        Some("a"),
+        "the cleared account is a plain candidate"
+    );
+}
+
+/// A verdict about a key the account has since replaced, which the loop finds superseded when it handles it: it
+/// stamps no retry and its write carries no stamp. A later mark's retry meets that write's acknowledgment, refused by
+/// its fences, and stays unacknowledged until the later mark's own write is acknowledged.
+#[tokio::test]
+async fn a_verdict_superseded_at_handling_writes_no_stamp_and_its_refused_write_credits_no_funding_mark(
+) {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    // With the purge tick held, the superseded verdict's write is the writer's first wake, so it parks on the first
+    // hold.
+    let first = store.debug_hold_next_routing_write();
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            funding_retry: Duration::from_secs(120),
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::FundingRequired,
+            lifecycle_generation: 1,
+            credential_generation: 0,
+            incarnation: 1,
+            cause: StateCause::FundingRefused,
+            detail: None,
+            dispatched_at: None,
+        })
+        .await;
+    wait_for(WRITTEN, || first.is_parked().then_some(())).await;
+    assert!(
+        handle.funding_retries().await.unwrap().is_empty(),
+        "the verdict named a key the account has replaced, so it stamps nothing"
+    );
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 1_000 + 120_000)]
+    );
+    let second = store.debug_hold_next_routing_write();
+    first.release();
+    // The mark's wake parks only once the writer has handed the loop the superseded write's acknowledgment.
+    wait_for(WRITTEN, || second.is_parked().then_some(())).await;
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready,
+        "the superseded verdict's fences refused its write"
+    );
+    handle.reload().await.unwrap();
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 1_000 + 120_000)],
+        "the unstamped acknowledgment names no entry, so the load before the mark's commit drops nothing"
+    );
+    second.release();
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 1_000)).await.unwrap()),
+        None,
+        "the two-minute wait from the mark holds"
+    );
+    // The operator's Clear: the mark's own acknowledgment credited the retry, so a load at a later revision drops
+    // it.
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(handle.funding_retries().await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn after_a_restart_the_first_request_retries_a_marked_account_at_once_and_holds_the_second_off(
 ) {
@@ -5145,6 +5301,25 @@ async fn a_credits_reading_with_room_lifts_the_spent_window_rows_and_leaves_a_mo
             ("model:claude-fable-5-1".to_string(), "recovered"),
         ]
     );
+    // Set after the last reading and read before the next, so the row's window alone decides the lift.
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            4_000 + HOUR,
+            "rate_limit",
+            "retry_after",
+        ))
+        .await;
+    handle
+        .report(credits_at(true, None, Some(20.0), 5_000))
+        .await;
+    assert_eq!(
+        scopes().await,
+        ["account", "model:claude-opus-5"],
+        "a reading with room keeps an account rate limit that names no plan window"
+    );
 }
 
 #[tokio::test]
@@ -5948,9 +6123,7 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
         "the thousand fast tokens land in the pin's fast usage, unweighed: {fast:?}"
     );
     assert_eq!((s1.burn_at, s1.last_input_tokens), (Some(62_000), 1_000));
-    let priced = rates
-        .price_pin(BurnUnit::Usd, s1, &fast, &s1.burn_unmetered)
-        .unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, s1).unwrap();
     assert!(
         (priced - (decayed * 0.25 + 1_000.0 / window * 0.5)).abs() < 1e-9,
         "priced, the row's tokens at the quarter and the fast tokens at the half: {priced}"
@@ -6069,16 +6242,12 @@ async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars
         "the thousand classifier tokens land in the pin's unmetered copy, unweighed: {:?}",
         s1.burn_unmetered
     );
-    let share = rates
-        .price_pin(BurnUnit::WindowShare, s1, &s1.burn_fast, &s1.burn_unmetered)
-        .unwrap();
+    let share = rates.price_pin(BurnUnit::WindowShare, s1).unwrap();
     assert!(
         (share - decayed).abs() < 1e-9,
         "under the window share the row's banded copy alone, so the renewal adds nothing to the plan's figure: {share}"
     );
-    let dollars = rates
-        .price_pin(BurnUnit::Usd, s1, &s1.burn_fast, &s1.burn_unmetered)
-        .unwrap();
+    let dollars = rates.price_pin(BurnUnit::Usd, s1).unwrap();
     assert!(
         (dollars - (decayed + 1_000.0 / window) * 0.25).abs() < 1e-9,
         "in dollars the classifier tokens price at the standard quarter beside the row's: {dollars}"
@@ -6273,9 +6442,7 @@ async fn a_fast_renewal_over_the_threshold_lands_in_the_fast_usage_and_prices_at
         "the fast tokens land in the fast usage, unweighed: {fast:?}"
     );
     assert_eq!(s1.last_input_tokens, 1_001);
-    let priced = rates
-        .price_pin(BurnUnit::Usd, &s1, &fast, &s1.burn_unmetered)
-        .unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, &s1).unwrap();
     assert!(
         (priced - 1_001.0 * 0.5 / window).abs() < 1e-9,
         "priced through the fast table, the burn reads the fast dollars whatever the pin's last prompt: {priced}"
@@ -6303,9 +6470,7 @@ async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_prices_at
         (fast.input - 1_001.0 / window).abs() < 1e-9,
         "the fast tokens land in the fast usage: {fast:?}"
     );
-    let priced = rates
-        .price_pin(BurnUnit::Usd, &s1, &fast, &s1.burn_unmetered)
-        .unwrap();
+    let priced = rates.price_pin(BurnUnit::Usd, &s1).unwrap();
     assert!(
         (priced - 1_001.0 / window).abs() < 1e-9,
         "priced at the long-context rates the pin's last prompt selects: {priced}"
@@ -6359,13 +6524,20 @@ async fn pinned_under(rates: &BurnRates) -> (RouterHandle, PinRef) {
     (handle, pin)
 }
 
-/// Session "s1"'s pin and its fast usage as the task holds them after the last fold.
-async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
-    let pins = handle.pins().await.unwrap();
-    let pin = pins
+/// Session "s1"'s pin as the task holds it after the last fold.
+async fn s1_pin(handle: &RouterHandle) -> PinRow {
+    handle
+        .pins()
+        .await
+        .unwrap()
         .into_iter()
         .find(|p| p.session_id == "s1")
-        .expect("the session holds a pin");
+        .expect("the session holds a pin")
+}
+
+/// Session "s1"'s pin and its fast usage as the task holds them after the last fold.
+async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
+    let pin = s1_pin(handle).await;
     let fast = handle
         .fast_burns()
         .await
@@ -6379,9 +6551,8 @@ async fn pin_and_fast_usage(handle: &RouterHandle) -> (PinRow, PinBurn) {
 /// One second of session "s1"'s dollar burn as the readers price it: the pin's row at the set its last prompt
 /// selects plus its fast usage through the fast table.
 async fn dollar_burn(handle: &RouterHandle, rates: &BurnRates) -> f64 {
-    let (pin, fast) = pin_and_fast_usage(handle).await;
     rates
-        .price_pin(BurnUnit::Usd, &pin, &fast, &pin.burn_unmetered)
+        .price_pin(BurnUnit::Usd, &s1_pin(handle).await)
         .unwrap()
 }
 
@@ -7450,6 +7621,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         cache_ttl_ms: 300_000,
         shed_from: None,
         shed_at: None,
+        shed_reason: None,
         static_hash: None,
         tail_hash: None,
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
@@ -7601,7 +7773,7 @@ fn no_round(events: &[phoebis_routing::RouterEvent]) -> bool {
 async fn past_the_wait(handle: &RouterHandle, store: &Store, account: &str, now: i64) {
     let dwell = shed_dwell_ms(&store.pool("p").unwrap().expect("the pool"));
     handle
-        .stamp_projection_over("p", account, FIVE_HOUR, now - dwell)
+        .stamp_projection_over("p", account, FIVE_HOUR, now - dwell, None)
         .await;
 }
 
@@ -8656,6 +8828,399 @@ async fn a_reading_with_no_reset_after_the_stored_reset_passed_announces_it_by_s
     }
     // A reload runs the purge, whose clock walk finds nothing left to announce.
     handle.reload().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+/// The next window edge on `events`, a spent, a cleared or a reset window, every other event passed over.
+async fn next_window_edge(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> phoebis_routing::RouterEvent {
+    use phoebis_routing::RouterEvent;
+    loop {
+        let event = next_event(events).await;
+        if matches!(
+            event,
+            RouterEvent::WindowSpent { .. }
+                | RouterEvent::WindowCleared { .. }
+                | RouterEvent::WindowReset { .. }
+        ) {
+            return event;
+        }
+    }
+}
+
+/// A cleared window's edge as `(account, window, before, after, reset, source, request)`.
+type Cleared<'a> = (
+    &'a str,
+    &'a str,
+    f64,
+    f64,
+    Option<i64>,
+    WindowSource,
+    Option<&'a str>,
+);
+
+fn cleared_of(event: &phoebis_routing::RouterEvent) -> Option<Cleared<'_>> {
+    match event {
+        phoebis_routing::RouterEvent::WindowCleared {
+            account_id,
+            window,
+            utilization_before,
+            utilization,
+            reset,
+            source,
+            source_request_id,
+            ..
+        } => Some((
+            account_id.as_str(),
+            window.as_str(),
+            *utilization_before,
+            *utilization,
+            *reset,
+            *source,
+            source_request_id.as_deref(),
+        )),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn a_sample_whose_every_window_falls_under_its_limit_under_the_same_reset_emits_window_cleared_for_each(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let resets = [
+        (FIVE_HOUR, 5 * HOUR),
+        (SEVEN_DAY, 7 * 24 * HOUR),
+        (SEVEN_DAY_FABLE, 7 * 24 * HOUR),
+    ];
+    let read = |at: i64, utilization: f64| {
+        resets.iter().fold(sample(at), |sample, (window, reset)| {
+            sample.with(
+                window,
+                WindowReading {
+                    utilization,
+                    reset: Some(*reset),
+                    observed_at: at,
+                    source: WindowSource::Poll,
+                },
+            )
+        })
+    };
+    handle.report(observed("a", read(1_000, 1.0))).await;
+    handle.samples().await.unwrap();
+    for (window, _) in resets {
+        assert!(matches!(
+            next_event(&mut events).await,
+            RouterEvent::WindowSpent { window: spent, .. } if spent == window
+        ));
+    }
+    // Every window of the answer falls together under its unchanged reset, as an account's one-time reset grant reads.
+    handle.report(observed("a", read(2_000, 0.0))).await;
+    handle.samples().await.unwrap();
+    for (window, reset) in resets {
+        let event = next_event(&mut events).await;
+        assert_eq!(
+            cleared_of(&event),
+            Some(("a", window, 1.0, 0.0, Some(reset), WindowSource::Poll, None)),
+            "{event:?}"
+        );
+        assert!(matches!(
+            event,
+            RouterEvent::WindowCleared { at: 4_000, .. }
+        ));
+    }
+    // A clear announces no reset.
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_head_whose_one_window_falls_under_its_limit_emits_window_cleared_for_that_window_alone()
+{
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let (five_hour, week) = (Some(5 * HOUR), Some(7 * 24 * HOUR));
+    let head = |at: i64, five_hour_utilization: f64, request_id: &str| Report::Sample {
+        account_id: "a".into(),
+        sample: sample(at)
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: five_hour_utilization,
+                    reset: five_hour,
+                    observed_at: at,
+                    source: WindowSource::Head,
+                },
+            )
+            .with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 1.0,
+                    reset: week,
+                    observed_at: at,
+                    source: WindowSource::Head,
+                },
+            ),
+        incarnation: 1,
+        source_request_id: Some(request_id.into()),
+    };
+    handle.report(head(1_000, 1.0, "r-1")).await;
+    handle.samples().await.unwrap();
+    for window in [FIVE_HOUR, SEVEN_DAY] {
+        assert!(matches!(
+            next_event(&mut events).await,
+            RouterEvent::WindowSpent { window: spent, .. } if spent == window
+        ));
+    }
+    handle.report(head(2_000, 0.0, "r-2")).await;
+    handle.samples().await.unwrap();
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.0,
+            five_hour,
+            WindowSource::Head,
+            Some("r-2")
+        )),
+        "{event:?}"
+    );
+    // The week still reads its limit under its reset, which crosses nothing.
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_reading_under_the_limit_with_a_reset_past_the_slack_emits_window_reset_and_no_clear() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 1.0, Some(5 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowSpent { .. }
+    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.1, Some(10 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            ..
+        } => assert_eq!(
+            (utilization_before, reset_at, next_reset, observed),
+            (1.0, 5 * HOUR, Some(10 * HOUR), "sample")
+        ),
+        other => panic!("the passed reset, not {other:?}"),
+    }
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_reading_at_the_limit_after_a_clear_emits_window_spent_again_under_the_reset_the_prediction_announced(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.99, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // The 200 000 token body books 0.02, which takes the 0.99 reading past the wall before any usage lands.
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_window_edge(&mut events).await,
+        RouterEvent::WindowSpent {
+            source: WindowSource::Predicted,
+            ..
+        }
+    ));
+    // The head that confirms the wall names the reset the prediction announced, and announces nothing.
+    for (at, utilization, request_id) in [(3_000, 1.0, "r-2"), (4_000, 0.0, "r-3")] {
+        now.store(at, Ordering::SeqCst);
+        handle
+            .report(head_reading(at, utilization, Some(reset), request_id))
+            .await;
+        handle.samples().await.unwrap();
+    }
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.0,
+            Some(reset),
+            WindowSource::Head,
+            Some("r-3")
+        )),
+        "{event:?}"
+    );
+    now.store(5_000, Ordering::SeqCst);
+    handle
+        .report(head_reading(5_000, 1.0, Some(reset), "r-4"))
+        .await;
+    handle.samples().await.unwrap();
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowSpent {
+            utilization,
+            reset: spent_reset,
+            source,
+            source_request_id,
+            ..
+        } => assert_eq!(
+            (
+                utilization,
+                spent_reset,
+                source,
+                source_request_id.as_deref()
+            ),
+            (1.0, Some(reset), WindowSource::Head, Some("r-4"))
+        ),
+        other => panic!("the window spent again, not {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_clear_whose_reading_names_no_reset_carries_the_stored_reset() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 5 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowSpent { .. }
+    ));
+    // Read before the stored reset, so no reset passed and the window stands under the reset it read.
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)))
+        .await;
+    handle.samples().await.unwrap();
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.4,
+            Some(reset),
+            WindowSource::Poll,
+            None
+        )),
+        "{event:?}"
+    );
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn the_clock_walk_announces_the_stored_reset_once_it_passes_after_a_clear() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    for (at, utilization) in [(1_000, 1.0), (1_500, 0.0)] {
+        handle
+            .report(observed(
+                "a",
+                sample_with(at, FIVE_HOUR, utilization, Some(2_000)),
+            ))
+            .await;
+        handle.samples().await.unwrap();
+    }
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::WindowSpent { .. }
+    ));
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.0,
+            Some(2_000),
+            WindowSource::Poll,
+            None
+        )),
+        "{event:?}"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            at,
+            ..
+        } => assert_eq!(
+            (utilization_before, reset_at, next_reset, observed, at),
+            (0.0, 2_000, None, "clock", 2_000)
+        ),
+        other => panic!("the tick's reset, not {other:?}"),
+    }
     no_further_event(&mut events).await;
 }
 
@@ -10010,11 +10575,26 @@ async fn a_head_under_the_margin_after_a_wall_lets_the_next_poll_announce_it_aga
     now.store(3_000, Ordering::SeqCst);
     handle.report(head_reading(3_000, 0.90, reset, "r-1")).await;
     handle.samples().await.unwrap();
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.90,
+            reset,
+            WindowSource::Head,
+            Some("r-1")
+        )),
+        "a head under the margin reads the window cleared: {event:?}"
+    );
     now.store(4_000, Ordering::SeqCst);
     handle
         .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
         .await;
-    match next_spent(&mut events).await {
+    // The next edge is the wall itself, so the head cleared the window once.
+    match next_window_edge(&mut events).await {
         RouterEvent::WindowSpent {
             reset: spent_reset,
             source,
@@ -10090,6 +10670,20 @@ async fn a_cooldown_set_at_the_wall_stands_through_a_head_within_the_margin() {
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == "account" && cause == "recovered" && at == 3_000)
     );
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            1.0 - SPENT_MARGIN - 0.001,
+            reset,
+            WindowSource::Head,
+            Some("r-2")
+        )),
+        "the head that releases the row reads the window cleared: {event:?}"
+    );
     wait_for(WRITTEN, || {
         store
             .load_routing()
@@ -10120,18 +10714,194 @@ async fn a_wall_announced_by_a_sample_is_not_announced_again_under_its_reset() {
         next_spent(&mut events).await,
         RouterEvent::WindowSpent { at: 2_000, .. }
     ));
-    // A head that names no reset reads another cycle than the poll's, so it lands as read under the wall.
+    // A head that names no reset, read before the stored reset passed, stands under that reset, so within the margin
+    // of the wall it is raised to it and clears nothing.
     now.store(3_000, Ordering::SeqCst);
     handle.report(head_reading(3_000, 0.99, None, "r-1")).await;
-    assert_eq!(
-        predicted_reading(&handle, FIVE_HOUR).await.utilization,
-        0.99
-    );
+    assert_eq!(predicted_reading(&handle, FIVE_HOUR).await.utilization, 1.0);
     // The poll names the wall's reset again, the cycle the first poll's announcement was recorded for.
     now.store(4_000, Ordering::SeqCst);
     handle
         .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
         .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+/// A reset-less head the hold raises to the wall stands under the stored reset and takes it, so the stored reading
+/// after it still names that reset, and a poll naming a later one reads it passed.
+#[tokio::test]
+async fn a_head_raised_to_the_wall_keeps_the_stored_reset_so_a_later_reset_reads_it_passed() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    now.store(3_000, Ordering::SeqCst);
+    handle.report(head_reading(3_000, 0.99, None, "r-1")).await;
+    let raised = predicted_reading(&handle, FIVE_HOUR).await;
+    assert_eq!(
+        (raised.utilization, raised.reset),
+        (1.0, Some(reset)),
+        "the raised head stands under the stored reset"
+    );
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(4_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+        ))
+        .await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            account_id,
+            window,
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            at,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                window.as_str(),
+                utilization_before,
+                reset_at,
+                next_reset,
+                observed,
+                at
+            ),
+            ("a", FIVE_HOUR, 1.0, reset, Some(15 * HOUR), "sample", 4_000)
+        ),
+        other => panic!("the stored reset reads passed, not {other:?}"),
+    }
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+/// A reset-less clear read before the stored reset stands under it and is stored with it, so a later poll naming a
+/// later reset reads the stored one passed.
+#[tokio::test]
+async fn a_clear_that_names_no_reset_is_stored_under_the_stored_reset_so_a_later_reset_reads_it_passed(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    now.store(3_000, Ordering::SeqCst);
+    handle.report(head_reading(3_000, 0.4, None, "r-1")).await;
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.4,
+            Some(reset),
+            WindowSource::Head,
+            Some("r-1")
+        )),
+        "{event:?}"
+    );
+    let cleared = predicted_reading(&handle, FIVE_HOUR).await;
+    assert_eq!(
+        (cleared.utilization, cleared.reset),
+        (0.4, Some(reset)),
+        "the clear is stored under the stored reset"
+    );
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(4_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+        ))
+        .await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset,
+            utilization_before,
+            ..
+        } => assert_eq!(
+            (reset_at, next_reset, utilization_before),
+            (reset, Some(15 * HOUR), 0.4)
+        ),
+        other => panic!("the stored reset reads passed, not {other:?}"),
+    }
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+/// A reset-less head at the wall over a stored reading under it announces the wall under the stored reset and is stored
+/// with it, so a poll taken past that reset naming a later one reads it passed rather than cleared.
+#[tokio::test]
+async fn a_wall_read_by_a_head_that_names_no_reset_is_stored_under_the_stored_reset_and_resets_past_it(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(head_reading(2_000, 1.0, None, "r-1")).await;
+    assert!(matches!(
+        next_window_edge(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    let spent = predicted_reading(&handle, FIVE_HOUR).await;
+    assert_eq!(
+        (spent.utilization, spent.reset),
+        (1.0, Some(reset)),
+        "the wall is stored under the stored reset"
+    );
+    now.store(reset + 1_000, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+        ))
+        .await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset,
+            ..
+        } => assert_eq!((reset_at, next_reset), (reset, Some(15 * HOUR))),
+        other => panic!("the stored reset reads passed, not {other:?}"),
+    }
     handle.samples().await.unwrap();
     no_further_event(&mut events).await;
 }
@@ -10159,19 +10929,121 @@ async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_ann
         (kept.utilization, kept.observed_at, kept.source),
         (1.0, 2_000, WindowSource::Poll)
     );
-    // A head that names no reset reads another cycle than the poll's, so it lands as read under the wall.
+    // A newer reading of a later cycle reads the reset and clears nothing, so the old cycle's announcement stands, and
+    // a poll naming the old reset at the wall again announces nothing. Had the late reading forgotten the
+    // announcement, that poll would announce the wall a second time.
+    now.store(2_800, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_800, FIVE_HOUR, 0.10, Some(15 * HOUR)),
+        ))
+        .await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            account_id,
+            window,
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            at,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                window.as_str(),
+                utilization_before,
+                Some(reset_at),
+                next_reset,
+                observed,
+                at
+            ),
+            ("a", FIVE_HOUR, 1.0, reset, Some(15 * HOUR), "sample", 2_800)
+        ),
+        other => panic!("{other:?}"),
+    }
+    now.store(2_900, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(2_900, FIVE_HOUR, 1.0, reset)))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+    // A head that names no reset, read before the stored reset passed, stands under that reset, so within the margin
+    // of the wall it is raised to it: no clear, and the poll at the wall after it announces nothing.
     now.store(3_000, Ordering::SeqCst);
     handle.report(head_reading(3_000, 0.99, None, "r-2")).await;
-    assert_eq!(
-        predicted_reading(&handle, FIVE_HOUR).await.utilization,
-        0.99
-    );
+    assert_eq!(predicted_reading(&handle, FIVE_HOUR).await.utilization, 1.0);
     now.store(4_000, Ordering::SeqCst);
     handle
         .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
         .await;
     handle.samples().await.unwrap();
     no_further_event(&mut events).await;
+}
+
+/// A wall the prediction announced names the stored reading's reset, and a head that names none, read before that reset
+/// passed, stands under it: the head's own reading at the wall is the same crossing and announces nothing.
+#[tokio::test]
+async fn a_predicted_wall_is_not_announced_again_by_a_head_that_names_no_reset_before_its_reset() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let reset = 2 * HOUR;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    now.store(1_500, Ordering::SeqCst);
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: 1_500,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 10_000_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            classifier: false,
+            request_id: "r-1".into(),
+            attempt: 1,
+            entrypoint: None,
+        })
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent {
+            reset: Some(at),
+            source: WindowSource::Predicted,
+            ..
+        } if at == reset
+    ));
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(head_reading(2_000, 1.0, None, "r-2")).await;
+    handle.samples().await.unwrap();
+    let quiet = drained(&mut events).await;
+    assert!(
+        !quiet
+            .iter()
+            .any(|event| matches!(event, RouterEvent::WindowSpent { .. })),
+        "the predicted wall is announced once: {quiet:?}"
+    );
 }
 
 /// A main turn of `session` selected against `state` over the task's snapshot: the task's own state is out of the

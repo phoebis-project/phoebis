@@ -111,7 +111,7 @@ const failover = (reason, status) => [
   decision({ accountId: 'primary', at: iso(at + 300), attempt: 2, attemptCount: 2, by: strategy('pace', [0, 0, 0]), fast: reason === 'fast_lane', fromAccountId: 'secondary', requestId: `req_${reason}`, seq: 2, sessionId: 's-moved', status: 200, tier: [0, 0, 0] }),
   decision({ accountId: 'secondary', at: iso(at - 1_200), attempt: 1, attemptCount: 2, by: strategy('pace', [0, 0, 0]), fast: reason === 'fast_lane', requestId: `req_${reason}`, seq: 1, sessionId: 's-moved', status, tier: [0, 0, 0] }),
 ];
-/** The pool row as the store writes it on every edit: each field's current value, with no record of the old one. */
+/** A pool's whole row under the names it carried before the renames: each field's value, with no old one beside it. */
 const WHOLE_POOL_ROW = {
   label: 'All', enabled: true, strategy: 'pace', affinity_ttl_seconds: 600, overage_policy: 'prefer_plan', shed_ahead_of_pace: 0.9, select_below_utilization: null, model_rules: [],
   body_capture_hours: 24, prefer_subscription: true, shed_share: 0.5, burn_window_seconds: 600, source_dwell_seconds: 900, migrate_when_spent: true, warm_sessions: 'when_needed',
@@ -147,6 +147,13 @@ const EVENTS = [
   ['registry changed, several fields', event('registry_changed', { diff: { in_flight_cap: { from: 16, to: 8 }, pace_floor: { from: 0, to: 0.1 }, strategy: { from: 'pace', to: 'priority' } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['fields 3']],
   ['registry changed, the whole pool row', event('registry_changed', { diff: WHOLE_POOL_ROW, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', []],
   ['registry changed, a key revoked', event('registry_changed', { diff: {}, kind: 'key_revoked', target: 'ci' }, { accountId: null, actor: 'admin', keyId: 'ci' }), 'key revoked', []],
+  ['registry changed, an account edit of one field', event('registry_changed', { diff: { label: { from: 'annex', to: 'Studio annex' } }, kind: 'account_updated', target: 'annex' }, { accountId: null, actor: 'admin' }), 'account edited', ['field label', 'to Studio annex']],
+  ['registry changed, a field beside a replaced secret', event('registry_changed', { diff: { label: { from: 'annex', to: 'Studio annex' }, secret_replaced: true }, kind: 'account_updated', target: 'annex' }, { accountId: null, actor: 'admin' }), 'account edited', ['field label', 'to Studio annex']],
+  ['registry changed, a replaced secret alone', event('registry_changed', { diff: { secret_replaced: true }, kind: 'account_updated', target: 'annex' }, { accountId: null, actor: 'admin' }), 'account edited', ['secret replaced']],
+  ['registry changed, an end', event('registry_changed', { diff: { subscription_ends_at: { from: null, to: ms(18, 0) } }, kind: 'account_updated', target: 'secondary' }, { accountId: null, actor: 'admin' }), 'account edited', ['field subscription ends at', 'to 18:00']],
+  ['registry changed, a key expiry', event('registry_changed', { diff: { expires_at: { from: null, to: MIDNIGHT + 9 * 24 * HOUR } }, kind: 'key_updated', target: 'ci' }, { accountId: null, actor: 'admin' }), 'key edited', ['field expires at', 'to Sep 26 00:00']],
+  ['registry changed, a list', event('registry_changed', { diff: { guardrails: { from: [], to: ['no-secrets', 'size-cap'] } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['field guardrails', 'to no-secrets, size-cap']],
+  ['registry changed, a list emptied', event('registry_changed', { diff: { guardrails: { from: ['no-secrets'], to: [] } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['field guardrails', 'to none']],
   ['refresh succeeded', event('refresh_succeeded', { access_expires_at: ms(20, 52), refresh_expires_at: null, until: ms(20, 52) }), 'refreshed', ['until 20:52']],
   ['refresh failed', event('refresh_failed', { cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }), 'refresh failed', ['cause invalid_grant']],
   ['refresh uncertain', event('refresh_uncertain', { cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }), 'refresh uncertain', ['cause refresh_response_lost']],
@@ -157,6 +164,7 @@ const EVENTS = [
   ['fast credits changed, room again', event('fast_credits_changed', { after: { disabled_reason: null, enabled: true, utilization: 0.31 }, blocked_after: null, blocked_before: 'org_spend_cap_reached' }), 'room', ['state available']],
   ['window spent', event('window_spent', { reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }), 'head on 5h', ['resets 15:42']],
   ['window spent, read by the poll', event('window_spent', { reset: ms(15, 42), source: 'poll', utilization: 1, window: 'seven_day' }), 'poll on 7d', ['resets 15:42']],
+  ['window cleared', event('window_cleared', { reset: ms(15, 42), source: 'poll', source_request_id: null, utilization: 0, utilization_before: 1, window: 'five_hour' }), '5h cleared', []],
   ['window reset', event('window_reset', { next_reset: ms(19, 0), observed: 'sample', reset_at: at, utilization_before: 0.92, window: 'five_hour' }), '5h reset', ['was 92%']],
   ['router started', event('router_started', { pins_loaded: 10, version: '0.1.0' }, { accountId: null }), 'restart', ['pins 10']],
   ['warm prefix expired', event('warm_prefix_expired', { cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000 }, entries: 2, root: 's0' }), '5 min tier', ['prefix 18.4K', 'depth 1']],
@@ -248,13 +256,13 @@ test('a fact key the console has no label for is dropped rather than drawn under
 
 const TABLE_LABELS = [
   '5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'fit', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix',
-  'rank', 'resets', 'retry', 'rewrite in flight', 'runway', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
+  'rank', 'resets', 'retry', 'rewrite in flight', 'runway', 'secret', 'slow-down', 'slowest', 'speed', 'spent', 'state', 'to', 'turn', 'until', 'was',
 ];
 
 test('every label of the table is used at least once and no fact key lacks a label', () => {
-  assert.equal(TABLE_LABELS.length, 39);
+  assert.equal(TABLE_LABELS.length, 40);
   assert.deepEqual([...new Set(Object.values(d.FACT_LABEL))].sort(), [...TABLE_LABELS].sort());
-  assert.equal(Object.keys(d.FACT_LABEL).length, 39);
+  assert.equal(Object.keys(d.FACT_LABEL).length, 40);
   const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW, page).map((p) => p.label));
   // The slow-down's word names the By of its rows, the held decision's and the two events', where no fact carries it, and
   // the rewrite's names the By of its held row and its renewal.
@@ -269,16 +277,18 @@ test('every event kind has its words and its tone', () => {
     'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
     'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
     'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
-    'window_reset', 'window_spent',
+    'window_cleared', 'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
-  assert.equal(kinds.length, 32);
+  assert.equal(kinds.length, 33);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
   assert.deepEqual([d.EVENT_KIND_LABEL.mark_cleared, d.EVENT_KIND_LABEL.reservation_expired], ['mark cleared', 'reservation expired']);
   // A slowed account warns while its requests wait, and the end of the span reports no trouble.
   assert.deepEqual([d.EVENT_KIND_LABEL.slow_down_started, d.EVENT_KIND_LABEL.slow_down_ended], ['slow-down started', 'slow-down ended']);
+  // A window read under its limit again reports no trouble, as its reset does, so both read neutral.
+  assert.deepEqual([d.EVENT_KIND_LABEL.window_cleared, d.EVENT_KIND_LABEL.window_reset], ['window cleared', 'window reset']);
   const tones = Object.fromEntries(kinds.map((k) => [k, d.eventTone(k)]).filter(([, t]) => t !== 'neutral'));
   assert.deepEqual(tones, { account_state_changed: 'serious', budget_reached: 'serious', cooldown_set: 'warning', ledger_gap: 'serious', model_rejected: 'warning', slow_down_started: 'warning', window_spent: 'warning' });
   assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
@@ -881,6 +891,21 @@ test('the pin fold reads the cycle and the slowed-until time', () => {
   assert.deepEqual(rows({ ...pin, slowDownUntil: null }).slice(-1), [['Cycle', ['42 s']]], 'a cycle stands without a deadline');
 });
 
+test("the pin fold's Shed mark reads a round's move as shed from its source and every other stamp as failed over from it", () => {
+  const pin = {
+    accountId: 'primary', createdAt: iso(ms(14, 7, 51)), cycleMs: null, epoch: 61, found: 'live', idleMs: 314_000, incarnation: 1, lane: 'x|standard|enabled|high', lastRefreshAt: iso(ms(14, 7, 51)), lastUsedAt: iso(ms(14, 7, 51)),
+    marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: 314_000, released: [], shed: null, slowDownUntil: null, warmth: 'refresh', warmthCause: 'continues_pin',
+  };
+  const mark = (p) => d.pinRows(record({ pin: p, pinReason: null }), NOW).find((r) => r.label === 'Shed mark');
+  const stamped = (reason) => texts(mark({ ...pin, shed: { at: iso(ms(14, 7, 51)), from: 'secondary', reason } }).chips);
+  assert.deepEqual(stamped('round'), ['shed from secondary', 'at 14:07'], "a shedding round's move");
+  for (const reason of ['cooldown', 'fast_lane', 'mark']) assert.deepEqual(stamped(reason), ['failed over from secondary', 'at 14:07'], `a failover's landing on ${reason}`);
+  // A marked pin reads its mark first, and the stamp of the move that brought it after it.
+  const marked = { ...pin, marked: true, markedAt: iso(ms(14, 12, 30)), markedOn: 'primary', markedWindow: 'five_hour', shed: { at: iso(ms(14, 7, 51)), from: 'secondary', reason: 'cooldown' } };
+  assert.deepEqual(texts(mark(marked).chips), ['marked on primary', 'at 14:12', 'by the 5h trigger', 'failed over from secondary', 'at 14:07']);
+  assert.equal(mark(pin), undefined, 'a pin no round marked and nothing stamped draws no Shed mark');
+});
+
 /** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */
 const DETAIL_EVENTS = {
   account_state_changed: [{ cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }, ['From', 'To', 'Cause', 'Detail', 'Effect']],
@@ -929,6 +954,7 @@ const DETAIL_EVENTS = {
   slow_down_started: [{ demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 }, ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect']],
   warm_prefix_expired: [{ cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000, written_at: ms(14, 19, 52) }, entries: 1, root: 's0' }, ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed']],
   wind_down_started: [{ end_source: 'cancelled', ends_at: ms(15, 0), wind_down_minutes: 30 }, ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from']],
+  window_cleared: [{ reset: ms(15, 42), source: 'poll', source_request_id: null, utilization: 0, utilization_before: 1, window: 'five_hour' }, ['Window', 'Before', 'After', 'Reset', 'Read from']],
   window_reset: [{ next_reset: ms(19, 0), observed: 'sample', reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' }, ['Window', 'Before the reset', 'Prediction', 'Next reset']],
   window_spent: [{ reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }, ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request']],
 };
@@ -975,6 +1001,24 @@ test("a round's off-window pin reads its word and the rewrite cell names its uni
   const unnamed = { ...sonnet };
   delete unnamed.rewrite_window;
   assert.equal(fiveHour(unnamed), '0.5%', 'a pin whose record names no window draws the bare share');
+});
+
+test('a cleared window reads its readings before and after, its unchanged reset and its source, and nothing of why', () => {
+  const pairs = (detail) => Object.fromEntries(d.detailPairs(event('window_cleared', detail), NOW, []).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual(pairs(DETAIL_EVENTS.window_cleared[0]), {
+    When: ['2026-09-16 14:00:00 UTC'],
+    Account: ['primary'],
+    Window: ['5h'],
+    Before: ['100%'],
+    After: ['0%'],
+    Reset: ['15:42'],
+    'Read from': ['the poll'],
+  });
+  const head = { reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 0.4, utilization_before: 1.02, window: 'seven_day' };
+  // The chip draws the window's word and its title the sentence whole, which the By column has no room for.
+  assert.deepEqual(d.byOf(event('window_cleared', head)), { title: '7d cleared to 40% under its reset', value: '7d cleared' });
+  assert.deepEqual(d.byOf(event('window_cleared', DETAIL_EVENTS.window_cleared[0])), { title: '5h cleared to 0% under its reset', value: '5h cleared' });
+  assert.deepEqual(pairs(head)['Read from'], ['the response head']);
 });
 
 test('the two slow-down events read their pairs and effects', () => {
@@ -1204,6 +1248,28 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
   assert.deepEqual(edit['shed ahead of pace (removed)'], ['from none', 'to 90%']);
   assert.deepEqual(edit['Reading it'], ['decisions before 09:05 carry pace floor (removed) 5%', 'decisions before 09:05 carry shed ahead of pace (removed) none']);
   assert.deepEqual(pairs('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) })['Backed off'], ['from 07:50', 'to 08:15']);
+});
+
+test("an account edit's drawer reads each pair and the replaced secret beside them, with no reading of decisions", () => {
+  const pairs = (diff, kind = 'account_updated', target = 'annex') =>
+    d.detailPairs(event('registry_changed', { diff, kind, target }, { accountId: null, actor: 'admin', at: iso(ms(9, 8, 30)) }), NOW, []).map((p) => [p.label, texts(p.chips)]);
+  assert.deepEqual(pairs({ label: { from: 'annex', to: 'Studio annex' }, secret_replaced: true }), [
+    ['When', ['2026-09-16 09:08:30 UTC']],
+    ['Change', ['account edited', 'annex']],
+    ['label', ['from annex', 'to Studio annex']],
+    ['Secret', ['replaced']],
+    ['Actor', ['admin']],
+  ]);
+  assert.deepEqual(pairs({ secret_replaced: true }).slice(1), [['Change', ['account edited', 'annex']], ['Secret', ['replaced']], ['Actor', ['admin']]], 'the flag alone');
+  // A decision record carries the pool's settings it was decided under, so a pool's edit alone reads one.
+  const key = pairs({ enabled: { from: true, to: false }, expires_at: { from: null, to: MIDNIGHT + 9 * 24 * HOUR } }, 'key_updated', 'ci');
+  assert.deepEqual(key.slice(1), [['Change', ['key edited', 'ci']], ['enabled', ['from on', 'to off']], ['expires at', ['from none', 'to Sep 26 00:00']], ['Actor', ['admin']]]);
+  const end = pairs({ cancelled: { from: false, to: true }, subscription_ends_at: { from: null, to: ms(18, 0) } }, 'account_updated', 'secondary');
+  assert.deepEqual(end.slice(2), [['cancelled', ['from off', 'to on']], ['subscription ends at', ['from none', 'to 18:00']], ['Actor', ['admin']]]);
+  const pool = pairs({ window_ceiling: { from: 0.95, to: 0.75 } }, 'pool_updated', 'all');
+  assert.deepEqual(pool.slice(-1), [['Reading it', ['decisions before 09:08 carry window ceiling 95%']]], 'a pool edit keeps its reading');
+  const listed = pairs({ guardrails: { from: [], to: ['no-secrets', 'size-cap'] } }, 'pool_updated', 'all');
+  assert.deepEqual(listed[2], ['guardrails', ['from none', 'to no-secrets, size-cap']], 'a list reads its items where the count stood');
 });
 
 test('a registry change reads the renamed pool settings by their new word, marks the removed ones and reads each fraction as a percent', () => {

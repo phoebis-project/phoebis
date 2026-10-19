@@ -1906,6 +1906,10 @@ async fn deleted_during_a_failing_tier_streak(session_ended: bool) {
     r.h.store.delete_account("o", "test").unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
+    assert!(
+        r.h.router.snapshot().account("o").is_none(),
+        "the deletion's tick runs on a snapshot without the account"
+    );
     r.h.store
         .insert_account(&relay_common::test_account_row(&oauth(
             "o",

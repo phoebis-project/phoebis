@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_bus::Classifier;
 use phoebis_ledger::{
-    entrypoint_of_client, free_equivalent, free_shares, funding_of, list_requests,
+    entrypoint_of_client, free_equivalent, free_shares, funding_of, list_request_page,
     price_equivalent, price_shares, request_by_id, request_events,
     AttemptRecord, Funding, LiveKeys, PlanTables, PriceRevisions, PricedShares, RequestFilter,
     RequestRecord, Speed, SHARE_REASON_CLIENT_CLASSIFIER,
@@ -59,6 +59,10 @@ pub(crate) struct RequestList {
     pub requests: Vec<RequestSummary>,
     /// Set only while a row lies beyond the page. A page of exactly `limit` rows with none beyond answers null.
     pub next_cursor: Option<String>,
+    /// The newest write instant among the rows the filters admit at this read, `to` included, the `landed_after` passed
+    /// where none above it has landed, and 0 where neither is set, never past a `to` the query names, since a row
+    /// received after `to` lands after it. Pass it as `landed_after` to read what landed since.
+    pub landed_through: i64,
 }
 
 /// One client request with its attempt trail. `request_truncated` and `response_truncated` say whether the captured
@@ -366,7 +370,13 @@ pub(crate) struct Event {
     ///   row was written.
     /// - `refresh_uncertain`: an OAuth token refresh that may or may not have rotated the token, with its `error`
     ///   and `cause` as on a failed one.
-    /// - `registry_changed`: an operator's edit to the registry, with its `kind`, `target` and `diff`.
+    /// - `registry_changed`: an operator's edit to the registry, with its `kind`, `target` and `diff`: the row's
+    ///   snapshot for a creation, the `{field: {from, to}}` pairs of the changed fields for an account, a key or a pool
+    ///   update, the guardrail's snapshot with its `pools` and `keys` lists for a guardrail update, `{}` for a deletion
+    ///   or a revocation, and the member list for `pool_members_set`. An account update's pairs carry
+    ///   `"secret_replaced": true` beside them where the edit staged a secret, whose value the diff never holds, and
+    ///   `key_rotated` carries the new secret's `prefix` and `previous_secret_until`, the instant the retired secret
+    ///   stops being accepted.
     /// - `router_started`: the router started, with what it loaded, `down_since`, the newest row the ledger held
     ///   before it, and `holds_lost`, since no held request survives a restart. A clock reset or a wind-down the
     ///   previous run announced before that row is not written again.
@@ -390,6 +400,8 @@ pub(crate) struct Event {
     ///   with the largest of them and the cause, `ttl` or `incarnation`.
     /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `cancelled` or
     ///   `trial`.
+    /// - `window_cleared`: a plan window read under 1.0 after a reading at 1.0 under the same reset, with the
+    ///   reading before and after and the unchanged reset, so the history no longer keeps the window spent.
     /// - `window_reset`: a plan window's reset passed, seen by a sample naming a later reset, or naming none once
     ///   read past it (`sample`), or by the clock (`clock`), once per reset.
     /// - `window_spent`: a plan window's reading reached 1.0 from under it, with the head's request when a head
@@ -782,6 +794,9 @@ pub(crate) struct RequestsQuery {
     pub request: Option<String>,
     /// The requests whose session id equals the value, literally. Combines with `text` and every other filter.
     pub session: Option<String>,
+    /// Unix milliseconds. Only the rows the ledger wrote after this instant, for a poll that passes back the
+    /// `landed_through` of its last answer, beside the other filters.
+    pub landed_after: Option<i64>,
     /// A comma list. A value is read as the breakdown's: a bare id for the current key's rows,
     /// `<id>@<generation>` for an earlier holder's, or `-` for requests no key was read for.
     pub keys: Option<String>,
@@ -836,7 +851,7 @@ pub(crate) struct RequestsQuery {
     params(RequestsQuery),
     responses(
         (status = 200, description = "The page.", body = RequestList),
-        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `statuses are numbers`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
+        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `landed_after is not a number`\n- `statuses are numbers`\n- `limit is not a number`\n- `cursor is <received_at>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -854,6 +869,10 @@ pub(crate) async fn list(
             return failure(StatusCode::BAD_REQUEST, &format!("{name} is not a number"))
         }
     };
+    let landed_after = match number("landed_after") {
+        Ok(landed_after) => landed_after,
+        Err(name) => return failure(StatusCode::BAD_REQUEST, &format!("{name} is not a number")),
+    };
     let statuses: Result<Vec<u16>, _> = list_param(&q, "statuses")
         .iter()
         .map(|s| s.parse::<u16>())
@@ -866,6 +885,7 @@ pub(crate) async fn list(
         // An empty value narrows nothing, as an absent one, since the ledger drops it as it drops an empty `text`.
         request: q.get("request").cloned(),
         session: q.get("session").cloned(),
+        landed_after,
         keys: list_param(&q, "keys"),
         pools: list_param(&q, "pools"),
         accounts: list_param(&q, "accounts"),
@@ -915,15 +935,17 @@ pub(crate) async fn list(
     match state
         .ledger
         .db()
-        .read(move |c| list_requests(c, &filter, &live, cursor.as_deref(), limit))
+        .read(move |c| list_request_page(c, &filter, &live, cursor.as_deref(), limit))
         .await
     {
-        Ok((rows, next_cursor)) => Json(RequestList {
-            requests: rows
+        Ok(page) => Json(RequestList {
+            requests: page
+                .rows
                 .iter()
                 .map(|(r, a)| request_summary(r, a, &shares))
                 .collect(),
-            next_cursor,
+            next_cursor: page.next,
+            landed_through: page.landed_through,
         })
         .into_response(),
         Err(e) => ledger_failure(e),

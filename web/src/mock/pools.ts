@@ -121,7 +121,7 @@ export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKee
 const UNTIL_DRAWN: Pick<PoolSeed, 'billed24h' | 'cost24h' | 'equivalent24h' | 'estimated24h' | 'requests24h' | 'traffic24h'> = {
   billed24h: 0,
   cost24h: 0,
-  equivalent24h: { fiveHour: 0, sevenDay: 0 },
+  equivalent24h: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } },
   estimated24h: false,
   requests24h: 0,
   traffic24h: [],
@@ -199,7 +199,7 @@ const POOL_ROWS: PoolSeed[] = [
       },
     ],
     ...UNTIL_DRAWN,
-    // The 09:05:12 edit that set its ceiling, the registry change the routing log records.
+    // The 09:05:12 edit of its shared prefix floor and its slow-down hold, the registry change the routing log records.
     updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
     // The sample's failover settings are the store's defaults, so this pool reads balanced on both groups. The last
     // hour's moves are the routing log's story: three failovers, a fast lane's and two by the spent rule.
@@ -340,7 +340,7 @@ export const KEYS: ApiKey[] = [
     notes: 'Main workstation. Claude Code launches through the shell profile.',
     bodyCaptureHours: null,
     keepaliveOptOut: false,
-    lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0 },
+    lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 0 },
   },
   {
     ...KEY_SAMPLE,
@@ -371,7 +371,7 @@ export const KEYS: ApiKey[] = [
     keepaliveOptOut: false,
     // Plan-funded, so its dollars bill nothing. Its equivalents before the month the rollups hold are not drawn, so
     // they read the rollups' sums.
-    lifetime: { billedUsd: 0, cost: 38.6, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 1_012 },
+    lifetime: { billedUsd: 0, cost: 38.6, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 1_012 },
   },
   {
     ...KEY_SAMPLE,
@@ -399,7 +399,7 @@ export const KEYS: ApiKey[] = [
     bodyCaptureHours: 0,
     keepaliveOptOut: true,
     // The jobs pool's one member is an API key account, so every dollar of its life billed.
-    lifetime: { billedUsd: 31.8, cost: 31.8, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 2_204 },
+    lifetime: { billedUsd: 31.8, cost: 31.8, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 2_204 },
   },
   {
     ...KEY_SAMPLE,
@@ -430,7 +430,7 @@ export const KEYS: ApiKey[] = [
     notes: 'Rotated out after the runner image moved to its own key.',
     bodyCaptureHours: 0,
     keepaliveOptOut: true,
-    lifetime: { billedUsd: 21.4, cost: 21.4, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 960 },
+    lifetime: { billedUsd: 21.4, cost: 21.4, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 960 },
   },
   {
     ...KEY_SAMPLE,
@@ -457,7 +457,7 @@ export const KEYS: ApiKey[] = [
     notes: 'Handed out for the data notebooks, which call the Messages API through the SDK.',
     bodyCaptureHours: null,
     keepaliveOptOut: false,
-    lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0 }, estimated: false, requests: 0 },
+    lifetime: { billedUsd: 0, cost: 0, equivalent: { fiveHour: 0, sevenDay: 0, unpriced: { fiveHour: false, sevenDay: false } }, estimated: false, requests: 0 },
   },
 ];
 

@@ -16,8 +16,12 @@ pub struct Stainless {
     pub runtime_version: &'static str,
     pub timeout: &'static str,
 }
-/// The beta lists the measured client sends in each of its three shapes. The relay emits none of them either;
-/// it adjusts the caller's own list by one entry, the one the credential decides.
+/// The beta lists the measured client sends in each of its three shapes. The relay drops three betas where the
+/// request calls for it (`DANGEROUS_TOOL_USE_BETA` under an off auto-mode setting, `EXTENDED_TTL_BETA` for a
+/// five-minute body, `OAUTH_BETA` on an API-key account), injects three (`CACHE_DIAGNOSIS_BETA` under the pool's
+/// cache diagnostics switch, `EXTENDED_TTL_BETA` for a one-hour body, `OAUTH_BETA` on an OAuth account), and passes
+/// every other beta the client sends through: the pass-through set is whatever the client sends less the dropped
+/// ones, and it changes with the client's version.
 pub struct Betas {
     pub oauth_non_first_party: &'static str,
     pub oauth_first_party: &'static str,

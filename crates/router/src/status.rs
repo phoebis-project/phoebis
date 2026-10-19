@@ -541,15 +541,17 @@ fn pins_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: &
                 ));
             }
         }
-        let (state, shed_age) = match (row["shed_from"].as_str(), age) {
-            (Some(from), Some(age)) => (
-                format!("shedding from {}", accounts.label(from)),
-                Some((format!("{age} ago"), keepalive)),
-            ),
-            (Some(from), None) => (
-                format!("shedding from {}{keepalive}", accounts.label(from)),
-                None,
-            ),
+        // A stamp written before the row named its reason reads as a round's, the one word its readers had.
+        let stamped = row["shed_from"].as_str().map(|from| {
+            let origin = match row["shed_reason"].as_str() {
+                None | Some("round") => "shed from",
+                Some(_) => "failed over from",
+            };
+            format!("{origin} {}", accounts.label(from))
+        });
+        let (state, shed_age) = match (stamped, age) {
+            (Some(stamp), Some(age)) => (stamp, Some((format!("{age} ago"), keepalive))),
+            (Some(stamp), None) => (format!("{stamp}{keepalive}"), None),
             (None, Some(age)) => (
                 format!("pinned {age} ago, {}{keepalive}", text(&row["model"])),
                 None,
@@ -992,8 +994,8 @@ mod tests {
             .collect()
     }
 
-    /// The fixture's pinned row as `count` pinned sessions, every fifth shedding from `direct` and every third with a
-    /// keepalive, beside the fixture's unpinned rows.
+    /// The fixture's pinned row as `count` pinned sessions, every fifth stamped from `direct` (every tenth by a round,
+    /// the others by a failover) and every third with a keepalive, beside the fixture's unpinned rows.
     fn pinned_sessions(count: usize) -> Value {
         let sessions = fixture("sessions")["sessions"].as_array().unwrap().clone();
         let pinned = sessions
@@ -1011,6 +1013,7 @@ mod tests {
             row["last_used_at"] = json!(NOW_MS - i as i64 * 60_000);
             if i % 5 == 0 {
                 row["shed_from"] = json!("direct");
+                row["shed_reason"] = json!(if i % 10 == 0 { "round" } else { "cooldown" });
             }
             if i % 3 == 0 {
                 row["keepalive"]["state"] = json!("idle");
@@ -1213,7 +1216,7 @@ mod tests {
                 "{line}"
             );
             assert_eq!(
-                line.contains("shedding from"),
+                line.contains("shed from") || line.contains("failed over from"),
                 !row["shed_from"].is_null(),
                 "{line}"
             );
@@ -1260,12 +1263,15 @@ mod tests {
             !whole_pins.iter().any(|line| line.starts_with("  and ")),
             "{whole}"
         );
-        assert_eq!(
+        let stamped = |words: &str| {
             whole_pins
                 .iter()
-                .filter(|line| line.contains("shedding from Direct, "))
-                .count(),
-            5,
+                .filter(|line| line.contains(&format!("{words} Direct, ")))
+                .count()
+        };
+        assert_eq!(
+            (stamped("shed from"), stamped("failed over from")),
+            (3, 2),
             "{whole}"
         );
         // A keepalive's suffix runs past the width on these rows and is cut there; its first words survive.
@@ -1529,17 +1535,17 @@ mod tests {
     fn a_shedding_pin_prints_its_age_whole_however_long_the_labels() {
         assert_eq!(LONG_LABEL.chars().count(), 30);
         let twelve_seconds_ago = NOW_MS - 12_000;
-        let pin = |session: &str, agent: Value, account: &str, from: &str| {
+        let pin = |session: &str, agent: Value, account: &str, from: &str, reason: &str| {
             json!({
                 "session_id": session, "agent_id": agent, "account_id": account, "shed_from": from,
-                "pinned": true, "model": "claude-sonnet-5", "last_used_at": twelve_seconds_ago,
-                "keepalive": {"state": null, "next_probe_at": null},
+                "shed_reason": reason, "pinned": true, "model": "claude-sonnet-5",
+                "last_used_at": twelve_seconds_ago, "keepalive": {"state": null, "next_probe_at": null},
             })
         };
         let reads = Reads {
             sessions: Ok(json!({"sessions": [
-                pin("7b21aa90f3d1aaaa", json!("a1"), "business", "direct"),
-                pin("3f9a0c12e4b7bbbb", Value::Null, "direct", "business"),
+                pin("7b21aa90f3d1aaaa", json!("a1"), "business", "direct", "round"),
+                pin("3f9a0c12e4b7bbbb", Value::Null, "direct", "business", "mark"),
             ]})),
             ..labelled(LONG_LABEL, "Direct")
         };
@@ -1553,12 +1559,9 @@ mod tests {
         // The pin on the long label: the account cell is cut, the state reads through its age.
         let on_long = pins[2];
         assert!(on_long.starts_with("  7b21aa90f3d1  a1 "), "{screen}");
-        assert!(
-            on_long.ends_with("  shedding from Direct, 12s ago"),
-            "{screen}"
-        );
+        assert!(on_long.ends_with("  shed from Direct, 12s ago"), "{screen}");
         let account = on_long
-            .trim_end_matches("  shedding from Direct, 12s ago")
+            .trim_end_matches("  shed from Direct, 12s ago")
             .rsplit("  ")
             .next()
             .unwrap();
@@ -1566,11 +1569,11 @@ mod tests {
             account.ends_with('…') && LONG_LABEL.starts_with(account.trim_end_matches('…')),
             "{screen}"
         );
-        // The pin shedding from the long label: the source is cut, the age stays whole after it.
+        // The pin failed over from the long label: the source is cut, the age stays whole after it.
         let from_long = pins[1];
         assert!(from_long.starts_with("  3f9a0c12e4b7  -  "), "{screen}");
         let source = from_long
-            .split("shedding from ")
+            .split("failed over from ")
             .nth(1)
             .and_then(|state| state.strip_suffix(", 12s ago"))
             .unwrap_or_else(|| panic!("the age is cut: {screen}"));
@@ -1578,6 +1581,55 @@ mod tests {
             source.ends_with('…') && LONG_LABEL.starts_with(source.trim_end_matches('…')),
             "{screen}"
         );
+    }
+
+    #[test]
+    fn a_pin_reads_shed_from_after_a_round_and_failed_over_from_after_a_failover_with_and_without_its_age(
+    ) {
+        let pin = |session: &str, reason: Value, last_used_at: Value| {
+            json!({
+                "session_id": session, "agent_id": "main", "account_id": "business", "shed_from": "direct",
+                "shed_reason": reason, "pinned": true, "model": "claude-sonnet-5", "last_used_at": last_used_at,
+                "keepalive": {"state": null, "next_probe_at": null},
+            })
+        };
+        let aged = json!(NOW_MS - 12_000);
+        let reads = Reads {
+            sessions: Ok(json!({"sessions": [
+                pin("1aaaaaaaaaaa0000", json!("round"), aged.clone()),
+                pin("2bbbbbbbbbbb0000", json!("cooldown"), aged.clone()),
+                pin("3ccccccccccc0000", Value::Null, aged),
+                pin("4ddddddddddd0000", json!("round"), Value::Null),
+                pin("5eeeeeeeeeee0000", json!("fast_lane"), Value::Null),
+            ]})),
+            ..labelled("Business", "Direct")
+        };
+        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, true);
+        let lines: Vec<&str> = screen.lines().collect();
+        let state = |session: &str| {
+            block(&lines, "pins (one per session, the main agent's)")
+                .into_iter()
+                .find(|line| line.starts_with(&format!("  {session}")))
+                .map(|line| line.rsplit("  ").next().unwrap_or_default().to_owned())
+                .unwrap_or_else(|| panic!("no line for {session}: {screen}"))
+        };
+        assert_eq!(
+            state("1aaaaaaaaaaa"),
+            "shed from Direct, 12s ago",
+            "{screen}"
+        );
+        assert_eq!(
+            state("2bbbbbbbbbbb"),
+            "failed over from Direct, 12s ago",
+            "{screen}"
+        );
+        assert_eq!(
+            state("3ccccccccccc"),
+            "shed from Direct, 12s ago",
+            "a stamp from before its reason reads as shed: {screen}"
+        );
+        assert_eq!(state("4ddddddddddd"), "shed from Direct", "{screen}");
+        assert_eq!(state("5eeeeeeeeeee"), "failed over from Direct", "{screen}");
     }
 
     #[test]

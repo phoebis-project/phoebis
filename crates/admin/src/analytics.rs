@@ -159,7 +159,7 @@ pub(crate) struct RangeQuery {
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct RollupQuery {
-    /// Default `24h`.
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
     pub range: Option<String>,
     /// `account`, `all`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `speed`, or
     /// `user_agent`. Default `all`.
@@ -193,7 +193,7 @@ pub(crate) struct RollupQuery {
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct PlacementsQuery {
-    /// Default `24h`.
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
     pub range: Option<String>,
     /// A comma-separated list.
     pub keys: Option<String>,
@@ -222,7 +222,7 @@ pub(crate) struct PlacementsQuery {
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct BurnQuery {
-    /// Default `24h`.
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
     pub range: Option<String>,
     /// `account`, `classifier`, `client`, `effort`, `key`, `kind`, `model`, `pool`, `request_class`, `session`,
     /// `speed`, or `user_agent`. Default `account`. The `session` grouping reads the twenty sessions with the most
@@ -253,7 +253,7 @@ pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
 /// The series bucketed to the range. Under `group_by=key` a point's `groups` entries carry `key` in the same form
 /// as the breakdown route's key row. Each entry carries the breakdown row's `cost_shares`, `cache_shares`,
 /// `probe_shares`, `saving_shares`, `plan_requests` and `plan_output_tokens` under the same rules, summed over the
-/// bucket's rows.
+/// bucket's rows, and its `unpriced` and `probe_unpriced` read off the bucket's rows alone.
 // `GroupRow` serializes alone, so the series does too and the test-only `SeriesTwin` carries the round trip.
 #[derive(serde::Serialize, ToSchema)]
 pub(crate) struct Series {
@@ -277,7 +277,7 @@ pub(crate) struct Series {
     params(RollupQuery),
     responses(
         (status = 200, description = "The points over the range.", body = Series),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `pricing table: the range needs <n> points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `pricing table: the range needs {count} points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
 )]
@@ -837,6 +837,14 @@ pub(crate) struct BurnPoint {
     /// Whether a plan-funded row of the bucket priced at its model tier's latest weight, for a model the cost model
     /// does not weight.
     pub estimated: bool,
+    /// True for a bucket holding a plan-funded row with tokens the cost model could not price on the 5-hour window,
+    /// false for an idle bucket, so a null `five_hour_equivalent` with the flag false is an idle bucket. A window
+    /// stays unpriced only for a model with no tier, or a tier with no weighted model.
+    pub five_hour_unpriced: bool,
+    /// The same on the 7-day window.
+    pub seven_day_unpriced: bool,
+    /// The same on the model's own week, false where no row of the bucket is on a model with a week of its own.
+    pub model_week_unpriced: bool,
     pub cached_tokens: u64,
     /// Every token of the bucket, uncached input, cache reads, both cache writes and output. Zero for a bucket
     /// with no traffic the ledger can attribute.
@@ -957,6 +965,11 @@ pub(crate) async fn burn(
                 seven_day_equivalent: p.seven_day_equivalent,
                 model_week_equivalent: p.model_week_equivalent,
                 estimated: p.estimated,
+                // The equivalents' latches, never the shares' `five_hour_unpriced`, `seven_day_unpriced` and
+                // `model_week_unpriced`, which latch only where the read prices shares.
+                five_hour_unpriced: p.five_hour_equivalent_unpriced,
+                seven_day_unpriced: p.seven_day_equivalent_unpriced,
+                model_week_unpriced: p.model_week_equivalent_unpriced,
                 cached_tokens: p.cached_tokens,
                 tokens: p.tokens,
                 uncached_tokens: p.uncached_tokens,
@@ -1286,24 +1299,25 @@ mod tests {
         for stem in ["analytics_series", "analytics_series_accounts"] {
             round_trips::<SeriesTwin>(stem);
         }
-        // Three of the fixture's four hours carry a null `five_hour`, so every hour is read as the nullable sample
-        // and the mirror is proved on the ones that hold one.
+        // Each window is a sample or null, as `windows_schema` declares, so every window of every hour is read as
+        // the nullable sample and the mirror is proved on the ones that hold one.
         let accounts = fixture("analytics_accounts");
         let mut sampled = 0;
-        for hour in accounts["accounts"]
+        for (window, sample) in accounts["accounts"]
             .as_array()
             .unwrap()
             .iter()
             .flat_map(|a| a["hours"].as_array().unwrap())
+            .flat_map(|hour| hour["windows"].as_object().unwrap())
         {
-            let sample = &hour["windows"]["five_hour"];
-            let typed: Option<WindowSample> = serde_json::from_value(sample.clone()).unwrap();
-            assert_eq!(serde_json::to_value(&typed).unwrap(), *sample);
+            let typed: Option<WindowSample> =
+                serde_json::from_value(sample.clone()).unwrap_or_else(|e| panic!("{window}: {e}"));
+            assert_eq!(serde_json::to_value(&typed).unwrap(), *sample, "{window}");
             sampled += typed.is_some() as usize;
         }
         assert!(
             sampled >= 1,
-            "at least one hour samples five_hour, so WindowSample is exercised"
+            "at least one window of one hour holds a sample, so WindowSample is exercised"
         );
     }
 }

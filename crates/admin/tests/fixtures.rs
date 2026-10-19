@@ -24,10 +24,10 @@ fn dir() -> PathBuf {
 }
 
 /// One line per value, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`, `float`,
-/// `string`, `array`, `object`). The first element stands for an array. Values are not compared: ids and secrets
-/// are random, and a value change is the decoder tests' business. The order and the kinds are compared, since an
-/// answer rebuilt from a struct could move a key, turn an absence into a `null` or an integer into a float and
-/// still hold the key set.
+/// `string`, `array`, `object`). The first element stands for an array. Values are not compared: a value change is
+/// the decoder tests' business. The order and the kinds are compared, since an answer rebuilt from a struct could
+/// move a key, turn an absence into a `null` or an integer into a float and still hold the key set. A backslash, a
+/// `.` or a `[` in a key is escaped with a backslash, so a key cannot read as a nested path.
 fn shape(v: &Value) -> Vec<String> {
     fn walk(v: &Value, path: &str, out: &mut Vec<String>) {
         let kind = match v {
@@ -43,6 +43,10 @@ fn shape(v: &Value) -> Vec<String> {
         match v {
             Value::Object(m) => {
                 for (k, v) in m {
+                    let k = k
+                        .replace('\\', "\\\\")
+                        .replace('.', "\\.")
+                        .replace('[', "\\[");
                     walk(v, &format!("{path}.{k}"), out);
                 }
             }
@@ -73,6 +77,11 @@ fn shape_tells_a_moved_key_a_null_for_an_absence_and_a_float_for_an_integer_but_
             "a null for an absent key",
         ),
         (j!({ "a": 1.0 }), j!({ "a": 1 }), "a float for an integer"),
+        (
+            j!({ "a": { "b": 1 } }),
+            j!({ "a": {}, "a.b": 1 }),
+            "a dotted key for a nested one",
+        ),
     ];
     for (left, right, what) in &differ {
         assert_ne!(
@@ -139,7 +148,7 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
             .position(|(c, l)| c != l)
             .unwrap_or(committed.len().min(live.len()));
         panic!(
-            "{name}: the committed fixture's shape differs from the live answer at line {at}: committed {:?}, live {:?}. \
+            "{name}: the committed fixture's shape differs from the live answer at entry {at}: committed {:?}, live {:?}. \
              A moved key, a null for an absence or a float for an integer is a defect of the route's answer. A new or \
              dropped key needs a re-capture and a decoder update.",
             committed.get(at),
@@ -377,9 +386,16 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
     }
 }
 
+/// Seeds every id and secret the capture mints, so two captures at one head write the same bytes.
+const FIXTURE_SEED: u64 = 0x0123_4567_89ab_cdef;
+
 #[tokio::test]
 async fn every_route_is_captured_and_holds_its_shape() {
     let parts = common::admin_parts_full().await;
+    // Ahead of the login, since the login mints the session id `session.json` reads. The seeded source is
+    // process-wide, so the repeat holds while this case is the binary's one minting test: a second one running beside
+    // it would draw from the same generator and move every id after its first mint.
+    phoebis_oauth::random::seed(FIXTURE_SEED);
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
     let app = &parts.app;
@@ -443,7 +459,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
     let planted = planted(access_token, refresh_token, &key_secret);
     let mut key_created = created.clone();
-    // The minted secret is random, so the fixture carries a stable stand-in rather than the capture's own.
+    // No fixture carries a secret shaped like a real one, so the stand-in stays whatever the capture mints.
     key_created["secret"] = j!("phoebis-fixture");
     hold(&planted, "key_created", "POST /admin/keys", key_created);
     // One guardrail observing on the pool and one enforcing on the key, so the matches the request rows below carry
@@ -861,14 +877,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "succeeded",
             )
         },
-        attempts: vec![attempt(
-            "r-captured",
-            1,
-            "business",
-            200,
-            "succeeded",
-            now - 60_000,
-        )],
+        // Pending beside the other rows' `none`, so the capture carries both words the relay reads from the member.
+        attempts: vec![AttemptRecord {
+            cache_miss_reason: Some("pending".into()),
+            ..attempt("r-captured", 1, "business", 200, "succeeded", now - 60_000)
+        }],
         bodies: Some(BodyRecord {
             request_id: "r-captured".into(),
             request_body: br#"{"model":"claude-sonnet-5","messages":[]}"#.to_vec(),
@@ -1125,6 +1138,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             held: None,
             diagnostics: None,
             message_id: Some("msg_k1_1".into()),
+            skipped_events: 0,
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
@@ -1227,6 +1241,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             held: None,
             diagnostics: None,
             message_id: None,
+            skipped_events: 0,
             finished_at: now,
         }));
     // The replay's counts while the parked table is still empty.
@@ -1268,6 +1283,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 None,
                 hour_ago + 40 * 60_000,
                 j!({
+                    "early_ms": null,
                     "projection_error": 0.04,
                     "setting": ["shed_cap", "window_ceiling"],
                     "walls": 1,
@@ -2099,7 +2115,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
                     scope: "account".into(),
                     until: now + 600_000,
                     set_at: now,
-                    reason: "rate_limited".into(),
+                    reason: "rate_limit".into(),
                     window: "five_hour".into(),
                     source_request_id: Some("r-move".into()),
                     incarnation: 1,
@@ -2248,6 +2264,17 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             end_source: "cancelled",
             restored: false,
             at: at(4),
+        },
+        // The 5-hour window the probe's head spent, read back under its limit under the same reset.
+        RouterEvent::WindowCleared {
+            account_id: "business".into(),
+            window: "five_hour".into(),
+            utilization_before: 1.0,
+            utilization: 0.0,
+            reset: Some(now + 3_600_000),
+            source: phoebis_routing::WindowSource::Poll,
+            source_request_id: None,
+            at: now,
         },
         RouterEvent::WindowReset {
             account_id: "business".into(),

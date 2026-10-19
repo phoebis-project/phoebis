@@ -1,8 +1,8 @@
 //! The Node check the build script runs before npm, apart from `build.rs` so the crate's unit tests reach it:
 //! a build script is not a test target.
 
-/// The range the lockfile's Vite declares in its own `engines` field.
-pub(crate) const NODE_RANGES: &str = "^20.19.0 || >=22.12.0";
+/// The floor the console's `engines` field declares.
+pub(crate) const NODE_RANGES: &str = ">=26.0.0";
 
 /// Reads the `vMAJOR.MINOR.PATCH` that `node --version` answers.
 pub(crate) fn parse_node_version(answer: &str) -> Option<(u32, u32, u32)> {
@@ -13,8 +13,8 @@ pub(crate) fn parse_node_version(answer: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// Whether a version falls inside [`NODE_RANGES`].
-pub(crate) fn node_supported((major, minor, _): (u32, u32, u32)) -> bool {
-    (major == 20 && minor >= 19) || (major == 22 && minor >= 12) || major > 22
+pub(crate) fn node_supported((major, _, _): (u32, u32, u32)) -> bool {
+    major >= 26
 }
 
 #[cfg(test)]
@@ -47,23 +47,21 @@ mod tests {
     }
 
     #[test]
-    fn node_20_is_supported_from_20_19_on() {
-        assert!(!node_supported((20, 18, 3)));
-        assert!(node_supported((20, 19, 0)));
-        assert!(node_supported((20, 20, 1)));
+    fn node_is_supported_from_26_0_0_on() {
+        assert!(!node_supported((25, 9, 3)));
+        assert!(node_supported((26, 0, 0)));
+        assert!(node_supported((26, 11, 1)));
     }
 
     #[test]
-    fn node_22_is_supported_from_22_12_on_and_every_later_major_too() {
-        assert!(!node_supported((22, 11, 9)));
-        assert!(node_supported((22, 12, 0)));
-        assert!(node_supported((23, 0, 0)));
-        assert!(node_supported((24, 4, 1)));
+    fn every_major_after_26_is_supported_too() {
+        assert!(node_supported((27, 0, 0)));
+        assert!(node_supported((28, 4, 1)));
     }
 
     #[test]
-    fn node_before_20_19_and_node_21_and_22_before_22_12_are_refused() {
-        for version in [(18, 20, 4), (19, 9, 0), (20, 0, 0), (21, 7, 3), (22, 0, 0)] {
+    fn node_24_and_25_are_refused() {
+        for version in [(24, 21, 0), (25, 0, 0), (25, 6, 1)] {
             assert!(!node_supported(version), "{version:?}");
         }
     }
@@ -77,7 +75,7 @@ mod tests {
     #[test]
     fn the_nvmrc_names_a_supported_node() {
         let nvmrc = web_file(".nvmrc");
-        let version = parse_node_version(&format!("v{}.0", nvmrc.trim()));
+        let version = parse_node_version(&format!("v{}", nvmrc.trim()));
         assert!(version.is_some_and(node_supported), "{nvmrc:?}");
     }
 }

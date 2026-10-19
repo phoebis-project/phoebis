@@ -103,6 +103,7 @@ pub(crate) struct DecisionRow {
     #[schema(required = true)]
     pub rule: Option<String>,
     pub strategy: String,
+    /// `[group, priority, overage_bit]`.
     #[schema(value_type = Option<Vec<u64>>, required = true)]
     pub tier: Option<(u8, u32, u8)>,
     #[schema(required = true)]
@@ -137,6 +138,7 @@ pub(crate) struct SummaryBy {
     pub kind: String,
     /// The rule's, the rung's, the strategy's, the hold's place, the exhaustion's kind or the refusal's kind.
     pub value: String,
+    /// `[group, priority, overage_bit]`.
     #[schema(value_type = Option<Vec<u64>>)]
     pub tier: Option<(u8, u32, u8)>,
 }
@@ -335,8 +337,9 @@ pub(crate) struct DecisionRecord {
     /// `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran out with no slot freed), `reason`
     /// (`cap` for a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait before its
     /// head, `rewrite` for a moved pin's wait for the head of the request that carried the move), `until` (the
-    /// instant the wait ends: a reset's, the pin's slow-down deadline, or the rewrite's bound, null under `cap`),
-    /// `waits_for` (the request whose head a `rewrite` hold waited for, absent under the other reasons)),
+    /// instant the wait ends: a reset's, the pin's slow-down deadline, the rewrite's bound, or under `cap` the
+    /// admission once a slot freed, null where the wait ran out), `waits_for` (the request whose head a `rewrite`
+    /// hold waited for, absent under the other reasons)),
     /// `registry_revision`, `body_tokens` (the relay's estimate of the body's prompt tokens, which a fresh session's
     /// rewrite reads, null on a refusal).
     ///
@@ -348,7 +351,8 @@ pub(crate) struct DecisionRecord {
     pub request: Value,
     /// The pin as the selection found it: `found` (`live`, `expired_idle`, `left_pool` or `none`), `account_id`,
     /// `epoch`, `incarnation`, `created_at`, `last_used_at`, `last_refresh_at`, `idle_ms`, `refresh_age_ms`,
-    /// `lane`, `shed` (`from`, `at`), `marked`, `warmth` (`refresh`, `cold` or `untouched`), `warmth_cause`,
+    /// `lane`, `shed` (`from`, `at`, `reason`: `round` for a shedding round's move, the failover's word `cooldown`,
+    /// `fast_lane` or `mark` for its landing), `marked`, `warmth` (`refresh`, `cold` or `untouched`), `warmth_cause`,
     /// `released` (the reasons a pin was let go), `marked_at`, `marked_on` and `marked_window` (the shedding mark the
     /// row carries: when it was made, the account and the window whose trigger made it, null without one), `cycle_ms`
     /// (the pin's cycle, the count-weighted mean of its last eight gaps between a dispatch and the next arrival, null
@@ -480,7 +484,13 @@ pub(crate) struct RoutingLogQuery {
     params(RoutingLogQuery),
     responses(
         (status = 200, description = "The page.", body = RoutingLog),
-        (status = 400, description = "- `unknown filter {name}`\n- `unknown kind {name}`\n- `{name} is not a time`, for `from` or `to`\n- `limit is 1 to 200`\n- `cursor is <at>:<rank>:<id>`", body = ErrorBody, example = json!({"error": "unknown filter {name}"})),
+        (status = 400, description = concat!(
+            "- `unknown filter {name}`, for a query key outside the parameters\n",
+            "- `unknown kind {name}`\n",
+            "- `{name} is not a time`, for `from` or `to`\n",
+            "- `limit is 1 to 200`\n",
+            "- `cursor is <at>:<rank>:<id>`",
+        ), body = ErrorBody, example = json!({"error": "unknown filter {name}"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -617,8 +627,14 @@ fn event_json(e: &EventListRow) -> EventRow {
     ),
     responses(
         (status = 200, description = "The decision's record.", body = DecisionRecord),
-        (status = 400, description = "`seq is the decision's sequence number`, for a `seq` that is not a whole number", body = ErrorBody, example = json!({"error": "seq is the decision's sequence number"})),
-        (status = 404, description = "`no decision {seq} for request {id}`, for a decision the retention purged and one never written alike", body = ErrorBody, example = json!({"error": "no decision {seq} for request {id}"})),
+        (status = 400, description = concat!(
+            "`seq is the decision's sequence number`, ",
+            "for a `seq` that is not a whole number",
+        ), body = ErrorBody, example = json!({"error": "seq is the decision's sequence number"})),
+        (status = 404, description = concat!(
+            "`no decision {seq} for request {id}`, ",
+            "for a decision the retention purged and one never written alike",
+        ), body = ErrorBody, example = json!({"error": "no decision {seq} for request {id}"})),
         (status = 500, response = LedgerFailure),
     ),
 )]

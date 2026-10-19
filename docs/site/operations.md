@@ -148,30 +148,38 @@ service layout, as root:
 1. Stop the service: `sudo systemctl stop phoebis`.
 2. Take a [backup](#backup): `phoebis backup --to <dir>`.
 3. Run `sudo phoebis recover-key --config /etc/phoebis/config.yaml --owner phoebis`. A key file already in place is
-   read as the new key. When the file `storage.encryption_key_file` names is missing, the run generates the key as
-   `init` does, at `0600` and owned by the `--owner` user with the directories it created for it, and prints `wrote a
-   new storage key to {path} (mode 0600)`. The `--owner` user also receives the registry's lock file when this run
-   creates it, and handing these to the `--owner` user needs root (`--owner needs root` refuses a run without it).
+   read as the new key. When the file `storage.encryption_key_file` names is missing, the run generates the key in
+   memory and writes its file once the operator confirms (at once under `--yes`), as `init` does, at `0600` and owned
+   by the `--owner` user with the directories it created for it, then prints `wrote a new storage key to {path} (mode
+   0600)`, so a run stopped at the prompt leaves no key file. The `--owner` user also receives the registry's lock
+   file when this run creates it, and handing these to the `--owner` user needs root (`--owner needs root` refuses a
+   run without it).
 4. Read its summary, which opens `the recovery discards what the old key sealed:` over the counts of OAuth credential
    bundles, API-key secrets and keepalive recipe bodies, then `and marks the accounts:` over the counts of OAuth
    accounts disconnected, API-key accounts unpaired and open refresh attempts failed.
 5. Answer the prompt `type yes to discard them: `. Any other answer prints `the registry was not changed` and exits 2,
-   and a declined run discards nothing and removes a key file it generated, with any directory it created for it,
-   naming the file in its last line, `removed the storage key this run wrote to {path}`. `--yes` skips the question
-   for a script.
+   and a declined run discards nothing, writes no key file and keeps the registry's lock file. `--yes` skips the
+   question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with `the storage
-key matches the registry, nothing to recover` when the key file still opens the registry's canary (or, without one,
-any of its sealed rows), with `the storage key opens {readable_rows} sealed {rows} but not the corrupt canary, so
-nothing was discarded: restore the canary from a backup` (`{rows}` reading `row` or `rows`) when the canary alone does
-not open, since the canary is then the corrupt part and a backup restores it, and with `no registry at {path}, nothing
-to recover` when the registry does not exist. Before it discards anything it tries every sealed row, never a sample.
-Each refusal exits 1, and a failure after the run generated the key file removes the file as a declined run does. A
-run that stops before the discard leaves the registry at the schema version it found. Past them it runs the sequence
+key matches the registry, nothing to recover` when the key file still opens the registry's canary (or, without one, any
+of its sealed rows), with `the storage key opens {readable_rows} sealed {rows} but not the corrupt canary, so nothing
+was discarded: restore the canary from a backup` (`{rows}` reading `row` or `rows`) when the canary alone does not open,
+since the canary is then the corrupt part and a backup restores it, and with `no registry at {path}, nothing to recover`
+when the registry does not exist. Before it discards anything it tries every sealed row, never a sample. Each refusal
+exits 1. Past them it prepares the registry's schema, running every migration above the stored version, and a
+preparation that fails prints `the registry's schema could not be prepared for the recovery, so nothing was discarded:
+{error}` and exits 1. A run that stops before the preparation leaves the registry at the schema version it found, and
+one whose preparation fails leaves it at the step it reached, since each migration step commits alone. A run that exits
+1 or 2 removes the key file it wrote, with any directory it created for it, and names it in the line `removed the key
+file {path} this run created`, with a line after it for each it could not remove. Every run keeps the registry's lock
+file, a refused open included, since a start that opened the file while the run held it goes on to lock that same file,
+and a file created again in its place would let a later start lock a second one beside it. Then it runs the sequence
 under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
 prints the counts again under `discarded what the old key sealed:` and `and marked the accounts:`, then `sealed a new
-canary under the key at {path}`, then `start the service, then:` over the three steps that remain, and exits 0 once
-the accounts are marked. It prints counts and paths, never a key. Then start the service, and:
+canary under the key at {path}`, then `start the service, then:` over the three steps that remain, and exits 0 once the
+accounts are marked, keeping the key file and the lock file for the service's next start. It prints counts and paths,
+never a key. Then start the service, and:
 
 - Re-enter every API-key secret in the console.
 - Pair every OAuth account again in the console.
@@ -253,7 +261,7 @@ accounts in no pool
 
 pins (one per session, the main agent's)
   session       agent  account            state
-  7b21aa90f3d1  a1     alice@example.com  shedding from bob@example.com, 12s ago
+  7b21aa90f3d1  a1     alice@example.com  shed from bob@example.com, 12s ago
   3f9a0c12e4b7  -      alice@example.com  pinned 4m ago, claude-opus-4-1
 ```
 
@@ -282,22 +290,24 @@ pool holds, with their state, and is left out when there are none.
 The pins block is the sessions route's answer, one line per session that holds a pin: the route groups pins by key
 generation and session and prefers the main agent's pin, so a session whose subagent is pinned to another account shows
 its main agent's line. Each line carries the first twelve characters of the session id, the agent id or `-`, the
-account, and `pinned {age} ago, {model}`, or `shedding from {account}, {age} ago` while the session moves off an
-account, followed by `, keepalive {state}` and `next probe {HH:MM}` while the keepalive engine tracks it. Times print in
-the local zone as `HH:MM`, with the date in front as `MM-DD` when it is not today, and ages print in their largest whole
-unit as `12s`, `4m`, `3h` or `2d`. The block reads `pins: none` when no session holds a pin.
+account, and `pinned {age} ago, {model}`, or, on a pin a move stamped, `shed from {account}, {age} ago` when a shedding
+round moved the session off that account and `failed over from {account}, {age} ago` when a failover landed it, followed
+by `, keepalive {state}` and `next probe {HH:MM}` while the keepalive engine tracks it. Times print in the local zone as
+`HH:MM`, with the date in front as `MM-DD` when it is not today, and ages print in their largest whole unit as `12s`,
+`4m`, `3h` or `2d`. The block reads `pins: none` when no session holds a pin.
 
 A read that fails prints one line in its section, such as `pools: the admin listener did not answer on {url}: {reason}`
 or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is down, the
 screen is the header with the binary's version and `proxy down: proxy does not answer on {addr}: {error}`, the
 listeners, and one such line per read. A label column is as wide as its widest label where the line has the room. A
-member's reset or cooldown word and a shedding pin's age keep their width ahead of the labels, so a long account label
-is cut before them, and once it reaches its floor of 12 columns the label a shedding pin moves from is cut too. A cut
-label ends in `…`, and `--json` carries every label and id whole. A table line past 80 columns is cut and ends in `…`,
-and a line of text past 80 columns wraps. The pins and the accounts in no pool print 20 lines each and then `and {n}
-more`, and `--all` prints every one. `--json` prints the same reads as one object for a script: `health` (`ready`,
-`addr` and `reason`, or `null` when no probe ran), the five answers verbatim (`null` for a read that failed) and
-`errors`, each failed read's reason under its name. Neither output carries the admin secret.
+member's reset or cooldown word and the age on a `shed from` or `failed over from` line keep their width ahead of the
+labels, so a long account label is cut before them, and once it reaches its floor of 12 columns the account after `shed
+from` or `failed over from` is cut too. A cut label ends in `…`, and `--json` carries every label and id whole. A
+table line past 80 columns is cut and ends in `…`, and a line of text past 80 columns wraps. The pins and the accounts
+in no pool print 20 lines each and then `and {n} more`, and `--all` prints every one. `--json` prints the same reads as
+one object for a script: `health` (`ready`, `addr` and `reason`, or `null` when no probe ran), the five answers verbatim
+(`null` for a read that failed) and `errors`, each failed read's reason under its name. Neither output carries the admin
+secret.
 
 With `--url` and `--secret-env` both given, as for a router on another machine, the file is not read and `status` has
 no proxy listener to probe: it prints `proxy: not probed, no configuration file names the listener` under the listeners
@@ -375,8 +385,8 @@ until a reload lands and `certificate_expiring` from 30 days before a loaded lea
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
-rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 58 and the
-ledger at schema 41. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
+rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 59 and the
+ledger at schema 42. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
 {found} is newer than this build supports ({supported}), so restore the backup taken before the upgrade`, and the ledger
 with the same words after `the ledger's schema version`. `phoebis check-config` reads both versions read-only, taking no
 lock, and refuses first with `the registry at {path} is at schema {found}, newer than the {supported} this build reads`

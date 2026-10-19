@@ -925,6 +925,9 @@ pub(crate) struct Confirmed {
     /// `confirmed`.
     #[schema(example = "confirmed")]
     pub status: String,
+    /// The first usage poll runs in the background, so the account's windows land a few seconds after this
+    /// answer.
+    pub first_poll_in_flight: bool,
 }
 
 /// Start a pairing session.
@@ -1235,7 +1238,7 @@ async fn pairing_callback(
     tag = "Pairing",
     params(("id" = String, Path, description = "The pairing session's id")),
     responses(
-        (status = 200, description = "The account and the confirmed status.", body = Confirmed),
+        (status = 200, description = "The account, the confirmed status, and `first_poll_in_flight`, true when the confirm started the account's first usage poll.", body = Confirmed),
         (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`\n- `account not found`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
         (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session has no exchanged credential`\n- `the account was disconnected while pairing`\n- `the credential changed while pairing, so start the pairing again`\n- `this slot is already paired to a different upstream account`\n- `that upstream account is already paired to another slot`\n- `an account with this id exists`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
         (status = 500, response = StorageFailure),
@@ -1461,6 +1464,7 @@ async fn pairing_confirm(
             Json(Confirmed {
                 account_id: row.id.clone(),
                 status: "confirmed".into(),
+                first_poll_in_flight: true,
             })
             .into_response()
         }
@@ -1850,6 +1854,9 @@ pub(crate) struct AccountContext {
     /// The router's projections per account under its pool's settings, absent for an account in no pool.
     pub projections: BTreeMap<String, AccountProjection>,
     pub quota: Vec<phoebis_ledger::QuotaSampleRecord>,
+    /// The router's samples per account as the poll or a head reported them, no charge added and no reset rolled:
+    /// the readings an account's windows draw.
+    pub reported: BTreeMap<String, UtilizationSample>,
     pub week: BTreeMap<String, phoebis_ledger::Totals>,
 }
 
@@ -1998,6 +2005,13 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             .into_iter()
             .collect(),
         quota,
+        reported: state
+            .router
+            .reported_samples()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         week,
     }
 }
@@ -2135,6 +2149,8 @@ pub(crate) struct AccountWindow {
     pub id: String,
     pub utilization: Option<f64>,
     pub resets_at: Option<i64>,
+    /// The instant of the reading: the router's reported sample's, or the ledger row's own, the bucket's 300-second
+    /// floor only for a row from before the samples carried one.
     pub observed_at: i64,
     /// The router's projection of the window at its horizon, null on an api_key account, a window the router holds no
     /// reading of and an account in no pool.
@@ -2373,52 +2389,59 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             trial_ends_at: s.trial_ends_at,
             ends_at: term.ends_at,
         });
-    let mut windows: Vec<AccountWindow> = ctx
-        .quota
-        .iter()
-        .filter(|q| q.account_id == row.id)
-        .map(|q| {
-            let (projection, horizon, burn) = window_projection(ctx, &row.id, &q.window);
-            let demand = window_demand(ctx, &row.id, &q.window);
+    // The router holds a reading the moment the poll or a head reports it, while the ledger's row waits on the writer,
+    // so a refresh's reading shows as soon as the refresh answers. The ledger's rows fill each plan window the router
+    // holds no reading of, and every window of an api_key account.
+    let reported = ctx
+        .reported
+        .get(&row.id)
+        .filter(|_| row.kind == AccountKind::Oauth);
+    let mut windows: Vec<AccountWindow> = reported
+        .map(|sample| held_windows(sample, end, now))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, reading, lead)| {
+            let (projection, horizon, burn) = window_projection(ctx, &row.id, &key);
+            let demand = window_demand(ctx, &row.id, &key);
             AccountWindow {
-                id: q.window.clone(),
-                utilization: q.utilization,
-                resets_at: q.reset_at,
-                observed_at: q.bucket * 1_000,
+                id: key,
+                utilization: Some(reading.utilization),
+                resets_at: reading.reset,
+                observed_at: reading.observed_at,
                 projection,
                 horizon,
                 burn,
                 demand,
-                lead: q
-                    .utilization
-                    .map(|u| lead_over_pace(&q.window, u, q.reset_at, end, now)),
+                lead: Some(lead),
             }
         })
         .collect();
-    // The ledger's samples reach back a day, and the router keeps routing on older windows persisted across a
-    // restart whose startup read was refused; the card shows what selection reads rather than no windows.
-    if windows.is_empty() && row.kind == AccountKind::Oauth {
-        if let Some(sample) = ctx.held.get(&row.id) {
-            windows = held_windows(sample, end, now)
-                .into_iter()
-                .map(|(key, reading, lead)| {
-                    let (projection, horizon, burn) = window_projection(ctx, &row.id, &key);
-                    let demand = window_demand(ctx, &row.id, &key);
-                    AccountWindow {
-                        id: key,
-                        utilization: Some(reading.utilization),
-                        resets_at: reading.reset,
-                        observed_at: reading.observed_at,
-                        projection,
-                        horizon,
-                        burn,
-                        demand,
-                        lead: Some(lead),
-                    }
-                })
-                .collect();
-        }
-    }
+    windows.extend(
+        ctx.quota
+            .iter()
+            .filter(|q| q.account_id == row.id)
+            .filter(|q| {
+                !reported
+                    .is_some_and(|s| is_plan_window(&q.window) && s.reading(&q.window).is_some())
+            })
+            .map(|q| {
+                let (projection, horizon, burn) = window_projection(ctx, &row.id, &q.window);
+                let demand = window_demand(ctx, &row.id, &q.window);
+                AccountWindow {
+                    id: q.window.clone(),
+                    utilization: q.utilization,
+                    resets_at: q.reset_at,
+                    observed_at: q.observed_at.unwrap_or(q.bucket * 1_000),
+                    projection,
+                    horizon,
+                    burn,
+                    demand,
+                    lead: q
+                        .utilization
+                        .map(|u| lead_over_pace(&q.window, u, q.reset_at, end, now)),
+                }
+            }),
+    );
     let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
     // The router may hold an entry for a mark whose write landed nowhere, so the registry's state decides.
     let funding_retry_at = (row.state == AccountState::FundingRequired)
