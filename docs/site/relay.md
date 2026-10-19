@@ -510,7 +510,8 @@ A connect or handshake that times out counts as unsent, so the request is writte
 retry in place sleeps the throttle's delay on the same account, with the same credential, before any byte of the
 answer's head reaches the client ([Retry in place](routing.md#retry-in-place)). The slow-down's hold sleeps to the pin's
 deadline, which a retry or a sibling request of the pin rejoins, before the request is selected again
-([Slow-down](routing.md#slow-down)).
+([Slow-down](routing.md#slow-down)). A reset wait and the slow-down and rewrite holds end inside the head guard whatever
+its length: at the request's deadline where the guard leaves one, else at the guard itself.
 
 Beneath these sit Claude Code's own waits. The client cuts a stream that has gone silent for 180 seconds with its
 watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The four

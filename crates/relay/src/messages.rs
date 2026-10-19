@@ -1927,6 +1927,9 @@ impl Relay {
         );
         // Read once and reused on every attempt of this request: the lane does not change across a failover.
         let lane = crate::lane::lane_of(&identity.canonical_model, &facts, hints.per_turn_effort);
+        let deadline = (self.limits.head_timeout > ATTEMPT_DEADLINE_MARGIN).then(|| {
+            received_at + (self.limits.head_timeout - ATTEMPT_DEADLINE_MARGIN).as_millis() as i64
+        });
         let admitted = Admitted {
             auto_mode_server,
             auxiliary,
@@ -1937,10 +1940,7 @@ impl Relay {
             client_diagnostics,
             client_gzip,
             client_version,
-            deadline: (self.limits.head_timeout > ATTEMPT_DEADLINE_MARGIN).then(|| {
-                received_at
-                    + (self.limits.head_timeout - ATTEMPT_DEADLINE_MARGIN).as_millis() as i64
-            }),
+            deadline,
             diagnostics,
             fallback_ms,
             fast: facts.shape.speed.as_deref() == Some("fast"),
@@ -1959,6 +1959,8 @@ impl Relay {
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
             target: &target,
             trace: &trace,
+            wait_bound: deadline
+                .unwrap_or(received_at + self.limits.head_timeout.as_millis() as i64),
         };
         let mut attempted: Vec<String> = Vec::new();
         // Every hold this request waited through, oldest first: carried onto the next selection so the
@@ -2149,7 +2151,7 @@ impl Relay {
                     account_id,
                     mut hold,
                 } => {
-                    // A slowed pin waits to its deadline before its head, under the request's own deadline alone, and
+                    // A slowed pin waits to its deadline before its head, under the request's `wait_bound` alone, and
                     // selects again with the hold on the request, which answers no second one. The hold is its own
                     // stage: it starts no retry bound and passes no account over, so a slot or reset wait after it
                     // keeps its whole bound and a pool that exhausts after it answers as it would have without it.
@@ -2158,7 +2160,7 @@ impl Relay {
                         let waited = self
                             .wait_out(
                                 hold.until.unwrap_or(now),
-                                admitted.deadline,
+                                Some(admitted.wait_bound),
                                 &answer.cancel,
                                 None,
                             )
@@ -2185,7 +2187,7 @@ impl Relay {
                             Some(mut head) => {
                                 self.wait_out(
                                     hold.until.unwrap_or(now),
-                                    admitted.deadline,
+                                    Some(admitted.wait_bound),
                                     &answer.cancel,
                                     Some(&mut head),
                                 )
@@ -2216,25 +2218,19 @@ impl Relay {
                         )
                     });
                     // A spent window about to reset: the request sleeps to the hold's end, the later of the reset and
-                    // the cooldown's end, or to its one bound or its deadline when one of those comes first, and
+                    // the cooldown's end, or to its one bound or its `wait_bound` when one of those comes first, and
                     // selects again with the account still open to it, so the pin renews in place. A wait the bound
-                    // cut short, or one the account left during, passes the account over. A hold's end past the
-                    // request's deadline would end the wait with the request answered exhausted, so that wait is
-                    // refused and the account passed over, and the selection that follows tries a sibling as the
-                    // retry-in-place path does.
+                    // cut short, or one the account left during, passes the account over. A hold that ends at or past
+                    // `wait_bound` could not be waited out inside the head guard, so that wait is refused and the
+                    // account passed over, and the selection that follows tries a sibling as the retry-in-place path
+                    // does.
                     if hold.reason == "reset" {
-                        if admitted
-                            .deadline
-                            .zip(hold.until)
-                            .is_some_and(|(deadline, until)| until >= deadline)
-                        {
+                        if hold.until.is_some_and(|until| until >= admitted.wait_bound) {
                             held_out = true;
                             attempted.push(account_id);
                             continue;
                         }
-                        let end = admitted
-                            .deadline
-                            .map_or(hold_bound, |deadline| deadline.min(hold_bound));
+                        let end = admitted.wait_bound.min(hold_bound);
                         let waited = self
                             .wait_out(hold.until.unwrap_or(now), Some(end), &answer.cancel, None)
                             .await;
@@ -2574,11 +2570,11 @@ impl Relay {
                     t
                 }
             });
-            // A marker-less body that went as sent claims no TTL, whether because it is a count or because
-            // the toggle left it alone: no beta for it, none dropped for it, and none reported. A body that
-            // already carried a marker claims the rewrite's TTL even where the marker already read that way,
-            // so a leg does not lose its report to a rewrite that had nothing left to change. A beta naming an
-            // hour the body does not carry would be the relay's to answer for on a 400.
+            // A marker-less body that went as sent claims no TTL, whether because it is a count, because the
+            // toggle left it alone or because its class is auxiliary: no beta for it, none dropped for it, and
+            // none reported. A body that already carried a marker claims the rewrite's TTL even where the marker
+            // already read that way, so a leg does not lose its report to a rewrite that had nothing left to
+            // change. A beta naming an hour the body does not carry would be the relay's to answer for on a 400.
             let claims_its_ttl = |edits: &BodyEdits| carries_a_marker || edits.cache_ttl_edited;
             // Isolated per account, so a failover never carries one account's previous request id, or the
             // previous message id a diagnostics member names, into another account's memory.
@@ -5181,6 +5177,9 @@ struct Admitted<'a> {
     retry_in_place: Duration,
     target: &'a str,
     trace: &'a Trace,
+    /// The bound a reset wait and a hold sleep under: `deadline` where the head timeout leaves one, else the head
+    /// timeout itself, so a short head timeout bounds the waits that would otherwise outlast it.
+    wait_bound: i64,
 }
 
 /// What one selected account produced: an answer for the caller; nothing, in which case the loop selects the

@@ -2613,12 +2613,16 @@ fn last_wait(record: &DecisionRecord) -> Option<(&'static str, bool)> {
 async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_head() {
     let up = FakeUpstream::start(vec![]).await;
     up.add_credential_rule(B, "/v1/messages", json_200());
-    // The fork's first pass on b reads a throttle it waits out on b, and its retry's head commits at the release.
-    up.push_credential_rule(B, "/v1/messages", json_429_retry_after("1"));
+    // The fork's first pass on b reads a throttle, which the gate holds back until the turn waits and which the fork
+    // waits out on b, and its retry's head commits at the release.
+    up.push_credential_rule(
+        B,
+        "/v1/messages",
+        Respond::Gated(Box::new(json_429_retry_after("1"))),
+    );
     up.push_credential_rule(B, "/v1/messages", stalled_stream());
     let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
-    // The throttle cools b on the relay's clock until its retry is due and a margin past it, so the turn comes after
-    // that, under a cap long enough to hold it there.
+    // A cap long enough to hold the turn through the throttle and the retry's delay.
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.slow_down.slow_down_hold_seconds = 10;
     h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
@@ -2627,18 +2631,25 @@ async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_he
     tokio::time::pause();
     let fork = sent(&h, fork_of("s1"));
     let fork_id = moved_to(&mut events, "b").await;
-    wait_for(Duration::from_secs(5), || (posts(&up) == 3).then_some(())).await;
-    h.clock.store(NOW + 22_500, Ordering::SeqCst);
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
     let turn = sent(&h, request_for(KEY, MODEL, "s1"));
     let held = next_held(&mut events).await;
     let hold = held.outcome.hold.expect("a held outcome");
     assert_eq!(
         (hold.reason, hold.waits_for.as_deref(), hold.until),
         ("rewrite", Some(fork_id.as_str()), Some(NOW + 30_000)),
-        "the throttle the fork retried in place answered nothing for its leg"
+        "the turn waits for the fork's head before the fork's throttle comes"
     );
+    still_held(&up, &turn, 2);
+    up.release_one().await;
+    // The throttle's head answers nothing for the fork's leg, so the turn stays held while the fork waits out the
+    // delay on b and dials its retry.
+    wait_for(Duration::from_secs(5), || (posts(&up) == 3).then_some(())).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     still_held(&up, &turn, 3);
+    // The throttle cooled b on the relay's clock until its retry was due and a margin past it. The clock steps past
+    // that, so the turn's selection after the wait finds b open again.
+    h.clock.store(NOW + 22_500, Ordering::SeqCst);
     up.release();
     let released = tokio::time::Instant::now();
     let turn = answered(turn).await;
@@ -2655,10 +2666,17 @@ async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_he
             .collect::<Vec<_>>(),
         ["rewrite"]
     );
+    let after = after_the_wait(&mut events, &held.request.request_id).await;
     assert_eq!(
-        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        last_wait(&after),
         Some(("rewrite", false)),
         "the retry's head ended the wait inside its bound"
+    );
+    let landed = outcome(&turn).account_id;
+    assert_eq!(
+        after.outcome.account_id.as_deref(),
+        Some(landed.as_str()),
+        "the turn goes out where its selection after the wait landed"
     );
     drain(turn).await;
     drain(answered(fork).await).await;
