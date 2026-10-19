@@ -734,6 +734,7 @@ impl Trace {
         message_id: Option<String>,
         skipped_events: u32,
         interruption: Option<Interruption>,
+        passthrough: Option<String>,
         finished_at: i64,
     ) {
         // Held by value across the publish: a handler dropped while a durable slot is full drops the guard still
@@ -767,6 +768,7 @@ impl Trace {
             message_id,
             skipped_events,
             interruption,
+            passthrough,
             finished_at,
         }))
         .await;
@@ -839,6 +841,7 @@ impl Drop for CompletionGuard {
             message_id: None,
             skipped_events: 0,
             interruption: None,
+            passthrough: None,
             finished_at: (self.trace.clock)(),
         });
         // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
@@ -4181,6 +4184,7 @@ impl Relay {
                 None,
                 0,
                 None,
+                None,
                 (self.clock)(),
             )
             .await;
@@ -4459,6 +4463,15 @@ impl Relay {
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
         let caller_decodes = decoder.is_some();
+        // The client reads the upstream's coding as sent, so the completion names it whichever decoder the bus copy
+        // ends up with, and a copy the router cannot read says nothing of the answer the client received.
+        let passthrough = match encoding(head) {
+            Ok(Encoding::Identity) | Err(_) => None,
+            Ok(_) if caller_decodes => None,
+            Ok(_) => head
+                .get("content-encoding")
+                .map(|coding| coding.trim().to_ascii_lowercase()),
+        };
         // A held stream was decoded and parsed up to its commit by the hold, so the bus copy goes on from there
         // with the hold's decoder and parser.
         let handover = match held {
@@ -4523,6 +4536,7 @@ impl Relay {
                 catalog: self.catalog.clone(),
                 decoder: bus_decoder,
                 decode_failed: false,
+                passthrough,
                 parser,
                 held,
                 on_error,
@@ -4663,6 +4677,7 @@ impl Relay {
                 // An error document carries no message `id`.
                 None,
                 0,
+                None,
                 None,
                 (self.clock)(),
             )

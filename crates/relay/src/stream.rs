@@ -127,6 +127,9 @@ pub(crate) struct Publish {
     /// Set once the decoder above rejected a piece, and never cleared: what follows it is no more readable
     /// than the piece that failed.
     pub decode_failed: bool,
+    /// The coding the client was handed as the upstream sent it, named on the completion whatever the decoder above
+    /// makes of the bytes. `None` where the relay decodes for the caller or the body carries no coding.
+    pub passthrough: Option<String>,
     /// Parses the decoded copy for phases on an event stream, and is `None` for any other body. It skips an event
     /// past its bound and keeps parsing, so an oversized event costs a bounded buffer and its own phase while the
     /// events after it still reach the completion. A held stream's is the hold's own, already past the held events.
@@ -657,6 +660,7 @@ impl Publish {
                 self.message_id.clone(),
                 skipped,
                 interruption,
+                self.passthrough.take(),
                 (self.clock)(),
             )
             .await;

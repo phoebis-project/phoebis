@@ -499,6 +499,16 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 }
             }
         }
+        // Apart from the usage block: a pass-through whose copy the router could not decode read no usage, and its
+        // trace still names the coding the client took.
+        if let (Some(coding), Some(trace)) = (&complete.passthrough, &last.selection) {
+            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trace) {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("passthrough".into(), json!(coding));
+                    last.selection = Some(value.to_string());
+                }
+            }
+        }
         let response = &complete.response;
         last.stop_reason = response.stop_reason.clone();
         last.stop_sequence = response.stop_sequence.clone();
@@ -906,6 +916,7 @@ mod tests {
             message_id: None,
             skipped_events: 0,
             interruption: None,
+            passthrough: None,
             finished_at: 1_500,
         })
     }
@@ -949,6 +960,7 @@ mod tests {
             message_id: None,
             skipped_events: 0,
             interruption: None,
+            passthrough: None,
             finished_at: 1_500,
         }
     }

@@ -495,6 +495,11 @@ pub struct RequestComplete {
     /// `None` for a clean end, a client that left, a local answer, and an error stream the upstream sent whole (the
     /// forwarded error's arm and an `error` event after the head).
     pub interruption: Option<Interruption>,
+    /// The coding of a streamed body the relay passed through as sent (`br`, `deflate`, `gzip` or `zstd`), named
+    /// whatever the relay's own copy made of the bytes. `None` for a body the relay decoded for the caller, an
+    /// identity body, a local answer, a client that left before the body, and a buffered answer forwarded whole,
+    /// whose outcome is the error's own.
+    pub passthrough: Option<String>,
     pub finished_at: i64,
 }
 

@@ -316,6 +316,9 @@ behind.
 | `403` `permission_error` | `FailOver` | Another account, the model cooled on this one for an hour, reason `permission` |
 | Anything else (a `2xx`, any other `4xx` or `5xx`) | `Commit` | The upstream's answer reaches the client as sent |
 
+A coded answer the client accepts passes through as sent and records as succeeded even where the router's own copy of
+the bytes does not decode, with the coding named among the attempt's stored facts as `passthrough`.
+
 The cooldown tables, the windows and the reasons are on [Cooldowns and failover](routing.md#cooldowns-and-failover).
 The rate-limit families the router reads off a head are `anthropic-ratelimit-unified-*`, `anthropic-ratelimit-*` and
 `anthropic-fast-*`. A connection that fails before the whole request was written is retried once on a fresh connection,

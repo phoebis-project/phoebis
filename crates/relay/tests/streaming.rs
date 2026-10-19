@@ -1478,6 +1478,104 @@ async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_t
     up.shutdown().await;
 }
 
+/// One streamed `200` answered by `respond` to `request`: the coding the client was answered in, the body it read to
+/// the end, and the completion the bus carried.
+async fn one_coded_stream(
+    respond: Respond,
+    request: Request<Body>,
+) -> (Option<String>, Bytes, phoebis_bus::RequestComplete) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond,
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let coding = resp
+        .headers()
+        .get("content-encoding")
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let complete = completion(&mut sub).await;
+    up.shutdown().await;
+    (coding, body, complete)
+}
+
+#[tokio::test]
+async fn a_gzip_stream_passed_through_whose_copy_does_not_decode_records_as_succeeded_naming_its_coding(
+) {
+    // The client takes the coding, so it reads the bytes as sent: only the router's own copy fails to inflate
+    // them, which says nothing of the answer the client received.
+    let events = [
+        message_start_event(),
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let wire = corrupt_gzip(rendered(&events).as_bytes());
+    let (coding, body, complete) = one_coded_stream(
+        Respond::Chunked {
+            status: 200,
+            headers: vec![
+                ("Content-Type".into(), "text/event-stream".into()),
+                ("Content-Encoding".into(), "gzip".into()),
+            ],
+            body: wire.clone(),
+        },
+        common::stream_request(common::KEY),
+    )
+    .await;
+    assert_eq!(coding.as_deref(), Some("gzip"));
+    assert_eq!(
+        body.as_ref(),
+        wire.as_slice(),
+        "the client reads the bytes as sent"
+    );
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Succeeded, None)
+    );
+    assert_eq!(
+        (complete.passthrough.as_deref(), complete.interruption),
+        (Some("gzip"), None),
+        "the completion names the coding and no cut"
+    );
+}
+
+#[tokio::test]
+async fn a_gzip_stream_passed_through_whose_copy_decodes_names_its_coding_on_the_completion() {
+    let events = [
+        message_start_event(),
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let (coding, _, complete) =
+        one_coded_stream(gzipped_stream(&events), common::stream_request(common::KEY)).await;
+    assert_eq!(coding.as_deref(), Some("gzip"));
+    assert_eq!(
+        (complete.outcome, complete.passthrough.as_deref()),
+        (phoebis_bus::Outcome::Succeeded, Some("gzip")),
+        "the hold's decoder carries the copy, and the client still took the coding as sent"
+    );
+}
+
+#[tokio::test]
+async fn a_gzip_stream_the_relay_decodes_for_the_caller_names_no_pass_through() {
+    let events = [
+        message_start_event(),
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let (coding, body, complete) =
+        one_coded_stream(gzipped_stream(&events), identity_request()).await;
+    assert_eq!(coding, None, "the relay drops the coding it decoded");
+    assert_eq!(String::from_utf8(body.to_vec()).unwrap(), rendered(&events));
+    assert_eq!(
+        (complete.outcome, complete.passthrough),
+        (phoebis_bus::Outcome::Succeeded, None)
+    );
+}
+
 #[tokio::test]
 async fn a_connection_cut_after_the_head_answers_502_upstream_cut_and_files_stream_cut() {
     // The cut comes before any committing event, so the hold has nothing the client could be sent.

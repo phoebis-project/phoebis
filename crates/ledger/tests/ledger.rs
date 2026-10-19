@@ -1135,6 +1135,7 @@ fn complete_event(id: &str) -> BusEvent {
         message_id: None,
         skipped_events: 0,
         interruption: None,
+        passthrough: None,
         finished_at: 1,
     })
 }
@@ -4884,6 +4885,49 @@ fn an_attempt_keeps_its_selection_trace_with_the_cache_read_folded_in() {
         serde_json::from_str(attempts[0].selection.as_deref().unwrap()).unwrap();
     assert_eq!(selection["strategy"], "pace");
     assert_eq!(selection["cache_read"], 42);
+}
+
+/// The trace `r1`'s first attempt stores once its completion lands with `usage`, naming `coding` as passed through.
+fn stored_trace_of_a_pass_through(usage: Option<Usage>, coding: &str) -> serde_json::Value {
+    let trace = r#"{"strategy":"pace","tier":[0,1,0],"renewed":false,"moved":null,"skipped":[]}"#;
+    let mut assembler = Assembler::new(Arc::new(|| NOW));
+    assembler.observe(observed_event("r1"));
+    assembler.observe(selected_event_with_trace("r1", 1, "a", minutes(1), trace));
+    let BusEvent::RequestComplete(mut complete) = complete_event("r1") else {
+        unreachable!()
+    };
+    complete.attempt = 1;
+    complete.account_id = Some("a".into());
+    complete.usage = usage;
+    complete.passthrough = Some(coding.into());
+    let records = assembler.observe(BusEvent::RequestComplete(complete));
+    let [Record::Request { attempts, .. }] = records.as_slice() else {
+        panic!("{} records at completion", records.len());
+    };
+    serde_json::from_str(attempts[0].selection.as_deref().unwrap()).unwrap()
+}
+
+#[test]
+fn a_passed_through_answer_without_usage_stores_its_coding_in_the_attempts_trace() {
+    let selection = stored_trace_of_a_pass_through(None, "gzip");
+    assert_eq!(selection["strategy"], "pace");
+    assert_eq!(
+        selection["passthrough"], "gzip",
+        "a copy that did not decode read no usage, and the fact still lands"
+    );
+}
+
+#[test]
+fn a_passed_through_answer_with_usage_stores_its_coding_beside_the_cache_read() {
+    let selection = stored_trace_of_a_pass_through(
+        Some(Usage {
+            cache_read_tokens: Some(42),
+            ..Usage::default()
+        }),
+        "gzip",
+    );
+    assert_eq!(selection["cache_read"], 42);
+    assert_eq!(selection["passthrough"], "gzip");
 }
 
 /// An assembler on a clock the test steps, with `r1` observed and its first attempt selected at `NOW + 10`.

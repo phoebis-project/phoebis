@@ -166,7 +166,7 @@ pub struct AttemptRecord {
     pub cleared_input_tokens: Option<u64>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
-    /// The trace as stored, `cache_read` folded in at completion.
+    /// The trace as stored, `cache_read` and `passthrough` folded in at completion.
     pub selection: Option<String>,
     /// When the relay flushed the request body to this attempt's upstream, as the response head reported it.
     pub written_at: Option<i64>,
