@@ -19,7 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, GUARDRAIL_BLOCKED, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, ratioOff, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, ratioOff, readBurn, sampledWindows, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -634,7 +634,7 @@ export function AnalyticsPage() {
 
       {tab === 'traffic' && (
         <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${fmtPct(errorRateOf(totals), 1)} errors`}>
-          <div className="grid-2">
+          <div className="grid-2 traffic-grid">
             <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
               <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
@@ -647,11 +647,16 @@ export function AnalyticsPage() {
               </BarChart>
             </ChartCard>
 
-            <Card title="Errors by code" subtitle="Non-200 responses in range, the guardrail blocks left out">
+            <Card title="Errors by code" subtitle="Non-200 responses in range, the refused requests left out">
               {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
             </Card>
 
-            {/* Failovers and the rewrites share a row, so what a move cost the cache sits beside the failovers. */}
+            {/* The refusals follow the errors, so the two code lists read in turn, and the grid then pairs Failovers
+                with the refusals and the rewrites with the speed chart. */}
+            <Card title="Refusals by code" subtitle="Requests the router refused before any account was asked, not in the counts">
+              {loading ? <Skeleton height={90} /> : <ErrorBars color={ink.series[7]} empty="No request was refused in this range." errors={totals.refusals} />}
+            </Card>
+
             <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
               <LineChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />
@@ -683,12 +688,12 @@ export function AnalyticsPage() {
             title={`Traffic by ${groupLabel.toLowerCase()}`}
             loading={loading}
             groupLabel={groupLabel}
-            columns={['Requests', 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', 'Error rate', 'Failovers', 'Search', 'Fetch']}
+            columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', 'Refused', <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
             rows={groups.map((g) => ({
               key: g.key,
               label: modelGroupLabel(g, groupBy),
               // Search and Fetch count the server-tool calls the group's answers made, not tokens.
-              cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
+              cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
             }))}
           />
         </Section>
@@ -1479,12 +1484,11 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
   );
 }
 
-function ErrorBars({ errors, color }: { color: string; errors: Record<string, number> }) {
+function ErrorBars({ errors, color, empty = 'No errors in range.' }: { color: string; empty?: string; errors: Record<string, number> }) {
   const rows = Object.entries(errors)
-    .filter(([label]) => label !== GUARDRAIL_BLOCKED)
     .map(([label, count]) => ({ count, label }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-  return <CountBars color={color} empty="No errors in range." rows={rows} />;
+  return <CountBars color={color} empty={empty} rows={rows} />;
 }
 
 /** Requests per effort level, each named as the rollups file it; `none`, the requests that asked for no level, last. */

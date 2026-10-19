@@ -14,7 +14,8 @@ export function shapeOf(v) {
 export const OPAQUE = (path) => path.endsWith('.detail');
 
 /** An open map (`AnalyticsGroup.errors`, `Record<string, number>`) holds one entry per error code observed in
- * the range; its keys are data, not schema. `cacheMissReasons` is one too past its eight known keys, since the
+ * the range; its keys are data, not schema. A group's `refusals` is one by refusal code, keyed apart in the mock and
+ * the fixture by design. `cacheMissReasons` is one too past its eight known keys, since the
  * route answers any name the beta sent, unlike a closed enum-keyed record such as `wastedProbeReasons`, which
  * decodes with every key always present and stays checked by key set; so is `Pool.movesPerHour`, one entry per
  * move reason seen in the last hour, the rewrite route's `moves`, the same over the range, and a window fit's
@@ -24,7 +25,7 @@ export const OPAQUE = (path) => path.endsWith('.detail');
  * `probeShares` and `probeEquivalent` (an object per window) and an account hour's `windows` (a sample per window).
  * Matched by path only where the fixture's own shape there is an object, so a same-named scalar
  * (`Overview.hourly[].errors`, a plain count) still takes the ordinary type check below. */
-const MAP_PATHS = ['.errors', '.cacheMissReasons', '.movesPerHour', '.moves', '.corrections', '.costShares', '.costEquivalent', '.cacheShares', '.cacheEquivalent', '.probeShares', '.probeEquivalent', '.savingShares', '.savingEquivalent', '.windows'];
+const MAP_PATHS = ['.errors', '.refusals', '.cacheMissReasons', '.movesPerHour', '.moves', '.corrections', '.costShares', '.costEquivalent', '.cacheShares', '.cacheEquivalent', '.probeShares', '.probeEquivalent', '.savingShares', '.savingEquivalent', '.windows'];
 const MAP = (path, want) => MAP_PATHS.some((suffix) => path.endsWith(suffix)) && typeof want === 'object' && want !== null && !Array.isArray(want);
 /**
  * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share and

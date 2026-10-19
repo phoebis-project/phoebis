@@ -1496,7 +1496,7 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 9);
+  assert.equal(all.requests, 7, 'the two requests the route flagged refused leave the count');
   assert.equal(all.succeeded, 5);
   assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
   assert.equal(all.incomplete, 1);
@@ -1734,7 +1734,8 @@ test('a sum of groups adds the 20x equivalents per window, the billed side and t
   assert.equal(mixed.equivalentSplit, null, 'a fold carries one total, so the split by kind is unknown');
   close(mixed.billedUsd, a.billedUsd + b.billedUsd + folded.billedUsd, 'billedUsd with the fold');
   for (const w of keys(a.costEquivalent, b.costEquivalent, folded.costEquivalent)) close(mixed.costEquivalent[w], (a.costEquivalent[w] ?? 0) + (b.costEquivalent[w] ?? 0) + (folded.costEquivalent[w] ?? 0), `costEquivalent.${w} with the fold`);
-  const planRows = rows.filter((r) => d.costUnitOf(r, 'native').kind !== 'dollars');
+  // A refused row joins no count of the fold, its plan counts among them.
+  const planRows = rows.filter((r) => !r.refused && d.costUnitOf(r, 'native').kind !== 'dollars');
   assert.deepEqual([folded.planRequests, folded.planOutputTokens], [planRows.length, planRows.reduce((n, r) => n + r.usage.output, 0)], 'a fold counts its plan rows under every grouping, as the route counts them');
   assert.deepEqual([mixed.planRequests, mixed.planOutputTokens], [routeOnly.planRequests + folded.planRequests, routeOnly.planOutputTokens + folded.planOutputTokens], 'and the counts sum');
   // A group the route answered no count for is skipped while another carries one.
@@ -1922,7 +1923,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 8], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 6], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -1972,6 +1973,29 @@ test('the dashboard reads its billed dollars, its 20x equivalents and its estima
   const busy = wire.hourly.findIndex((h) => h.requests > 0);
   assert.deepEqual([o.hourly[busy].billed, o.hourly[busy].equivalent], [wire.hourly[busy].billed, shared(wire.hourly[busy].equivalent)], "an hour's billed dollars and equivalents");
   assert.equal(d.decodeDashboard({ ...wire, estimated_24h: true }).estimated24h, true, 'a fallback-priced day reads estimated');
+});
+
+test('a breakdown group decodes its refused requests by code, the count the sum of the map', () => {
+  const g = d.decodeAnalyticsGroup(fixture('analytics_breakdown').rows[0]);
+  assert.equal(g.refused, 2);
+  assert.deepEqual({ ...g.refusals }, { client_contract: 1, guardrail_blocked: 1 });
+  assert.equal(g.refused, Object.values(g.refusals).reduce((a, b) => a + b, 0));
+});
+
+test("the dashboard decodes the day's refused requests, their most common code and the refused per hour", () => {
+  const o = d.decodeDashboard(fixture('dashboard'));
+  assert.equal(o.refused24h, 2);
+  assert.equal(typeof o.topRefusalCode, 'string');
+  assert.ok(o.hourly.every((h) => typeof h.refused === 'number'), JSON.stringify(o.hourly.map((h) => h.refused)));
+  assert.equal(o.hourly.reduce((n, h) => n + h.refused, 0), 2);
+});
+
+test('a request row decodes its refused flag, false on a row from a capture without it', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const flag = (id) => rows.find((r) => r.id === id)?.refused;
+  assert.deepEqual([flag('r-blocked'), flag('r-contract'), flag('r-captured')], [true, true, false]);
+  assert.equal(d.decodeRequest({}).refused, false);
+  assert.equal(d.decodeRequest({ refused: true }).refused, true);
 });
 
 test('the dashboard, sessions, recipes, and overview decode', () => {

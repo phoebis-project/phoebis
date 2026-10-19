@@ -844,7 +844,18 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 }
 
 let m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
+{
+  const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
+  const read = (t) => [t?.querySelector('.stat__label')?.textContent ?? null, t?.querySelector('.stat__value')?.textContent ?? null, t?.querySelector('.stat__note')?.textContent ?? null];
+  const requestsHint = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
+  const rateHint = 'Errors among the requests the router asked an account for, the refused requests left out';
+  results.push({
+    name: "/ the Refused tile reads the mock's zero with the note None and the two tiles carry their hints",
+    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '0', 'None']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint,
+    missing: [JSON.stringify(read(tiles[4])), `first tile ${tiles[0]?.getAttribute('title') ?? 'no title'}`, `fourth tile ${tiles[3]?.getAttribute('title') ?? 'no title'}`],
+  });
+}
 columnsMarked('/ the recent requests table marks Key as its fill column', m.container.querySelector('.dash__recent'), ['Key']);
 fillTitles('/ every Key cell of the recent requests table carries its own text as its title', m.container.querySelector('.dash__recent'));
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
@@ -1838,7 +1849,7 @@ await readsAgain('/', 'getOverview', 30_000);
   const failed = line()?.textContent ?? '';
   results.push({
     name: '/ the as-of line moves after a refresh and names a failed one',
-    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh of the 24-hour figures failed: ledger locked. Showing data as of ') && drawn.length === 4 && JSON.stringify(tiles()) === JSON.stringify(drawn),
+    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh of the 24-hour figures failed: ledger locked. Showing data as of ') && drawn.length === 5 && JSON.stringify(tiles()) === JSON.stringify(drawn),
     missing: [`title ${before} then ${after}`, failed || 'no line', JSON.stringify(drawn), JSON.stringify(tiles())],
   });
   page.unmount();
@@ -14307,30 +14318,41 @@ m.unmount();
 }
 
 {
-  // The route's answer with three requests a guardrail blocked in its first group: the Traffic line counts them, and
-  // its rate and the Errors by code card leave them out, so the rate reads as it did without them.
-  const blocksCheck = '/analytics the Traffic line counts the requests a guardrail blocked, and its rate and the Errors by code card leave them out';
+  // The route's answer with three refusals in its first group's map and its counts as they were: the Traffic line
+  // reads as it did, the Refused column and the Refusals by code card read the three, and Errors by code holds none.
+  const refusedCheck = '/analytics the Refused column, the Refusals by code card and the Traffic line read a refused group apart from the counts';
   const lineOf = (page) => /([\d,]+) requests, ([\d.]+)% errors/.exec(page.text());
   const plain = await mount('/analytics');
   const before = lineOf(plain);
   plain.unmount();
   const breakdownOf = api.getAnalyticsBreakdown;
-  api.getAnalyticsBreakdown = async (...args) => (await breakdownOf.apply(api, args)).map((g, i) => (i === 0 ? { ...g, errors: { ...g.errors, guardrail_blocked: 3 }, rejected: g.rejected + 3, requests: g.requests + 3 } : g));
-  const blocked = await mount('/analytics');
-  const after = lineOf(blocked);
-  const text = blocked.text();
+  api.getAnalyticsBreakdown = async (...args) => (await breakdownOf.apply(api, args)).map((g, i) => (i === 0 ? { ...g, refused: 3, refusals: { ...g.refusals, guardrail_blocked: 3 } } : g));
+  const refused = await mount('/analytics');
+  const after = lineOf(refused);
+  const cardOf = (title) => [...refused.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  const codesOf = (title) => [...(cardOf(title)?.querySelectorAll('.hbars li > .mono') ?? [])].map((s) => s.textContent?.trim());
+  const table = cardOf('Traffic by key')?.querySelector('table');
+  const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+  const first = [...(table?.querySelector('tbody tr')?.children ?? [])].map((td) => td.textContent?.trim());
+  const column = heads.indexOf('Rejected') + 1;
   results.push({
-    name: blocksCheck,
-    ok: before !== null && after !== null && Number(after[1].replace(/,/g, '')) === Number(before[1].replace(/,/g, '')) + 3 && after[2] === before[2] && !text.includes('guardrail_blocked') && text.includes('api_error'),
-    missing: [`before ${before?.[0] ?? 'no line'}`, `after ${after?.[0] ?? 'no line'}`, text.includes('guardrail_blocked') ? 'guardrail_blocked listed' : 'guardrail_blocked absent', text.includes('api_error') ? 'api_error listed' : 'api_error absent'],
+    name: refusedCheck,
+    ok: before !== null && after !== null && after[0] === before[0] && column > 0 && heads[column] === 'Refused' && first[column] === '3' && codesOf('Refusals by code').includes('guardrail_blocked') && cardOf('Errors by code') !== undefined && !codesOf('Errors by code').includes('guardrail_blocked'),
+    missing: [`before ${before?.[0] ?? 'no line'}`, `after ${after?.[0] ?? 'no line'}`, `${heads[column] ?? 'no column'} after Rejected reads ${first[column] ?? 'no cell'}`, `Refusals by code ${JSON.stringify(codesOf('Refusals by code'))}`, `Errors by code ${JSON.stringify(codesOf('Errors by code'))}`],
   });
   delete api.getAnalyticsBreakdown;
-  blocked.unmount();
+  refused.unmount();
 }
 
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'the guardrail blocks left out', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'desktop', 'laptop', 'in range']);
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Non-200 responses in range, the refused requests left out', 'Refusals by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
+{
+  const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
+  const hinted = [...(table?.querySelectorAll('thead th') ?? [])].filter((th) => th.querySelector('[title]') !== null).map((th) => [th.textContent?.trim(), th.querySelector('[title]').getAttribute('title')]);
+  const hint = 'The refused requests are left out, see the Refused column';
+  results.push({ name: '/analytics the Requests and Error rate headers of the Traffic table say the refused requests are left out', ok: JSON.stringify(hinted) === JSON.stringify([['Requests', hint], ['Error rate', hint]]), missing: hinted.length ? hinted.map((h) => h.join(': ')) : ['no header carries a hint'] });
+}
 await tab(m, 'Latency');
 expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
 await tab(m, 'Cache');
@@ -16726,7 +16748,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
       results.push({
         name: '/analytics grouped by model the Traffic table names the requests the router rejected before routing "no model", with their figures',
-        ok: row.length === 12 && figure(1) > 0 && figure(2) === 0 && row[8] === '100.0%',
+        ok: row.length === 13 && figure(1) > 0 && figure(2) === 0 && row[9] === '100.0%',
         missing: row.length ? row : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
       });
     }
@@ -17378,11 +17400,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const sums = want.get(r.canonicalModel) ?? [0, 0];
       want.set(r.canonicalModel, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
     }
-    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[10]) !== sums[0] || num(row[11]) !== sums[1]; });
+    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[11]) !== sums[0] || num(row[12]) !== sums[1]; });
     results.push({
       name: '/analytics a session sums the server-tool calls per model the way the routes sum them',
       ok: perModel.length > 0 && wrong.length === 0,
-      missing: wrong.map((row) => `${row[0]} ${row[10]}/${row[11]} against ${(want.get(row[0]) ?? []).join('/')}`),
+      missing: wrong.map((row) => `${row[0]} ${row[11]}/${row[12]} against ${(want.get(row[0]) ?? []).join('/')}`),
     });
 
     const agentFold = '/analytics a user agent pattern nothing matches empties the session fold';
@@ -21791,7 +21813,7 @@ m.unmount();
     return button !== undefined && button !== null;
   };
   const counts = (outage) => Object.fromEntries(Object.entries(outage.calls).map(([name, calls]) => [name, calls.length]));
-  const tilesDrawn = (page) => page.container.querySelectorAll('.stat-grid > .stat').length === 4 && tilesFailure(page) === null;
+  const tilesDrawn = (page) => page.container.querySelectorAll('.stat-grid > .stat').length === 5 && tilesFailure(page) === null;
 
   let outage = failCalls(READS, 'ledger locked');
   let page = await mount('/', { now: CLOCK_ORIGIN });

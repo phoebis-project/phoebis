@@ -769,6 +769,8 @@ export interface RequestLog {
   poolId: string | null;
   /** The sum of the client's `x-claude-code-prev-tool-durations`, in milliseconds. */
   prevToolMs: number | null;
+  /** The router refused the request before any account was asked, so the figures leave it out and the logs list it. */
+  refused: boolean;
   /** `x-claude-code-request-class` as the client sent it; `null` when it sent none. */
   requestClass: string | null;
   requestTruncated: boolean;
@@ -1445,6 +1447,9 @@ export interface AnalyticsGroup {
   /** `wasted` is null while the group's probe dollars are zero, and the map is null whole on a fold, which prices no probe share. */
   probeShares: Record<string, { cost: number; wasted: number | null }> | null;
   rateLimited: number;
+  /** The refused requests of the group by error code, each counted here and in `refused`, never in `requests`. */
+  refusals: Record<string, number>;
+  refused: number;
   rejected: number;
   requests: number;
   /** The kept-warm saving in the 20x window equivalent by window key, empty without one. */
@@ -1918,11 +1923,14 @@ export interface Overview {
   /** True when any request of the day priced through the model tier's fallback weight. */
   estimated24h: boolean;
   /** `billed` and `equivalent` split each hour as `billed24h` and `equivalent24h` split the day. */
-  hourly: { at: string; billed: number; cost: number; equivalent: SharedEquivalent; errors: number; requests: number; tokens: number }[];
+  hourly: { at: string; billed: number; cost: number; equivalent: SharedEquivalent; errors: number; refused: number; requests: number; tokens: number }[];
+  /** The requests the router refused before any account was asked, not in `requests24h`. */
+  refused24h: number;
   requests24h: number;
   tokens24h: number;
   tokensCached24h: number;
   topErrorCode: string | null;
+  topRefusalCode: string | null;
 }
 
 /** Observe records a match on the request, enforce refuses the request with a 403. */

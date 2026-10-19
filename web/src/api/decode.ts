@@ -511,7 +511,7 @@ export function decodeRequest(v: unknown): RequestLog {
     kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: REQUEST_OUTCOME_VALUES.find((o) => o === str(r.outcome)) ?? 'failed',
     phases: phasesOf(r.phases, isoOr(r.at, epoch)),
-    poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), requestClass: strOrNull(r.request_class), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape), shareReason: r.share_reason === 'client_classifier' ? 'client_classifier' : null,
+    poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), refused: r.refused === true, requestClass: strOrNull(r.request_class), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape), shareReason: r.share_reason === 'client_classifier' ? 'client_classifier' : null,
     status: numOrNull(r.status), tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
 }
@@ -753,7 +753,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     probeEquivalent: equivalentMap(g.probe_equivalent, (e) => ({ cost: num(e.cost), wasted: num(e.wasted) })),
     probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
     probeShares: shareMap(g.probe_shares, (e) => ({ cost: num(e.cost), wasted: numOrNull(e.wasted) })),
-    rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),
+    rateLimited: num(g.rate_limited), refusals: counts(g.refusals), refused: num(g.refused), rejected: num(g.rejected), requests: num(g.requests),
     savingEquivalent: numberMap(g.saving_equivalent),
     savingShares: g.saving_shares === null || g.saving_shares === undefined ? null : numberMap(g.saving_shares),
     savingUsd: num(g.saving_usd),
@@ -834,11 +834,13 @@ export function decodeDashboard(v: unknown): Overview {
     equivalent24h: sharedEquivalent(d.equivalent_24h),
     errorRate24h: numOrNull(d.error_rate_24h),
     estimated24h: bool(d.estimated_24h),
-    hourly: list(d.hourly).map(rec).map((h) => ({ at: isoOr(h.at, epoch), billed: num(h.billed), cost: num(h.cost), equivalent: sharedEquivalent(h.equivalent), errors: num(h.errors), requests: num(h.requests), tokens: num(h.tokens) })),
+    hourly: list(d.hourly).map(rec).map((h) => ({ at: isoOr(h.at, epoch), billed: num(h.billed), cost: num(h.cost), equivalent: sharedEquivalent(h.equivalent), errors: num(h.errors), refused: num(h.refused), requests: num(h.requests), tokens: num(h.tokens) })),
+    refused24h: num(d.refused_24h),
     requests24h: num(d.requests_24h),
     tokens24h: num(d.tokens_24h),
     tokensCached24h: num(d.tokens_cached_24h),
     topErrorCode: strOrNull(d.top_error_code),
+    topRefusalCode: strOrNull(d.top_refusal_code),
   };
 }
 

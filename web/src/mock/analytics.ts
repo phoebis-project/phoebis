@@ -362,6 +362,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
     probeShares: shares.probeShares,
     rateLimited,
+    refusals: emptyCounts(),
+    refused: 0,
     rejected: 0,
     requests,
     savingShares: shares.savingShares,

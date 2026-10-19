@@ -4469,6 +4469,12 @@
   grid-column: 1 / -1;
 }
 
+/* The Traffic grid's last card spans the row where the count is odd, as the Burn grid's does, rather than leaving a half
+   empty beside it. */
+.traffic-grid > .card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .grid-2 > .card:has(.split-pair) {
   grid-column: 1 / -1;
 }

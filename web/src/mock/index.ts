@@ -925,7 +925,7 @@ export class MockApi implements Api {
       const startMs = Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000;
       const at = iso(startMs);
       const { billedUsd, equivalent } = requestSidesOf(last24h.filter((r) => Date.parse(r.at) >= startMs && Date.parse(r.at) < startMs + 3_600_000));
-      hourlyMap.set(at, { at, billed: billedUsd, cost: 0, equivalent, errors: 0, requests: 0, tokens: 0 });
+      hourlyMap.set(at, { at, billed: billedUsd, cost: 0, equivalent, errors: 0, refused: 0, requests: 0, tokens: 0 });
     }
     let tokens = 0;
     let cached = 0;
@@ -961,10 +961,12 @@ export class MockApi implements Api {
       errorRate24h: rated.length ? rated.filter((r) => r.status !== 200).length / rated.length : null,
       estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
+      refused24h: 0,
       requests24h: last24h.length,
       tokens24h: tokens,
       tokensCached24h: cached,
       topErrorCode: top ? top[0] : null,
+      topRefusalCode: null,
     });
   }
 

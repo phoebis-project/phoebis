@@ -716,6 +716,42 @@ async function attentionLineNarrow(theme) {
   if (!wide || wide.wrapped || Math.abs(wide.height - 22) > 0.5) failures.push(`${theme} /: back at 1280 px the attention line reads ${JSON.stringify(wide)}, not one 22 px row`);
 }
 
+/**
+ * The dashboard's stat grid at the pass's viewport and at 400 by 900: all five tiles drawn, wrapping as the grid's
+ * columns let them, and none past the grid's right edge. The tiles and the rows they fill go to the measurements at
+ * both widths, and the viewport is the pass's again after.
+ */
+async function statGrid(theme) {
+  const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
+  const read = () =>
+    page.evaluate(() => {
+      const grid = document.querySelector('.stat-grid');
+      if (!grid) return null;
+      const right = grid.getBoundingClientRect().right;
+      const tiles = [...grid.querySelectorAll(':scope > .stat')].map((t) => t.getBoundingClientRect());
+      return { past: tiles.filter((t) => t.right > right + 0.5).length, rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length };
+    });
+  try {
+    for (const width of [viewport.width, 400]) {
+      if (width !== viewport.width) {
+        await page.setViewportSize({ height: 900, width });
+        await settle();
+      }
+      const grid = await read();
+      measurements.push(`${theme} / stat grid at ${width} px: ${grid?.tiles ?? 0} tiles over ${grid?.rows ?? 0} rows`);
+      const say = (what) => failures.push(`${theme} /: at ${width} px the stat grid ${what}`);
+      if (!grid) say('is not drawn');
+      else {
+        if (grid.tiles < 5) say(`draws ${grid.tiles} tiles, not five`);
+        if (grid.past > 0) say(`draws ${grid.past} tiles past its right edge`);
+      }
+    }
+  } finally {
+    await page.setViewportSize(viewport);
+    await settle();
+  }
+}
+
 /** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
 async function topbarHeights(theme) {
   const read = await page.evaluate(() => {
@@ -4605,12 +4641,13 @@ async function refreshControlWidth(theme) {
 /**
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
- * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
- * type and its track), Fast mode spend against the first tile, Cost under a fresh browser's native position (the tile
- * box and its figure's type). Migration rewrites, which grows taller than its row partner with the held chart under
- * its moves, stands against Failovers (title type, card width, the row's top and height, the first chart's height),
- * and in the mock pass, whose story holds requests for the slow-down, draws the held chart's bars in the warning tone.
- * The cards are read on the Traffic tab and the tiles on Cost.
+ * Effort levels against Errors by code (title type, and where both draw bars, the bar row, its label type and its
+ * track), Fast mode spend against the first tile, Cost under a fresh browser's native position (the tile box and its
+ * figure's type). Effort levels ends the grid alone, so it spans the grid's row. Refusals by code follows Errors by
+ * code, so the grid pairs it with Failovers (title type, card width, the row's top and height), and Migration
+ * rewrites, which grows taller than its row partner with the held chart under its moves, with Requests by speed (the
+ * same, and the first chart's height). In the mock pass, whose story holds requests for the slow-down, the rewrites
+ * card draws the held chart's bars in the warning tone. The cards are read on the Traffic tab and the tiles on Cost.
  */
 async function trafficCards(theme) {
   // The cards and tiles the shown tab draws; one on another tab is not mounted and reads as null.
@@ -4629,6 +4666,7 @@ async function trafficCards(theme) {
           charts: el.querySelectorAll('.recharts-responsive-container').length,
           height: Math.round(el.getBoundingClientRect().height),
           label: type(bar?.children[0]),
+          row: Math.round(el.parentElement.getBoundingClientRect().width),
           section: el.closest('.analytics-section')?.id ?? null,
           title: type(el.querySelector('.card__title')),
           top: Math.round(el.getBoundingClientRect().top),
@@ -4653,7 +4691,7 @@ async function trafficCards(theme) {
         const b = el.getBoundingClientRect();
         return { height: Math.round(b.height), value: type(el.querySelector('.stat__value')), width: Math.round(b.width) };
       };
-      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), failovers: box('Failovers'), fastSpend: tile('Fast mode spend'), held, outcome: box('Requests by outcome'), rewrites: box('Migration rewrites'), speed: box('Requests by speed') };
+      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), failovers: box('Failovers'), fastSpend: tile('Fast mode spend'), held, outcome: box('Requests by outcome'), refusals: box('Refusals by code'), rewrites: box('Migration rewrites'), speed: box('Requests by speed') };
     });
   try {
     if (!(await tabTo(theme, 'Traffic'))) return;
@@ -4664,10 +4702,12 @@ async function trafficCards(theme) {
     measurements.push(`${theme} /analytics speed and effort ${JSON.stringify(read)}`);
     failures.push(...compare(read.speed, read.outcome, ['chart', 'section', 'title', 'width'], `${theme} /analytics: "Requests by speed" against "Requests by outcome"`));
     const bars = read.effort?.bar !== null && read.errors?.bar !== null ? ['bar', 'label', 'track'] : [];
-    failures.push(...compare(read.effort, read.errors, ['section', 'title', 'width', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
+    failures.push(...compare(read.effort, read.errors, ['section', 'title', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
+    if (read.effort && Math.abs(read.effort.width - read.effort.row) > 1) failures.push(`${theme} /analytics: the Effort levels card ends the grid alone at ${read.effort.width}px, not across its ${read.effort.row}px row`);
     failures.push(...compare(read.fastSpend, read.cost, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Cost`));
     if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
-    failures.push(...compare(read.rewrites, read.failovers, ['chart', 'height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Failovers"`));
+    failures.push(...compare(read.refusals, read.failovers, ['height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Refusals by code" against "Failovers"`));
+    failures.push(...compare(read.rewrites, read.speed, ['chart', 'height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Requests by speed"`));
     if (mock && (read.rewrites?.charts !== 2 || !read.held || read.held.bars === 0)) failures.push(`${theme} /analytics: the story holds requests for the slow-down, yet the rewrites card draws no held bar under its moves (${JSON.stringify(read.held)})`);
     if (read.held && read.held.fills.some((fill) => fill !== read.held.warning)) failures.push(`${theme} /analytics: the held bars draw ${read.held.fills.join(', ')}, not the warning ink ${read.held.warning}`);
   } finally {
@@ -8095,6 +8135,7 @@ try {
       if (view.path === '/') {
         await sidebarBrand(theme);
         await attentionLine(theme);
+        await statGrid(theme);
         await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {

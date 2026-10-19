@@ -548,7 +548,9 @@ test('the session fold files a request under the speed its serving attempt repor
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const served = (r) => r.attempts.at(-1)?.response.speed;
   const speedOf = (r) => served(r) ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
-  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', rows.filter((r) => speedOf(r) === 'fast').length], ['standard', rows.filter((r) => speedOf(r) !== 'fast').length]]);
+  // The route flags the requests it refused before any account, which the fold counts under no speed.
+  const flagged = new Set(fixture('requests').requests.filter((r) => r.refused).map((r) => r.id));
+  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', rows.filter((r) => speedOf(r) === 'fast').length], ['standard', rows.filter((r) => !flagged.has(r.id) && speedOf(r) !== 'fast').length]]);
   const named = rows.find((r) => served(r) === 'fast');
   const unnamed = { ...named, attempts: named.attempts.map((a) => ({ ...a, response: { ...a.response, speed: null } })) };
   assert.deepEqual(d.foldGroups([unnamed], 'speed').map((g) => g.key), ['standard'], 'an answer that named no speed files as standard, as the rollups file it');
@@ -1027,12 +1029,17 @@ test('ratioOff marks a ratio outside the band after a rise of five percent', () 
   assert.deepEqual([0.8, 1.25].map((ratio) => d.ratioOff({ observedRise: 0.3, ratio })), [false, false], 'the edges sit inside the band');
 });
 
-test('the error rate leaves the requests a guardrail blocked out of both sides, as the Dashboard tile does', () => {
-  const day = { errors: { guardrail_blocked: 684, upstream_unreachable: 13 }, requests: 26_112, succeeded: 25_407 };
-  assert.equal(d.blockedOf(day), 684);
-  assert.equal(d.errorRateOf(day), (26_112 - 684 - 25_407) / (26_112 - 684), 'the other failures over the other requests');
-  assert.equal(d.errorRateOf({ errors: {}, requests: 10, succeeded: 9 }), 0.1, 'without a block the rate is the plain one');
-  assert.equal(d.errorRateOf({ errors: { guardrail_blocked: 5 }, requests: 5, succeeded: 0 }), 0, 'blocks alone rate no request');
-  assert.equal(d.errorRateOf({ errors: {}, requests: 0, succeeded: 0 }), 0, 'no request rates zero');
-  assert.equal(d.blockedOf({ errors: Object.create({ guardrail_blocked: 5 }) }), 0, 'an inherited count is no count');
+test('the error rate is the requests that did not succeed over the requests', () => {
+  assert.equal(d.errorRateOf({ requests: 10, succeeded: 9 }), 0.1);
+  assert.equal(d.errorRateOf({ requests: 0, succeeded: 0 }), 0, 'no request rates zero');
+  // The fold never counts a refused request, so no code needs a rule of the console's own.
+  assert.equal(d.blockedOf, undefined);
+  assert.equal(d.GUARDRAIL_BLOCKED, undefined);
+});
+
+test('sumGroups sums refused and the refusals map', () => {
+  const row = fixture('analytics_breakdown').rows[0];
+  const sum = d.sumGroups([d.decodeAnalyticsGroup({ ...row, refused: 2, refusals: { guardrail_blocked: 2 } }), d.decodeAnalyticsGroup({ ...row, refused: 1, refusals: { auth_unknown: 1 } })]);
+  assert.equal(sum.refused, 3);
+  assert.deepEqual({ ...sum.refusals }, { auth_unknown: 1, guardrail_blocked: 2 });
 });

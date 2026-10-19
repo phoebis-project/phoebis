@@ -1,7 +1,6 @@
 import type { Api } from '@/api/client';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
-import { countOf } from '@/lib/counts';
 import { earlierHolderLabel, equivalentShort, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtShare, fmtUsd, withEstimate } from '@/lib/format';
 import { ageWord } from '@/lib/time';
 import type { UnitPosition } from '@/lib/unit';
@@ -282,18 +281,9 @@ export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: Analytic
  */
 export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
 export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
-/** The error code of a request a guardrail blocked, as the breakdown's `errors` map carries it. */
-export const GUARDRAIL_BLOCKED = 'guardrail_blocked';
-export const blockedOf = (g: Pick<AnalyticsGroup, 'errors'>): number => countOf(g.errors, GUARDRAIL_BLOCKED);
-/**
- * The requests that did not succeed over the requests, both without the ones a guardrail blocked: a block is a refusal
- * the operator asked for, so it is no error of the router's, the rule the Dashboard's tile follows. Zero where no other
- * request was rated.
- */
-export const errorRateOf = (g: Pick<AnalyticsGroup, 'errors' | 'requests' | 'succeeded'>): number => {
-  const rated = g.requests - blockedOf(g);
-  return rated > 0 ? (rated - g.succeeded) / rated : 0;
-};
+/** The requests that did not succeed over the requests. The refused requests are in neither, since the fold never
+ *  counted them. Zero where nothing was rated. */
+export const errorRateOf = (g: Pick<AnalyticsGroup, 'requests' | 'succeeded'>): number => (g.requests > 0 ? (g.requests - g.succeeded) / g.requests : 0);
 /**
  * Whether a group's plan side shows the probes or the credits whose windows `maps` carry. The routes answer no count of
  * the plan-funded probes or credits apart from the billed ones, so a plan figure shows by a window the ledger priced it

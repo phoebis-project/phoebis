@@ -20,31 +20,33 @@ router pass), the list the "+N more" badge opens (every item, one badge per row 
 8 px inside the window, closed by Escape with the focus back on the badge), the attention line at the phone widths from
 360 to 414 px (the first row one 22 px row of the lead, the badges that fit and the fold badge, the Replay button on a
 second row where they need more than the line, every part inside the line's box, the same draw on a second read), the
-top bar's controls (Log out and the theme control 32 px at one top), the sidebar's Expert view row above the version
-line, the routing log's columns at 1280 by 800 and 1440 by 900 (Fact 189 px at both, Account 179 then 147 px, Model at
-1440 alone at 192 px with the model beneath the account at 1280 alone, each column as wide as its longest cell, a line
-cut on purpose behind an ellipsis, the table its card's width with nothing to scroll sideways, and again under the 7-day
-range on the state changes with each dated Time cell on one line), the Diagnostics group (neither its heading nor the
-Routing log link on the dashboard with the expert view off, both with the log open and the link active), pool chips, the
-caching controls, the Load shedding switch against Migrate when spent, the load groups (the overage grace field against
-the window ceiling field, the utilization bar's ceiling handle and the shedding preview line), the pool dialog's ceiling
-handle in the plain view (on the track at the field's value, centered on the track and taller than it), the pool card's
-serving table and its seven tiles, its attention rows ending with their age (the row's last cell, on the detail's line
-in the detail's ink and size, uncut and inside the card, at the pass's viewport and at 400 px), the serving table's
-columns (Account the fill), the chevron of the pool dialog's Identity select (12 px square at a 1.5 stroke), the pool
-dialog's members table (Account the fill, each Priority and budget input at least its column's 96, 140 or 150 px less
-the cell's padding) and keys table (Key the fill), each read while its group shows, and in the mock pass's expert view
-its model rules table (Model the fill, each select holding its widest option's text inside its padding), which the
-router's seed draws no override for, the Create key dialog's Key group (the Name input, the Pool select and the footer's
-buttons 32 px, the Notes field 72 px, each label above its control), the settings cards' order, the listener hint's gaps
-and size and About's lines (their order, one type and one gap), the Settings page's Unit row at 1280 and 400 px (the
-legend's button on the select's line, and its popover inside the viewport's width, uncovered, in the legend's 12 px type
-and closed by Escape), the cooling-down block's columns (Reason the fill), the Delete account button, the window bars on
-the dashboard and the Accounts page (each bar's line inside its bar, a compact bar's projection in its reset's place as
-two parts, its share and its horizon, and a whole bar's reset and projection as two parts, each part whole on its line),
-the account lines, the Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the
-serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title), the Quota cards' chips
-and reset cells (each chip and each reset cell without a projection on one line inside its column, a live label with its
+dashboard's stat grid at the pass's viewport and at 400 by 900 (all five tiles drawn, wrapping as the grid's columns let
+them and none past its right edge, the tiles and their rows recorded at both widths), the top bar's controls (Log out
+and the theme control 32 px at one top), the sidebar's Expert view row above the version line, the routing log's columns
+at 1280 by 800 and 1440 by 900 (Fact 189 px at both, Account 179 then 147 px, Model at 1440 alone at 192 px with the
+model beneath the account at 1280 alone, each column as wide as its longest cell, a line cut on purpose behind an
+ellipsis, the table its card's width with nothing to scroll sideways, and again under the 7-day range on the state
+changes with each dated Time cell on one line), the Diagnostics group (neither its heading nor the Routing log link on
+the dashboard with the expert view off, both with the log open and the link active), pool chips, the caching controls,
+the Load shedding switch against Migrate when spent, the load groups (the overage grace field against the window ceiling
+field, the utilization bar's ceiling handle and the shedding preview line), the pool dialog's ceiling handle in the
+plain view (on the track at the field's value, centered on the track and taller than it), the pool card's serving table
+and its seven tiles, its attention rows ending with their age (the row's last cell, on the detail's line in the detail's
+ink and size, uncut and inside the card, at the pass's viewport and at 400 px), the serving table's columns (Account the
+fill), the chevron of the pool dialog's Identity select (12 px square at a 1.5 stroke), the pool dialog's members table
+(Account the fill, each Priority and budget input at least its column's 96, 140 or 150 px less the cell's padding) and
+keys table (Key the fill), each read while its group shows, and in the mock pass's expert view its model rules table
+(Model the fill, each select holding its widest option's text inside its padding), which the router's seed draws no
+override for, the Create key dialog's Key group (the Name input, the Pool select and the footer's buttons 32 px, the
+Notes field 72 px, each label above its control), the settings cards' order, the listener hint's gaps and size and
+About's lines (their order, one type and one gap), the Settings page's Unit row at 1280 and 400 px (the legend's button
+on the select's line, and its popover inside the viewport's width, uncovered, in the legend's 12 px type and closed by
+Escape), the cooling-down block's columns (Reason the fill), the Delete account button, the window bars on the dashboard
+and the Accounts page (each bar's line inside its bar, a compact bar's projection in its reset's place as two parts, its
+share and its horizon, and a whole bar's reset and projection as two parts, each part whole on its line), the account
+lines, the Quota cards' poll lines (short of the Refresh pill and inside the card, the backoff line in the serious ink,
+none wrapping, a failed poll's reason cut inside its line and whole in its title), the Quota cards' chips and reset
+cells (each chip and each reset cell without a projection on one line inside its column, a live label with its
 projection split between its reset and its projection with each part on one line inside the cell, the window grid inside
 its card) and each live window's pace mark (inside its meter and taller than the track), the timeline's chips on the
 Quota windows section (each inside its column, a chip with a share in the background and ink of the card chip of the
