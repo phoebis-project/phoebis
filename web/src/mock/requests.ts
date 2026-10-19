@@ -6,6 +6,7 @@ import type { GuardrailMatch } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { anchorTier, equivalentOf, fundingOf, modelWeeks, pricedWindow, shareOrFallback, tierCapacity } from '@/lib/costs';
+import { countOf, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
@@ -858,6 +859,8 @@ interface StorySeed {
   kind?: RequestKind;
   model: string;
   outcome?: RequestOutcome;
+  /** The router refused the request before any account was asked, which the ledger's landing would have flagged. */
+  refused?: true;
   /** The class header as the client sent it, null for a request that sent none. */
   requestClass: string | null;
   /** The client's session, a prefix of the story's own ids. */
@@ -996,6 +999,7 @@ function storyRow(seed: StorySeed): RequestLog {
     outcome: seed.outcome ?? (answered ? 'succeeded' : 'failed'),
     poolId,
     prevToolMs: null,
+    refused: seed.refused ?? false,
     requestClass: seed.requestClass,
     requestTruncated: false,
     responseTruncated: false,
@@ -1068,13 +1072,13 @@ function storyRequests(): RequestLog[] {
     { agentId: 'main', at: t(14, 19, 2), attempts: [{ accountId: 'primary', at: t(14, 19, 2), ms: 7_100, status: 200 }], errorCode: 'overloaded_error', id: 'req_9a07c4e1-d55', outcome: 'failed', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 44_900, cacheWrite1h: 1_800, input: 2_600, output: 960 } },
     // The runner sends again on its key after its revocation at 14:17:30, which the selection refuses. Refused before
     // routing, the request carries no model, as the router records it.
-    { agentId: 'main', at: t(14, 18, 5), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: '', outcome: 'rejected', requestClass: 'main', session: 'cd9a5904', status: 401 },
+    { agentId: 'main', at: t(14, 18, 5), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: 'main', session: 'cd9a5904', status: 401 },
     // A compacted conversation renews its pin cold and writes its prefix afresh.
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
-    { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
+    { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     // The same client's next request carried no class header, so the contract refused it before any account was chosen.
-    { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', requestClass: null, session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
+    { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
@@ -1339,6 +1343,7 @@ function guardrailSeeds(): StorySeed[] {
     keyId: 'desktop',
     model: 'claude-sonnet-5-5',
     outcome: 'rejected',
+    refused: true,
     requestClass: 'auxiliary',
     session: BLOCKED_SESSION_ID,
     status: 403,
@@ -2040,7 +2045,12 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     }
     for (const [part, partRows] of parts) {
       const [effort, requestClass, classifier] = part.split('|');
-      const ok = partRows.filter((r) => r.status === 200);
+      // The ledger files a refused request under the refusals map alone, so the counts read the served rows.
+      const served = partRows.filter((r) => !r.refused);
+      const refused = partRows.filter((r) => r.refused);
+      const refusals = emptyCounts();
+      for (const r of refused) if (r.errorCode !== null) refusals[r.errorCode] = countOf(refusals, r.errorCode) + 1;
+      const ok = served.filter((r) => r.status === 200);
       const cacheMissReasons = emptyCacheMissReasons();
       for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = missCount(cacheMissReasons, a.cacheMissReason) + 1;
       const keptHere = partRows.filter((r) => kept.has(r));
@@ -2061,20 +2071,21 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         speed,
         requests: {
           // A stream that ended short committed its 200 and still is no success, so it counts on its own.
-          incomplete: partRows.filter((r) => r.outcome === 'incomplete').length,
+          incomplete: served.filter((r) => r.outcome === 'incomplete').length,
           ok: ok.filter((r) => r.outcome === 'succeeded').length,
-          rate_limited: partRows.filter((r) => r.status === 429).length,
+          rate_limited: served.filter((r) => r.status === 429).length,
           // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
-          overloaded: partRows.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
+          overloaded: served.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
           // A stream the relay could not decode is an upstream error of its own, counted inside `upstream_error` under
           // the same status filter, so the error split that subtracts it never reads negative.
-          undecodable: partRows.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
-          upstream_error: partRows.filter(upstreamFailed).length,
+          undecodable: served.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
+          upstream_error: served.filter(upstreamFailed).length,
           // The ledger files a stream the client closed as failed, under the code the relay gave it.
-          client_gone: partRows.filter((r) => r.errorCode === 'client_gone').length,
+          client_gone: served.filter((r) => r.errorCode === 'client_gone').length,
         },
+        refusals,
         // Every attempt but the last one moved the request to another member.
-        failovers: partRows.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
+        failovers: served.reduce((s, r) => s + Math.max(0, r.attempts.length - 1), 0),
         // The lane hour draws one migration, filed with the first request that moved.
         migrations: partRows.includes(moved[0]) ? migrations : 0,
         effort,
@@ -2099,7 +2110,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         // of a plan window, so its part prices nothing and reads zero.
         ...hourShares(accountId, partRows[0].canonicalModel, classifier === NO_CLASS ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
         tier: accountTier(accountId),
-        histograms: histogramsOf(partRows),
+        histograms: histogramsOf(served),
         keptWarm: { requests: keptHere.length, tokens1h: keptHere.reduce((s, r) => s + keptOf(r).tokens1h, 0), tokens5m: keptHere.reduce((s, r) => s + keptOf(r).tokens5m, 0) },
         savingUsd: keptHere.reduce((s, r) => s + savingUsdOf(r.model, keptOf(r), r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h, r.attempts[r.attempts.length - 1]?.response.speed === 'fast', r.at), 0),
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
@@ -2231,6 +2242,7 @@ function historicalRollups(): HourlyRollup[] {
         funding: kindOf(accountId) === 'api_key' ? 'billed' : fast ? 'fast' : 'plan',
         speed: fast ? 'fast' : 'standard',
         requests: { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, undecodable: 0, upstream_error: 0 },
+        refusals: {},
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
         migrations: h.chance(0.08) ? 1 : 0,
         tokens,
@@ -2287,6 +2299,7 @@ function historicalRollups(): HourlyRollup[] {
           funding: kindOf(accountId) === 'api_key' ? 'billed' : 'plan',
           speed: 'standard',
           requests: { client_gone: 0, incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, undecodable: 0, upstream_error: failed },
+          refusals: {},
           failovers: 0,
           migrations: 0,
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
@@ -2348,6 +2361,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       funding: kindOf(r.accountId) === 'api_key' ? 'billed' : 'plan',
       speed: 'standard',
       requests: { client_gone: 0, incomplete: 0, ok: 1, overloaded: 0, rate_limited: 0, undecodable: 0, upstream_error: 0 },
+      refusals: {},
       failovers: 0,
       migrations: 0,
       tokens: { cacheRead: 0, cacheWrite1h: prefix, cacheWrite5m: 0, output: 1, ...NO_ANSWER_FACTS, uncachedInput: 0 },
@@ -2440,7 +2454,8 @@ function deriveFigures() {
     });
   }
   for (const p of poolById.values()) {
-    const mine = TOTAL_ROWS.filter((r) => r.poolId === p.id);
+    // The route reads the fold, which books a refused request under none of the pool's traffic figures.
+    const mine = TOTAL_ROWS.filter((r) => r.poolId === p.id && !r.refused);
     const traffic24h: TrafficBucket[] = Array.from({ length: 25 }, (_, i) => {
       const at = TOTALS_FROM + i * HOUR;
       const hour = mine.filter((r) => Date.parse(r.at) >= at && Date.parse(r.at) < at + HOUR);

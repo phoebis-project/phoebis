@@ -851,8 +851,8 @@ expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost
   const requestsHint = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
   const rateHint = 'Errors among the requests the router asked an account for, the refused requests left out';
   results.push({
-    name: "/ the Refused tile reads the mock's zero with the note None and the two tiles carry their hints",
-    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '0', 'None']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint,
+    name: "/ the Refused tile reads the story's six refusals with guardrail_blocked the most common and the two tiles carry their hints",
+    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '6', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint,
     missing: [JSON.stringify(read(tiles[4])), `first tile ${tiles[0]?.getAttribute('title') ?? 'no title'}`, `fourth tile ${tiles[3]?.getAttribute('title') ?? 'no title'}`],
   });
 }
@@ -14353,6 +14353,25 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   const hint = 'The refused requests are left out, see the Refused column';
   results.push({ name: '/analytics the Requests and Error rate headers of the Traffic table say the refused requests are left out', ok: JSON.stringify(hinted) === JSON.stringify([['Requests', hint], ['Error rate', hint]]), missing: hinted.length ? hinted.map((h) => h.join(': ')) : ['no header carries a hint'] });
 }
+{
+  // The story's refusals by key: the three guardrail blocks on desktop, the runner's send after its key's revocation on
+  // ci, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the Traffic line does.
+  const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
+  const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
+  const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
+  const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+  const cellsOf = (key) => [...([...(table?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === key)?.children ?? [])].map((td) => td.textContent?.trim());
+  const keys = ['desktop', 'ci', 'laptop'].map((key) => [key, cellsOf(key)[heads.indexOf('Failed')], cellsOf(key)[heads.indexOf('Refused')]]);
+  const line = /[\d,]+ requests, [\d.]+% errors/.exec(m.text())?.[0] ?? null;
+  results.push({
+    name: "/analytics the Refused and Failed cells by key, the Refusals by code card and the Traffic line read the story's refusals apart from the counts",
+    ok:
+      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '4', '2']]) &&
+      JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
+      line === '207 requests, 16.4% errors',
+    missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
+  });
+}
 await tab(m, 'Latency');
 expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
 await tab(m, 'Cache');
@@ -16742,13 +16761,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Model');
     {
-      // The story's revoked key sends one request the router rejects before routing, so it carries no model. Its row
-      // counts the request as an error, with no answer.
+      // The story's revoked key sends one request the router refuses before routing, so it carries no model. Its row
+      // counts the request under Refused alone, as no request and no error.
       const row = trafficRows('model').find((cells) => cells[0] === 'no model') ?? [];
       const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
       results.push({
-        name: '/analytics grouped by model the Traffic table names the requests the router rejected before routing "no model", with their figures',
-        ok: row.length === 13 && figure(1) > 0 && figure(2) === 0 && row[9] === '100.0%',
+        name: '/analytics grouped by model the Traffic table names the request the router refused before routing "no model", under Refused alone',
+        ok: row.length === 13 && figure(1) === 0 && figure(2) === 0 && row[8] === '1' && row[9] === '0.0%',
         missing: row.length ? row : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
       });
     }

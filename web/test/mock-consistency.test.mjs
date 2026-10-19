@@ -31,6 +31,12 @@ const pinnedRecipesOf = (s, recipes) => {
   return recipes.filter((r) => r.agentState !== 'released' || routed.has(pinOf(r)));
 };
 
+/**
+ * The story's refusals, each seed flagged as the ledger's landing would flag it: the three guardrail blocks on desktop,
+ * the runner's send on ci after its key's revocation, and the drift and the contract refusals on laptop.
+ */
+const REFUSED_IDS = ['req_0c4e7a91-b5d', 'req_5d1b8e2f-c64', 'req_6c3a9e27-5b1', 'req_a8f3c6d0-e17', 'req_e0a4c6f2-118', 'req_f1c8e3a5-29d'];
+
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
 const RETIRED = ['business', 'codex', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
 
@@ -62,9 +68,11 @@ async function storyAt(at) {
   const weekFrom = startOfHour(now) - 7 * DAY;
   const counted = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= dayFrom);
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
+  // The rows the router asked an account for, which every count reads: a refused request is in the logs alone.
+  const asked = (rows) => rows.filter((r) => !r.refused);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, leadOf: d.leadOf, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, asked, attention, counted, dayFrom, events, keys, leadOf: d.leadOf, lib: d, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
 }
 
 /** Every decision record of the story, read as the routing log answers them, newest first. */
@@ -393,7 +401,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`each pool's day and its 25 hourly buckets total its rows from the hour a day back, at ${at}`, async () => {
     const s = await story;
     for (const p of s.pools) {
-      const mine = s.totalled.filter((r) => r.poolId === p.id);
+      const mine = s.asked(s.totalled).filter((r) => r.poolId === p.id);
       assert.equal(p.requests24h, mine.length, `${p.id}'s day`);
       assert.ok(near(p.cost24h, sum(mine, (r) => r.costUsd)), `${p.id}'s cost`);
       assert.equal(p.traffic24h.length, 25, `${p.id}'s buckets`);
@@ -404,9 +412,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the dashboard's day and the analytics' day add up from the rows and the rollups, at ${at}`, async () => {
     const s = await story;
-    assert.equal(s.overview.requests24h, s.counted.length);
+    assert.equal(s.overview.requests24h, s.asked(s.counted).length);
     assert.equal(sum(s.overview.hourly, (h) => h.requests), s.overview.requests24h, 'the hourly buckets');
-    assert.equal(sum(s.pools, (p) => p.requests24h), s.totalled.length, "the pools' days");
+    assert.equal(sum(s.pools, (p) => p.requests24h), s.asked(s.totalled).length, "the pools' days");
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
     const points = await s.api.getAnalyticsSeries({ ...range, groupBy: 'all' });
     const day = s.rollups.filter((r) => Date.parse(r.hour) >= Date.parse(range.from) && Date.parse(r.hour) <= Date.parse(range.to));
@@ -455,7 +463,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const x of s.sessions.filter((row) => !row.historical)) {
       const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === x.keyId && r.keyGeneration === x.keyGeneration && r.sessionId === x.sessionId);
       const newest = own.reduce((last, r) => (last === null || Date.parse(r.at) > Date.parse(last) ? r.at : last), null);
-      assert.deepEqual([x.requests, x.lastRequestAt], [own.length, newest], `${x.keyId}'s ${x.sessionId}`);
+      assert.deepEqual([x.requests, x.lastRequestAt], [s.asked(own).length, newest], `${x.keyId}'s ${x.sessionId}`);
     }
   });
 
@@ -1805,7 +1813,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the default range's effort, request class and classifier breakdowns count the story's rows per folded value, at ${at}`, async () => {
     const s = await story;
-    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
+    const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY));
     const folds = { classifier: (r) => s.lib.foldClassifier(r.classifier), effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
     for (const [groupBy, fold] of Object.entries(folds)) {
       const want = {};
@@ -1830,7 +1838,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const closed = s.requests.filter((r) => r.outcome === 'canceled');
     assert.ok(closed.length > 0, 'the story holds a stream the client closed');
     for (const r of closed) assert.equal(r.errorCode, 'client_gone', `${r.id} names the code`);
-    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
+    const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY));
     const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
     assert.equal(totals.errors.client_gone ?? 0, rows.filter((r) => r.errorCode === 'client_gone').length, 'the Errors by code panel reads the story');
     // An undecodable stream files under its own code, apart from the upstream errors.
@@ -1889,19 +1897,68 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([day.from, day.to, day.guardrails], [iso(from), iso(s.now), counts.guardrails], "the view's day is the last 24 hours");
   });
 
-  test(`the_mock_dashboard_leaves_the_blocked_rows_out_of_the_rate_and_the_top_code_and_keeps_them_in_the_count at ${at}`, async () => {
+  test(`the_mock_dashboard_leaves_the_refused_rows_out_of_its_counts_and_reads_them_in_the_refused_members at ${at}`, async () => {
     const s = await story;
-    const blocked = s.counted.filter((r) => r.errorCode === 'guardrail_blocked');
-    const rated = s.counted.filter((r) => r.errorCode !== 'guardrail_blocked');
-    const failed = rated.filter((r) => r.status !== 200);
-    assert.equal(s.overview.errorRate24h, failed.length / rated.length, 'the rate is the other failures over the other requests');
-    const codes = new Map();
-    for (const r of rated) if (r.errorCode) codes.set(r.errorCode, (codes.get(r.errorCode) ?? 0) + 1);
-    assert.notEqual(s.overview.topErrorCode, 'guardrail_blocked');
-    assert.equal(codes.get(s.overview.topErrorCode ?? '') ?? 0, Math.max(0, ...codes.values()), "the top code is the day's most frequent other code");
-    assert.ok(blocked.length > 0 && blocked.length === s.requests.filter((r) => r.guardrailId !== null).length, "the day holds every one of the story's blocked rows");
-    assert.equal(s.overview.requests24h, s.counted.length, 'the count keeps the blocked rows, since the router received them');
-    assert.equal(sum(s.overview.hourly, (h) => h.errors), failed.length, 'the hourly errors leave them out too');
+    const refused = s.counted.filter((r) => r.refused);
+    const asked = s.asked(s.counted);
+    const codesOf = (rows) => {
+      const codes = new Map();
+      for (const r of rows) if (r.errorCode) codes.set(r.errorCode, (codes.get(r.errorCode) ?? 0) + 1);
+      return codes;
+    };
+    assert.deepEqual(refused.map((r) => r.id).sort(), REFUSED_IDS, "the day holds every one of the story's refusals");
+    assert.equal(s.overview.requests24h, asked.length, 'the count leaves the refused rows out');
+    assert.equal(sum(s.overview.hourly, (h) => h.requests), asked.length, 'the hourly requests too');
+    assert.equal(s.overview.refused24h, refused.length, 'the refused member counts them');
+    assert.equal(sum(s.overview.hourly, (h) => h.refused), refused.length, 'the hourly refused too');
+    const refusals = codesOf(refused);
+    assert.equal(refusals.get(s.overview.topRefusalCode ?? '') ?? 0, Math.max(...refusals.values()), 'the top refusal code is their most frequent');
+    const failed = asked.filter((r) => r.status !== 200);
+    assert.equal(s.overview.errorRate24h, failed.length / asked.length, 'the rate is the failures over the asked requests');
+    assert.equal(sum(s.overview.hourly, (h) => h.errors), failed.length, 'the hourly errors leave the refused rows out');
+    const codes = codesOf(asked);
+    assert.equal(codes.get(s.overview.topErrorCode ?? '') ?? 0, Math.max(0, ...codes.values()), "the top code is the asked requests' most frequent");
+  });
+
+  test(`the_rollups_refusals_map_sums_to_the_storys_refused_rows_by_code_and_key_and_no_refused_row_counts_under_requests at ${at}`, async () => {
+    const s = await story;
+    const byKey = {};
+    for (const r of s.allRollups) {
+      for (const [code, n] of Object.entries(r.refusals)) {
+        const map = (byKey[r.keyId] ??= {});
+        map[code] = (map[code] ?? 0) + n;
+      }
+    }
+    assert.deepEqual(byKey, { ci: { auth_unknown: 1 }, desktop: { guardrail_blocked: 3 }, laptop: { client_contract: 1, client_drift: 1 } });
+    // Folded from the story's rows and from its asked rows alone, the request counts agree member by member.
+    const countsOf = (rollups) => {
+      const out = {};
+      for (const r of rollups) {
+        const into = (out[r.keyId] ??= {});
+        for (const [member, n] of Object.entries(r.requests)) into[member] = (into[member] ?? 0) + n;
+      }
+      return out;
+    };
+    assert.deepEqual(countsOf(s.lib.rollups(s.requests)), countsOf(s.lib.rollups(s.asked(s.requests))), 'no refused row counts under a request count');
+  });
+
+  test(`the_breakdowns_refused_column_agrees_with_the_map_and_the_guardrails_cards_blocked_count_on_desktop at ${at}`, async () => {
+    const s = await story;
+    const range = { from: iso(s.now - DAY), to: iso(s.now) };
+    const groups = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'key' });
+    const desktop = groups.find((g) => g.key === 'desktop');
+    const blocked = (await s.api.getAnalyticsGuardrails(range)).guardrails.find((c) => c.id === 'large-auxiliary')?.blocked;
+    assert.deepEqual([desktop?.refused, desktop?.refusals.guardrail_blocked, blocked], [3, 3, 3], "desktop's Refused, its map and the card's blocked count");
+    for (const g of groups.filter((x) => x !== desktop)) assert.equal(g.refused, sum(Object.values(g.refusals), (n) => n), `${g.key}'s Refused is its map's sum`);
+  });
+
+  test(`the_requests_pages_guardrail_facet_lists_the_three_blocks_under_large_auxiliary at ${at}`, async () => {
+    const s = await story;
+    const { requests } = await s.api.listRequests({ guardrails: ['large-auxiliary'], limit: 100_000 });
+    const blocked = s.requests.filter((r) => r.errorCode === 'guardrail_blocked').map((r) => r.id);
+    assert.equal(blocked.length, 3, 'the story blocks three requests');
+    assert.deepEqual(requests.map((r) => r.id).sort(), blocked.sort(), 'the log lists every block under the guardrail that blocked it');
+    for (const r of requests) assert.equal(r.guardrailId, 'large-auxiliary', r.id);
   });
 }
 
@@ -1917,7 +1974,7 @@ test("the hour a full day back counts toward the accounts' and pools' day totals
     assert.equal(a.requests.last24h, own(s.counted) + own(early), `${a.id}'s first hour`);
   }
   for (const p of s.pools) {
-    assert.equal(p.traffic24h[0].requests, early.filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
+    assert.equal(p.traffic24h[0].requests, s.asked(early).filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
   }
-  assert.equal(s.overview.requests24h, s.counted.length, "the dashboard's day keeps its own first hour");
+  assert.equal(s.overview.requests24h, s.asked(s.counted).length, "the dashboard's day keeps its own first hour");
 });

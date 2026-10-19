@@ -931,26 +931,31 @@ export class MockApi implements Api {
     let cached = 0;
     let cost = 0;
     const errorCodes = new Map<string, number>();
-    // A guardrail block is a refusal the operator asked for, so it is no error of the router's: the rate, the hourly
-    // errors and the top code leave it out, while the request count keeps it, since the router received it.
-    const blocked = (r: RequestLog) => r.errorCode === 'guardrail_blocked';
-    const rated = last24h.filter((r) => !blocked(r));
+    const refusalCodes = new Map<string, number>();
+    const rated = last24h.filter((r) => !r.refused);
     for (const r of last24h) {
       const at = iso(Math.floor(Date.parse(r.at) / 3_600_000) * 3_600_000);
       const bucket = hourlyMap.get(at);
+      // The ledger's fold books a refused request under its refusals map and nothing else.
+      if (r.refused) {
+        if (r.errorCode) refusalCodes.set(r.errorCode, (refusalCodes.get(r.errorCode) ?? 0) + 1);
+        if (bucket) bucket.refused += 1;
+        continue;
+      }
       const total = r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
       tokens += total;
       cached += r.usage.cacheRead;
       cost += r.costUsd;
-      if (r.errorCode && !blocked(r)) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
+      if (r.errorCode) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
       if (bucket) {
         bucket.requests += 1;
         bucket.tokens += total;
         bucket.cost += r.costUsd;
-        if (r.status !== 200 && !blocked(r)) bucket.errors += 1;
+        if (r.status !== 200) bucket.errors += 1;
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
+    const topRefusal = [...refusalCodes.entries()].sort((a, b) => b[1] - a[1])[0];
     const day = requestSidesOf(last24h);
     return latency({
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
@@ -961,12 +966,12 @@ export class MockApi implements Api {
       errorRate24h: rated.length ? rated.filter((r) => r.status !== 200).length / rated.length : null,
       estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
-      refused24h: 0,
-      requests24h: last24h.length,
+      refused24h: last24h.length - rated.length,
+      requests24h: rated.length,
       tokens24h: tokens,
       tokensCached24h: cached,
       topErrorCode: top ? top[0] : null,
-      topRefusalCode: null,
+      topRefusalCode: topRefusal ? topRefusal[0] : null,
     });
   }
 
