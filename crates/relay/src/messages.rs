@@ -1564,8 +1564,8 @@ impl Relay {
             .await;
         if let Some(id) = guardrail_id {
             // The routes refuse a name that carries one of the client's phrases, but a stored row can predate that
-            // rule, and the phrase in the 403's message would start the client's own handling, so the id stands in
-            // for such a name.
+            // rule. "model:" or "OAuth token has been revoked" in a 403's message would start the client's own
+            // handling, so the id stands in for a stored name that carries any phrase of the list.
             let name = snapshot
                 .guardrails()
                 .name_of(&id)

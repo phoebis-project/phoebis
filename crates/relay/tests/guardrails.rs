@@ -263,7 +263,8 @@ async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_i
 }
 
 /// The routes refuse a name that carries one of the client's phrases, but a row stored before that rule can hold
-/// one, and the phrase in the 403's message would start the client's own handling, so the block answers by the id.
+/// one. "model:" or "OAuth token has been revoked" in a 403's message would start the client's own handling, so the
+/// block answers by the id for a stored name that carries any phrase of the list.
 async fn answered_by_the_id(id: &str, name: &str) {
     let up = upstream().await;
     let (h, mut sub) = harness(&up, PoolSpec::default()).await;
