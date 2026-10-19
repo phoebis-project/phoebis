@@ -111,7 +111,7 @@ async fn events_through_cache_map(
 }
 
 /// The decisions among `events` for `request_id` as `(seq, attempt, kind)`, in the order the router made them.
-fn decisions_of(events: &[RouterEvent], request_id: &str) -> Vec<(u32, u32, &'static str)> {
+fn decision_facts_of(events: &[RouterEvent], request_id: &str) -> Vec<(u32, u32, &'static str)> {
     events
         .iter()
         .filter_map(|event| match event {
@@ -171,7 +171,7 @@ async fn a_completed_first_request_s_decision_names_attempt_one_and_its_cache_ma
     let id = outcome(&resp).request_id;
     drain(resp).await;
     let seen = events_through_cache_map(&mut events, &id).await;
-    assert_eq!(decisions_of(&seen, &id), [(1, 1, "placed")]);
+    assert_eq!(decision_facts_of(&seen, &id), [(1, 1, "placed")]);
     assert_eq!(cache_map_of(&seen, &id), Some((1, 1)));
     assert_eq!(selected_attempts(&mut sub, &id).await, [1]);
     up.shutdown().await;
@@ -200,7 +200,7 @@ async fn a_retry_in_place_that_succeeds_reports_its_cache_map_under_the_selectin
     drain(resp).await;
     let seen = events_through_cache_map(&mut events, &o.request_id).await;
     assert_eq!(
-        decisions_of(&seen, &o.request_id),
+        decision_facts_of(&seen, &o.request_id),
         [(1, 1, "placed")],
         "the retry in place dispatched again without a new selection"
     );
@@ -323,7 +323,7 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
     drain(resp).await;
     seen.extend(events_through_cache_map(&mut events, &o.request_id).await);
     assert_eq!(
-        decisions_of(&seen, &o.request_id),
+        decision_facts_of(&seen, &o.request_id),
         [(1, 1, "held"), (2, 1, "renewed")],
         "the hold and the renewal are two decisions of one wire attempt"
     );
@@ -481,7 +481,7 @@ async fn a_reset_that_moves_during_the_wait_moves_the_pin_rather_than_holding_th
     drain(resp).await;
     seen.extend(events_through_cache_map(&mut events, &o.request_id).await);
     assert_eq!(
-        decisions_of(&seen, &o.request_id),
+        decision_facts_of(&seen, &o.request_id),
         [(1, 1, "held"), (2, 1, "moved")],
         "the request's decisions stay at one hold"
     );
@@ -560,7 +560,7 @@ async fn a_reset_wait_the_request_deadline_would_outlast_is_refused_and_the_sibl
     drain(resp).await;
     let seen = events_through_cache_map(&mut events, &o.request_id).await;
     assert_eq!(
-        decisions_of(&seen, &o.request_id),
+        decision_facts_of(&seen, &o.request_id),
         [(1, 1, "held"), (2, 1, "moved")],
         "the hold is answered, its wait refused, and the sibling tried"
     );

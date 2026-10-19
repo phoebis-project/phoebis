@@ -22,13 +22,16 @@ use phoebis_relay::{
     router, AccountingSource, CatalogService, Limits, OriginalHead, Relay, RelayOutcome,
     UpstreamGzip,
 };
-use phoebis_routing::{spawn, RouterConfig, RouterHandle};
+use phoebis_routing::{
+    spawn, DecisionRecord, DecisionSummary, RouterConfig, RouterEvent, RouterHandle,
+};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Failover,
     Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret,
     StateCause, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 // The polls live with the fake so every integration suite has them; the call sites here name them as before.
 #[allow(unused_imports)]
@@ -37,6 +40,8 @@ pub use fake_upstream::{stays_for, wait_for, wait_for_async};
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 /// The Claude Code CLI's user agent, so a test whose point is not the client class needs no shape of its own.
 pub const CLAUDE_CLI_USER_AGENT: &str = "claude-cli/2.1.269 (external, sdk-cli)";
+/// The session id the first-party fixture's head carries.
+pub const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
 pub const KEY: &str = "phoebis-testkey";
 /// A raw Messages caller, not Claude Code.
 pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
@@ -1344,6 +1349,18 @@ pub fn json_404_plain() -> Respond {
     }
 }
 
+/// A non-streaming commit whose message carries `id`, so the id lands in memory synchronously within the request.
+pub fn ok_with_id(id: &str) -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: format!(
+            r#"{{"id":"{id}","type":"message","content":[],"usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+        )
+        .into_bytes(),
+    }
+}
+
 /// Waits for the bus to publish a completion and hands back every event seen up to and including it.
 pub async fn drain_until_complete(sub: &mut phoebis_bus::Subscriber) -> Vec<phoebis_bus::Event> {
     let give_up = std::time::Instant::now() + Duration::from_secs(2);
@@ -1364,6 +1381,43 @@ pub async fn drain_until_complete(sub: &mut phoebis_bus::Subscriber) -> Vec<phoe
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+/// The router's events up to and including the first one `last` accepts, under a five-second bound.
+pub async fn router_events_until(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    last: impl Fn(&RouterEvent) -> bool,
+) -> Vec<RouterEvent> {
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the router's event arrives")
+            .expect("not lagged");
+        let done = last(&event);
+        seen.push(event);
+        if done {
+            return seen;
+        }
+    }
+}
+
+/// The decisions among `events` for `request_id`, in the order the router made them.
+pub fn decisions_of(
+    events: &[RouterEvent],
+    request_id: &str,
+) -> Vec<(DecisionSummary, DecisionRecord)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::Decision {
+                summary, record, ..
+            } if record.request.request_id == request_id => {
+                Some(((**summary).clone(), (**record).clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 pub fn outcome(resp: &axum::http::Response<Body>) -> RelayOutcome {

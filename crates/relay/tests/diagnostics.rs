@@ -23,8 +23,6 @@ const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
 const ACCT_SECRET: &str = "sk-ant-api03-ACCT0001";
 const RESET: i64 = 4_600; // one hour past NOW (1_000 s), in Unix seconds
-/// The session id the first-party fixture's head carries.
-const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
 
 const REFUSED_BETA: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `cache-diagnosis-2026-04-07` for the `anthropic-beta` header."}}"#;
 const REFUSED_REQUEST_ID: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unrecognized request header `x-client-request-id`."}}"#;
@@ -36,20 +34,6 @@ fn json_400(message: &str) -> Respond {
         status: 400,
         headers: vec![],
         body: message.as_bytes().to_vec(),
-    }
-}
-
-/// A non-streaming commit, so the message id lands in memory synchronously within the request the fixture's
-/// own `stream: true` would otherwise defer to a background drain of the response body; the streamed path is
-/// covered on its own in `restoration.rs`.
-fn ok_with_id(id: &str) -> Respond {
-    Respond::Json {
-        status: 200,
-        headers: vec![],
-        body: format!(
-            r#"{{"id":"{id}","type":"message","content":[],"usage":{{"input_tokens":1,"output_tokens":1}}}}"#
-        )
-        .into_bytes(),
     }
 }
 

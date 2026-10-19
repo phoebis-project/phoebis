@@ -15,8 +15,8 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_routing::{
-    DecisionRecord, DecisionSummary, FactValue, HoldOutcome, Report, RouterConfig, RouterEvent,
-    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    DecisionRecord, FactValue, HoldOutcome, Report, RouterConfig, RouterEvent, SharePricer,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
 use phoebis_store::{Failover, SlowDown, SubscriptionRow};
 use tokio::sync::broadcast;
@@ -279,43 +279,6 @@ async fn a_hold_followed_by_a_dispatch_names_the_hold_in_the_attempts_trace() {
     drop(first);
     up.release();
     up.shutdown().await;
-}
-
-/// The router's events up to and including the first one `last` accepts, under a five-second bound.
-async fn router_events_until(
-    events: &mut broadcast::Receiver<RouterEvent>,
-    last: impl Fn(&RouterEvent) -> bool,
-) -> Vec<RouterEvent> {
-    let mut seen = Vec::new();
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-            .await
-            .expect("the router's event arrives")
-            .expect("not lagged");
-        let done = last(&event);
-        seen.push(event);
-        if done {
-            return seen;
-        }
-    }
-}
-
-/// The decisions among `events` for `request_id`, in the order the router made them.
-fn decisions_of(
-    events: &[RouterEvent],
-    request_id: &str,
-) -> Vec<(DecisionSummary, DecisionRecord)> {
-    events
-        .iter()
-        .filter_map(|event| match event {
-            RouterEvent::Decision {
-                summary, record, ..
-            } if record.request.request_id == request_id => {
-                Some(((**summary).clone(), (**record).clone()))
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 #[tokio::test]
