@@ -98,3 +98,24 @@ test('releasedCount counts the lines the view hides and nothing else', () => {
     [true, false, false],
   );
 });
+
+test('isFinished reads a session whose main ended with it or was released, or whose every line the mod released', () => {
+  const at = ms(14, 20);
+  const line = (agentId, agentState, cause) => ({ ...recipe(agentId, agentState, at), cause });
+  const session = (state, cause) => ({ keepalive: { cause, lastGuard: null, nextProbeAt: null, state } });
+  assert.equal(d.isFinished(session('idle', 'session_ended'), [line('main', 'idle', 'session_ended'), line('3e', 'released', 'agent_released')]), true);
+  assert.equal(d.isFinished(session('released', 'released'), [line('main', 'released', 'released')]), true);
+  assert.equal(d.isFinished(session('released', 'agent_released'), [line('main', 'released', 'agent_released'), line('3e', 'released', 'agent_released')]), true);
+  assert.equal(d.isFinished(session('busy', 'probing'), [line('main', 'busy', 'probing'), line('3e', 'released', 'agent_released')]), false);
+  assert.equal(d.isFinished(session('idle', 'scheduled'), []), false);
+});
+
+test('hiddenByAge hides a row no companion reports once its last use is past the preset, and never a companion row', () => {
+  const row = (companion, lastUsedAt, lastRequestAt = null) => ({ companion, lastRequestAt: lastRequestAt === null ? null : iso(lastRequestAt), lastUsedAt: lastUsedAt === null ? null : iso(lastUsedAt) });
+  for (const companion of ['reporting', 'silent']) assert.equal(d.hiddenByAge(row(companion, NOW - 30 * DAY), '15m', NOW), false, companion);
+  const twoHours = row('none', NOW - 2 * HOUR);
+  assert.deepEqual(['1h', '6h', 'none'].map((age) => d.hiddenByAge(twoHours, age, NOW)), [true, false, false]);
+  // A row the router has no use of its own for dates from its last ledgered request.
+  const ledgered = row('none', null, NOW - 2 * HOUR);
+  assert.deepEqual(['1h', '6h'].map((age) => d.hiddenByAge(ledgered, age, NOW)), [true, false]);
+});

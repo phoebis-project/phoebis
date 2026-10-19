@@ -11,6 +11,17 @@ import { HOUR, MINUTE, NOW, ago, ahead } from './time';
 
 const rng = createRng(2_024);
 
+/** What a fixed row writes out in place of the rolls, each time in minutes before the mock's now. */
+interface WrittenFigures {
+  /** Main first, then its subagents: the id, the last request and the next probe in seconds ahead, null for none. */
+  agents: { agentId: string; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
+  burn: number;
+  burnAtMinutes: number;
+  createdMinutes: number;
+  lastInputTokens: number;
+  lastRefreshMinutes: number;
+}
+
 // `state: null` marks a session with no cache-warming recipe: the `ci` key opts
 // out and `jobs` keeps no caches warm.
 // `companion` is independent of that: it says whether the keepalive mod ever
@@ -27,10 +38,15 @@ const rng = createRng(2_024);
 // `released` marks a session whose every
 // agent, main included, the mod released. `sessionId` writes out the id of a
 // session past the story's ids whose story row names it.
-const sessionSpec: {
+const sessionSpec: ({
   accountId: string;
   agents: number;
   companion: CompanionState;
+  /**
+   * The row is finished: the builder writes main's cause `session_ended` and every subagent `agent_released` in
+   * `released` state.
+   */
+  finished?: true;
   idleMinutes?: number;
   keyId: string;
   lastUseFromRows?: boolean;
@@ -39,7 +55,16 @@ const sessionSpec: {
   sessionId?: string;
   state: Session['keepalive']['state'];
   subagents?: { accountId?: string; model: string };
-}[] = [
+} & (
+  | { figures?: undefined; fixed?: undefined }
+  | {
+      figures: WrittenFigures;
+      /** The row and its agents draw nothing from `rng`. Their ids, dates and figures are written in the row. */
+      fixed: true;
+      idleMinutes: number;
+      sessionId: string;
+    }
+))[] = [
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 2, companion: 'silent' },
@@ -62,6 +87,51 @@ const sessionSpec: {
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
+  // The two sessions the Sessions view's default filters hide: one the mod ended, which keeps its lines, and one no
+  // companion reports, last used two hours ago, past the view's one-hour age.
+  {
+    keyId: 'desktop',
+    accountId: 'nightly',
+    model: 'claude-opus-5',
+    state: 'idle',
+    agents: 3,
+    companion: 'reporting',
+    finished: true,
+    fixed: true,
+    idleMinutes: 21,
+    sessionId: '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96',
+    figures: {
+      agents: [
+        { agentId: 'main', lastRequestMinutes: 21, nextProbeSeconds: null },
+        { agentId: 'a7f3', lastRequestMinutes: 34, nextProbeSeconds: null },
+        { agentId: '5d0e', lastRequestMinutes: 47, nextProbeSeconds: null },
+      ],
+      burn: 0.18,
+      burnAtMinutes: 22,
+      createdMinutes: 140,
+      lastInputTokens: 14_200,
+      lastRefreshMinutes: 22,
+    },
+  },
+  {
+    keyId: 'laptop',
+    accountId: 'secondary',
+    model: 'claude-sonnet-4-6',
+    state: 'idle',
+    agents: 1,
+    companion: 'none',
+    fixed: true,
+    idleMinutes: 120,
+    sessionId: 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58',
+    figures: {
+      agents: [{ agentId: 'main', lastRequestMinutes: 120, nextProbeSeconds: null }],
+      burn: 0.09,
+      burnAtMinutes: 121,
+      createdMinutes: 310,
+      lastInputTokens: 6_400,
+      lastRefreshMinutes: 121,
+    },
+  },
 ];
 
 /** How long the router lists a session after its last request, which the settings answer as well. */
@@ -111,15 +181,16 @@ function runwayOf(i: number): Pick<Session, 'runwayBounded' | 'runwayMs'> {
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
-  // out as well, so the rows after this one keep their rolls.
-  const drawnId = i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
+  // out as well, so the rows after this one keep their rolls. A fixed row draws nothing, so it takes its own.
+  const drawnId = spec.fixed ? spec.sessionId : i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
+  const written = spec.fixed ? spec.figures : null;
   const keyGeneration = Date.parse(keyById.get(spec.keyId)!.createdAt);
   const sessionId = spec.sessionId ?? drawnId;
   const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
-  // Both rolls are drawn whatever the spec says, so pinning one session's idle
+  // Both rolls are drawn whatever the spec says, a fixed row's aside, so pinning one session's idle
   // does not shift the seeded stream the rest of these fixtures read from.
-  const createdRoll = rng.int(8, 9 * 60) * MINUTE;
-  const idleRoll = spec.state === 'busy' ? rng.int(5, 90) * 1000 : rng.int(2, 40) * MINUTE;
+  const createdRoll = (written ? written.createdMinutes : rng.int(8, 9 * 60)) * MINUTE;
+  const idleRoll = spec.fixed ? spec.idleMinutes * MINUTE : spec.state === 'busy' ? rng.int(5, 90) * 1000 : rng.int(2, 40) * MINUTE;
   // Off the rows, a session the ledger holds no request of has no last use.
   const lastFromRows = spec.lastUseFromRows ? (seen ? Date.parse(seen.last) : null) : undefined;
   const lastUsedAgo = typeof lastFromRows === 'number' ? NOW - lastFromRows : spec.idleMinutes === undefined ? Math.min(createdRoll, idleRoll) : spec.idleMinutes * MINUTE;
@@ -131,14 +202,14 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
       ? 'usd'
       : 'window_share'
     : null;
-  // Drawn whatever the spec says, so pinning or the account's kind never shifts the stream the rows after this
-  // one read. A row's burn is the per-hour figure the wire answers for its unit: dollars on the usd roll, a share
-  // of the account's 5-hour window on the other.
-  const burnRoll = rng.float(0.01, 0.9);
-  const burnUsdRoll = rng.float(0.01, 0.5);
-  const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
-  const lastInputRoll = rng.int(500, 20_000);
-  const lastRefreshRoll = ago(rng.int(2, 40) * MINUTE);
+  // Drawn whatever the spec says, a fixed row's aside, so pinning or the account's kind never shifts the stream the
+  // rows after this one read. A row's burn is the per-hour figure the wire answers for its unit: dollars on the usd
+  // roll, a share of the account's 5-hour window on the other.
+  const burnRoll = written ? written.burn : rng.float(0.01, 0.9);
+  const burnUsdRoll = written ? written.burn : rng.float(0.01, 0.5);
+  const burnAtRoll = ago((written ? written.burnAtMinutes : rng.int(2, 40)) * MINUTE);
+  const lastInputRoll = written ? written.lastInputTokens : rng.int(500, 20_000);
+  const lastRefreshRoll = ago((written ? written.lastRefreshMinutes : rng.int(2, 40)) * MINUTE);
   // A pin on a model of no weighted tier has no burn to rank by, as the route answers it.
   const weight = pinned && unit === 'window_share' ? pinWeight(spec.model) : null;
   const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weight !== null ? burnRoll : null;
@@ -232,10 +303,13 @@ const RECIPE_CAUSES: (RecipeCause | null)[] = [
   null,
   null,
   null,
-  // One row for each session past the story's ids, so the modulo leaves them scheduled rather than wrapping them onto
-  // the first two causes.
+  // One row for each session past the story's ids, so the modulo wraps none of them onto the first causes. The
+  // finished row's main is written over its own, and the row idle for two hours ran past the `all` pool's one-hour max
+  // idle as the 95-minute `laptop` row did.
   null,
   null,
+  null,
+  'idle_limit',
 ];
 
 // A held or paused subagent under a main agent that keeps probing, which is the
@@ -293,12 +367,20 @@ const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
 
 /** What every line of a session the mod released whole reads, written over the drawn row. */
 const RELEASED_BY_THE_MOD: Partial<KeepaliveRecipe> = { agentState: 'released', cause: 'agent_released', deadline: null, nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null };
+/**
+ * What main reads on a session the mod ended, written over the drawn row. Its lifecycle word stays its session's, as
+ * an ended main's does, and its subagents read as the mod released them.
+ */
+const ENDED_WITH_THE_SESSION: Partial<KeepaliveRecipe> = { cause: 'session_ended', deadline: null, nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null };
 
 export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
   const mainState = pin.keepalive.state;
   if (mainState === null) return [];
   const sub = sessionSpec[i].subagents;
-  const agents = Array.from({ length: pin.agents }, (_, j) => (j === 0 ? 'main' : rng.uuid().slice(0, 4)));
+  const spec = sessionSpec[i];
+  // A fixed row's agents are written, so they draw nothing.
+  const fixedAgents = spec.fixed ? spec.figures.agents : null;
+  const agents = fixedAgents ? fixedAgents.map((a) => a.agentId) : Array.from({ length: pin.agents }, (_, j) => (j === 0 ? 'main' : rng.uuid().slice(0, 4)));
   return agents.map((agentId, j) => {
     // A parked agent is probed like a busy one until one of the park's ceilings stops it.
     const held = mainState === 'parked' ? (j === 0 ? PARKED_HOLDS.get(i) ?? null : null) : j === 0 ? RECIPE_CAUSES[i % RECIPE_CAUSES.length] : j === 1 ? SUBAGENT_HOLDS.get(i) ?? null : null;
@@ -309,7 +391,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     // The engine lists an agent once it has sent a request. The roll is drawn whatever it gives, so the rows after this
     // one keep theirs, and a subagent it leaves without one sent its request three and a half minutes ago, off the
     // whole minutes its last probe falls on.
-    const rolled = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
+    const rolled = fixedAgents ? ago(fixedAgents[j].lastRequestMinutes * MINUTE) : j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     const lastRequestAt = rolled ?? ago(3 * MINUTE + 30_000);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
@@ -326,7 +408,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     // The written session's rows past its drawn pair are written, so a reader meets every lifecycle word. A session the
     // mod released whole keeps its draws, so the rows after it keep theirs.
-    const written = sessionSpec[i].released ? RELEASED_BY_THE_MOD : i === WRITTEN_SESSION && j >= 2 ? WRITTEN_SUBAGENTS[j - 2] : undefined;
+    const written = sessionSpec[i].released ? RELEASED_BY_THE_MOD : sessionSpec[i].finished ? (j === 0 ? ENDED_WITH_THE_SESSION : RELEASED_BY_THE_MOD) : i === WRITTEN_SESSION && j >= 2 ? WRITTEN_SUBAGENTS[j - 2] : undefined;
     return {
       ...RECIPE_SAMPLE,
       accountId,
@@ -343,7 +425,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       lastRequestAt,
       model,
       // A probe in flight leaves the due time it went out at, which the engine keeps showing until it lands.
-      nextProbeAt: cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : null,
+      nextProbeAt: fixedAgents ? (fixedAgents[j].nextProbeSeconds === null ? null : ahead(fixedAgents[j].nextProbeSeconds * 1000)) : cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : null,
       parkKind,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       probesToday,

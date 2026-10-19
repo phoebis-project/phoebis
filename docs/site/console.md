@@ -873,19 +873,32 @@ no session, and its subtitle says so.
 ![The Sessions view: the tiles and the table with a fork badge](assets/sessions-light.png#only-light)
 ![The Sessions view: the tiles and the table with a fork badge](assets/sessions-dark.png#only-dark)
 
-The view opens on its bar, the Columns control with the split Refresh button and the session count, `{n} sessions`, at
-the right edge. The head under it reads "Every session within the session expiry, with the account each model is pinned
-to and each agent's cache-warming recipe." with the disclosure "How pins and recipes work", whose paragraph says what a
-pin and a recipe are, and a "Cost reference" link that opens the dialog on Plan rates. The tiles read Sessions (`{n} of
-{max}`, the engine's cap), Agents (`{n} of {max}` with `{n} busy, {n} idle, {n} parked`, less the subagents the mod
-released while their session lives, which draw no line and keep their slot until the session leaves, named on hover),
-Retained (`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h" (a bar by outcome and `{n} ok ({pct}),
-{n} migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to
-prevent") and "Bus gaps" ("times the keepalive engine missed bus events"). A tile whose read failed draws a dash with
-the reason on hover, and Try again under the tiles reads them again. Auto reload starts at 5 s and reads the sessions,
-the recipes and the tiles at that one interval, and it waits while the Cost reference dialog, the Release question or a
-row's menu is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
-mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
+The view opens on its bar: Add filter, the Columns control, and at the right edge the split Refresh button and the count
+of the sessions the filters keep, `{n} sessions`. Add filter opens a "Filter by" field over the filters of one group,
+Sessions: Companion only, Finished sessions, Non-companion age and Released agents. Companion only keeps the rows whose
+companion reports or went silent. Finished sessions lists a session the engine is done with, one whose main agent ended
+with the session or was released or whose every agent the mod released, which the view hides by default. Non-companion
+age offers 1 h (the default), 15 min, 6 h, 24 h or No limit, and hides a row no companion reports once its last use lies
+further back, with the session expiry as the outer bound. A companion row stays whatever its age. Released agents draws
+a live session's released agents after its others, each with its released badge. Companion only, Finished sessions and
+Released agents apply at once. Each filter off its default stands as a chip on a line under the bar, "companion only",
+"finished sessions", "age: 6 h" or "released agents": a click on the chip opens its values again, its x removes it, and
+from two chips on "Clear all" returns the four to their defaults. The filters live in the page's address, so a reload or
+a shared link keeps them, and a bare `/sessions` reads the defaults. The head under the bar reads "Every session within
+the session expiry that the filters keep, with the account each model is pinned to and each agent's cache-warming
+recipe." with the disclosure "How pins and recipes work", whose paragraph says what a pin and a recipe are, and a "Cost
+reference" link that opens the dialog on Plan rates. The tiles read Sessions (`{n} of {max}`, the rows the filters keep
+against the engine's cap), Agents (`{n} of {max}` with `{n} busy, {n} idle, {n} parked`, the agents of the rows the
+filters keep less the subagents the mod released while their session lives, which draw no line and keep their slot until
+the session leaves, named on hover), Retained (`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h"
+(a bar by outcome and `{n} ok ({pct}), {n} migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h"
+("misses cache warming exists to prevent") and "Bus gaps" ("times the keepalive engine missed bus events"). While the
+filters hide rows, the Sessions and Agents tiles name them on hover, `{k} sessions hidden by the filters`. A tile whose
+read failed draws a dash with the reason on hover, and Try again under the tiles reads them again. Auto reload starts at
+5 s and reads the sessions, the recipes and the tiles at that one interval, and it waits while the Cost reference
+dialog, the Release question or a row's menu is open. The probes and the recipe are explained on
+[Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the recipe's states under [The five
+states](keepalive.md#the-five-states).
 
 The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
 all" or "Collapse all". The Session column is always drawn, and the eleven others, which the bar's Columns control shows
@@ -918,10 +931,11 @@ Account, TTL, Last request, Last probe, Next probe ("on first stream event" or "
 State, main first, then the busy, idle and parked agents. State reads the recipe's state word (`ended`, `held`, `not
 retained`, `paused` or `retained`) with the cause beside it and the sentence of each on hover, and under them the
 mod's lifecycle word for the agent with a parked agent's park kind and its deadline or wake time (`parked · background
-· deadline in 1h 12m`). A session whose every agent the mod released reads "The mod released every agent of this
-session. Their records keep their slots of the cap until the session leaves the engine." in the lines' place, keeps its
-released badge and an Agents count of 0. A session without a recipe reads "no recipe" and `Nothing is scheduled because
-{reason}.`
+· deadline in 1h 12m`). A finished session, listed under Finished sessions, reads "The mod released every agent of this
+session. Their records keep their slots of the cap until the session leaves the engine." above its lines, which keep
+their ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last read, and its
+Agents cell counts the lines drawn. A session the mod released whole keeps its released badge. A session without a
+recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
 
 ### The cost reference
 

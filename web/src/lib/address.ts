@@ -304,4 +304,25 @@ export const MODELS_CODEC = codecOf<ModelsAddress>({ key: text('key') });
 // `edit` and `group`, the Quota page's hash is its section, and a filter either view gains later lands here.
 export const POOLS_CODEC = codecOf<Record<string, never>>({});
 export const QUOTA_CODEC = codecOf<Record<string, never>>({});
-export const SESSIONS_CODEC = codecOf<Record<string, never>>({});
+
+/** The Non-companion age presets, `none` for no limit. The default is the view's own hour. */
+export const SESSION_AGES = ['15m', '1h', '6h', '24h', 'none'] as const;
+
+export interface SessionsAddress {
+  /** The Non-companion age preset, one of SESSION_AGES. */
+  age: string;
+  /** Companion only: the rows whose companion reports or went silent. */
+  companion: boolean;
+  /** Show finished sessions. */
+  finished: boolean;
+  /** Show released agents on a live session. */
+  released: boolean;
+}
+
+// The codec's literal keeps the bar's order: codecOf writes the address's keys in its specification's order.
+export const SESSIONS_CODEC = codecOf<SessionsAddress>({
+  companion: { kind: 'flag', name: 'companion' },
+  finished: { kind: 'flag', name: 'finished' },
+  age: { default: '1h', kind: 'choice', name: 'age', values: SESSION_AGES },
+  released: { kind: 'flag', name: 'released' },
+});

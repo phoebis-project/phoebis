@@ -1,4 +1,4 @@
-import type { KeepaliveRecipe, KeepaliveState, RecipeCause } from '@/api/types';
+import type { KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
 import { RANGE_PRESETS } from '@/lib/address';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
@@ -194,4 +194,24 @@ export function isReleasedLine(agent: Pick<KeepaliveRecipe, 'agentState' | 'caus
  */
 export function releasedCount(agents: readonly Pick<KeepaliveRecipe, 'agentState' | 'cause'>[]): number {
   return agents.filter(isReleasedLine).length;
+}
+
+/** The age preset's span in milliseconds, null for `none`. */
+export const SESSION_AGE_MS: Record<string, number | null> = { '15m': 15 * 60_000, '1h': 3_600_000, '6h': 6 * 3_600_000, '24h': 24 * 3_600_000, none: null };
+
+/**
+ * A session the engine is done with: main's recipe reads the cause `session_ended` or `released`, or every line it
+ * holds is a released one. Such a session keeps its lines, so its probe facts stay in view once it is shown.
+ */
+export function isFinished(session: Pick<Session, 'keepalive'>, agents: readonly Pick<KeepaliveRecipe, 'agentState' | 'cause'>[]): boolean {
+  const { cause } = session.keepalive;
+  return cause === 'session_ended' || cause === 'released' || (agents.length > 0 && agents.every(isReleasedLine));
+}
+
+/** Whether the Non-companion age hides the row: never a companion row, else its last use older than the preset. */
+export function hiddenByAge(session: Pick<Session, 'companion' | 'lastRequestAt' | 'lastUsedAt'>, age: string, now: number): boolean {
+  const span = SESSION_AGE_MS[age] ?? null;
+  const lastUse = session.lastUsedAt ?? session.lastRequestAt;
+  // A row with no use on record keeps its place, as the expiry keeps it.
+  return session.companion === 'none' && span !== null && lastUse !== null && now - Date.parse(lastUse) > span;
 }

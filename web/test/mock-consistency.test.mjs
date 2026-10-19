@@ -652,6 +652,32 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(member.activePins, counted.size, `${main.accountId}'s figure counts it`);
   });
 
+  test(`one session the mod ended reads main ended with it and every other line released, each with its probe facts, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    const ended = s.sessions.filter((x) => !x.historical && x.keepalive.cause === 'session_ended');
+    assert.equal(ended.length, 1, 'one session the mod ended');
+    const [row] = ended;
+    const lines = recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId);
+    const main = lines.find((r) => r.agentId === 'main');
+    assert.deepEqual([main?.cause, main?.state, main?.nextProbeAt], ['session_ended', 'ended', null], 'main ended with the session');
+    const others = lines.filter((r) => r.agentId !== 'main');
+    assert.ok(others.length > 0, 'the session holds subagents');
+    for (const r of others) assert.deepEqual([r.agentState, r.cause, r.state, r.nextProbeAt], ['released', 'agent_released', 'ended', null], `${r.agentId} reads as a released agent`);
+    for (const r of lines) assert.ok(r.lastProbeAt !== null && r.probesToday > 0, `${r.agentId} keeps its probe facts`);
+    assert.equal(row.agents, lines.length, 'the row counts every record');
+  });
+
+  test(`the session idle for two hours is pinned with no companion and reads its last use two hours back, at ${at}`, async () => {
+    const s = await story;
+    // Written out in the mock's seeds, as the smoke reads it.
+    const row = s.sessions.find((x) => x.sessionId === 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58');
+    assert.ok(row !== undefined, 'the session is listed');
+    assert.deepEqual([row.pinned, row.companion], [true, 'none']);
+    assert.equal(Date.parse(row.lastUsedAt), s.now - 2 * HOUR, 'last used two hours before the mock\'s now');
+    assert.ok(Date.parse(row.createdAt) < Date.parse(row.lastUsedAt), 'created before its last use');
+  });
+
   test(`a released agent keeps its pin while its last request or probe is inside its pool's affinity window and loses it past the window, the written session's three released lines counting, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();

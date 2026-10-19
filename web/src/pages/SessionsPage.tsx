@@ -11,11 +11,12 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
-import { ANALYTICS_CODEC, REQUESTS_CODEC } from '@/lib/address';
+import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSIONS_CODEC, type SessionsAddress } from '@/lib/address';
 import { clock } from '@/lib/clock';
+import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
-import { useAsync, useNow } from '@/lib/hooks';
+import { CAUSE_HINT, CAUSE_LABEL, hiddenByAge, isFinished, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
+import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
@@ -38,6 +39,13 @@ type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
 // The default set fits the card at 1280 by 800 without these: Last used carries recency, Cache warming and the expanded
 // row carry the agents and their next probes.
 const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['agents', 'lastRequest', 'nextProbe'];
+// Add filter draws the dimension's "1 h" first as the default hour's row, so the options are the other four presets.
+const AGE_OPTIONS = [
+  { label: '15 min', value: '15m' },
+  { label: '6 h', value: '6h' },
+  { label: '24 h', value: '24h' },
+  { label: 'No limit', value: 'none' },
+];
 
 /**
  * The pin's runway on its account as the route answers it: a span, `none` at zero, `unbounded` where no window binds.
@@ -84,6 +92,8 @@ interface Row {
   account: Account | null;
   /** Every recipe filed under the session, as the route answered them: the no-recipe causes read this list. */
   agents: KeepaliveRecipe[];
+  /** The engine is done with the session, which draws every line it holds under the released sentence. */
+  finished: boolean;
   /** Why a session carries no recipe at all; null while it has one. */
   noRecipe: string | null;
   /** The session's lines the view hides, which its Agents column takes off the engine's record count. */
@@ -127,8 +137,11 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
   return seconds > 0 && session.lastUsedAt !== null ? new Date(Date.parse(session.lastUsedAt) + seconds * 1000).toISOString() : null;
 }
 
-/** `poolsFailed`: the pool list did not load, so a session whose pool is not found has no cause the rows can name but that. */
-function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, now: number): Row[] {
+/**
+ * `poolsFailed`: the pool list did not load, so a session whose pool is not found has no cause the rows can name but
+ * that. `showReleased`: the Released agents filter, which draws a live session's released lines.
+ */
+function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, showReleased: boolean, now: number): Row[] {
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const keyById = new Map(keys.map((k) => [k.id, k]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
@@ -168,13 +181,18 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     }
     // The full list stays beside the lines drawn: the causes of a session without a line read every record, and a
     // session whose lines the mod all released still holds records, so it is no session without a recipe.
+    const finished = isFinished(session, agents);
+    // A finished session keeps every line so its probe facts stay in view, and a live one draws its released lines
+    // only while the filter asks for them.
+    const drawsReleased = finished || showReleased;
     return {
       account: accountById.get(session.accountId ?? '') ?? null,
       agents,
+      finished,
       noRecipe: agents.length === 0 || idleLimitOnly ? causes.join(' and ') : null,
-      released: releasedCount(agents),
+      released: drawsReleased ? 0 : releasedCount(agents),
       session,
-      shown: orderRecipes(agents.filter((a) => !isReleasedLine(a))),
+      shown: orderRecipes(drawsReleased ? agents : agents.filter((a) => !isReleasedLine(a))),
     };
   });
 }
@@ -227,22 +245,33 @@ export function SessionsPage() {
   const [current, setCurrent] = useState<string | null>(null);
   const [howOpen, setHowOpen] = useState(false);
   const howId = useId();
+  const { address, filters, update } = useQueryFilters(SESSIONS_CODEC);
 
   const sessionData = sessions.data;
   const recipeData = recipes.data;
   const expireAfterSeconds = settings.data?.sessions.expireAfterSeconds ?? null;
   const poolsFailed = pools.data === null && pools.error !== null;
   // The router forgets a session once it has been idle for the expiry, so this list has to as well.
-  const rows = useMemo(
+  const listed = useMemo(
     () =>
       sessionData && recipeData && keys.data
-        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], poolsFailed, now).filter((r) => {
+        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], poolsFailed, filters.released, now).filter((r) => {
             const lastUsed = r.session.lastUsedAt ?? r.session.lastRequestAt;
             return expireAfterSeconds === null || lastUsed === null || Date.parse(lastUsed) + expireAfterSeconds * 1000 > now;
           })
         : null,
-    [sessionData, recipeData, accounts.data, keys.data, pools.data, poolsFailed, expireAfterSeconds, now],
+    [sessionData, recipeData, accounts.data, keys.data, pools.data, poolsFailed, filters.released, expireAfterSeconds, now],
   );
+  // The expiry stays the outer bound, and the filters narrow the list inside it.
+  const rows = useMemo(
+    () =>
+      listed?.filter(
+        (r) => (!filters.companion || r.session.companion === 'reporting' || r.session.companion === 'silent') && !hiddenByAge(r.session, filters.age, now) && (filters.finished || !r.finished),
+      ) ?? null,
+    [listed, filters.age, filters.companion, filters.finished, now],
+  );
+  const hiddenRows = listed !== null && rows !== null ? listed.length - rows.length : 0;
+  const hiddenTitle = hiddenRows > 0 ? `${fmtInt(hiddenRows)} ${hiddenRows === 1 ? 'session' : 'sessions'} hidden by the filters` : undefined;
   const o = overview.data;
   // A refresh that fails keeps the tiles it drew, so only a read that never answered draws them as failed.
   const overviewError = o === null ? overview.error : null;
@@ -250,7 +279,9 @@ export function SessionsPage() {
   const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
   const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
   const sessionsNote = withCompanion !== null && withRecipe !== null ? `${fmtInt(withCompanion)} with the keepalive mod, ${fmtInt(withRecipe)} with a recipe` : null;
-  const hidden = releasedCount(recipeData ?? []);
+  // Counted over the rows the filters keep, so the Agents figure agrees with the Agents column under it.
+  const agentRecords = rows?.reduce((n, r) => n + r.session.agents, 0) ?? 0;
+  const hidden = rows?.reduce((n, r) => n + r.released, 0) ?? 0;
   const onConfirmRelease = () => {
     if (!pending) return;
     void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
@@ -290,11 +321,15 @@ export function SessionsPage() {
 
   return (
     <div className="stack">
-      <FilterBar
-        address="/sessions"
+      {/* TypeScript rejects an address that shares no key with the bar's optional range and search, so this one is read
+          with an optional search it never sets. */}
+      <FilterBar<SessionsAddress & { search?: string }>
+        address={address}
         count={rows === null ? '' : `${rows.length} ${rows.length === 1 ? 'session' : 'sessions'}`}
-        filters={{}}
+        dimensions={SESSIONS_DIMENSIONS}
+        filters={filters}
         onOpenChange={setBarOpen}
+        options={{ age: AGE_OPTIONS }}
         refresh={{
           intervalMs,
           onIntervalChange: setIntervalMs,
@@ -306,14 +341,14 @@ export function SessionsPage() {
           paused: pauseCause,
           refreshTitle: 'Reads the list again now',
         }}
-        update={() => undefined}
+        update={update}
       >
         <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
       </FilterBar>
       <div className="page-head">
         <div className="page-head__lead">
           <p className="page-head__meta">
-            Every session within the session expiry, with the account each model is pinned to and each agent&apos;s cache-warming recipe.{' '}
+            Every session within the session expiry that the filters keep, with the account each model is pinned to and each agent&apos;s cache-warming recipe.{' '}
             <button type="button" className="link-btn" aria-expanded={howOpen} aria-controls={howId} onClick={() => setHowOpen((v) => !v)}>
               How pins and recipes work
             </button>
@@ -328,20 +363,24 @@ export function SessionsPage() {
       </div>
 
       <div className="stat-grid stat-grid--caps">
-        <Tile label="Sessions" value={o ? <span className="nowrap">{`${fmtInt(o.limits.sessions.count)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} error={overviewError} />
-        {/* The overview and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
+        <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} error={overviewError} />
+        {/* The sessions and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
             read, which is accepted. Only a line the recipes list carries comes off, so a record that never drew a line
             is never subtracted. */}
         <Tile
           label="Agents"
           value={
-            o ? (
-              <span className="nowrap" title={`The engine holds ${fmtInt(o.limits.agents.count)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.` : ''}`}>
-                {`${fmtInt(Math.max(0, o.limits.agents.count - hidden))} of ${fmtInt(o.limits.agents.max)}`}
+            o && rows ? (
+              <span
+                className="nowrap"
+                title={`The engine holds ${fmtInt(agentRecords)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.` : ''}${hiddenTitle === undefined ? '' : ` ${hiddenTitle}.`}`}
+              >
+                {`${fmtInt(Math.max(0, agentRecords - hidden))} of ${fmtInt(o.limits.agents.max)}`}
               </span>
             ) : null
           }
           note={o ? `${fmtInt(o.agents.busy)} busy, ${fmtInt(o.agents.idle)} idle, ${fmtInt(o.agents.parked)} parked` : null}
+          title={hiddenTitle}
           error={overviewError}
         />
         <Tile
@@ -726,7 +765,8 @@ function SessionRows({
                 <span>Nothing is scheduled because {row.noRecipe}.</span>
               </p>
             )}
-            {!session.historical && !row.noRecipe && row.agents.length > 0 && shown.length === 0 && (
+            {/* A finished session keeps its lines, so the sentence stands above them. */}
+            {row.finished && shown.length > 0 && (
               <p className="agents__released">The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.</p>
             )}
             {shown.length > 0 && (
