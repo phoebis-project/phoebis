@@ -38,8 +38,9 @@ the body is read and the conversation is climbed, and before the request's facts
 account is resolved. It runs for an inference request and a token count and never for a keepalive probe. A blocked
 request touches no account, no pin, no hold, no window and no burn, so the slow-down never holds it and it refreshes no
 pin ([Slow-down](routing.md#slow-down)). The router reads its guardrails with the registry snapshot, so a save in the
-console takes effect on the next request without a restart. Deleting a guardrail removes its attachments and leaves the
-request rows that name it, which the Requests view marks `{id} (deleted)`.
+console takes effect on the next request without a restart. Deleting a guardrail removes its attachments, moves the
+stamps of the pools and keys it was attached to, so a save of one of them opened before the delete is refused as stale,
+and leaves the request rows that name it, which the Requests view marks `{id} (deleted)`.
 
 ## The subagent summary fork
 

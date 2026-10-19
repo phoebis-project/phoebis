@@ -452,8 +452,8 @@ opens `Move key {name}` ("A key reaches only its own pool's members, so moving i
 the destination Pool, and "Revoke" asks `Revoke {name}`:
 `Requests with {name} are rejected immediately. The key stays in this pool and its history stays in the ledger.` A key
 created from here opens "Key created", the dialog the Keys section describes. Guardrails lists the pool's guardrails in
-the order they run, each with its name, its mode as a badge (enforce in the warning tone, observe muted), `off` on a
-disabled one, move up, move down and remove, then "Attach guardrail", a box over every guardrail of the registry with
+the order they run, each with its name, `off` on a disabled one, its mode as a badge (enforce in the warning tone,
+observe muted), move up, move down and remove, then "Attach guardrail", a box over every guardrail of the registry with
 the pool's own ones checked, which stays open while the operator picks: a check adds its guardrail to the end of the
 list at once and an uncheck removes it, "Select all" adds every guardrail the box lists and its uncheck removes them
 all, and Escape or a click outside closes the box, the save writing the list as it stands. While the registry holds no
@@ -508,10 +508,10 @@ adds every guardrail the box lists and its uncheck removes them all, and Escape 
 save writing the list as it stands, the control disabled with "No other guardrail is left to attach" on hover while
 the registry holds nothing beyond the pool's, under the hint "The pool's guardrails run first and cannot be dropped
 here. This key's own run after them." and the link "Manage guardrails", reading "Guardrails can be attached once the
-key is saved." on create), Sessions (Cache warming opt-out)
-and Capture (Capture request and response bodies as Inherit from pool, an override in hours or off for this key).
-Server-side auto mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group
-warns what the bodies hold, the warning [Keys](routing.md#keys) quotes.
+key is saved." on create), Sessions (Cache warming opt-out) and Capture (Capture request and response bodies as Inherit
+from pool, an override in hours or off for this key). Server-side auto mode, Pool rules and List [1m] twins show in the
+expert view. While the key captures, the Capture group warns what the bodies hold, the warning [Keys](routing.md#keys)
+quotes.
 
 ## Guardrails
 
@@ -760,8 +760,8 @@ Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetc
 reading "The refused requests are left out, see the Refused column" on hover. Under the model grouping the requests the
 router rejected before routing group under "no model", which the Cache by model table leaves out. A request the router
 refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card, a
-guardrail's block on the Guardrails card as well, and never in the request count, the outcome columns, the error rate,
-the cache figures or the latency.
+guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
+outcome columns, the error rate, the cache figures or the latency.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply

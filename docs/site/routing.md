@@ -224,7 +224,8 @@ pool runs once, at its pool position ([Guardrails](guardrails.md)). Naming a gua
 lists {id} twice`, a list that with the pool's takes the key past 64 `400 key {id} would hold more than 64 guardrails`,
 as does a `pool_id` change that moves the key under a pool whose guardrails, with the key's own, pass 64, the member on
 a create `400 guardrails applies on edit`, and an unknown guardrail `404 guardrail {id} not found`, in each case with
-nothing written.
+nothing written. A write that attaches or detaches a guardrail moves that guardrail's stamp, so a save of the guardrail
+opened before it is refused as stale.
 
 A create under an id a key already holds answers `409 a key with this id exists`. Rotate issues a new secret under the
 same id, and a revoked key cannot be rotated (`409 a revoked key cannot be rotated`). Revoke is permanent, so a revoked
