@@ -8101,7 +8101,7 @@ const editGuardrail = async (page, name) => {
     name: '/guardrails lists the two guardrails with their mode, state, attachments, 24-hour matches and preset',
     ok:
       page.container.querySelector('.filter-bar__count')?.textContent === '2 guardrails' &&
-      page.text().includes('A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 400.') &&
+      page.text().includes('A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 403.') &&
       JSON.stringify(large.slice(0, 6)) === JSON.stringify(['Large auxiliary requests', 'enforce', 'on', '0 pools, 1 key', figures('large-auxiliary'), '-']) &&
       JSON.stringify(summary.slice(0, 6)) === JSON.stringify(['Subagent status summary', 'observe', 'on', '1 pool, 0 keys', figures('subagent-status-summary'), 'Subagent status summary v1']) &&
       countOf('large-auxiliary').blocked === 3 &&
@@ -8161,6 +8161,12 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
       JSON.stringify(pickers) === JSON.stringify(['1 pool', 'No keys']) &&
       (dlg?.textContent ?? '').includes('Every group saves together.'),
     missing: [dlg?.querySelector('.dialog__title')?.textContent ?? 'no dialog', JSON.stringify(labels), JSON.stringify(subjects), line?.textContent ?? 'no preset line', JSON.stringify(pickers)],
+  });
+  const modeHint = [...(identity?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Mode')?.querySelector(':scope > .field__hint')?.textContent ?? null;
+  results.push({
+    name: '/guardrails the Mode hint of the dialog says the block answers a 403',
+    ok: modeHint === 'Observe records each match on the request. Enforce refuses a matching request with a 403 before any account is selected.',
+    missing: [modeHint ?? 'no Mode hint'],
   });
   buttonIn(dlg, 'Cancel')?.click();
   await page.settle(200);

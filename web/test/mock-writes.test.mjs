@@ -646,6 +646,9 @@ test('a_guardrail_is_created_edited_attached_and_deleted_on_the_mock_with_the_ro
   await assert.rejects(() => api.createGuardrail({ ...input, conditions: [] }), refusedAs(400, 'conditions holds 1 to 16 entries'));
   await assert.rejects(() => api.createGuardrail({ ...input, conditions: [...conditions, { operator: 'present', subject: 'header' }] }), refusedAs(400, 'conditions[1]: name is required'));
   await assert.rejects(() => api.createGuardrail({ ...input, keys: ['ghost'] }), refusedAs(404, 'key ghost not found'));
+  await assert.rejects(() => api.createGuardrail({ ...input, name: 'Model: Opus Only' }), refusedAs(400, 'name must not contain "model:"'));
+  await assert.rejects(() => api.createGuardrail({ ...input, name: 'oauth TOKEN has been REVOKED' }), refusedAs(400, 'name must not contain "OAuth token has been revoked"'));
+  await assert.rejects(() => api.createGuardrail({ ...input, name: 'Prompt Is Too Long!' }), refusedAs(400, 'name must not contain "prompt is too long"'));
   assert.deepEqual(await ids(), before, 'a refused create stores nothing');
 
   const fresh = await api.createGuardrail({ ...input, keys: ['laptop'], pools: ['all'] });

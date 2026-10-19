@@ -1853,13 +1853,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`every_blocked_story_row_reads_rejected_400_guardrail_blocked_with_no_attempt_and_a_captured_body_and_carries_its_blocking_match at ${at}`, async () => {
+  test(`every_blocked_story_row_reads_rejected_403_guardrail_blocked_with_no_attempt_and_a_captured_body_and_carries_its_blocking_match at ${at}`, async () => {
     const s = await story;
     const blocked = s.requests.filter((r) => r.guardrailId !== null);
     assert.equal(blocked.length, 3, 'the story blocks three requests');
     for (const r of blocked) {
       const usage = r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
-      assert.deepEqual([r.outcome, r.status, r.errorCode, r.attempts.length, r.accountId, usage, r.capturedBodies, r.requestClass], ['rejected', 400, 'guardrail_blocked', 0, null, 0, true, 'auxiliary'], r.id);
+      assert.deepEqual([r.outcome, r.status, r.errorCode, r.attempts.length, r.accountId, usage, r.capturedBodies, r.requestClass], ['rejected', 403, 'guardrail_blocked', 0, null, 0, true, 'auxiliary'], r.id);
       assert.deepEqual([r.guardrailId, r.guardrails], ['large-auxiliary', [{ blocked: false, id: 'subagent-status-summary', position: 0 }, { blocked: true, id: 'large-auxiliary', position: 1 }]], `${r.id} matched its pool's guardrail first and was blocked by its key's`);
       assert.ok((await s.api.getCapturedBodies(r.id)) !== null, `${r.id} keeps its body`);
     }

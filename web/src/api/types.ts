@@ -1925,7 +1925,7 @@ export interface Overview {
   topErrorCode: string | null;
 }
 
-/** Observe records a match on the request, enforce refuses the request with a 400. */
+/** Observe records a match on the request, enforce refuses the request with a 403. */
 export type GuardrailMode = 'enforce' | 'observe';
 export type ConditionSubject = 'agent_type' | 'body' | 'client' | 'header' | 'kind' | 'message' | 'model' | 'request_class' | 'user_agent';
 export type ConditionOperator = 'absent' | 'equals' | 'gt' | 'lt' | 'matches' | 'present';

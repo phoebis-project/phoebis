@@ -1341,7 +1341,7 @@ function guardrailSeeds(): StorySeed[] {
     outcome: 'rejected',
     requestClass: 'auxiliary',
     session: BLOCKED_SESSION_ID,
-    status: 400,
+    status: 403,
   });
   return [
     fork(t(12, 40), 'req_3f7a2c91-d05', 84_200),

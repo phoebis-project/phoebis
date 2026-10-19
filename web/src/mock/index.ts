@@ -486,7 +486,11 @@ export class MockApi implements Api {
     if (input.name !== undefined) {
       if (bytes(input.name) > 256) return 'name is at most 256 bytes';
       if (input.name === '') return 'name is required';
-      if (input.name.toLowerCase().includes('prompt is too long')) return 'name must not contain "prompt is too long"';
+      // The route refuses each phrase the client reads specially in an error's message, matched in any case and
+      // answered as its list spells it.
+      const lowered = input.name.toLowerCase();
+      const phrase = ['model:', 'OAuth token has been revoked', 'prompt is too long'].find((p) => lowered.includes(p.toLowerCase()));
+      if (phrase !== undefined) return `name must not contain "${phrase}"`;
     }
     if (input.description !== undefined && bytes(input.description) > 256) return 'description is at most 256 bytes';
     if (input.mode !== undefined && !GUARDRAIL_MODE_VALUES.some((m) => m === input.mode)) return 'mode is observe or enforce';
