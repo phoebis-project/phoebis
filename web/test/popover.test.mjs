@@ -11,7 +11,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const { act, AddFilter, Button, ChipLine, createElement: h, createRoot, FilterChip, PATTERN_GRAMMAR, Popover, PopoverHost, useState } = await import('./dist/ui.js');
-const { chipsOf, emptyValue, KEYS_DIMENSIONS } = await import('./dist/api.js');
+const { chipsOf, emptyValue, KEYS_DIMENSIONS, REQUESTS_DIMENSIONS } = await import('./dist/api.js');
 
 // jsdom lays nothing out, so the boxes the placement reads are stood in: a 1280 by 800 window, an anchor's box from
 // its `data-rect` (left, top, width, height), and the popover's own size wherever its style puts it. A chip line is
@@ -608,4 +608,97 @@ test("a preset's click on an empty value under emptyMeansAll writes the preset's
   assert.deepEqual([b.writes, checked()], [[{ kinds: ['probe', 'warm_prefix_expired'] }], ['Probe decisions', 'Warm prefix expired']]);
   click(preset());
   assert.deepEqual([b.writes.at(-1), checked().length, box().querySelector('.mselect__option--all')?.getAttribute('aria-selected')], [{ kinds: [] }, 4, 'true'], 'removing the last members returns to the empty value, every option checked');
+});
+
+const KINDS = [
+  { group: 'Decisions', label: 'Moved', value: 'moved' },
+  { group: 'Decisions', label: 'Held', value: 'held' },
+  { group: 'Events', label: 'Cooldown set', value: 'cooldown_set' },
+];
+const KINDS_LIST = { emptyMeansAll: true, field: 'kinds', group: 'Kinds', kind: 'list', label: 'Kinds', word: 'kinds' };
+const EVERY_KIND = { checked: ['Moved', 'Held', 'Cooldown set'], head: { checked: null, selected: 'true' } };
+const NO_CHECK = { checked: [], head: { checked: null, selected: 'false' } };
+/** The open list's Select all row and the option rows it draws checked, past the presets. */
+const listRead = () => {
+  const head = box().querySelector('.mselect__option--all');
+  return {
+    checked: [...box().querySelectorAll('.mselect__option:not(.mselect__option--all):not(.mselect__option--preset)')].filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent),
+    head: { checked: head?.getAttribute('aria-checked') ?? null, selected: head?.getAttribute('aria-selected') ?? null },
+  };
+};
+const openStep = (b, label) => {
+  click(b.button());
+  click(b.rowOf(label));
+};
+const selectAll = () => click(box().querySelector('.mselect__option--all'));
+
+test("a preset's click after Select all's uncheck under emptyMeansAll writes the preset's members alone", () => {
+  const presets = { kinds: [{ label: 'moves and holds', members: ['moved', 'held'] }] };
+  const b = bar({ kinds: [] }, { dimensions: [KINDS_LIST], options: { kinds: KINDS }, presets });
+  openStep(b, 'Kinds');
+  selectAll();
+  click(box().querySelector('.mselect__option--preset'));
+  assert.deepEqual([b.writes, listRead().checked], [[{ kinds: [] }, { kinds: ['moved', 'held'] }], ['Moved', 'Held']]);
+});
+
+test('the popover closed after Select all is unchecked under emptyMeansAll opens again with every row checked', () => {
+  const b = bar({ kinds: [] }, { dimensions: [KINDS_LIST], options: { kinds: KINDS } });
+  openStep(b, 'Kinds');
+  selectAll();
+  press('Escape');
+  assert.equal(box(), null, 'Escape closes the box');
+  openStep(b, 'Kinds');
+  assert.deepEqual([b.writes, listRead()], [[{ kinds: [] }], EVERY_KIND], 'the empty value draws every kind again');
+});
+
+test('Select all on a list whose empty value is no filter checks every option, and its uncheck draws no check', () => {
+  const outcome = REQUESTS_DIMENSIONS.find((d) => d.field === 'outcomes');
+  const outcomes = [
+    { label: 'answered', value: 'answered' },
+    { label: 'failed', value: 'failed' },
+  ];
+  const b = bar({ outcomes: [] }, { dimensions: [outcome], options: { outcomes } });
+  openStep(b, 'Outcome');
+  assert.deepEqual(listRead(), NO_CHECK, 'the empty value is no filter and draws no check');
+  selectAll();
+  assert.deepEqual([b.writes, listRead()], [[{ outcomes: ['answered', 'failed'] }], { checked: ['answered', 'failed'], head: { checked: null, selected: 'true' } }]);
+  selectAll();
+  assert.deepEqual([b.writes.at(-1), listRead()], [{ outcomes: [] }, NO_CHECK], 'the uncheck writes the empty list and draws no check');
+});
+
+test("Select all's uncheck under emptyMeansAll keeps the value empty with no check drawn, and a kind's click then writes that kind alone", () => {
+  const b = bar({ kinds: [] }, { dimensions: [KINDS_LIST], options: { kinds: KINDS } });
+  openStep(b, 'Kinds');
+  assert.deepEqual(listRead(), EVERY_KIND, 'the empty value opens with every row checked');
+  selectAll();
+  assert.deepEqual(
+    [b.writes, listRead(), b.chipBody('kinds'), box().querySelector('.popover__head .link-btn')],
+    [[{ kinds: [] }], NO_CHECK, undefined, null],
+    'the uncheck writes the empty list, which still means every kind, and draws no check, no chip and no Remove',
+  );
+  click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'Held'));
+  assert.deepEqual([b.writes.at(-1), listRead()], [{ kinds: ['held'] }, { checked: ['Held'], head: { checked: 'mixed', selected: 'false' } }], "a kind's click from there writes that kind alone");
+});
+
+test('Back keeps the cleared draw of an unchecked Select all until the next write', () => {
+  const b = bar({ kinds: [] }, { dimensions: [KINDS_LIST], options: { kinds: KINDS } });
+  openStep(b, 'Kinds');
+  selectAll();
+  click(box().querySelector('[aria-label="Back to the filter list"]'));
+  click(b.rowOf('Kinds'));
+  assert.deepEqual(listRead(), NO_CHECK, 'the box stayed open, so the list opens with no check');
+  click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'Held'));
+  click([...box().querySelectorAll('.mselect__option')].find((o) => o.textContent === 'Held'));
+  assert.deepEqual([b.writes, listRead()], [[{ kinds: [] }, { kinds: ['held'] }, { kinds: [] }], EVERY_KIND], 'a write drops the cleared draw, so unchecking the last kind returns to every kind');
+});
+
+test("Select all's uncheck under a search that shows only the checked kinds writes the empty list and draws no check", () => {
+  const b = bar({ kinds: ['held'] }, { dimensions: [{ ...KINDS_LIST, searchable: true }], options: { kinds: KINDS } });
+  openStep(b, 'Kinds');
+  type(box().querySelector('.mselect__search'), 'held');
+  assert.deepEqual(listRead(), { checked: ['Held'], head: { checked: null, selected: 'true' } }, 'the search shows the one checked kind, so Select all reads checked');
+  selectAll();
+  assert.deepEqual([b.writes, listRead()], [[{ kinds: [] }], NO_CHECK], 'the uncheck writes the empty list and draws no check');
+  type(box().querySelector('.mselect__search'), '');
+  assert.deepEqual(listRead(), NO_CHECK, 'with the search cleared every kind reads unchecked');
 });

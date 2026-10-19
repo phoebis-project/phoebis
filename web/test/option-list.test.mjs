@@ -202,3 +202,23 @@ test('a click on a preset adds its members, a second click removes them, and the
   type(container.querySelector('.mselect__search'), 'zzz');
   assert.equal(container.querySelector('.mselect__empty')?.textContent, 'No matches', 'a search matching nothing draws No matches');
 });
+
+/** A list that records each change's arguments whole, so a case reads the second one as well as the value. */
+const recorded = (props) => {
+  const calls = [];
+  const { container } = open({ onChange: (...args) => calls.push(args), ...props });
+  return { calls, container };
+};
+
+test("a row's and a preset's click hand the list's change no second argument", () => {
+  const { calls, container } = recorded({ options: kinds, presets, value: kinds.map((k) => k.value) });
+  act(() => optionRows(container).find((el) => el.textContent?.trim() === 'held').click());
+  act(() => presetRows(container)[1].click());
+  assert.deepEqual(calls, [[['moved', 'cooldown_set', 'cooldown_cleared']], [['moved', 'held']]], 'each click hands its value alone');
+});
+
+test("with every option on, Select all's click still writes the empty list and names `all` as its second argument", () => {
+  const { calls, container } = recorded({ value: ['a', 'b', 'c'] });
+  act(() => row(container).click());
+  assert.deepEqual(calls, [[[], 'all']], "the uncheck writes the empty list, and the second argument tells it from a row's click");
+});

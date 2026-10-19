@@ -46,6 +46,11 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
   const [query, setQuery] = useState('');
   // A pattern or an id is written on Enter or Apply alone, so Escape can drop what was typed.
   const [draft, setDraft] = useState('');
+  /**
+   * The field whose Select all was unchecked while its empty value means every option. It draws with no check until the
+   * next write or the popover's close.
+   */
+  const [cleared, setCleared] = useState<string | null>(null);
   const textOf = (field: string) => {
     const value = filters[field];
     return typeof value === 'string' ? value : '';
@@ -88,6 +93,7 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
     to?.focus({ preventScroll: true });
     setOpen(false);
     setQuery('');
+    setCleared(null);
     if (edit !== null) onEditDone();
   };
   // A write that empties the dimension takes away the chip the box hangs from, so the chip line moves the focus on.
@@ -161,8 +167,9 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
     const none = d.defaultValue ?? '';
     const listed = Array.isArray(value) ? (value as string[]) : [];
     // An empty value that means every option reads every row checked, so a row's click unchecks one and a preset's
-    // narrows to its members.
-    const every = d.emptyMeansAll === true && listed.length === 0;
+    // narrows to its members. After Select all's uncheck it draws no check, so the uncheck reads as the inverse of the
+    // check while the value still means every option.
+    const every = d.emptyMeansAll === true && listed.length === 0 && cleared !== d.field;
     return (
       <div ref={bodyRef} className="add-filter" onKeyDown={d.kind === 'choice' ? (e) => walkRows(e, e.currentTarget) : undefined}>
         <div className="popover__head">
@@ -185,7 +192,10 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
             everyByDefault={every}
             label={d.label}
             mono={d.mono}
-            onChange={(next) => update({ [d.field]: next })}
+            onChange={(next, via) => {
+              setCleared(d.emptyMeansAll === true && via === 'all' && next.length === 0 ? d.field : null);
+              update({ [d.field]: next });
+            }}
             options={known}
             presets={presets[d.field]}
             searchable={d.searchable === true || known.length > SEARCHED}

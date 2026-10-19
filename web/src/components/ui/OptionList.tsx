@@ -22,7 +22,11 @@ export interface OptionListProps {
   /** The search field's placeholder reads `Search ${label.toLowerCase()}`. */
   label: string;
   mono?: boolean;
-  onChange: (next: string[]) => void;
+  /**
+   * `via` reads `all` on Select all's click alone. A caller reads it to tell the uncheck that empties the list from a
+   * row's click.
+   */
+  onChange: (next: string[], via?: 'all') => void;
   options: Option[];
   /** Rows under a "Presets" heading after "Select all" and before the first group: checked while every member is on, mixed while some are, a click adds the members of an unchecked or mixed row and removes a checked row's. The search filters them by label. */
   presets?: readonly Preset[];
@@ -76,7 +80,7 @@ export function OptionList({ autoFocus = false, everyByDefault = false, label, m
   const someOn = visibleValues.some((v) => value.includes(v));
   // The row reaches the options the search shows, so a query narrows what it selects and the hidden ones stay as
   // they are.
-  const toggleAll = () => onChange(allOn ? value.filter((v) => !visibleValues.includes(v)) : [...value, ...visibleValues.filter((v) => !value.includes(v))]);
+  const toggleAll = () => onChange(allOn ? value.filter((v) => !visibleValues.includes(v)) : [...value, ...visibleValues.filter((v) => !value.includes(v))], 'all');
   const togglePreset = (members: readonly string[]) =>
     onChange(everyByDefault ? [...members] : members.every((m) => value.includes(m)) ? value.filter((v) => !members.includes(v)) : [...value, ...members.filter((m) => !value.includes(m))]);
   return (

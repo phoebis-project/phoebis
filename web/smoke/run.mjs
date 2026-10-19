@@ -22743,44 +22743,82 @@ m.unmount();
   const QUERIED = { '/requests': ['Status', '50'], '/routing-log': ['Model', 'sonnet'] };
   // A kind's chip word is its option label with the first letter in lower case.
   const kindWords = (labels) => labels.map((l) => `${l.charAt(0).toLowerCase()}${l.slice(1)}`);
+  // The routing log's rows by the page's own row key, so a narrowed table reads against the mock's answer.
+  const logRows = (page) => [...page.container.querySelectorAll('.routing-log__table tbody tr')].filter((tr) => !tr.querySelector('.skeleton, .empty')).map((tr) => tr.getAttribute('data-row'));
+  const logKey = (r) => (r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`);
+  // A kind the default hour holds, so the table its click narrows to lists rows.
+  const ONE_KIND = 'Probe decisions';
+  /**
+   * Kinds on from Select all's uncheck: the table that draw lists, Select all's check, the uncheck again, then a click
+   * on `ONE_KIND` with the query the page sent for it and the mock's answer to that query.
+   */
+  const kindSteps = async (page, label, key) => {
+    const cleared = logRows(page);
+    await clickHead(page, label);
+    const back = read(page, label, key);
+    await clickHead(page, label);
+    const spy = countCalls('listRoutingLog');
+    [...(filterOf(page, label)?.querySelectorAll(CHOICE) ?? [])].find((o) => o.textContent?.trim() === ONE_KIND)?.click();
+    await page.settle(700);
+    spy.restore();
+    const sent = spy.calls.at(-1)?.[0] ?? null;
+    const answer = sent === null ? [] : (await api.listRoutingLog(sent)).rows.map(logKey);
+    return { answer, back, cleared, narrowed: logRows(page), picked: read(page, label, key), sent };
+  };
+  /** Select all's uncheck, then the list closed and opened again, read as it opens. */
+  const reopenCleared = async (page, label, key) => {
+    await clickHead(page, label);
+    await closeList(page);
+    await openList(page, label);
+    return read(page, label, key);
+  };
   for (const [view, pickers] of PICKERS) {
     const page = await mount(view, { now: CLOCK_ORIGIN });
     for (const [label, key] of pickers) {
-      // An empty Kinds value is every kind, so Select all on the full list changes nothing, unchecking one kind writes
-      // the others under a chip, and Select all then returns every kind to no chip.
+      // An empty Kinds value is every kind, so the list opens with every row checked. Select all's uncheck clears every
+      // check while the table still lists every kind, a kind's click from there lists that kind alone, Select all
+      // returns every kind with no chip as the page folds the full set, and the close drops the cleared draw.
       const kinds = label === 'Kinds';
       const name = kinds
-        ? `${view} Select all on Kinds keeps every kind with no chip, unchecking one writes the others, and Select all returns every kind`
+        ? `${view} Select all's uncheck on Kinds clears every check with every kind listed, a kind's click then lists it alone, Select all returns every kind, and the list reopens checked`
         : `${view} Select all on ${label} checks every option and a second click clears them`;
       await openList(page, label);
       if (!filterOf(page, label)) {
         controlMissing(name, label);
         continue;
       }
+      const rest = kinds ? logRows(page) : [];
       const before = read(page, label, key);
       await clickHead(page, label);
       const all = read(page, label, key);
-      let picked = null;
-      if (kinds) {
-        filterOf(page, label)?.querySelector(`${CHOICE}:not(.mselect__option--preset)`)?.click();
-        await page.settle(700);
-        picked = read(page, label, key);
-      }
+      const steps = kinds ? await kindSteps(page, label, key) : null;
       await clickHead(page, label);
       const none = read(page, label, key);
+      const reopened = kinds ? await reopenCleared(page, label, key) : null;
       const everyKind = (r) => r.trigger === 'no Kinds chip' && !r.set && r.address === null && r.choices.length > 0 && r.checked.length === r.choices.length && r.head?.selected === 'true' && r.head.checked === null;
+      const noKind = (r) => r.trigger === 'no Kinds chip' && !r.set && r.address === null && r.choices.length > 0 && r.checked.length === 0 && r.head?.selected === 'false' && r.head.checked === null;
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
       const kindsHeld = () => {
-        const words = kindWords(picked.checked);
+        const { answer, back, cleared, narrowed, picked, sent } = steps;
+        const [word] = kindWords(picked.checked);
         return (
           everyKind(before) &&
-          everyKind(all) &&
+          noKind(all) &&
+          rest.length > 0 &&
+          same(cleared, rest) &&
+          everyKind(back) &&
           picked.set &&
-          picked.checked.length === picked.choices.length - 1 &&
-          picked.address?.length === picked.checked.length &&
+          same(picked.checked, [ONE_KIND]) &&
+          picked.address?.length === 1 &&
+          same(sent?.kinds, picked.address) &&
           picked.head?.checked === 'mixed' &&
-          picked.trigger === `kinds: ${words.slice(0, 3).join(', ')} +${words.length - 3}` &&
-          picked.title === words.join(', ') &&
-          everyKind(none)
+          picked.trigger === `kinds: ${word}` &&
+          picked.title === word &&
+          narrowed.length > 0 &&
+          same(narrowed, answer) &&
+          !same(narrowed, rest) &&
+          everyKind(none) &&
+          everyKind(reopened)
         );
       };
       const wanted = summary(label, all.checked);
@@ -22805,7 +22843,9 @@ m.unmount();
               none.address === null &&
               none.checked.length === 0 &&
               none.head?.selected === 'false'),
-        missing: [`opened: ${brief(before)}`, `first click: ${brief(all)}`, ...(picked ? [`one unchecked: ${brief(picked)}`] : [`wanted: ${JSON.stringify(wanted)}`]), `second click: ${brief(none)}`],
+        missing: steps
+          ? [`opened: ${brief(before)}, ${rest.length} rows`, `unchecked: ${brief(all)}, ${steps.cleared.length} rows, as at rest ${same(steps.cleared, rest)}`, `checked again: ${brief(steps.back)}`, `${ONE_KIND}: ${brief(steps.picked)}, sent ${JSON.stringify(steps.sent?.kinds)}, ${steps.narrowed.length} rows, as answered ${same(steps.narrowed, steps.answer)}`, `Select all: ${brief(none)}`, `reopened: ${brief(reopened)}`]
+          : [`opened: ${brief(before)}`, `first click: ${brief(all)}`, `wanted: ${JSON.stringify(wanted)}`, `second click: ${brief(none)}`],
       });
       // A searchable list's row reaches the options its query leaves, and the hidden ones keep their state.
       const [queried, query] = QUERIED[view] ?? [];
