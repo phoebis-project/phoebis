@@ -864,9 +864,9 @@ pub(crate) struct PriorCoverage {
 }
 
 impl PriorCoverage {
-    /// The kept-warm credit's test for a request that arrived at `arrived` on `model` at the speed `fast`, was served by
-    /// `account` and read `read` from the cache: it arrived after the previous turn's own entry would have lapsed and
-    /// read the entry the covering probe kept.
+    /// The kept-warm credit's test for a request that arrived at `arrived` on `model` at the speed `fast`, was served
+    /// by `account` and read `read` from the cache: it arrived after the previous turn's own entry would have lapsed
+    /// and read the entry the covering probe kept.
     pub(crate) fn credits(
         &self,
         arrived: i64,
@@ -1608,6 +1608,12 @@ impl Inner {
         unanswered: Unanswered,
     ) {
         self.touch_agent(key, agent_id);
+        // A labeled stop settles or writes off the probes an open compaction would answer, so the compaction ends as a
+        // failed one, since its completion would credit a probe the stop wasted and relabel the stop. A registration
+        // that takes a released agent back follows such a stop, so it finds no compaction open.
+        if wasted.is_some() {
+            self.end_compaction(key, agent_id);
+        }
         let Some(agent) = self
             .sessions
             .get_mut(key)

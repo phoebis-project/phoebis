@@ -9,7 +9,8 @@ use phoebis_bus::{
     AttemptOutcome, Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, ResponseHead, Usage,
 };
 use phoebis_keepalive::{
-    AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState,
+    AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Reason,
+    RecipeState,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 
@@ -1209,9 +1210,14 @@ async fn a_completed_compaction_answers_the_chain_earns_its_credit_and_stops_the
         "{view:?}"
     );
     assert_eq!(
-        r.engine.sessions()[0].keepalive.cause,
-        None,
-        "the Sessions row reads null once the recipe stopped"
+        r.engine.sessions()[0].keepalive,
+        KeepaliveSummary {
+            cause: None,
+            last_guard: None,
+            next_probe_at: None,
+            state: None
+        },
+        "the Sessions row's keepalive member reads null once the recipe stopped"
     );
     // 870 s in, past the stopped recipe's next due time.
     r.advance_attended(270_000);
@@ -1234,8 +1240,8 @@ async fn a_completed_compaction_answers_the_chain_earns_its_credit_and_stops_the
 }
 
 /// The completion judges the probes a failed turn handed back and the ones sent while that turn was open as one chain:
-/// the first probe's own entry ended 570 s in, and the second, which read the entry back 550 s in, extended it to 850 s,
-/// so a compaction 600 s in that read the cache answers both.
+/// the first probe's own entry ended 570 s in, and the second, which read the entry back 550 s in, extended it to
+/// 850 s, so a compaction 600 s in that read the cache answers both.
 #[tokio::test]
 async fn a_completed_compaction_judges_the_kept_and_the_unanswered_probes_as_one_chain() {
     let mut r = rig(RigSpec {
@@ -1392,6 +1398,121 @@ async fn a_turn_admitted_while_a_compaction_is_open_ends_the_compaction_as_a_fai
         (status.reason, status.unanswered),
         (Reason::Scheduled, 0),
         "the turn's completion answered the probe: {status:?}"
+    );
+}
+
+/// A labeled stop of the agent settles the probes the recipe paid for, so it ends an open compaction as a failed one:
+/// after the operator's release, the compaction's completion that read the cache books no credit for the probe the
+/// release settled, and the cause stays `released`.
+#[tokio::test]
+async fn the_operators_release_ends_an_open_compaction_as_a_failed_one() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    // 310 s in, past the first turn's own entry and inside the probe's, which ends 570 s in.
+    r.advance_attended(40_000);
+    r.engine.observe(compaction(&r, "compaction"));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(head(&r, "compaction", 200));
+    r.engine.observe(message_start("compaction", 2_000, 0));
+    r.engine.release("desktop", "session").unwrap();
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    let status = r.status("main");
+    assert_eq!(
+        (status.reason, status.credited_today),
+        (Reason::Released, 0),
+        "{status:?}"
+    );
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (1, BTreeMap::from([("released".to_string(), 1)]), 0),
+        "the probe settled under the release, with no credit beside it"
+    );
+}
+
+/// A subagent's release is a labeled stop too, so the registration that takes the agent back finds no compaction
+/// open: the compaction's completion that read the cache books no credit for the probe the release settled, and the
+/// cause stays the registration's.
+#[tokio::test]
+async fn a_subagent_registered_again_after_its_release_holds_no_open_compaction() {
+    let mut r = rig(RigSpec::default()).await;
+    start_agent(&mut r, "worker");
+    r.observe("worker").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    // 310 s in, past the first turn's own entry and inside the probe's, which ends 570 s in.
+    r.advance_attended(40_000);
+    r.engine.observe(r.observed_with(
+        "compaction",
+        "worker",
+        Some("compaction"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(head(&r, "compaction", 200));
+    r.engine.observe(message_start("compaction", 2_000, 0));
+    r.state("worker", "released");
+    let generation = r.status("worker").request_generation;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("worker".into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    let status = r.status("worker");
+    assert_eq!(
+        (status.reason, status.credited_today),
+        (Reason::AwaitingRequest, 0),
+        "{status:?}"
+    );
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (1, BTreeMap::from([("released".to_string(), 1)]), 0),
+        "the probe settled under the release, with no credit beside it"
+    );
+}
+
+/// The lapse sweep leaves the probes of an agent with an open compaction to the compaction's completion: a chain a
+/// failed turn handed back, whose last entry ends 840 s in, outlives a tick 850 s in while the compaction opened 560 s
+/// in is open, and the completion that read the cache answers both probes, none settled `expired` by the sweep.
+#[tokio::test]
+async fn the_lapse_sweep_leaves_the_probes_of_an_open_compaction_to_its_completion() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_chain_of_two_probes(&mut r).await;
+    r.advance_attended(10_000);
+    open_turn(&r, "second", 2_000, 0);
+    r.engine
+        .observe(r.complete("second", Outcome::Failed, Some(usage(0, 0))));
+    r.advance_attended(10_000);
+    r.engine.observe(compaction(&r, "compaction"));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(head(&r, "compaction", 200));
+    r.engine.observe(message_start("compaction", 2_000, 0));
+    // 850 s in, past the chain's last entry.
+    r.advance_attended(290_000);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        2,
+        "the sweep left the open compaction's probes"
+    );
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (2, BTreeMap::new(), 1),
+        "both probes answered, and the compaction's credit"
     );
 }
 

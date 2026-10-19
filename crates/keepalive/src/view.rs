@@ -95,9 +95,9 @@ pub struct RecipeView {
     pub credited_today: u64,
     pub deadline: Option<i64>,
     pub key_id: String,
-    /// The guard's verdict on the last request the agent observed, `null` before the first one. Never a hold:
-    /// `auxiliary` and `foreign` both leave the recipe scheduled exactly as `state` and `cause` already say, and
-    /// `compaction` leaves it as it stood until the compaction completes, which stops it under `compacted`.
+    /// The guard's verdict on the last request the agent observed, `null` before the first one. `auxiliary` and
+    /// `foreign` both leave the recipe scheduled exactly as `state` and `cause` already say, `compaction` leaves it as
+    /// it stood while the compaction is open, and a completed one stops it under `compacted`.
     pub last_guard: Option<Guard>,
     pub last_probe_at: Option<i64>,
     pub last_request_at: Option<i64>,
