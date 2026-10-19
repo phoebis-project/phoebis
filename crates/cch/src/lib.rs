@@ -980,8 +980,8 @@ impl<'a> Scanner<'a> {
         }
     }
     /// Runs `walk` one level down, for a walker that eats a container's opening bracket itself rather than
-    /// entering it through `value`, so the container counts toward `MAX_DEPTH` as `value` would count it and the
-    /// depth is back where it was on every way out.
+    /// entering it through `value`, so the container counts toward the depth `value` checks, and on every way out
+    /// the depth is back where it was.
     fn inside<T>(&mut self, walk: impl FnOnce(&mut Self) -> T) -> T {
         self.depth += 1;
         let walked = walk(self);
@@ -1212,6 +1212,14 @@ mod tests {
                     matches!(repeated_top_level_member(&body, &["model"]), Ok(None)),
                     "{admitted}"
                 );
+                assert!(
+                    matches!(first_system_block_member_count(&body, "text"), Ok(1)),
+                    "{admitted}"
+                );
+                assert!(
+                    matches!(cache_control_spans(&body), Ok(spans) if spans.is_empty()),
+                    "{admitted}"
+                );
             } else {
                 let refused =
                     format!("serde refuses {depth} arrays under the root, so the scanners do");
@@ -1225,6 +1233,17 @@ mod tests {
                         repeated_top_level_member(&body, &["model"]),
                         Err(CchError::TooDeep(_))
                     ),
+                    "{refused}"
+                );
+                assert!(
+                    matches!(
+                        first_system_block_member_count(&body, "text"),
+                        Err(CchError::TooDeep(_))
+                    ),
+                    "{refused}"
+                );
+                assert!(
+                    matches!(cache_control_spans(&body), Err(CchError::TooDeep(_))),
                     "{refused}"
                 );
             }
