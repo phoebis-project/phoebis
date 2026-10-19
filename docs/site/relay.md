@@ -175,12 +175,14 @@ fields), which the router never writes and whose turn origin it records when the
 Two checks guard the restoration against a client build the router was not pinned to. The hash check refuses a stamped
 `cch=` hash this build's formula does not reproduce over the body, and the suffix check refuses, on a Claude Code
 inference request, a `cc_version` suffix that does not reproduce from the first user message and the version the user
-agent names. The hash goes first. A body carrying only the placeholder `cch=00000` passes, and a line with no
-`cc_version`, a bare version with no suffix, or a version other than the agent's is not the suffix drift: the first two
-carry nothing to check, and the third is the hash check's to judge. Both run once per request, after the key's client
-and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift. The
-contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request that
-fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
+agent names. On a resumed conversation, whose first user message is the client's resume placeholder, the suffix also
+reproduces from the empty prompt, since the client stamps the request over a message of tool results alone and writes
+the placeholder afterwards. The hash goes first. A body carrying only the placeholder `cch=00000` passes, and a line
+with no `cc_version`, a bare version with no suffix, or a version other than the agent's is not the suffix drift: the
+first two carry nothing to check, and the third is the hash check's to judge. Both run once per request, after the key's
+client and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift.
+The contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request
+that fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
 
 Either refuses the request as `400` `invalid_request_error` with the code `client_drift`, the header
 `x-phoebis-error-code: client_drift` and the message of its kind ([refusal codes](client.md#refusal-codes)):
@@ -189,10 +191,15 @@ Either refuses the request as `400` `invalid_request_error` with the code `clien
 | --- | --- |
 | `hash` | `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` |
 | `version_suffix` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version` |
+| `version_suffix`, resumed conversation | `the conversation was resumed, and the client's version suffix does not reproduce from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this client version` |
 
 The refusal logs `a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client` at
 warn level with the drift kind, the user agent and the profile name, and records itself as the request's one decision,
 of kind `client` with the code `drift` and the check as its reason, so the request log names which check refused.
+
+The warning also carries `resume`, `true` where the first user message is the client's resume placeholder, and the
+suffix check's refusal of such a body names the resume in its message while it stays a real non-reproduction, since the
+router reproduces a resumed conversation's stamp over the empty prompt.
 
 The router fails closed because a stamp it cannot verify never travels under an account's credential, edited or not: a
 wrong hash is indistinguishable from tampering, and the cost would fall on the account rather than on the request, which

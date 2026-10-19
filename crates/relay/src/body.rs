@@ -555,10 +555,11 @@ pub(crate) fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
 
 /// Whether the version suffix the client stamped reproduces from a text block of the body's first user message
 /// and the version its user agent names. The client anchors on its first non-meta user message, which the wire
-/// does not mark, so the check accepts any block of that message; a foreign formula still fails with a handful
-/// of candidates against 4096 values. A line with no `cc_version`, a bare version with no suffix, or a version
-/// other than the agent's is not this drift: the first two carry nothing to check, and the third is the hash
-/// check's to judge.
+/// does not mark, so the check accepts any block of that message, and a foreign formula still fails with a
+/// handful of candidates against 4096 values. A resumed body's candidates add the empty prompt, which the client
+/// stamps before it writes the resume placeholder over a message of tool results. A line with no `cc_version`, a
+/// bare version with no suffix, or a version other than the agent's is not this drift: the first two carry nothing
+/// to check, and the third is the hash check's to judge.
 pub(crate) fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'static str> {
     let (start, end) = phoebis_cch::string_member_span(body, &["system", "0", "text"])?;
     // The span is the JSON token with its quotes and escapes; the billing line is its decoded text.

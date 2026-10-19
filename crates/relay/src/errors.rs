@@ -314,8 +314,26 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         },
         // Fail closed: a hash or a version suffix the pinned rules cannot reproduce means the client moved past
         // the profile. A stamp the router cannot verify never travels under an account's credential, so the
-        // operator re-pins rather than the relay guessing what the upstream now expects.
-        RelayError::ClientDrift { kind: "version_suffix" } => Failure {
+        // operator re-pins rather than the relay guessing what the upstream now expects. A resumed conversation's
+        // suffix already reproduces over the empty prompt the client stamps, so its refusal is a moved client too,
+        // and the words name the resume apart so the client and the operator see which conversation it was.
+        RelayError::ClientDrift {
+            kind: "version_suffix",
+            resumed: true,
+        } => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "client_drift",
+            message: Cow::Borrowed("the conversation was resumed, and the client's version suffix does not reproduce \
+                      from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this \
+                      client version"),
+            retry_after: None,
+            no_retry: false,
+        },
+        RelayError::ClientDrift {
+            kind: "version_suffix",
+            resumed: false,
+        } => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "client_drift",
@@ -500,11 +518,15 @@ mod tests {
     /// failed, so an operator reads the right one off the response without a log line.
     #[test]
     fn a_client_drift_message_names_the_kind_that_failed() {
-        let hash = relay_failure(&RelayError::ClientDrift { kind: "hash" });
+        let hash = relay_failure(&RelayError::ClientDrift {
+            kind: "hash",
+            resumed: false,
+        });
         assert_eq!(hash.code, "client_drift");
         assert!(hash.message.contains("billing hash"), "{}", hash.message);
         let suffix = relay_failure(&RelayError::ClientDrift {
             kind: "version_suffix",
+            resumed: false,
         });
         assert_eq!(suffix.code, "client_drift");
         assert!(
@@ -637,9 +659,17 @@ mod tests {
             RelayError::BodyTooDeep,
             RelayError::BodyTooLarge,
             RelayError::Cch(phoebis_cch::CchError::Json(0)),
-            RelayError::ClientDrift { kind: "hash" },
+            RelayError::ClientDrift {
+                kind: "hash",
+                resumed: false,
+            },
             RelayError::ClientDrift {
                 kind: "version_suffix",
+                resumed: false,
+            },
+            RelayError::ClientDrift {
+                kind: "version_suffix",
+                resumed: true,
             },
             RelayError::InvalidModel,
             RelayError::LedgerBehind,

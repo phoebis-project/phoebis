@@ -1841,6 +1841,7 @@ impl Relay {
             Ok(None) => None,
             Ok(Some(kind)) => Some(self.drift_refusal(
                 kind,
+                facts.resumed,
                 &parts.headers,
                 &trace,
                 &key,
@@ -1870,6 +1871,7 @@ impl Relay {
                 if let Some(kind) = crate::body::version_drift(&raw, check) {
                     let refusal = self.drift_refusal(
                         kind,
+                        facts.resumed,
                         &parts.headers,
                         &trace,
                         &key,
@@ -4051,10 +4053,13 @@ impl Relay {
 
     /// A client-drift refusal with its trigger, the warn that tells the operator which client to re-pin to, and the
     /// refusal's record as the request's one decision. The record is try-sent, so a full router queue drops it
-    /// rather than delaying the 400.
+    /// rather than delaying the 400. A moved client is cured by the re-pin, and a resumed body warns `resume` and
+    /// its suffix refusal's words name the resume, so the operator sees the refused conversation was a resumed one.
+    #[allow(clippy::too_many_arguments)]
     fn drift_refusal(
         &self,
         kind: &'static str,
+        resumed: bool,
         headers: &HeaderMap,
         trace: &Trace,
         key: &ApiKeyRow,
@@ -4065,6 +4070,7 @@ impl Relay {
             drift = %kind,
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
+            resume = resumed,
             "a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client",
         );
         self.router.record_refusal(
@@ -4095,7 +4101,7 @@ impl Relay {
             },
         );
         LocalRefusal {
-            failure: relay_failure(&RelayError::ClientDrift { kind }),
+            failure: relay_failure(&RelayError::ClientDrift { kind, resumed }),
             client_drift: Some(kind),
             client_contract: None,
         }
