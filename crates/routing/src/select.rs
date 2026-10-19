@@ -7402,8 +7402,9 @@ mod banded_tests {
         );
     }
 
-    /// The pin path reads an account whose saved end passed as `subscription_ended` and runs no rule, so no selection
-    /// reads the slow-down at a horizon the end clamped to `now`: the case calls the read itself.
+    /// The factor of a read at a horizon the end clamped to `now` shows only through an entry write, and no selection
+    /// writes one there: the pin path reads an account whose saved end passed as `subscription_ended` and runs no rule,
+    /// and the heal check ahead of it reads the stretch and not the factor. The case calls the read itself.
     #[test]
     fn a_horizon_the_end_reached_reads_a_factor_of_one_under_the_ceiling_and_zero_at_it() {
         const HOUR: i64 = 3_600_000;
@@ -7411,6 +7412,7 @@ mod banded_tests {
         let tier = "default_claude_max_20x";
         let mut pool = PoolRow::for_tests("p");
         pool.slow_down.slow_down = true;
+        pool.window_ceiling = 0.9;
         let snapshot = RegistrySnapshot::from_load(
             RegistryLoad {
                 accounts: vec![AccountRow {
@@ -7431,7 +7433,7 @@ mod banded_tests {
                     since: None,
                     trial_ends_at: None,
                     cancelled: true,
-                    ends_at: Some(T),
+                    ends_at: Some(T - HOUR),
                     tier: Some(tier.into()),
                 }],
                 ..RegistryLoad::default()
@@ -7442,7 +7444,7 @@ mod banded_tests {
         );
         let pool = snapshot.pool("p").expect("the case's pool");
         // A booking of a tenth of the window an hour, so the demand alone would read a stretch, and the reset an hour
-        // out past the end.
+        // out, two hours past the end, which passed an hour before `now`.
         let read_at = |utilization: f64| {
             let mut state = RoutingState::from_load(RoutingLoad::default());
             state.book_reservation(
@@ -7491,7 +7493,7 @@ mod banded_tests {
         );
         assert_eq!(
             over.stretch_ms,
-            ((0.97 - 0.95) / over.demand * 1_000.0).round() as i64,
+            ((0.97 - pool.window_ceiling) / over.demand * 1_000.0).round() as i64,
             "the stretch is the overrun at the demand, with no time left to the horizon"
         );
     }
