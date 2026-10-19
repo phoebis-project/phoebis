@@ -519,13 +519,16 @@ const KEY_GUARDRAILS_HINT = "The pool's guardrails run first and cannot be dropp
 /** A row of a guardrail list: the route's ref, or the registry's row for one attached since the dialog opened. */
 type ListedGuardrail = Pick<GuardrailRef, 'enabled' | 'id' | 'name'> & { mode: GuardrailRef['mode'] | null };
 
-/** A row's name, its mode badge in the Guardrails view's tones, and the view's word for a switched-off guardrail. */
+/**
+ * A row's name, the view's word for a switched-off guardrail, and its mode badge in the Guardrails view's tones,
+ * drawn last so it ends at the trailing slot in every row.
+ */
 function GuardrailWords({ guardrail: g }: { guardrail: ListedGuardrail }) {
   return (
     <>
       <span className="pattern-editor__pattern">{g.name}</span>
-      {g.mode !== null && <Badge tone={g.mode === 'enforce' ? 'warning' : 'neutral'}>{g.mode}</Badge>}
       {!g.enabled && <span className="muted">off</span>}
+      {g.mode !== null && <Badge tone={g.mode === 'enforce' ? 'warning' : 'neutral'}>{g.mode}</Badge>}
     </>
   );
 }

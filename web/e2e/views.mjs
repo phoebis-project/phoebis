@@ -6909,13 +6909,18 @@ async function keyDialogGeometry(theme) {
         const inherited = box('li.pattern-editor__row--inherited .badge');
         const badge = box(`${own} .badge`);
         const actions = box(`${own} .pattern-editor__actions`);
-        return { actions: actions && +actions.width.toFixed(2), inherited: inherited && +inherited.right.toFixed(2), own: badge && +badge.right.toFixed(2) };
+        const buttons = [...group.querySelectorAll(`${own} .pattern-editor__actions button`)].map((b) => b.getBoundingClientRect());
+        const span = buttons.length ? +(buttons[buttons.length - 1].right - buttons[0].left).toFixed(2) : null;
+        return { actions: actions && +actions.width.toFixed(2), buttons: span, inherited: inherited && +inherited.right.toFixed(2), own: badge && +badge.right.toFixed(2) };
       });
       const missing = [read.inherited === null && 'inherited row', read.own === null && 'own row'].filter(Boolean);
       if (missing.length) sayBadge(`no ${missing.join(' and no ')} with a mode badge to read`);
       else {
         measurements.push(`${theme} /keys dialog ${badgeAt}: badge x inherited ${read.inherited} own ${read.own}, actions ${read.actions} px`);
         if (Math.abs(read.inherited - read.own) > 1) sayIn(badgeAt, `the mode badge sits at ${read.inherited} in an inherited row and ${read.own} in an own row`);
+        // The slot keeps its width whatever the buttons measure, so buttons that outgrow it spill over the badge while
+        // both badges stay aligned. The spill runs toward the row's start, which the slot's scrollWidth does not count.
+        if (read.buttons === null || Math.abs(read.buttons - read.actions) > 1) sayIn(badgeAt, `the own row's buttons span ${read.buttons} px in a ${read.actions} px trailing slot`);
       }
       await close(badgeAt);
     } catch (error) {
