@@ -5006,6 +5006,71 @@ mod tests {
         );
     }
 
+    /// The plan sums fold the equivalent the row's priced figures carry, so a figure no pricing of the row's usage
+    /// answers reads back from the group's equivalent sums. A fold that priced the usage again would read the same
+    /// figures the priced row holds in production, which leaves only this sentinel to tell the two apart.
+    #[test]
+    fn the_plan_sums_fold_the_priced_rows_equivalent_and_never_price_its_usage_again() {
+        let costs = crate::test_tables::subscription_costs();
+        let model = "claude-sonnet-5-5";
+        let mut row = RollupRow::key(
+            HOUR,
+            "k",
+            0,
+            "p",
+            "a",
+            model,
+            "inference",
+            "-",
+            "-",
+            "-",
+            "-",
+            "standard",
+            "plan",
+            "standard",
+            "-",
+            "-",
+        );
+        row.requests = 1;
+        row.input_tokens = 1_000;
+        row.output_tokens = 100;
+        let sentinel: WindowShares =
+            IndexMap::from([(FIVE_HOUR, Some(0.375)), (SEVEN_DAY, Some(0.0625))]);
+        let at = HOUR * 1_000;
+        let repriced = price_equivalent(&costs, None, model, row.usage(), at, at).shares;
+        for (window, share) in &sentinel {
+            assert_ne!(
+                repriced.get(window).copied().flatten(),
+                *share,
+                "the sentinel on {window} is a figure the pricer does not answer for this usage"
+            );
+        }
+        let mut plan = PlanSums::default();
+        plan.add(
+            &row,
+            Priced {
+                equivalent: Some(sentinel.clone()),
+                ..Priced::default()
+            },
+            &costs,
+            true,
+        );
+        let cost = &plan.equivalent.cost;
+        assert_eq!(
+            cost.keys().copied().collect::<Vec<_>>(),
+            [FIVE_HOUR, SEVEN_DAY],
+            "the sentinel's windows alone"
+        );
+        for (window, share) in &sentinel {
+            let sum = &cost[window];
+            assert_eq!(
+                (Some(sum.sum), sum.unpriced),
+                (*share, false),
+                "the equivalent sums on {window} read the priced row's figure"
+            );
+        }
+    }
+
     /// The hour of a date's midnight, in seconds.
     fn hour_at(date: &str) -> i64 {
         effective_instant(date).expect("a date") / 1_000

@@ -167,18 +167,38 @@ async fn step_to(h: &Harness, up: &FakeUpstream, paused: &Paused, to: Duration) 
                 break;
             }
             tokio::time::resume();
-            let accepted = wait_for(Duration::from_secs(30), || {
-                let accepted = up.connections();
-                let answered = up.requests().len() - paused.requests;
-                (up.open_connections() <= paused.idle.get()
-                    && accepted - paused.accepted == answered)
-                    .then_some(accepted)
-            })
-            .await;
+            let accepted = settled(up, paused).await;
             tokio::time::pause();
             paused.seen.set(accepted);
             sync();
         }
+    }
+}
+
+/// Waits with time moving until every connection the fake accepted since the start has sent its one request and only
+/// the idle ones stay open, and answers the connections accepted in all. The shared `wait_for` panics with no count,
+/// so this deadline is its own: a step that does not settle under host load names the counts that did not.
+async fn settled(up: &FakeUpstream, paused: &Paused) -> usize {
+    let deadline = Duration::from_secs(30);
+    let give_up = std::time::Instant::now() + deadline;
+    loop {
+        let accepted = up.connections();
+        let answered = up.requests().len() - paused.requests;
+        let open = up.open_connections();
+        let idle = paused.idle.get();
+        let since = accepted - paused.accepted;
+        if open <= idle && since == answered {
+            return accepted;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the fake upstream did not settle within {deadline:?}\n\
+             accepted connections since the start: {since}, expected {answered}, one per answered request\n\
+             answered requests since the start: {answered}, expected {since}, one per accepted connection\n\
+             open connections: {open}, expected at most {idle}, the idle ones\n\
+             idle connections: {idle}, expected at least {open}, the open ones"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 
