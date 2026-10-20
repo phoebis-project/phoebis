@@ -26,7 +26,7 @@ import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
-import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, instant, pct, shareLabel, shortId, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
+import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtEquivalent, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, instant, pct, shareLabel, shortId, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
@@ -1909,9 +1909,9 @@ function KeepaliveByPool({ error, funded, groups, loading, unit }: { error: stri
 /**
  * One ring of the cost by token kind. `format` prints each kind's figure in the ring's unit and the center's total
  * unless `center` prints it shorter, `label` names the ring at its center, and `title` is the ring's hover text, such
- * as the estimate's sentence.
+ * as the estimate's sentence. `figureTitle` is a kind's figure's own hover text, which masks `title` over the figure.
  */
-function CostDonut({ center, cost, format = fmtUsd, label = 'cost', title }: { center?: (v: number) => string; cost: CostSplit; format?: (v: number) => string; label?: string; title?: string }) {
+function CostDonut({ center, cost, figureTitle, format = fmtUsd, label = 'cost', title }: { center?: (v: number) => string; cost: CostSplit; figureTitle?: (v: number) => string; format?: (v: number) => string; label?: string; title?: string }) {
   const ink = useChartInk();
   const [hover, setHover] = useState<string | null>(null);
   const total = COST_PARTS.reduce((s, p) => s + cost[p.key], 0);
@@ -1923,7 +1923,7 @@ function CostDonut({ center, cost, format = fmtUsd, label = 'cost', title }: { c
           <li key={p.key} className={hover && hover !== p.key ? 'is-dim' : ''}>
             <span className="legend__swatch" style={{ background: ink.series[p.slot] }} />
             <span>{p.label}</span>
-            <span className="num">
+            <span className="num" title={figureTitle?.(cost[p.key])}>
               {format(cost[p.key])} <span className="muted">{fmtPct(total ? cost[p.key] / total : 0)}</span>
             </span>
           </li>
@@ -1946,7 +1946,7 @@ function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
   const billed = sides.billed === undefined ? null : knownSplit(totals.billed);
   const mark = totals.estimated ? '~' : '';
   const rings = [
-    ...(subscription === null ? [] : [<CostDonut key="subscription" cost={subscription} center={(v) => `${mark}${fmtShare(v)}`} format={(v) => `${mark}${equivalentShort('seven_day', v)}`} label="subscription" title={totals.estimated ? ESTIMATED_TITLE : undefined} />]),
+    ...(subscription === null ? [] : [<CostDonut key="subscription" cost={subscription} center={(v) => `${mark}${fmtShare(v)}`} figureTitle={(v) => withEstimate(fmtEquivalent('seven_day', v), totals.estimated)} format={(v) => `${mark}${equivalentShort('seven_day', v)}`} label="subscription" title={totals.estimated ? ESTIMATED_TITLE : undefined} />]),
     ...(billed === null ? [] : [<CostDonut key="billed" cost={billed} label="billed" />]),
   ];
   if (rings.length === 0) return sides.equivalent === null ? <p className="muted">-</p> : <Skeleton height={148} />;
@@ -2535,12 +2535,16 @@ function BurnCharts({
         // Per window, as the line's dots read it, so a model week the fold filled at zero takes no mark from estimated
         // 5-hour buckets.
         const marked = rows.some((r) => w.marked(r, i));
+        const perHour = w.perHour(l);
+        const short = figureOf(w, perHour, marked, 'short');
         return {
           color: colorOf(l),
           label: nameOf(l),
           shape: 'line' as const,
           title: withEstimate(w === PLAN_WINDOWS[2] ? (figure === 'equivalent' ? WEEK_IDLE_HINT : WEEK_MEAN_HINT) : w.band && l.fiveHourPeak !== null ? `Highest hour ${figureOf(w, l.fiveHourPeak, false, 'full')}` : '', marked) || undefined,
-          value: figureOf(w, w.perHour(l), marked, 'short'),
+          // An equivalent's own hover names its window in full and masks the entry's title over the figure, so it
+          // carries the estimate as well. A dash has no window to name.
+          value: figure === 'equivalent' && perHour !== null ? <span title={withEstimate(figureOf(w, perHour, false, 'full'), marked)}>{short}</span> : short,
         };
       }),
       // One entry for every figure the cost model cannot price on the window, whichever line it fell on. Muted, since

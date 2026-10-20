@@ -15923,6 +15923,27 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok: splitSubtitle === 'By token kind, the subscription requests in 20x 7-day equivalents and the billed requests in dollars' && rings.length === 2 && rings[0][0] === 'subscription' && /^~\d[\d.]*%$/.test(rings[0][1]) && rings[0][2] === ESTIMATED_TITLE && rings[1][0] === 'billed' && isUsd(rings[1][1]) && rings[1][2] === null,
         missing: [splitSubtitle, JSON.stringify(rings)],
       });
+      {
+        // A subscription row's figure names its window in full on its own hover, which masks the ring's, so that hover
+        // carries the estimate too. A billed row reads dollars and carries none.
+        const KIND_KEY = { 'Cache read': 'cacheRead', 'Cache write': 'cacheWrite', Input: 'input', Output: 'output' };
+        const ringRows = (ring) =>
+          [...(ring?.querySelectorAll('.remaining__list li') ?? [])].map((li) => {
+            const num = li.querySelector('.num');
+            return { figure: num === null ? '' : textOf(num, '.muted'), kind: li.children[1]?.textContent?.trim() ?? '', title: num?.getAttribute('title') ?? null };
+          });
+        const [subscriptionRows, billedRows] = [...(split?.querySelectorAll('.split-row') ?? [])].map(ringRows);
+        const parts = totals?.equivalentSplit ?? null;
+        const wrongRows = (subscriptionRows ?? []).filter((r) => {
+          const v = parts?.[KIND_KEY[r.kind]];
+          return typeof v !== 'number' || r.figure !== `~${equivalentShort('seven_day', v)}` || r.title !== `${fmtEquivalent('seven_day', v)}. ${ESTIMATED_TITLE}.`;
+        });
+        results.push({
+          name: "/analytics under native the Cost split's subscription rows name the 20x 7-day window in full on each figure's hover with the estimate after it, and the billed rows carry no hover",
+          ok: totals?.estimated === true && subscriptionRows?.length === 4 && wrongRows.length === 0 && billedRows?.length === 4 && billedRows.every((r) => r.title === null),
+          missing: [JSON.stringify(subscriptionRows), JSON.stringify(billedRows), JSON.stringify(parts)],
+        });
+      }
       const byKey = tableRead('Cost by key');
       // A cell names its window in the short word, and a group with no plan row reads its billed dollars alone.
       const short = (word) => (v) => v === '-' || new RegExp(`^~?\\d[\\d.]*% 20x ${word}$`).test(v);
@@ -17055,6 +17076,40 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         subtitleOf('7-day per hour').startsWith('The subscription traffic per hour in 20x 7-day equivalents.'),
       missing: read.map((r) => `${r.t}: ${r.items.map((li) => `${labelOf(li)}=${valueOf(li)}`).join(', ')}`),
     });
+    {
+      // A line's legend figure names its window in full on its own hover, the estimate after it where the line is
+      // marked, so the entry's title keeps the peak, the week's hint or the estimate it reads. The 5-hour and 7-day
+      // cards mark a line by its estimated buckets, read off the mock's own answer, and the week card by its own slots,
+      // which its entry's title names.
+      const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
+      const markedLines = new Set(burned.points.filter((p) => p.estimated).map((p) => p.group));
+      const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': 'Fable week' };
+      const fullOf = (value) => {
+        const figure = /^~?(\d[\d.e-]*%) 20x (5h|7d|Fable week)$/.exec(value);
+        return figure === null ? null : `${figure[1]} of 20x ${FULL[figure[2]]}`;
+      };
+      const WEEK_CARD = 'Model week per hour';
+      const WEEK_HINT = 'The mean per hour of the buckets, reading one that ran on no model with a week of its own as zero and leaving out one the cost model could not price';
+      const estimate = `${ESTIMATED_TITLE}.`;
+      const entries = [...PLAN_CARDS, WEEK_CARD].flatMap((t) =>
+        legendItems(t)
+          .filter((li) => subscribed.includes(labelOf(li)))
+          .map((li) => ({ account: labelOf(li), entry: li.getAttribute('title'), t, title: li.querySelector('.legend__value [title]')?.getAttribute('title') ?? null, value: valueOf(li) })),
+      );
+      const markedOf = (e) => (e.t === WEEK_CARD ? (e.entry ?? '').endsWith(estimate) : markedLines.has(e.account));
+      const entryKept = (e) => {
+        const bare = (e.entry ?? '').endsWith(estimate) ? e.entry.slice(0, -estimate.length).replace(/\. $/, '') : (e.entry ?? '');
+        if (e.t === WEEK_CARD) return bare === WEEK_HINT;
+        if (e.t === '7-day per hour') return e.entry === (markedOf(e) ? estimate : null);
+        return (e.entry === null || (e.entry ?? '').endsWith(estimate) === markedOf(e)) && (bare === '' || /^Highest hour \d[\d.e-]*% of 20x 5-hour$/.test(bare));
+      };
+      const wrongEntries = entries.filter((e) => fullOf(e.value) === null || e.title !== (markedOf(e) ? `${fullOf(e.value)}. ${estimate}` : fullOf(e.value)) || !entryKept(e));
+      results.push({
+        name: "/analytics a plan card's legend figure names its window in full on its own hover with the estimate after it where the line is marked, while the entry's title keeps the peak, the week's hint or the estimate",
+        ok: [...PLAN_CARDS, WEEK_CARD].every((t) => entries.some((e) => e.t === t)) && entries.some((e) => e.t === '7-day per hour' && markedOf(e)) && entries.some((e) => e.t === '7-day per hour' && !markedOf(e)) && wrongEntries.length === 0,
+        missing: [`marked ${[...markedLines].join(',')}`, ...wrongEntries.map((e) => JSON.stringify(e)), ...(wrongEntries.length === 0 ? entries.map((e) => JSON.stringify(e)) : [])],
+      });
+    }
     results.push({
       name: '/analytics each plan card lists one estimated entry with a hollow swatch, muted, titled with the estimate, while a drawn line holds an estimated bucket',
       ok: estimated.every((e) => e.length === 1 && /background: transparent/.test(swatch(e[0])) && /border: 1px solid/.test(swatch(e[0])) && e[0].getAttribute('title') === 'A bucket whose model has no measured weight and reads the latest weighed model of its model tier'),

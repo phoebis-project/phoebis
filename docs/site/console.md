@@ -784,24 +784,24 @@ to it, which its head says while another filter is set. Plan per hour draws thre
 hour" and "Model week per hour", the last while a group's traffic ran on a model with a week of its own, each with one
 line per group. Under Window shares a line is the share of a subscription account's own window, which reads under the
 account grouping or with one account named in the Accounts filter, and under every other position it is the group's
-subscription traffic per hour in 20x equivalents of the window. Under those positions a bucket whose traffic ran on no
-model with a week of its own reads zero on the Model week card, as an idle bucket reads zero on the other two, and one
-the cost model could not price stays a gap. Under Window shares such a bucket stays a gap on the Model week card, since
-the shares cannot tell it from one the cost model could not price. The 5-hour card shades the peak band's hours behind
-its lines, and each card's note carries a "Cost reference" link that opens the dialog on Tiers and peak band. A hollow
-dot marks a bucket whose model has no measured weight and reads the latest weighed model of its model tier, with an
-"estimated" entry in the legend and a `~` on the legend's and the tooltip's figures. A bucket whose traffic ran on a
-model of no known tier, or on a tier the cost model has no capacity for on that window, prices no share there and draws
-no point, under a "model unlisted" entry, and under Window shares an account whose tier the cost model does not size
-reads "tier unknown". Spend per minute charts the dollars alone, a subscription account's among them for its fast-mode
-and overage answers. The Meter reconciliation card stands between the charts and Member budgets, one row per completed
-5-hour, 7-day or Fable window of an account, newest first: Upstream, Window, Ended, Rise (the rise the upstream's
-readings showed), Predicted (the share the router priced for its own requests in it, with the charts' `~` and its
-estimate hover where an attempt in it was priced at a model tier's estimate), Ratio, with a warning badge on a ratio
-under 0.8 or over 1.25 after a rise of at least 5%, and Requests. It reads the trailing 30 days under the Accounts
-filter whatever the range. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row
-per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
-reported".
+subscription traffic per hour in 20x equivalents of the window, the legend's figure naming the window in full on hover.
+Under those positions a bucket whose traffic ran on no model with a week of its own reads zero on the Model week card,
+as an idle bucket reads zero on the other two, and one the cost model could not price stays a gap. Under Window shares
+such a bucket stays a gap on the Model week card, since the shares cannot tell it from one the cost model could not
+price. The 5-hour card shades the peak band's hours behind its lines, and each card's note carries a "Cost reference"
+link that opens the dialog on Tiers and peak band. A hollow dot marks a bucket whose model has no measured weight and
+reads the latest weighed model of its model tier, with an "estimated" entry in the legend and a `~` on the legend's and
+the tooltip's figures. A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no
+capacity for on that window, prices no share there and draws no point, under a "model unlisted" entry, and under Window
+shares an account whose tier the cost model does not size reads "tier unknown". Spend per minute charts the dollars
+alone, a subscription account's among them for its fast-mode and overage answers. The Meter reconciliation card stands
+between the charts and Member budgets, one row per completed 5-hour, 7-day or Fable window of an account, newest first:
+Upstream, Window, Ended, Rise (the rise the upstream's readings showed), Predicted (the share the router priced for its
+own requests in it, with the charts' `~` and its estimate hover where an attempt in it was priced at a model tier's
+estimate), Ratio, with a warning badge on a ratio under 0.8 or over 1.25 after a rise of at least 5%, and Requests. It
+reads the trailing 30 days under the Accounts filter whatever the range. The section closes on Member budgets, Pool,
+Account, Spent, Budget and Period ends, one row per budget a member carries, a member at its budget marked and one the
+ledger has not reported on reading "not reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)
@@ -830,22 +830,22 @@ Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscrip
 over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output
 tokens the same two ways. Cost by the chosen group stacks the equivalent per bucket with "Billed by {group}" beside it
 in dollars, the Cost split draws a ring per side by token kind, the subscription requests' with its 7-day equivalent in
-the center and the billed requests' in dollars, and the table reads Requests, Cost, 20x 5-hour, the model week's 20x
-column, Per request and Per 1k output, its Cost the 20x 7-day equivalent, and Cost, Per request and Per 1k output each
-with the billed dollars on a line under the equivalent. A subscription side the route could not price on the 7-day
-window, as when a request ran on a model of no known tier, reads a dash, its bucket on the Cost by chart a gap, and the
-Cost split draws no ring for it. The Cost tile's dash carries the Dashboard's hover, and the Cost by chart notes the
-groups it draws that read unpriced on the 7-day window on a line under its subtitle,
-`{n} groups unpriced in {m} buckets, drawn as gaps` (`1 group unpriced in 1 bucket, drawn as a gap`). Under All in
-dollars, Billed dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars or Dollar equivalent,
-Cost per request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a table (Requests, Cost,
-Input, Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in dollars (Input,
-Cache read, Cache write, Output). Under Window shares, which reads under the account grouping or with one account named
-in the Accounts filter, the tiles read Window share, Per request and Per 1k output, the chart one line per group, the
-table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k output, and the Cost split the whole in
-dollars. Every position draws Fast mode spend, and an estimated figure carries the `~` and the estimate's hover. The
-prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost model behind the shares and the
-equivalents on [Plan meter](statistics.md#plan-meter).
+the center (each token kind's figure names the window in full on hover) and the billed requests' in dollars, and the
+table reads Requests, Cost, 20x 5-hour, the model week's 20x column, Per request and Per 1k output, its Cost the 20x
+7-day equivalent, and Cost, Per request and Per 1k output each with the billed dollars on a line under the equivalent. A
+subscription side the route could not price on the 7-day window, as when a request ran on a model of no known tier,
+reads a dash, its bucket on the Cost by chart a gap, and the Cost split draws no ring for it. The Cost tile's dash
+carries the Dashboard's hover, and the Cost by chart notes the groups it draws that read unpriced on the 7-day window on
+a line under its subtitle, `{n} groups unpriced in {m} buckets, drawn as gaps` (`1 group unpriced in 1 bucket, drawn as
+a gap`). Under All in dollars, Billed dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars
+or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a
+table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one
+ring in dollars (Input, Cache read, Cache write, Output). Under Window shares, which reads under the account grouping or
+with one account named in the Accounts filter, the tiles read Window share, Per request and Per 1k output, the chart one
+line per group, the table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k output, and the Cost
+split the whole in dollars. Every position draws Fast mode spend, and an estimated figure carries the `~` and the
+estimate's hover. The prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost model behind the
+shares and the equivalents on [Plan meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
