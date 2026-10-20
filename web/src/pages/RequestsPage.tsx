@@ -605,7 +605,12 @@ function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, set
                 ...(r.canonicalModel !== r.model ? [{ label: 'Canonical model', value: r.canonicalModel, mono: true }] : []),
                 { label: 'TTFB', value: fmtMs(r.ttfbMs) },
                 { label: 'Duration', value: fmtMs(r.durationMs) },
-                { label: 'Error', value: r.errorCode ?? <span className="muted">none</span>, mono: Boolean(r.errorCode) },
+                // `mono` sets the whole value's face, so the code takes its own mono span where a cut's words follow.
+                {
+                  label: 'Error',
+                  value: !r.errorCode ? <span className="muted">none</span> : fetched?.streamCut ? <><span className="mono">{r.errorCode}</span>: {fetched.streamCut.text}</> : r.errorCode,
+                  mono: Boolean(r.errorCode) && !fetched?.streamCut,
+                },
                 ...(r.clientDrift ? [{ label: 'Client drift', value: r.clientDrift, mono: true }] : []),
                 ...(r.clientContract ? [{ label: 'Client contract', value: r.clientContract, mono: true }] : []),
                 ...(serving

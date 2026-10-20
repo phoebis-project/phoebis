@@ -75,7 +75,7 @@ const SYNC = {
   pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing({ accountId: 'legacy' }) },
   pools: { decode: (b) => b.pools.map(d.decodePool), mock: (api) => api.listPools() },
   replay: { decode: (b) => d.decodeReplay(b), mock: (api) => api.replayParked() },
-  request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const detail = await api.getRequest(r.id); if (detail.events.length) return detail; } throw new Error('no mock request carries an event'); } },
+  request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request), streamCut: d.decodeStreamCut(b.stream_cut) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const detail = await api.getRequest(r.id); if (detail.events.length) return detail; } throw new Error('no mock request carries an event'); } },
   // `.request`/`.response` are CapturedBodies' own declared-`unknown` fields (decode.ts's decodeBodies passes
   // them through raw), the same class of value OPAQUE covers for `.detail`. A stream's capture is the text of its
   // events, which only a response is, so the string is admitted on `.response` alone.

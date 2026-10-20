@@ -1445,6 +1445,15 @@ test('a request decodes its fork', () => {
   assert.deepEqual([plain.forkedFrom, plain.forkDepth], [null, null], 'a request that branched from no other reads no fork');
 });
 
+test("a request detail's stream cut decodes its six members with its instant from epoch milliseconds, and a null or absent member reads none", () => {
+  const at = Date.parse('2026-09-16T14:22:55.400Z');
+  const wire = { at, attempt: 1, bytes_relayed: 846, code: 'stream_undecodable', text: 'error decoding response body', upstream_request_id: 'req_011CUcut' };
+  assert.deepEqual(d.decodeStreamCut(wire), { at: '2026-09-16T14:22:55.400Z', attempt: 1, bytesRelayed: 846, code: 'stream_undecodable', text: 'error decoding response body', upstreamRequestId: 'req_011CUcut' });
+  assert.equal(d.decodeStreamCut({ ...wire, upstream_request_id: null })?.upstreamRequestId, null, 'a head with no request id names none');
+  assert.equal(d.decodeStreamCut(null), null);
+  assert.equal(d.decodeStreamCut(undefined), null);
+});
+
 test('a budget reads as a skip obstacle and as a pin release reason', () => {
   assert.ok(d.SKIP_OBSTACLE_VALUES.includes('budget'), 'the trace labels a member passed over at its budget');
   assert.deepEqual(d.decodeSelection({ renewed: false, skipped: [{ account_id: 'direct', obstacle: 'budget' }], strategy: 'pace', tier: [0, 0, 0] }).skipped, [{ accountId: 'direct', obstacle: 'budget' }]);

@@ -860,10 +860,22 @@ export interface RequestEvent {
   sessionId: string | null;
 }
 
+/** The newest stream interruption of the request, from `stream_cut`. Null where none was recorded. */
+export interface StreamCut {
+  at: string;
+  attempt: number;
+  bytesRelayed: number;
+  /** `stream_cut`, `stream_stalled`, `stream_undecodable` or `account_cancelled`, the request's error code word. */
+  code: string;
+  text: string;
+  upstreamRequestId: string | null;
+}
+
 /** `GET /admin/requests/{id}`: the row and the events of its window, from one read. */
 export interface RequestDetail {
   events: RequestEvent[];
   request: RequestLog;
+  streamCut: StreamCut | null;
 }
 
 export interface RequestQuery {

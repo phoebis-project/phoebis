@@ -889,6 +889,7 @@ export const STORY_IDS = new Set([
   'req_4d9a1e6b-c20',
   'req_4e8b1d36-f72', 'req_4f2a8d6e-b7a', 'req_51d0e2b8-7a0', 'req_5b2e8d47-c19', 'req_5c7e2a9d-b14', 'req_5d1f8c3a-b27',
   'req_5d6f1b3a-e27', 'req_5e2f7a19-b03',
+  'req_5e3c8a41-d27',
   'req_63a8d2f5-b17',
   'req_69e30548-32e', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
   'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
@@ -1163,6 +1164,21 @@ function storyRequests(): RequestLog[] {
       requestClass: 'main',
       session: CLIENT_SESSION_ID,
       status: 502,
+    },
+    // The client's retry of that turn: primary's head arrived and went out under its 200, and the body ended short
+    // where the relay could not decode the stream past what it had forwarded, so the request is incomplete.
+    {
+      agentId: 'main',
+      at: t(14, 22, 53),
+      attempts: [{ accountId: 'primary', at: t(14, 22, 53), ms: 2_400, status: 200 }],
+      errorCode: 'stream_undecodable',
+      id: 'req_5e3c8a41-d27',
+      keyId: 'laptop',
+      model: 'claude-sonnet-4-6',
+      outcome: 'incomplete',
+      requestClass: 'main',
+      session: CLIENT_SESSION_ID,
+      usage: { input: 3_200 },
     },
     // A Fable turn on primary's plan whose bodies were captured, so the drawer reads a plan-funded answer of the model.
     { agentId: 'main', at: t(14, 23, 30), attempts: [{ accountId: 'primary', at: t(14, 23, 30), ms: 8_200, status: 200 }], capturedBodies: true, id: 'req_a6c19e73-5d2', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 52_300, cacheWrite1h: 3_400, input: 2_100, output: 1_650, thinking: 640 } },

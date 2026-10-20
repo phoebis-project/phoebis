@@ -343,6 +343,18 @@ test('the request detail reads the row and its events from one GET, and a purged
   assert.equal(await api.getRequest('gone'), null);
 });
 
+test('the request detail answers the stream cut its body carries, and none where the member is null or absent', async () => {
+  const { stream_cut: _absent, ...body } = JSON.parse(readFileSync(new URL('./fixtures/request.json', import.meta.url), 'utf8')).body;
+  const cut = { at: 1_000, attempt: 1, bytes_relayed: 846, code: 'stream_undecodable', text: 'error decoding response body', upstream_request_id: 'req_011CUcut' };
+  const api = new HttpApi();
+  stub(() => answer(200, { ...body, stream_cut: cut }));
+  assert.deepEqual((await api.getRequest('r-failover')).streamCut, { at: '1970-01-01T00:00:01.000Z', attempt: 1, bytesRelayed: 846, code: 'stream_undecodable', text: 'error decoding response body', upstreamRequestId: 'req_011CUcut' });
+  stub(() => answer(200, { ...body, stream_cut: null }));
+  assert.equal((await api.getRequest('r-failover')).streamCut, null, 'a request with no cut reads none');
+  stub(() => answer(200, body));
+  assert.equal((await api.getRequest('r-failover')).streamCut, null, 'a body without the member reads none');
+});
+
 const keyEdit = { autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
 
 test('a key creation and a key edit send the auto mode override in snake_case', async () => {

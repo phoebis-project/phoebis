@@ -9751,7 +9751,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   await m.navigate('/requests');
 }
 {
-  const cut = requests.find((r) => r.outcome === 'incomplete');
+  const cut = requests.find((r) => r.outcome === 'incomplete' && r.errorCode === 'stream_incomplete');
   await m.navigate(`/requests/${cut?.id}`);
   await m.settle(300);
   const error = [...(m.container.querySelectorAll('.drawer .kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Error')?.querySelector('dd');
@@ -9759,6 +9759,31 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     name: '/requests the drawer of a stream that ended short names stream_incomplete',
     ok: cut !== undefined && error?.textContent?.trim() === 'stream_incomplete',
     missing: [cut?.id ?? 'no incomplete row in the mock', error?.textContent ?? 'no Error row'],
+  });
+  await m.navigate('/requests');
+}
+{
+  // The retry whose stream was cut after its head reads the relay's words for the cut after its code, the words of the
+  // mock's stream_interrupted seed, and the 502 before it, whose detail carries no cut, reads its code alone.
+  const errorOf = async (id) => {
+    await m.navigate(`/requests/${id}`);
+    await m.settle(300);
+    return [...(m.container.querySelectorAll('.drawer .kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Error')?.querySelector('dd');
+  };
+  const cut = requests.find((r) => r.status === 200 && r.outcome === 'incomplete' && r.errorCode === 'stream_undecodable');
+  const relayed = requests.find((r) => r.status === 502 && r.errorCode === 'stream_undecodable');
+  const cutError = await errorOf(cut?.id);
+  const cutWords = [cutError?.textContent?.trim(), cutError?.classList.contains('mono'), cutError?.querySelector('.mono')?.textContent];
+  const relayedError = await errorOf(relayed?.id);
+  const relayedWords = [relayedError?.textContent?.trim(), relayedError?.classList.contains('mono')];
+  results.push({
+    name: "/requests the drawer of a stream cut after its head reads the cut's text after the code, and the 502's its code alone",
+    ok:
+      cut !== undefined &&
+      relayed !== undefined &&
+      JSON.stringify(cutWords) === JSON.stringify(['stream_undecodable: error decoding response body', false, 'stream_undecodable']) &&
+      JSON.stringify(relayedWords) === JSON.stringify(['stream_undecodable', true]),
+    missing: [cut?.id ?? 'no cut row in the mock', relayed?.id ?? 'no 502 row in the mock', JSON.stringify(cutWords), JSON.stringify(relayedWords)],
   });
   await m.navigate('/requests');
 }

@@ -200,8 +200,8 @@ export class HttpApi implements Api {
   getQuotaHistory = async (accountId: string) => d.decodeQuotaHistory(await call('GET', `/admin/accounts/${enc(accountId)}/quota?range=7d`));
   getRequest = async (id: string): Promise<RequestDetail | null> => {
     try {
-      const body = await call<{ events: unknown[]; request: unknown }>('GET', `/admin/requests/${enc(id)}`);
-      return { events: body.events.map(d.decodeRequestEvent), request: d.decodeRequest(body.request) };
+      const body = await call<{ events: unknown[]; request: unknown; stream_cut?: unknown }>('GET', `/admin/requests/${enc(id)}`);
+      return { events: body.events.map(d.decodeRequestEvent), request: d.decodeRequest(body.request), streamCut: d.decodeStreamCut(body.stream_cut) };
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;

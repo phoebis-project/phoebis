@@ -1794,6 +1794,9 @@ function storySpecs(): Spec[] {
     // The router keyed the laptop turn by the root its content matched and placed it on primary, whose head arrived
     // before the relay found the stream past it undecodable.
     at('req_5e2f7a19-b03', 1, 1, t(14, 22, 48), 'placed', 'primary'),
+    // The client's retry renews the pin the 502 placed, and primary's head goes out before the relay finds the stream
+    // past part of the body undecodable.
+    at('req_5e3c8a41-d27', 1, 1, t(14, 22, 53), 'renewed', 'primary', { pin: live('continues_pin', 5_000) }),
     at('req_a6c19e73-5d2', 1, 1, t(14, 23, 30), 'placed', 'primary'),
     at('req_2e7c90a1-6d4', 1, 1, t(14, 24, 9), 'placed', 'primary'),
     at('req_2e7c90a1-6d4', 2, 2, t(14, 24, 10), 'placed', 'nightly', { attempted: ['primary'], failover: 'cooldown', from: 'primary', pin: live() }),
@@ -2332,7 +2335,7 @@ function buildEvents(): RoutingEvent[] {
   const pool = poolById.get('all')!;
   const annex = accountOf.get('annex')!;
   const beforeReset = oauthWindows('primary', fiveHourReset - 1, () => OLDER_FACTOR).find((w) => w.id === '5h')?.utilization ?? null;
-  const undecodable = requestById.get('req_5e2f7a19-b03')!;
+  const undecodable = requestById.get('req_5e3c8a41-d27')!;
   const cutAttempt = undecodable.attempts[undecodable.attempts.length - 1];
   seeds.push(
     ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS)].flatMap((e) => (e === null ? [] : [e])),
@@ -2342,12 +2345,12 @@ function buildEvents(): RoutingEvent[] {
     // The story hour.
     ...expiries(),
     { accountId: 'secondary', at: iso(t(13, 48, 20)), detail: { attempts: 1, endpoint: 'usage', last_clean_poll_at: t(13, 43), next_attempt_at: t(13, 53), reason: '429' }, kind: 'poll_backoff_started' },
-    // Primary's head arrived and the relay could not decode the stream after it, so the attempt's completion records the
-    // cut with the request's error word and none of the body relayed.
+    // Primary's head went out on the client's retry and the relay could not decode the stream past part of the body, so
+    // the attempt's completion records the cut with the request's error word and the body bytes the client got.
     {
       accountId: cutAttempt.accountId,
       at: iso(Date.parse(cutAttempt.startedAt) + (cutAttempt.durationMs ?? 0)),
-      detail: { attempt: cutAttempt.index + 1, bytes_relayed: 0, code: undecodable.errorCode, text: 'error decoding response body', upstream_request_id: cutAttempt.upstreamRequestId },
+      detail: { attempt: cutAttempt.index + 1, bytes_relayed: 846, code: undecodable.errorCode, text: 'error decoding response body', upstream_request_id: cutAttempt.upstreamRequestId },
       kind: 'stream_interrupted',
       model: undecodable.canonicalModel,
       requestId: undecodable.id,

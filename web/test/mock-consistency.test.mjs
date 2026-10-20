@@ -1694,11 +1694,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // session, model and error word.
     assert.deepEqual(
       [cut.requestId, cut.at, cut.accountId, cut.sessionId, cut.model, Object.keys(cut.detail).sort()],
-      ['req_5e2f7a19-b03', new Date(Date.parse(a.startedAt) + a.durationMs).toISOString(), a.accountId, r.sessionId, r.canonicalModel, ['attempt', 'bytes_relayed', 'code', 'text', 'upstream_request_id']],
+      ['req_5e3c8a41-d27', new Date(Date.parse(a.startedAt) + a.durationMs).toISOString(), a.accountId, r.sessionId, r.canonicalModel, ['attempt', 'bytes_relayed', 'code', 'text', 'upstream_request_id']],
     );
     assert.deepEqual([cut.detail.code, cut.detail.attempt, cut.detail.upstream_request_id], [r.errorCode, a.index + 1, a.upstreamRequestId]);
-    // The relay forwarded none of the stream it could not decode.
-    assert.deepEqual([cut.detail.bytes_relayed, r.usage.output], [0, 0]);
+    // The relay forwarded the head and part of the body before the decode failed, with no output usage.
+    assert.deepEqual([cut.detail.bytes_relayed, r.usage.output], [846, 0]);
     assert.ok(typeof cut.detail.text === 'string' && cut.detail.text.length > 0, "the error's own words");
     // A joined value would read as two in the panel, so neither seed's words carries a comma or a semicolon.
     for (const words of [poll.detail.error, cut.detail.text]) assert.ok(!/[,;]/.test(words), words);
@@ -2271,11 +2271,38 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(events, ['event: message_start', 'event: content_block_start', 'event: content_block_delta', 'event: content_block_delta'], 'the capture ends after the second delta');
   });
 
+  test(`the stream cut after its head files where the ledger files an incomplete request, and its detail carries the cut, at ${at}`, async () => {
+    const s = await story;
+    const row = s.requests.find((r) => r.id === 'req_5e3c8a41-d27');
+    const relayed = s.requests.find((r) => r.id === 'req_5e2f7a19-b03');
+    assert.ok(row && relayed, 'the story holds both undecodable rows');
+    // The head went out under its 200, so the router records the request incomplete with the cut's code and its one
+    // attempt as an upstream error.
+    assert.deepEqual(
+      [row.keyId, row.accountId, row.status, row.errorCode, row.outcome, row.attempts.map((a) => [a.accountId, a.upstreamStatus, a.outcome])],
+      ['laptop', 'primary', 200, 'stream_undecodable', 'incomplete', [['primary', 200, 'upstream_error']]],
+    );
+    assert.equal(row.sessionId, relayed.sessionId, "the 502 row's session holds both");
+    // A cold request whose input went up, with no output usage back.
+    assert.deepEqual([row.usage.input > 0, row.usage.cacheRead, row.usage.cacheWrite5m + row.usage.cacheWrite1h, row.usage.output], [true, 0, 0, 0]);
+    const hours = s.lib.rollups([row]);
+    const total = (read) => hours.reduce((n, h) => n + read(h.requests), 0);
+    assert.deepEqual([total((r) => r.incomplete), total((r) => r.ok), total((r) => r.undecodable), total((r) => r.upstream_error)], [1, 0, 0, 0], 'the rollups file it under incomplete alone');
+    assert.deepEqual((await decisionsOf(s)).filter((r) => r.requestId === row.id).map((r) => [r.outcome.kind, r.outcome.accountId]), [['renewed', 'primary']], 'its decision renews the pin the 502 row placed');
+    // The route lifts the member off the newest cut row of the request, and no other request carries one.
+    const [cut] = (await logOf(s)).filter((e) => e.type === 'event' && e.kind === 'stream_interrupted' && e.requestId === row.id);
+    const detail = await s.api.getRequest(row.id);
+    assert.deepEqual(detail.streamCut, { at: cut.at, attempt: cut.detail.attempt, bytesRelayed: cut.detail.bytes_relayed, code: row.errorCode, text: cut.detail.text, upstreamRequestId: cut.detail.upstream_request_id });
+    const carrying = (await Promise.all(s.requests.map((r) => s.api.getRequest(r.id)))).filter((d) => d.streamCut !== null).map((d) => d.request.id);
+    assert.deepEqual(carrying, [row.id]);
+  });
+
   test(`the undecodable row files under its own error on the account that served its head, at ${at}`, async () => {
     const s = await story;
     const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
     const primary = groups.find((g) => g.key === 'primary');
-    const undecodable = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').length;
+    // A stream cut after its 200 head files as incomplete, so the code's own count is the relay's 502s.
+    const undecodable = s.counted.filter((r) => r.accountId === 'primary' && r.status !== 200 && r.errorCode === 'stream_undecodable').length;
     const otherErrors = s.counted.filter((r) => r.accountId === 'primary' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable').length;
     assert.ok(undecodable > 0, 'primary served the head of an undecodable stream');
     assert.deepEqual([primary.errors.stream_undecodable, primary.errors.api_error ?? 0], [undecodable, otherErrors], 'the count leaves the upstream errors for its own entry');

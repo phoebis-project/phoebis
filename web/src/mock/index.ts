@@ -2,6 +2,7 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/a
 import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from '@/api/client';
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
 import { GUARDRAIL_MODE_VALUES } from '@/api/decode';
+import { decodeStreamCut } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
@@ -26,6 +27,7 @@ import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRI
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
+import { ROUTING_EVENTS } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
@@ -267,6 +269,12 @@ const unpricedStory = (): boolean => {
 /** The rollups the analytics routes fold: none for a fresh installation, the unpriced request's beside the story's
  *  under its switch. */
 const ledgerRollups = () => (emptyStore() ? [] : unpricedStory() ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS);
+/** The detail's cut as the route lifts it, off the newest `stream_interrupted` row that names the request. */
+const streamCutOf = (requestId: string) => {
+  const cuts = ROUTING_EVENTS.filter((e) => e.kind === 'stream_interrupted' && e.requestId === requestId);
+  const newest = cuts[cuts.length - 1];
+  return newest ? decodeStreamCut({ ...newest.detail, at: Date.parse(newest.at) }) : null;
+};
 
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
@@ -1033,7 +1041,7 @@ export class MockApi implements Api {
 
   getRequest(id: string): Promise<RequestDetail | null> {
     const request = emptyStore() ? undefined : requestById.get(id);
-    return latency(request ? { events: REQUEST_EVENTS.get(id) ?? [], request } : null);
+    return latency(request ? { events: REQUEST_EVENTS.get(id) ?? [], request, streamCut: streamCutOf(id) } : null);
   }
 
   getSession(): Promise<SessionInfo | null> {

@@ -683,10 +683,11 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
 
 - Outcome: Status, Outcome, Account, Model, Canonical model when it differs from the model the client spelled, TTFB,
-  Duration, Error, Client drift when set, Client contract when set (the item the refusal named), then the serving
-  attempt's Answer (the stop reason, the speed, the geography, the service tier) and Cache (the miss reason, `{read}
-  read, {written} written`, where the prompt diverged), and a Diagnostics row naming who put the cache diagnostics
-  member on the body: "sent by the client", "added by the router" or none.
+  Duration, Error (the error code, which a stream cut after its head follows with the relay's words for the cut, such
+  as `stream_undecodable: error decoding response body`), Client drift when set, Client contract when set (the item
+  the refusal named), then the serving attempt's Answer (the stop reason, the speed, the geography, the service tier)
+  and Cache (the miss reason, `{read} read, {written} written`, where the prompt diverged), and a Diagnostics row
+  naming who put the cache diagnostics member on the body: "sent by the client", "added by the router" or none.
 - Guardrails: one row per guardrail that matched, in evaluation order, the guardrail's name (or `{id} (deleted)` for one
   the registry no longer holds) with a `blocked` badge in the critical tone or an `observed` badge muted, shown where
   the request carries a match ([Guardrails](guardrails.md)).
