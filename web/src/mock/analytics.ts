@@ -5,7 +5,7 @@ import type {
 import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { equivalentOf, modelWeeks, pricedWindow, shareOrFallback, tierCapacity, type Usage } from '@/lib/costs';
-import { emptyCounts } from '@/lib/counts';
+import { countOf, emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -53,6 +53,8 @@ export interface HourlyRollup {
   funding: 'billed' | 'fast' | 'overage' | 'plan';
   histograms: LatencyHistograms;
   hour: string;
+  /** The incomplete requests by the code each ended on, which the ledger counts beside the outcome. */
+  incompleteCodes?: Record<string, number>;
   /** Requests whose cache read was kept alive by a probe, and the tokens they read under each TTL. */
   keptWarm: { requests: number; tokens1h: number; tokens5m: number };
   keyId: string;
@@ -344,7 +346,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   if (upstreamError - undecodable) errors.api_error = upstreamError - undecodable;
   if (undecodable) errors.stream_undecodable = undecodable;
   if (clientGone) errors.client_gone = clientGone;
-  if (incomplete) errors.stream_incomplete = incomplete;
+  // The ledger counts a request's own code beside its outcome, so an incomplete one files under the code it ended on.
+  for (const r of counted) for (const [code, n] of Object.entries(r.incompleteCodes ?? {})) errors[code] = countOf(errors, code) + n;
 
   return {
     ...equivalentsOfGroup(counted, probeRows),

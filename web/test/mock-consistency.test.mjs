@@ -2288,6 +2288,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const hours = s.lib.rollups([row]);
     const total = (read) => hours.reduce((n, h) => n + read(h.requests), 0);
     assert.deepEqual([total((r) => r.incomplete), total((r) => r.ok), total((r) => r.undecodable), total((r) => r.upstream_error)], [1, 0, 0, 0], 'the rollups file it under incomplete alone');
+    // The ledger counts a request's own code beside its outcome, so the breakdown files the row under the cut's code.
+    assert.deepEqual(hours.map((h) => ({ ...h.incompleteCodes })), [{ stream_undecodable: 1 }], 'its rollup carries the code it ended on');
+    const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
+    const filed = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').map((r) => r.id);
+    assert.deepEqual([filed.includes(row.id), groups.find((g) => g.key === 'primary')?.errors.stream_undecodable], [true, filed.length], "primary's entry counts it");
     assert.deepEqual((await decisionsOf(s)).filter((r) => r.requestId === row.id).map((r) => [r.outcome.kind, r.outcome.accountId]), [['renewed', 'primary']], 'its decision renews the pin the 502 row placed');
     // The route lifts the member off the newest cut row of the request, and no other request carries one.
     const [cut] = (await logOf(s)).filter((e) => e.type === 'event' && e.kind === 'stream_interrupted' && e.requestId === row.id);
@@ -2301,11 +2306,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
     const primary = groups.find((g) => g.key === 'primary');
-    // A stream cut after its 200 head files as incomplete, so the code's own count is the relay's 502s.
-    const undecodable = s.counted.filter((r) => r.accountId === 'primary' && r.status !== 200 && r.errorCode === 'stream_undecodable').length;
+    // The ledger counts each request's own code beside its outcome, so the relay's 502 and the stream cut after its 200
+    // head both file under the code.
+    const undecodable = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').length;
     const otherErrors = s.counted.filter((r) => r.accountId === 'primary' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable').length;
     assert.ok(undecodable > 0, 'primary served the head of an undecodable stream');
     assert.deepEqual([primary.errors.stream_undecodable, primary.errors.api_error ?? 0], [undecodable, otherErrors], 'the count leaves the upstream errors for its own entry');
+    // An incomplete request files under the code it ended on, so stream_incomplete counts the rows that carry it alone.
+    const ended = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_incomplete').length;
+    assert.ok(ended > 0, 'primary served a stream that closed without its end');
+    assert.equal(primary.errors.stream_incomplete ?? 0, ended);
   });
 
   test(`the first page under the default range holds a plan-funded Fable row with captured bodies, at ${at}`, async () => {

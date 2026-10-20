@@ -6,6 +6,7 @@ import type { GuardrailMatch } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { anchorTier, equivalentOf, fundingOf, modelWeeks, pricedWindow, shareOrFallback, tierCapacity } from '@/lib/costs';
+import { countOf, emptyCounts } from '@/lib/counts';
 import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
@@ -2059,6 +2060,13 @@ function hourShares(accountId: string, model: string, priced: { at: number; usag
 
 const upstreamFailed = (r: RequestLog) => r.status !== 200 && r.status !== 429 && r.status !== 529;
 
+/** The incomplete requests of a part by the code each ended on, as the ledger counts a request's code. */
+function incompleteCodesOf(rows: RequestLog[]): Record<string, number> {
+  const codes = emptyCounts();
+  for (const r of rows) if (r.outcome === 'incomplete' && r.errorCode !== null) codes[r.errorCode] = countOf(codes, r.errorCode) + 1;
+  return codes;
+}
+
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -2151,6 +2159,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
         cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
         cacheMissReasons,
+        incompleteCodes: incompleteCodesOf(partRows),
         expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: partRows.reduce((s, r) => s + r.costUsd, 0),
