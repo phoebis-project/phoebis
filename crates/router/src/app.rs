@@ -416,6 +416,7 @@ pub async fn run_until(
         tls_reload: Some(tls_live.clone()),
         vault: vault.clone(),
         started_at: (clock)(),
+        build: crate::BUILD_COMMIT,
         router: router_task.clone(),
         catalog: catalog.clone(),
         body_capture_max_hours: config.stats.body_capture_max_hours,

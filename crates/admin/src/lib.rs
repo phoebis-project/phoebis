@@ -71,6 +71,9 @@ pub struct AdminState {
     pub vault: Arc<PairingVault>,
     /// Unix milliseconds this state was built, which `GET /system` reports as uptime.
     pub started_at: i64,
+    /// The commit the binary was built from, or `unknown`: every answer carries it as `x-phoebis-build`, and the
+    /// system and settings answers as `build`.
+    pub build: &'static str,
     pub router: RouterHandle,
     pub catalog: Arc<CatalogService>,
     /// The longest body capture a route may ask for. A capture holds request and response bodies on disk, so

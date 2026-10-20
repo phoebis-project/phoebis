@@ -15597,6 +15597,7 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/settings",
     "body": {
       "about": {
+        "build": "0123456789abcdef0123456789abcdef01234567",
         "profile": "claude-code-2.1.269-linux-x64",
         "version": "0.1.0"
       },
@@ -16143,6 +16144,7 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/system",
     "body": {
       "version": "0.1.0",
+      "build": "0123456789abcdef0123456789abcdef01234567",
       "profile": "claude-code-2.1.269-linux-x64",
       "uptime_seconds": 0,
       "storage_ok": true,

@@ -53,6 +53,9 @@ pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
 /// back lands in the hour before the clock's own.
 pub const NOW: i64 = 1_791_721_000_000;
 
+/// The build every harness names, so the captured answers read the same commit on any head.
+pub const FIXTURE_BUILD_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
 /// The first instant of the UTC calendar month after the one `NOW` falls in, where a monthly budget's period ends.
 pub fn month_end() -> i64 {
     let first = jiff::Timestamp::from_millisecond(NOW)
@@ -1133,6 +1136,7 @@ async fn build_app_routed(
         tls_reload,
         vault: vault.clone(),
         started_at: NOW,
+        build: FIXTURE_BUILD_COMMIT,
         router: router_handle.clone(),
         catalog,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,

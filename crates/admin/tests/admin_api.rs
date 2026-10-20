@@ -2510,6 +2510,64 @@ async fn a_refused_origin_answers_no_store_and_nosniff_and_a_login_needs_no_orig
 }
 
 #[tokio::test]
+async fn every_answer_and_every_refusal_of_the_gate_names_the_build_the_binary_was_built_from() {
+    use common::{cookie_of, delete, get, post, post_from, FIXTURE_BUILD_COMMIT};
+    let (app, _up) = common::admin_app().await;
+    let anonymous = get(&app, "/admin/accounts", None).await;
+    assert_eq!(anonymous.status(), 401);
+    assert_eq!(
+        anonymous.headers()["x-phoebis-build"],
+        FIXTURE_BUILD_COMMIT,
+        "the gate's refusal names the build too"
+    );
+    let refused = post(&app, "/admin/session", r#"{"secret":"nope"}"#, None).await;
+    assert_eq!(refused.status(), 401);
+    assert_eq!(refused.headers()["x-phoebis-build"], FIXTURE_BUILD_COMMIT);
+    let login = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
+    assert_eq!(login.status(), 204);
+    assert_eq!(login.headers()["x-phoebis-build"], FIXTURE_BUILD_COMMIT);
+    let cookie = cookie_of(&login);
+    let forged = post_from(
+        &app,
+        "/admin/accounts/business/pause",
+        "",
+        Some(&cookie),
+        "https://evil.example",
+    )
+    .await;
+    assert_eq!(forged.status(), 403);
+    assert_eq!(forged.headers()["x-phoebis-build"], FIXTURE_BUILD_COMMIT);
+    for path in ["/admin/accounts", "/admin/system", "/admin/no-such-route"] {
+        let answer = get(&app, path, Some(&cookie)).await;
+        assert_eq!(
+            answer.headers()["x-phoebis-build"],
+            FIXTURE_BUILD_COMMIT,
+            "{path} answered {}",
+            answer.status()
+        );
+    }
+    let logout = delete(&app, "/admin/session", Some(&cookie)).await;
+    assert_eq!(logout.status(), 204);
+    assert_eq!(logout.headers()["x-phoebis-build"], FIXTURE_BUILD_COMMIT);
+}
+
+#[tokio::test]
+async fn the_system_and_settings_answers_carry_the_build_beside_the_version() {
+    use common::{get, json, login, FIXTURE_BUILD_COMMIT};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let system = json(get(&app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(system["build"], FIXTURE_BUILD_COMMIT, "{system}");
+    assert_eq!(system["version"], env!("CARGO_PKG_VERSION"), "{system}");
+    let settings = json(get(&app, "/admin/settings", Some(&cookie)).await).await;
+    assert_eq!(
+        settings["about"]["build"], FIXTURE_BUILD_COMMIT,
+        "{settings}"
+    );
+    assert_eq!(settings["about"]["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
 async fn an_uncertain_refresh_shows_as_quarantined_with_its_detail() {
     use common::{get, json, login};
     let (app, _up) =

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use axum::body::Bytes;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use phoebis_guardrails::{Condition, ConditionWords};
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ const INTRODUCTION: &str = r#"Every operation here lives under `/admin/` on the 
 
 ## Access
 
-Log in with `POST /admin/session` and the admin secret. The answer sets the `phoebis_admin` cookie, which every later call carries. Five failed logins in a minute refuse every login for the rest of that minute (`429 too many failed logins, try again in a minute`), and a wrong secret answers `401 secret does not match`. A session ends after 15 minutes idle or 12 hours in all. A login with `stay_logged_in` true keeps its session for 30 days from its last read, across a restart: every answer to it sets a renewed cookie of the same 30 days, and a secret rotation or the logout of a kept login ends it, the logout ending every kept login of the install. Every `DELETE`, `PATCH`, `POST` or `PUT` that carries an `Origin` must name the request's own `Host` with it, the authority equal ignoring case, port included, and the scheme `https` where the admin listener terminates TLS or the request carries a front's `X-Forwarded-Proto: https`, `http` or `https` otherwise (`403 origin is not allowed`). One with no `Origin` is admitted. Behind a front that terminates TLS the front passes `Host` through and sets the header, so both headers name it and the scheme is required. Every `PATCH`, `POST` or `PUT` that carries a body must send `Content-Type: application/json` (`415 content type must be application/json`). A missing or unknown cookie answers `401 no admin session`, except on `DELETE /admin/session`, which answers its clear whatever the cookie names. Every answer carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+Log in with `POST /admin/session` and the admin secret. The answer sets the `phoebis_admin` cookie, which every later call carries. Five failed logins in a minute refuse every login for the rest of that minute (`429 too many failed logins, try again in a minute`), and a wrong secret answers `401 secret does not match`. A session ends after 15 minutes idle or 12 hours in all. A login with `stay_logged_in` true keeps its session for 30 days from its last read, across a restart: every answer to it sets a renewed cookie of the same 30 days, and a secret rotation or the logout of a kept login ends it, the logout ending every kept login of the install. Every `DELETE`, `PATCH`, `POST` or `PUT` that carries an `Origin` must name the request's own `Host` with it, the authority equal ignoring case, port included, and the scheme `https` where the admin listener terminates TLS or the request carries a front's `X-Forwarded-Proto: https`, `http` or `https` otherwise (`403 origin is not allowed`). One with no `Origin` is admitted. Behind a front that terminates TLS the front passes `Host` through and sets the header, so both headers name it and the scheme is required. Every `PATCH`, `POST` or `PUT` that carries a body must send `Content-Type: application/json` (`415 content type must be application/json`). A missing or unknown cookie answers `401 no admin session`, except on `DELETE /admin/session`, which answers its clear whatever the cookie names. Every answer carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and `x-phoebis-build`, the full commit the router was built from or `unknown` for a build that had none.
 
 A request that carries `Authorization: Bearer` with the admin secret is admitted without a cookie and without the `Origin` check. A wrong bearer answers `401 secret does not match` and counts toward the login throttle, so a throttled process answers it `429` too. A bearer on `POST /admin/session` is ignored: the login stays the cookie's door. This page's Authorization input sends the admin secret as that bearer on every call it makes and keeps it in memory alone, so the secret is gone with the tab.
 
@@ -986,16 +986,26 @@ fn matches(pattern: &str, path: &str) -> bool {
     }
 }
 
+/// The header naming the commit the binary was built from on every admin answer.
+pub(crate) const BUILD_HEADER: &str = "x-phoebis-build";
+
+/// `build` as the header's value. A hand-set `PHOEBIS_BUILD_COMMIT` can hold a byte no header carries, and such a
+/// build answers `unknown` rather than fail every answer.
+pub(crate) fn build_value(build: &str) -> HeaderValue {
+    HeaderValue::from_str(build).unwrap_or_else(|_| HeaderValue::from_static("unknown"))
+}
+
 /// The document's answer. The gate's middleware never runs on this route, so the headers every admin answer carries
 /// are set here. `no-store`, because the document changes with every binary and names the version, and a browser
 /// holding an old copy across an upgrade would list operations the new binary no longer serves.
-pub(crate) fn document(text: Bytes) -> Response {
+pub(crate) fn document(text: Bytes, build: &str) -> Response {
     (
         StatusCode::OK,
         [
             (CONTENT_TYPE, HeaderValue::from_static("application/json")),
             (CACHE_CONTROL, HeaderValue::from_static("no-store")),
             (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
+            (HeaderName::from_static(BUILD_HEADER), build_value(build)),
         ],
         text,
     )

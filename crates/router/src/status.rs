@@ -167,11 +167,13 @@ impl Reader<'_> {
     }
 }
 
-/// The screen. `now` and `zone` are the clock and the local zone, passed in so a test renders a fixed instant.
+/// The screen. `binary_version` and `binary_build` stand in for the system answer's where it could not be read. `now`
+/// and `zone` are the clock and the local zone, passed in so a test renders a fixed instant.
 pub fn render(
     reads: &Reads,
     listeners: &Listeners,
     binary_version: &str,
+    binary_build: &str,
     now: Timestamp,
     zone: &TimeZone,
     all: bool,
@@ -184,6 +186,9 @@ pub fn render(
     let version = system
         .and_then(|s| s["version"].as_str())
         .unwrap_or(binary_version);
+    let build = system
+        .and_then(|s| s["build"].as_str())
+        .unwrap_or(binary_build);
     // The probe's failure is the worst reading, then the system answer's: a proxy that does not answer is down
     // whatever the admin listener says.
     let readiness = match (&reads.health, &reads.system) {
@@ -211,6 +216,8 @@ pub fn render(
     }
     header.push_str(&format!(", {readiness}"));
     screen.wrap(&header);
+    // A line of its own, since the 40 hex characters beside the version would push `, ready` past the width.
+    screen.push(format!("  build {build}"));
 
     let named: Vec<String> = [
         ("proxy", listeners.proxy.as_deref()),
@@ -1050,7 +1057,15 @@ mod tests {
             certificates: certificate_lines(&[("proxy.tls", &tls), ("admin.tls", &None)]),
             ..listeners()
         };
-        let screen = render(&reads, &expiring, "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &reads,
+            &expiring,
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         for line in &lines {
             assert!(line.chars().count() <= WIDTH, "{line}");
@@ -1096,6 +1111,11 @@ mod tests {
                 "{screen}"
             );
         }
+        assert_eq!(
+            lines[1],
+            format!("  build {}", system["build"].as_str().unwrap()),
+            "the system answer's build leads the binary's: {screen}"
+        );
         let ledger = lines.iter().position(|line| *line == "  ledger:");
         assert_eq!(
             ledger.map(|at| lines[at + 1]),
@@ -1233,6 +1253,7 @@ mod tests {
             &extended,
             &listeners(),
             "9.9.9",
+            "unknown",
             now(),
             &TimeZone::UTC,
             false,
@@ -1252,6 +1273,7 @@ mod tests {
             &extended,
             &listeners(),
             "9.9.9",
+            "unknown",
             now(),
             &TimeZone::UTC,
             true,
@@ -1295,7 +1317,15 @@ mod tests {
         row["shed_from"] = Value::Null;
         let mut one = fixture_reads();
         one.sessions = Ok(short);
-        let one_screen = render(&one, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let one_screen = render(
+            &one,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let one_lines: Vec<&str> = one_screen.lines().collect();
         assert_eq!(
             block(&one_lines, "pins (one per session, the main agent's)"),
@@ -1344,7 +1374,15 @@ mod tests {
             ]})),
             ..fixture_reads()
         };
-        let screen = render(&two, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &two,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         assert_eq!(
             block(&lines, "  attention:"),
@@ -1362,7 +1400,15 @@ mod tests {
             attention: Ok(json!({"items": []})),
             ..fixture_reads()
         };
-        let screen = render(&none, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &none,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let attention: Vec<&str> = screen
             .lines()
             .filter(|line| line.starts_with("  attention"))
@@ -1392,7 +1438,15 @@ mod tests {
             system: Ok(system(2, 1, 3)),
             ..fixture_reads()
         };
-        let screen = render(&busy, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &busy,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         let figures: Vec<&str> = lines
             .iter()
@@ -1411,7 +1465,15 @@ mod tests {
             system: Ok(system(0, 0, 0)),
             ..fixture_reads()
         };
-        let screen = render(&clean, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &clean,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         assert!(
             !screen.lines().any(|line| line.starts_with("  ledger")),
             "{screen}"
@@ -1451,7 +1513,15 @@ mod tests {
                 window["resets_at"] = Value::Null;
             }
         }
-        let screen = render(&roomy, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &roomy,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         let members = block(&lines, "pools");
         assert!(members[1].starts_with(&format!("    {one}  ")), "{screen}");
@@ -1465,6 +1535,7 @@ mod tests {
             &labelled(long, two),
             &listeners(),
             "9.9.9",
+            "unknown",
             now(),
             &TimeZone::UTC,
             false,
@@ -1493,7 +1564,15 @@ mod tests {
             accounts: Ok(accounts),
             ..fixture_reads()
         };
-        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &reads,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         block(&lines, "pools")[1].to_owned()
     }
@@ -1549,7 +1628,15 @@ mod tests {
             ]})),
             ..labelled(LONG_LABEL, "Direct")
         };
-        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &reads,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         for line in &lines {
             assert!(line.chars().count() <= WIDTH, "{line}: {screen}");
@@ -1604,7 +1691,15 @@ mod tests {
             ]})),
             ..labelled("Business", "Direct")
         };
-        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, true);
+        let screen = render(
+            &reads,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            true,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         let state = |session: &str| {
             block(&lines, "pins (one per session, the main agent's)")
@@ -1654,7 +1749,15 @@ mod tests {
             }]})),
             ..fixture_reads()
         };
-        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &reads,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         let member = block(&lines, "pools")[1];
         assert!(member.chars().count() <= WIDTH, "{screen}");
@@ -1691,7 +1794,15 @@ mod tests {
             accounts: Ok(accounts),
             ..fixture_reads()
         };
-        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &reads,
+            &listeners(),
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         assert_eq!(
             block(&lines, "accounts in no pool"),
@@ -1735,12 +1846,21 @@ mod tests {
             proxy: None,
             certificates: Vec::new(),
         };
-        let screen = render(&skipped, &file_free, "9.9.9", now(), &TimeZone::UTC, false);
+        let screen = render(
+            &skipped,
+            &file_free,
+            "9.9.9",
+            "unknown",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
         let lines: Vec<&str> = screen.lines().collect();
         assert!(lines[0].ends_with(", ready"), "{screen}");
-        assert_eq!(lines[1], "  admin http://127.0.0.1:8081", "{screen}");
+        assert!(lines[1].starts_with("  build "), "{screen}");
+        assert_eq!(lines[2], "  admin http://127.0.0.1:8081", "{screen}");
         assert_eq!(
-            lines[2], "  proxy: not probed, no configuration file names the listener",
+            lines[3], "  proxy: not probed, no configuration file names the listener",
             "{screen}"
         );
         assert!(render_json(&skipped)["health"].is_null());

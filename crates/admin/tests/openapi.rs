@@ -453,6 +453,10 @@ async fn the_document_is_served_without_the_gate_as_no_store_json() {
     assert_eq!(response.headers()["content-type"], "application/json");
     assert_eq!(response.headers()["cache-control"], "no-store");
     assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(
+        response.headers()["x-phoebis-build"],
+        common::FIXTURE_BUILD_COMMIT
+    );
     assert!(response
         .headers()
         .get("access-control-allow-origin")
@@ -1094,6 +1098,31 @@ async fn the_login_takes_stay_logged_in_false_by_default_and_the_session_answers
             .is_some_and(|r| r.iter().any(|m| m == "persistent")),
         "every session answer carries the member: {view}"
     );
+}
+
+#[tokio::test]
+async fn the_system_and_about_answers_declare_the_build_beside_the_version() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    for name in ["About", "System"] {
+        let schema = &schemas[name];
+        assert_eq!(
+            schema["properties"]["build"]["type"], "string",
+            "{name}: {schema}"
+        );
+        assert!(
+            schema["properties"]["build"]["description"]
+                .as_str()
+                .is_some_and(|text| text.contains("x-phoebis-build")),
+            "{name}.build names the header it repeats: {schema}"
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|m| m == "build")),
+            "every {name} answer carries the member: {schema}"
+        );
+    }
 }
 
 #[tokio::test]

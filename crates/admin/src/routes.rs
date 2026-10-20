@@ -121,13 +121,14 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .split_for_parts();
     openapi::Examples.modify(&mut api);
     let document = Bytes::from(api.to_json().expect("the admin document serializes"));
+    let build = state.build;
     router
         .layer(from_fn_with_state(state.clone(), gate))
         .route(
             openapi::DOCUMENT_PATH,
             get(move || {
                 let document = document.clone();
-                async move { openapi::document(document) }
+                async move { openapi::document(document, build) }
             }),
         )
         .with_state(state)
@@ -158,8 +159,8 @@ pub(crate) struct CreatedId(pub String);
 #[derive(Clone)]
 pub(crate) struct LoggedEntity(pub &'static str, pub String);
 
-/// Authentication, the origin check, `Cache-Control`, `X-Content-Type-Options` and the mutation log for every route
-/// at once, so no handler can be added that quietly skips one of them.
+/// Authentication, the origin check, `Cache-Control`, `X-Content-Type-Options`, `x-phoebis-build` and the mutation
+/// log for every route at once, so no handler can be added that quietly skips one of them.
 async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let mutation = is_mutation(&method);
@@ -195,6 +196,11 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
     let headers = response.headers_mut();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    // On refusals too, so a console that compares it to its own bundle's commit reads it before any login.
+    headers.insert(
+        HeaderName::from_static(openapi::BUILD_HEADER),
+        openapi::build_value(state.build),
+    );
     response
 }
 
@@ -1549,6 +1555,9 @@ async fn pairing_confirm(
 #[serde(deny_unknown_fields)]
 pub(crate) struct System {
     pub version: String,
+    /// The full commit the router was built from, or `unknown` for a build that had none, as every answer carries it
+    /// in `x-phoebis-build`.
+    pub build: String,
     pub profile: String,
     pub uptime_seconds: i64,
     pub storage_ok: bool,
@@ -1718,6 +1727,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let prices = revisions.in_force(now);
     Json(System {
         version: env!("CARGO_PKG_VERSION").into(),
+        build: state.build.into(),
         profile: state.profile.name.to_string(),
         uptime_seconds: uptime,
         // From the one store read `dead` made, so a transient failure cannot show both a working and a dead store.

@@ -240,6 +240,7 @@ each call under the `--timeout` deadline, and prints one screen:
 
 ```text title="phoebis status"
 phoebis 0.1.0, up 3d 4h, ready
+  build 9f3c2a7e5b1d4c6f8a0e2b4d6f8a1c3e5b7d9f0a
   proxy https://0.0.0.0:8317  admin http://127.0.0.1:8081
   metrics http://127.0.0.1:9464
   ledger:
@@ -267,9 +268,11 @@ pins (one per session, the main agent's)
 
 The header carries the version and the uptime from `GET /admin/system` and one of three readings: `ready`, `not ready:`
 with each dead component (`ledger`, `router`, `store`), or `proxy down:` with the probe's line when the proxy listener
-did not answer `200`, which wins over the other two. When the admin API could not be read, the header carries the
-binary's own version and `readiness unknown`, unless the proxy is down. The listeners follow with their schemes as the
-file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
+did not answer `200`, which wins over the other two. The line under it names the build as `build {commit}` from the same
+answer, the full commit the router was built from or `unknown` for a build that had none. When the admin API could not
+be read, the header carries the binary's own version and `readiness unknown`, unless the proxy is down, and the line
+under it the binary's own build. The listeners follow with their schemes as the file names them. Under them, a
+listener's certificate whose leaf expires within 30 days prints
 `proxy.tls.cert_file {path} expires in {n} days ({date})` (or `admin.tls.cert_file`), and a certificate file the loader
 refuses when the operator reads it prints the loader's line for it
 ([TLS on the listeners](installation.md#tls-on-the-listeners)). The running router keeps the pair it loaded until

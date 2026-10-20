@@ -23,6 +23,12 @@ const ADMIN_SECRET: &str = "admin-secret-status-001";
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The line under the header, which the in-process router's answer and the binary's own fallback both fill from this
+/// build.
+fn build_line() -> String {
+    format!("  build {}", phoebis_router::BUILD_COMMIT)
+}
+
 /// The five reads as the screen and the JSON's `errors` name them.
 const READS: [&str; 5] = ["system", "attention", "pools", "accounts", "sessions"];
 
@@ -203,12 +209,13 @@ async fn status_prints_one_screen_of_a_ready_router_and_the_same_reads_as_json()
         lines[0].starts_with(&format!("phoebis {VERSION}, up ")) && lines[0].ends_with(", ready"),
         "{stdout}"
     );
+    assert_eq!(lines[1], build_line(), "{stdout}");
     // The listeners wrap between entries rather than past 80 columns, so the third may sit on the line below.
     assert!(
-        lines[1].starts_with(&format!("  proxy http://127.0.0.1:{}", ports.proxy)),
+        lines[2].starts_with(&format!("  proxy http://127.0.0.1:{}", ports.proxy)),
         "{stdout}"
     );
-    let listeners = format!("{} {}", lines[1], lines[2]);
+    let listeners = format!("{} {}", lines[2], lines[3]);
     for named in [
         format!("admin http://127.0.0.1:{}", ports.admin),
         format!("metrics http://127.0.0.1:{}", ports.metrics),
@@ -307,6 +314,10 @@ async fn a_router_that_is_down_prints_the_down_screen_and_exits_one() {
         )),
         "{stdout}"
     );
+    assert!(
+        lines.contains(&build_line().as_str()),
+        "a router that is down leaves the binary's own build under the header: {stdout}"
+    );
     for read in READS {
         let failed = format!(
             "{read}: the admin listener did not answer on http://127.0.0.1:{}:",
@@ -340,9 +351,10 @@ async fn the_url_and_the_secret_variable_stand_in_for_the_file_and_skip_the_prob
     );
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(lines[0].ends_with(", ready"), "{stdout}");
-    assert_eq!(lines[1], format!("  admin {url}"), "{stdout}");
+    assert_eq!(lines[1], build_line(), "{stdout}");
+    assert_eq!(lines[2], format!("  admin {url}"), "{stdout}");
     assert_eq!(
-        lines[2].trim_start(),
+        lines[3].trim_start(),
         "proxy: not probed, no configuration file names the listener",
         "{stdout}"
     );
