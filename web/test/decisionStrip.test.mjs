@@ -616,10 +616,13 @@ test('the session-pin cap exemption is decided by its hold after the pick', asyn
 });
 
 test("two partitions sit far enough apart that a badge pill wider than its label clears its neighbors' labels", async () => {
-  // The failover landing's No fit station reads `fell through`, which wraps at the label's width, and its pill around
-  // `through` (63 px in Chromium) stands past the label's edges. Half of it and half of a neighbor's 58 px label take
-  // 60.5 px.
-  const m = modelOf(await recordOf('req_b8c3e9d4-e61/2'));
+  // A No fit station reading `fell through` wraps at the label's width, and its pill around `through` (63 px in
+  // Chromium) stands past the label's edges. Half of it and half of a neighbor's 58 px label take 60.5 px. The pill's
+  // width is what the case measures, so the badge is set by hand: the failover landing reads `1 out` under the
+  // router's ladder.
+  const record = await recordOf('req_b8c3e9d4-e61/2');
+  const fell = (s) => (s.step === 'partitions' ? { ...s, facts: s.facts.map((f) => (f.key === 'no_fit' ? { ...f, value: 'fell_through' } : f)) } : s);
+  const m = modelOf({ ...record, walk: record.walk.map(fell) });
   assert.equal(stationOf(m, 'partitions:no_fit').badge, 'fell through');
   const layout = d.layoutStrip(m, 958);
   const [atCap, noFit, windingDown] = ['partitions:at_cap', 'partitions:no_fit', 'partitions:winding_down'].map((id) => layout.stations[id].x);
