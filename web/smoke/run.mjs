@@ -9233,6 +9233,43 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   }
 }
 {
+  // The mock's one request with an empty model, `req_6c3a9e27-5b1` in `web/src/mock/requests.ts`, was refused for an
+  // unknown key before the router resolved a model, and it sits on the first page. Its row is found by its id and the
+  // column by its header, since the story's newer rows and the shown columns both move.
+  const REFUSED = 'req_6c3a9e27-5b1';
+  results.push({ name: 'fixture: the request refused before the router resolved a model carries an empty model', ok: requests.find((r) => r.id === REFUSED)?.model === '', missing: [REFUSED] });
+  const at = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Model');
+  const row = [...m.container.querySelectorAll('.requests__table tbody tr')].find((tr) => tr.querySelector('.requests__links a[href^="/requests/"]')?.getAttribute('href')?.slice('/requests/'.length).split('?')[0] === REFUSED);
+  const cell = row?.children[at];
+  results.push({
+    name: '/requests a request the router refused before it resolved a model reads a muted dash in its Model cell, with no title',
+    ok: at >= 0 && cell?.textContent?.trim() === '-' && cell.querySelector('.muted')?.textContent === '-' && !cell.hasAttribute('title'),
+    missing: [row ? (cell?.outerHTML ?? 'no Model cell') : `${REFUSED} not on the first page`],
+  });
+  // The dash reads in the body face, as the drawer's other placeholders do, where a model id reads in mono.
+  await m.navigate(`/requests/${REFUSED}`);
+  await m.settle(300);
+  const value = drawerRowOf(m, 'Model')?.querySelector('dd');
+  results.push({
+    name: "/requests the drawer's Model row of a request refused before the router resolved a model reads the muted dash",
+    ok: value?.textContent?.trim() === '-' && value.querySelector('.muted')?.textContent === '-' && !value.classList.contains('mono'),
+    missing: [value?.outerHTML ?? 'no Model row'],
+  });
+  await m.navigate('/requests');
+}
+{
+  // The body reads the Routing log's sentence, so the two pages word the way out of an empty table alike.
+  const none = await mount('/requests?search=no-such-request', { now: CLOCK_ORIGIN });
+  const empty = none.container.querySelector('.requests__table .empty');
+  const read = { action: empty?.querySelector('button')?.textContent?.trim() ?? null, body: empty?.querySelector('.empty__body')?.textContent ?? null, title: empty?.querySelector('.empty__title')?.textContent ?? null };
+  none.unmount();
+  results.push({
+    name: '/requests the empty state reads "Widen the range or clear a filter." under No requests match, beside Reset filters',
+    ok: JSON.stringify(read) === JSON.stringify({ action: 'Reset filters', body: 'Widen the range or clear a filter.', title: 'No requests match' }),
+    missing: [JSON.stringify(read)],
+  });
+}
+{
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   // A pattern is typed into Add filter's field for its dimension and applied with Enter.
   const type = async (check, label, value) => {

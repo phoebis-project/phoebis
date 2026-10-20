@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso, REQUEST_OUTCOME_VALUES } from '@/api/decode';
-import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
+import type { ApiKey, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
@@ -138,6 +138,16 @@ function CostCell({ request, unit }: { request: RequestLog; unit: UnitPosition }
       {cell.main}
       {cell.sub && <span className="sub">{cell.sub}</span>}
     </td>
+  );
+}
+
+/** A held row's badge in the Attempts cell, its text and its hover from one read of the hold's words. */
+function HeldBadge({ held }: { held: CohortHold }) {
+  const words = heldWords(held);
+  return (
+    <Badge tone="warning" title={words.title}>
+      {words.badge}
+    </Badge>
   );
 }
 
@@ -421,7 +431,7 @@ export function RequestsPage() {
                         {shown.has('account') && <td className="col-fit">{r.accountId ?? '-'}</td>}
                         {shown.has('model') && (
                           <td className="mono nowrap col-fit" title={shortModel(r.model) === r.model ? undefined : r.model}>
-                            {shortModel(r.model)}
+                            {r.model === '' ? <span className="muted">-</span> : shortModel(r.model)}
                           </td>
                         )}
                         {shown.has('client') && (
@@ -452,11 +462,7 @@ export function RequestsPage() {
                           <td className="col-fit">
                             <span className="requests__attempts">
                               <AttemptCount attempts={r.attempts} />
-                              {r.held && (
-                                <Badge tone="warning" title={heldWords(r.held).title}>
-                                  {heldWords(r.held).badge}
-                                </Badge>
-                              )}
+                              {r.held && <HeldBadge held={r.held} />}
                             </span>
                           </td>
                         )}
@@ -486,7 +492,7 @@ export function RequestsPage() {
                       {error ? (
                         <ErrorState title="Could not load the request log" body={error} action={<Button onClick={requests.reload}>Try again</Button>} />
                       ) : (
-                        <EmptyState title="No requests match" body="Widen the date range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
+                        <EmptyState title="No requests match" body="Widen the range or clear a filter." action={<Button onClick={reset}>Reset filters</Button>} />
                       )}
                     </td>
                   </tr>
@@ -601,7 +607,7 @@ function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, set
                 { label: 'Status', value: <StatusBadge status={r.status} /> },
                 { label: 'Outcome', value: REQUEST_OUTCOME_LABEL[r.outcome] },
                 { label: 'Account', value: r.accountId === null ? '-' : <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link> },
-                { label: 'Model', value: r.model, mono: true },
+                { label: 'Model', value: r.model === '' ? <span className="muted">-</span> : r.model, mono: r.model !== '' },
                 ...(r.canonicalModel !== r.model ? [{ label: 'Canonical model', value: r.canonicalModel, mono: true }] : []),
                 { label: 'TTFB', value: fmtMs(r.ttfbMs) },
                 { label: 'Duration', value: fmtMs(r.durationMs) },

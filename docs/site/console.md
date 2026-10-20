@@ -637,34 +637,35 @@ The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind
 Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and shows
 Time, Model, Status and Attempts alone while the drawer is open. A row older than a day prints its date before the time,
 so a 7-day or 30-day range reads without the hover. The model column reads the family and version with the whole id on
-hover. The client column reads the class the router derived from the user agent (`claude-code/<entrypoint>`
-or `other`), whole on hover, with the agent type beneath it on a subagent's turn.
-Status reads the code with the outcome word beside it where the
-request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One row is one client request
-however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, nothing for a
-request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
-account was at its cap, for a reset, for the slow-down or for the rewrite in flight, whose hover names each wait with
-its reason in the row's order and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`
-or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits span two,
-`waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads
-`waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover
-naming what each kind of request reads under the position. Under Native a request a subscription window paid reads its
-20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the model week
-among them, and the dollar equivalent on hover. Under Window shares it reads its account's own window shares, each with
-its window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), under All in dollars and Dollar
-equivalent its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under Billed dollars a dash
-with the hover "Nothing billed: a subscription request". An overage, fast mode or API-key request reads dollars under
-every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no subscription
-equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted
-model", and a dash carries no mark. A client classifier call on a subscription account reads `0%` under Native and
-Window shares, its 20x equivalents and its window shares zero, with the hover "Free on the plan: a client classifier
-call takes no window share" ahead of the estimate, its dollar equivalent over `equivalent` under All in dollars and
-Dollar equivalent with the same hover ahead of its zero 20x equivalents, and a dash under Billed dollars, while on an
-overage or API-key account it reads its dollars as any billed request does. The table pages by "Rows" (10, 25, 50 or
-100, 25 by default) with First, Previous and Next, holds the requests up to the moment you opened it so paging does not
-shift, and the split Refresh button's body brings it up to now. An empty table reads "No requests match" with "Widen the
-date range or clear a filter." and "Reset filters", which clears the filters, the search and the range. What each figure
-means is on [Statistics](statistics.md).
+hover, and a dash for a request the router refused before it resolved a model. The client column reads the class the
+router derived from the user agent (`claude-code/<entrypoint>` or `other`), whole on hover, with the agent
+type beneath it on a subagent's turn.
+Status
+reads the code with the outcome word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`,
+`incomplete` or `rejected`). One row is one client request however many attempts it took: Attempts reads `2 attempts`
+with the trail of account and status on hover, nothing for a request of one attempt, and a `waited 42 s` badge for a
+request that waited through a hold, for a slot while every account was at its cap, for a reset, for the slow-down or for
+the rewrite in flight, whose hover names each wait with its reason in the row's order and the account it waited on,
+`waited for the slow-down 42 s, for a slot 3 s on {account}` or `waited for the rewrite in flight 2 s on {account}`, or
+each with its own account where the waits span two, `waited for the slow-down 42 s on {account}, for a slot 3 s on
+{other}` (a row from before the reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost
+reads in the top bar's unit, its header's hover naming what each kind of request reads under the position. Under Native
+a request a subscription window paid reads its 20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244%
+20x 7d`), with every window, the model week among them, and the dollar equivalent on hover. Under Window shares it reads
+its account's own window shares, each with its window's short word (`0.12% Fable week` over `0.42% 5h`, the full labels
+on hover), under All in dollars and Dollar equivalent its dollar equivalent over `equivalent` with every 20x equivalent
+on hover, and under Billed dollars a dash with the hover "Nothing billed: a subscription request". An overage, fast mode
+or API-key request reads dollars under every position but Dollar equivalent, where it reads a dash with the hover
+"Billed in dollars, no subscription equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated
+at the model tier's latest weighted model", and a dash carries no mark. A client classifier call on a subscription
+account reads `0%` under Native and Window shares, its 20x equivalents and its window shares zero, with the hover "Free
+on the plan: a client classifier call takes no window share" ahead of the estimate, its dollar equivalent over
+`equivalent` under All in dollars and Dollar equivalent with the same hover ahead of its zero 20x equivalents, and a
+dash under Billed dollars, while on an overage or API-key account it reads its dollars as any billed request does. The
+table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the
+moment you opened it so paging does not shift, and the split Refresh button's body brings it up to now. An empty table
+reads "No requests match" with "Widen the range or clear a filter." and "Reset filters", which clears the filters, the
+search and the range. What each figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
