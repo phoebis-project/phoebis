@@ -681,18 +681,35 @@ async fn every_operation_declares_one_success_and_the_refusals_of_its_row_as_err
                 == "#/components/schemas/ErrorBody";
             assert!(shared || inline, "{id} {status}: the body is an ErrorBody");
             if status == "409" {
-                let stale_edit = [
+                let coded = [
                     "account_patch",
                     "guardrail_patch",
                     "key_patch",
+                    "pairing_confirm",
                     "pool_patch",
                 ]
                 .contains(&id);
                 assert_eq!(
                     response["headers"]["x-phoebis-error-code"].is_object(),
-                    stale_edit,
-                    "{id} 409: the code header on the four stale_edit sites alone"
+                    coded,
+                    "{id} 409: the code header on the four stale_edit sites and the pairing confirm alone"
                 );
+                if id == "pairing_confirm" {
+                    let code = response["headers"]["x-phoebis-error-code"]["description"]
+                        .as_str()
+                        .unwrap();
+                    assert!(
+                        code.starts_with("`sealed_under_another_key`"),
+                        "{id} 409: the header names the code: {code}"
+                    );
+                    let bullets = response["description"].as_str().unwrap();
+                    assert!(
+                        bullets.contains(
+                            "- `{label} holds a credential sealed under another storage key, so disconnect it before pairing again`, which carries the `sealed_under_another_key` code"
+                        ),
+                        "{id} 409: the sealed slot's refusal among the bullets: {bullets}"
+                    );
+                }
             }
         }
     }

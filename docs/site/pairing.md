@@ -117,7 +117,11 @@ identity, credential and profile in one write. The confirm reads the usage endpo
 windows show within seconds. An account stays bound to the upstream account it was first paired to, so moving it
 elsewhere means deleting it: confirming another upstream account answers
 `409 this slot is already paired to a different upstream account`, and an upstream account already paired to another of
-the router's accounts `409 that upstream account is already paired to another slot`.
+the router's accounts `409 that upstream account is already paired to another slot`. A confirm on an account whose
+stored credential does not open under the router's storage key, because another key sealed it or it is damaged, answers
+`409 {label} holds a credential sealed under another storage key, so disconnect it before pairing again` with the
+account's label. The console's pairing dialog offers Disconnect for it, which deletes the sealed credential so a fresh
+pairing proceeds.
 
 `GET /admin/accounts` lists the accounts with their `kind`, `state` and the rest of each row, and
 `GET /admin/accounts/{id}/usage` answers the poll's latest snapshot of the account's usage windows and the poll's

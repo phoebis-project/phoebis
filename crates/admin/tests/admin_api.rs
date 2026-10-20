@@ -1112,6 +1112,35 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
 }
 
 #[tokio::test]
+async fn a_confirm_on_a_slot_sealed_under_another_key_answers_409_naming_the_account() {
+    use common::{get, json, login, post};
+    let (app, _up, store, _manager) = common::paired_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    // AES-GCM cannot tell a blob sealed under another storage key from a damaged one, so a blob this key cannot
+    // open stands for the slot sealed elsewhere, and the refusal answers both alike.
+    store.debug_corrupt_credentials("business").unwrap();
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        confirmed.headers()["x-phoebis-error-code"],
+        "sealed_under_another_key"
+    );
+    assert_eq!(
+        json(confirmed).await["error"],
+        "Business holds a credential sealed under another storage key, so disconnect it before pairing again"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
+}
+
+#[tokio::test]
 async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_reading() {
     use common::{get, json, login, post, NOW};
     use std::sync::atomic::Ordering;

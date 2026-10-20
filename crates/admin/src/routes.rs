@@ -1311,7 +1311,11 @@ async fn pairing_callback(
     responses(
         (status = 200, description = "The account, the confirmed status, and `first_poll_in_flight`, true when the confirm started the account's first usage poll.", body = Confirmed),
         (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`\n- `account not found`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
-        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session has no exchanged credential`\n- `the account was disconnected while pairing`\n- `the credential changed while pairing, so start the pairing again`\n- `this slot is already paired to a different upstream account`\n- `that upstream account is already paired to another slot`\n- `an account with this id exists`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
+        // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
+        // attribute after it fails to parse.
+        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session has no exchanged credential`\n- `the account was disconnected while pairing`\n- `the credential changed while pairing, so start the pairing again`\n- `{label} holds a credential sealed under another storage key, so disconnect it before pairing again`, which carries the `sealed_under_another_key` code\n- `this slot is already paired to a different upstream account`\n- `that upstream account is already paired to another slot`\n- `an account with this id exists`",
+            headers(("x-phoebis-error-code" = String, description = "`sealed_under_another_key`: the slot's stored credential does not open under this router's storage key")),
+            body = ErrorBody, example = json!({"error": "pairing session expired"})),
         (status = 500, response = StorageFailure),
         (status = 503, response = RegistryUnavailable),
     ),
@@ -1354,6 +1358,16 @@ async fn pairing_confirm(
             .fail(&id, &caller.session_id, "storage failure", now);
         state.vault.discard(&id, now);
         store_failure(error)
+    };
+    // AES-GCM cannot tell a blob sealed under another storage key from a damaged one, so both answer this, and the
+    // operator's way out of either is Disconnect, which deletes the blob.
+    let sealed = |state: &AdminState, label: &str| {
+        let message = format!(
+            "{label} holds a credential sealed under another storage key, so disconnect it before pairing again"
+        );
+        let _ = state.pairing.fail(&id, &caller.session_id, &message, now);
+        state.vault.discard(&id, now);
+        failure_with_code(StatusCode::CONFLICT, "sealed_under_another_key", &message)
     };
 
     let Some(pending) = state.vault.take_exchange(&id, now) else {
@@ -1442,6 +1456,7 @@ async fn pairing_confirm(
             }
             let expected = match state.store.credentials(&row.id) {
                 Ok(current) => current.map(|bundle| bundle.generation),
+                Err(StoreError::Crypto) => return sealed(&state, &row.label),
                 Err(error) => return unstored(&state, error),
             };
             // The lifecycle carried from the exchange, not `row`'s own read: the store's fence is the one that
@@ -1463,6 +1478,8 @@ async fn pairing_confirm(
                         &state,
                         "the credential changed while pairing, so start the pairing again",
                     ),
+                    // A bundle without a refresh token opens the row it replaces to carry that token forward.
+                    StoreError::Crypto => sealed(&state, &row.label),
                     other => unstored(&state, other),
                 };
             }
