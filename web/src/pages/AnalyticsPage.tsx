@@ -337,8 +337,8 @@ export function AnalyticsPage() {
   // user agent matches its folded token, as the unscoped page's rollups do, where the route matches the raw header.
   const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: userAgentPattern.trim() ? [userAgentPattern.trim()] : undefined, clientPatterns: classPattern.trim() ? [classPattern.trim()] : undefined }), [agentGroups, classPattern, userAgentPattern]);
   // A custom span holds its end, so no dependency moves at the interval: its window's reads poll at it instead, and the
-  // figures stay drawn until the new answer lands, where a request that finished late shows. A preset's end moves to
-  // now at a boundary, and that change reads again.
+  // figures stay drawn until the new answer lands, where a request that finished late shows, in the session log when it
+  // falls on the first page. A preset's end moves to now at a boundary, and that change reads again.
   const reload = { paused, refreshMs: custom ? polledMs : 0 };
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
   const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reload);
@@ -352,6 +352,7 @@ export function AnalyticsPage() {
   const logDeps = JSON.stringify([classPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
   const log = useAsync(
     () => {
+      if (heldLog.current?.deps !== logDeps) heldLog.current = null;
       if (sessionId === null) return Promise.resolve({ partial: false, requests: [] as RequestLog[] });
       const held = heldLog.current?.deps === logDeps ? heldLog.current.answer : undefined;
       return loadSessionRequests(

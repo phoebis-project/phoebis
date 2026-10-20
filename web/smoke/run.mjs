@@ -18760,9 +18760,10 @@ m.unmount();
   }
   {
     // A session view walks the session's pages once, and on a custom range each auto reload reads the first page alone,
-    // the later pages standing as loaded. The client session's 502 and its retry fall inside the span, and a page of one
-    // row makes them two pages.
-    const name = "/analytics a session view on a custom range capped at the clock walks the session's pages by its session filter, then reads the first page alone at each tick and keeps the later rows";
+    // the later pages standing as loaded. The client session's 502 and its retry fall inside the span, and a page of
+    // one row makes them two pages. A session that leaves and comes back on the same span walks its pages again, since
+    // rows may have moved past the first page while the view was away.
+    const name = "/analytics a session view on a custom range capped at the clock walks the session's pages by its session filter, then reads the first page alone at each tick and keeps the later rows, and walks the pages again after the session leaves and comes back";
     const FROM = isoAt(CLOCK_ORIGIN - 2 * 3_600_000);
     const TO = isoAt(CLOCK_ORIGIN);
     const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
@@ -18781,14 +18782,31 @@ m.unmount();
     await page.settle();
     const ticked = spy.calls.map(([q]) => q);
     const after = total(page);
+    await removeChip(page, 'session');
+    const left = page.location().search;
+    spy.calls.length = 0;
+    await applyText(page, 'Session', sessionId ?? '');
+    await page.settle();
+    const back = spy.calls.map(([q]) => q);
+    const returned = total(page);
     spy.restore();
     api.listRequests = listRequests;
     page.unmount();
     const bySession = (q) => q?.session === sessionId && q?.search === undefined;
+    const walked = (calls) => calls.length === sessionRows.length && calls.every(bySession) && calls.every((q, i) => (q?.cursor === undefined) === (i === 0));
     results.push({
       name,
-      ok: sessionRows.length > 1 && walk.length === sessionRows.length && walk.every(bySession) && ticked.length === 1 && JSON.stringify(ticked[0]) === JSON.stringify(walk[0]) && loaded === sessionRows.length && after === sessionRows.length,
-      missing: [`${sessionRows.length} rows of the session ${sessionId ?? 'none'} in the span`, `walk ${JSON.stringify(walk)}`, `tick ${JSON.stringify(ticked)}`, `${loaded} requests loaded, ${after} after the tick`],
+      ok:
+        sessionRows.length > 1 &&
+        walked(walk) &&
+        ticked.length === 1 &&
+        JSON.stringify(ticked[0]) === JSON.stringify(walk[0]) &&
+        loaded === sessionRows.length &&
+        after === sessionRows.length &&
+        !left.includes('session=') &&
+        walked(back) &&
+        returned === sessionRows.length,
+      missing: [`${sessionRows.length} rows of the session ${sessionId ?? 'none'} in the span`, `walk ${JSON.stringify(walk)}`, `tick ${JSON.stringify(ticked)}`, `${loaded} requests loaded, ${after} after the tick`, `left at ${left}`, `back ${JSON.stringify(back)}`, `${returned} requests after the return`],
     });
   }
   {
