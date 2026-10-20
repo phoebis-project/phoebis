@@ -4,7 +4,7 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, Dot, Line, LineChart, Re
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { windowId } from '@/api/decode';
-import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
+import { foldGroups, foldRequests, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, ReconciliationsAnswer, RequestLog, RewritesAnswer, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
@@ -55,7 +55,7 @@ const SESSION_OPTION_HINT = 'The Burn section groups by session, and every other
 const GROUP_OPTIONS: readonly { label: string; title?: string; value: BurnGroup }[] = [...(Object.keys(GROUP_LABEL) as GroupBy[]).map((value) => ({ label: GROUP_LABEL[value], value })), { label: SESSION_OPTION, title: SESSION_OPTION_HINT, value: 'session' }];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
 const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key', model: 'model', poolId: 'pool' };
-/** The log has no session filter, so a session view pages through it; both bounds together are the note's figure. */
+/** A session view pages through the session's rows, and both bounds together are the note's figure. */
 const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
 const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
@@ -346,19 +346,27 @@ export function AnalyticsPage() {
   // A read only a hidden tab draws answers null without a request, and runs once its tab is chosen.
   const byModel = useAsync(() => (tab === 'cache' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
   const byPool = useAsync(() => (tab === 'cache-warming' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
+  // The log's last answer with the deps it answers, so an auto reload of the same deps reads the first page alone and
+  // the later pages stand as the walk loaded them. Other deps walk the pages again.
+  const heldLog = useRef<{ answer: SessionRequests; deps: string } | null>(null);
+  const logDeps = JSON.stringify([classPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
   const log = useAsync(
-    () =>
-      sessionId === null
-        ? Promise.resolve({ partial: false, requests: [] as RequestLog[] })
-        : loadSessionRequests(
-            (cursor) =>
-              api
-                .listRequests({ accountIds: filters.accountId, client: classPattern.trim() || undefined, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso })
-                // The search matches an id across several fields, so the page keeps only the exact session; the
-                // route reads one key list, so a lifetime beside a key filter is applied here as well.
-                .then((page) => ({ ...page, requests: page.requests.filter((r) => r.sessionId === sessionId && (sessionKey === null || `${r.keyId}@${r.keyGeneration}` === sessionKey)) })),
-            SESSION_PAGE_LIMIT,
-          ),
+    () => {
+      if (sessionId === null) return Promise.resolve({ partial: false, requests: [] as RequestLog[] });
+      const held = heldLog.current?.deps === logDeps ? heldLog.current.answer : undefined;
+      return loadSessionRequests(
+        (cursor) =>
+          api
+            .listRequests({ accountIds: filters.accountId, client: classPattern.trim() || undefined, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, session: sessionId, to: toIso })
+            // The route reads one key list, so a lifetime beside a key filter is applied here as well.
+            .then((page) => ({ ...page, requests: page.requests.filter((r) => sessionKey === null || `${r.keyId}@${r.keyGeneration}` === sessionKey) })),
+        SESSION_PAGE_LIMIT,
+        held,
+      ).then((answer) => {
+        heldLog.current = { answer, deps: logDeps };
+        return answer;
+      });
+    },
     [classPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
     reload,
   );

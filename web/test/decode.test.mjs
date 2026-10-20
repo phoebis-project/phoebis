@@ -2088,6 +2088,25 @@ test('a session view folds every page the cursor names', () => {
   });
 });
 
+test('a session view given its held rows reads the first page alone, replacing the held rows by id and keeping the rest', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  // The walk held four rows over two pages of two. A request that landed since heads the first page, which pushes a
+  // held row past its edge, and a held row the first page answers again replaces its held copy.
+  const held = { partial: true, requests: rows.slice(1, 5) };
+  const answered = { ...rows[1], status: 500 };
+  const cursors = [];
+  const load = async (cursor) => {
+    cursors.push(cursor);
+    return cursor === undefined ? { nextCursor: 'c1', requests: [rows[0], answered] } : { nextCursor: null, requests: rows.slice(3, 5) };
+  };
+  return d.loadSessionRequests(load, 20, held).then(({ partial, requests }) => {
+    assert.deepEqual(cursors, [undefined], 'one read, of the first page');
+    assert.deepEqual(requests.map((r) => r.id), rows.slice(0, 5).map((r) => r.id), "the first page's rows, then the held rows it did not answer, in the held order");
+    assert.equal(requests[1].status, 500, "the first page's copy of a held row replaces it");
+    assert.equal(partial, true, "the walk's partial mark stands");
+  });
+});
+
 test('the dashboard reads the live pin count the route answers beside the rollups', () => {
   assert.equal(fixture('dashboard').sessions.active_pins, 1);
   assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 1);

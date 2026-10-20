@@ -18759,6 +18759,39 @@ m.unmount();
     });
   }
   {
+    // A session view walks the session's pages once, and on a custom range each auto reload reads the first page alone,
+    // the later pages standing as loaded. The client session's 502 and its retry fall inside the span, and a page of one
+    // row makes them two pages.
+    const name = "/analytics a session view on a custom range capped at the clock walks the session's pages by its session filter, then reads the first page alone at each tick and keeps the later rows";
+    const FROM = isoAt(CLOCK_ORIGIN - 2 * 3_600_000);
+    const TO = isoAt(CLOCK_ORIGIN);
+    const total = (page) => Number(/^([\d,]+) requests/.exec(page.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '')?.[1].replace(/,/g, '') ?? -1);
+    const sessionId = requests.find((r) => r.status === 502 && r.errorCode === 'stream_undecodable')?.sessionId ?? null;
+    const sessionRows = requests.filter((r) => sessionId !== null && r.sessionId === sessionId && r.kind !== 'probe' && Date.parse(r.at) >= Date.parse(FROM) && Date.parse(r.at) <= Date.parse(TO));
+    const listRequests = api.listRequests;
+    api.listRequests = (q) => listRequests.call(api, { ...q, limit: 1 });
+    const spy = countCalls('listRequests');
+    const page = await mount(`/analytics?session=${encodeURIComponent(sessionId ?? '')}&from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    await page.settle();
+    const walk = spy.calls.map(([q]) => q);
+    const loaded = total(page);
+    await chooseInterval(page, '5 s');
+    spy.calls.length = 0;
+    tick(5_000);
+    await page.settle();
+    const ticked = spy.calls.map(([q]) => q);
+    const after = total(page);
+    spy.restore();
+    api.listRequests = listRequests;
+    page.unmount();
+    const bySession = (q) => q?.session === sessionId && q?.search === undefined;
+    results.push({
+      name,
+      ok: sessionRows.length > 1 && walk.length === sessionRows.length && walk.every(bySession) && ticked.length === 1 && JSON.stringify(ticked[0]) === JSON.stringify(walk[0]) && loaded === sessionRows.length && after === sessionRows.length,
+      missing: [`${sessionRows.length} rows of the session ${sessionId ?? 'none'} in the span`, `walk ${JSON.stringify(walk)}`, `tick ${JSON.stringify(ticked)}`, `${loaded} requests loaded, ${after} after the tick`],
+    });
+  }
+  {
     // The Cache warming tab's billed and by-pool reads and the Cache tab's funded by-model read belong to the span's
     // window as the page's breakdown does, so a custom span under auto reload reads them again at every tick beside it.
     const name = "/analytics a custom range under auto reload reads the Cache warming tab's billed and by-pool reads and the Cache tab's funded by-model read again at every tick, beside the page's breakdown";
@@ -19370,7 +19403,7 @@ m.unmount();
       const spy = countCalls('listRequests');
       const page = await mount(`/analytics?session=${encodeURIComponent(first.sessionId)}`, { now: CLOCK_ORIGIN });
       spy.restore();
-      const keyed = spy.calls.filter(([q]) => q?.search === first.sessionId).map(([q]) => q?.keyIds ?? []);
+      const keyed = spy.calls.filter(([q]) => q?.session === first.sessionId).map(([q]) => q?.keyIds ?? []);
       results.push({ name, ok: keyed.length > 0 && keyed.every((ids) => ids.every((id) => !id.includes('@'))) && total(page) > 0, missing: [JSON.stringify(keyed), `total ${total(page)}`] });
       page.unmount();
     }
@@ -19384,7 +19417,7 @@ m.unmount();
       await applyText(page, 'Session', second.sessionId);
       await page.settle(200);
       spy.restore();
-      const keyed = spy.calls.filter(([q]) => q?.search === second.sessionId).map(([q]) => q?.keyIds ?? []);
+      const keyed = spy.calls.filter(([q]) => q?.session === second.sessionId).map(([q]) => q?.keyIds ?? []);
       results.push({
         name,
         ok: JSON.stringify(query(page)) === JSON.stringify({ session: second.sessionId }) && keyed.length > 0 && keyed.every((ids) => !ids.includes(lifetime(first))) && total(page) > 0,
@@ -20980,7 +21013,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const view = await mount(`/analytics${m.location().search}#cost`, { now: CLOCK_ORIGIN });
     spy.restore();
     const byId = new Map();
-    for (const [q] of spy.calls) if (q?.search === sessionId) for (const r of (await api.listRequests(q)).requests) byId.set(r.id, r);
+    for (const [q] of spy.calls) if (q?.session === sessionId) for (const r of (await api.listRequests(q)).requests) byId.set(r.id, r);
     const rows = [...byId.values()];
     const plan = rows.filter((r) => costUnitOf(r, 'native').kind !== 'dollars');
     const billed = rows.filter((r) => costUnitOf(r, 'native').kind === 'dollars');

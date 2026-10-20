@@ -301,8 +301,24 @@ export function foldRequests(rows: RequestLog[], bucketMs: number, from: string,
   return buckets.map((inBucket, i) => ({ at: new Date(start + i * bucketMs).toISOString(), groups: foldGroups(inBucket, by, options, latest) }));
 }
 
-/** Every page of a session's requests, following the cursor to its end or to `maxPages`, which marks the result partial. */
-export async function loadSessionRequests(load: (cursor: string | undefined) => Promise<RequestPage>, maxPages: number): Promise<{ partial: boolean; requests: RequestLog[] }> {
+/** A session's requests as the log answered them, partial where the page bound stopped the walk short of the end. */
+export interface SessionRequests {
+  partial: boolean;
+  requests: RequestLog[];
+}
+
+/**
+ * Every page of a session's requests, following the cursor to its end or to `maxPages`, which marks the result partial.
+ * Given the session's held answer, it reads the first page alone, so a re-read costs one request. The page's rows
+ * replace the held rows by id, since a request that landed since pushes a held row past the page's edge, and the held
+ * rows the page did not answer stand as loaded, the partial mark with them.
+ */
+export async function loadSessionRequests(load: (cursor: string | undefined) => Promise<RequestPage>, maxPages: number, held?: SessionRequests): Promise<SessionRequests> {
+  if (held !== undefined) {
+    const first = await load(undefined);
+    const answered = new Set(first.requests.map((r) => r.id));
+    return { partial: held.partial, requests: [...first.requests, ...held.requests.filter((r) => !answered.has(r.id))] };
+  }
   const requests: RequestLog[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < maxPages; page += 1) {
