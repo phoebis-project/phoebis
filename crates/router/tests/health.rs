@@ -345,6 +345,40 @@ fn the_subcommand_exits_one_on_a_listener_answering_503() {
     served.join().unwrap();
 }
 
+/// The probe sends no credential, so a container whose secret the service would refuse still reads as up or down by
+/// its listener alone.
+#[test]
+fn the_subcommand_probes_under_a_placeholder_or_unset_admin_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, secret) in [
+        ("placeholder", Some("replace-with-a-long-random-string")),
+        ("unset", None),
+    ] {
+        let (addr, served) = answering("200 OK");
+        let config = config_file(dir.path(), name, addr);
+        let mut command = phoebis();
+        match secret {
+            Some(value) => command.env("TEST_HEALTH_ADMIN", value),
+            None => command.env_remove("TEST_HEALTH_ADMIN"),
+        };
+        let out = command
+            .args(["health", "--config"])
+            .arg(&config)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            format!("proxy answers on {addr}")
+        );
+        served.join().unwrap();
+    }
+}
+
 #[test]
 fn phoebis_config_names_the_file_when_the_flag_is_absent_and_loses_to_the_flag() {
     let dir = tempfile::tempdir().unwrap();

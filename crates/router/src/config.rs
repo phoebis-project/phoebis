@@ -230,8 +230,8 @@ pub struct StatsConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamConfig {
-    /// An extra trust anchor for the inference and control connectors, for a lab upstream that is not
-    /// signed by a public authority.
+    /// Extra trust anchors for the inference and control connectors, for a lab upstream that is not signed by a
+    /// public authority. Every certificate of a bundle is trusted, and a file with none is refused at the start.
     #[serde(default)]
     pub extra_ca_pem: Option<PathBuf>,
     /// Sends every host to this address instead of asking the resolver, which is how a test or a lab
@@ -310,8 +310,8 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-/// Reads, parses and validates the bootstrap file and leaves the admin secret unresolved, for `check-config`,
-/// which must run without the environment the service gets from its unit.
+/// Reads, parses and validates the bootstrap file and leaves the admin secret unresolved, for `check-config` and
+/// `health`, which must run without the environment the service gets from its unit.
 pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
         path: path.to_path_buf(),

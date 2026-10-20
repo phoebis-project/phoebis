@@ -118,16 +118,19 @@ pub async fn run_until(
 
     let extra_ca = match &config.upstream.extra_ca_pem {
         None => None,
-        Some(path) => Some(
+        Some(path) => Some((
+            path,
             std::fs::read_to_string(path)
                 .with_context(|| format!("reading upstream.extra_ca_pem {}", path.display()))?,
-        ),
+        )),
     };
     let mut inference_builder = connector_builder(profile, Plane::Inference)?;
     let mut control_builder = connector_builder(profile, Plane::Control)?;
-    if let Some(pem) = &extra_ca {
-        trust_extra_ca(&mut inference_builder, pem)?;
-        trust_extra_ca(&mut control_builder, pem)?;
+    if let Some((path, pem)) = &extra_ca {
+        trust_extra_ca(&mut inference_builder, pem)
+            .with_context(|| format!("upstream.extra_ca_pem {}", path.display()))?;
+        trust_extra_ca(&mut control_builder, pem)
+            .with_context(|| format!("upstream.extra_ca_pem {}", path.display()))?;
     }
 
     let clock: Clock = Arc::new(|| jiff::Timestamp::now().as_millisecond());

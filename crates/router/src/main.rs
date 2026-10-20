@@ -289,7 +289,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Some(Command::Health) => {
-            let config = phoebis_router::config::load(&cli.config)?;
+            let config = phoebis_router::config::load_unresolved(&cli.config)?;
             match phoebis_router::health::probe(
                 config.proxy.listen,
                 config.proxy.tls.is_some(),

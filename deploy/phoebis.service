@@ -21,6 +21,7 @@ PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 StateDirectory=phoebis
+StateDirectoryMode=0700
 UMask=0077
 
 [Install]

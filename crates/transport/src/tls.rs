@@ -41,9 +41,19 @@ pub fn connector(profile: &'static Profile, plane: Plane) -> Result<SslConnector
     Ok(connector_builder(profile, plane)?.build())
 }
 
+/// Every PEM block of the bundle is trusted, and a file with no block is refused, so an empty or misnamed file cannot
+/// pass as a bundle while the builder's public roots stay.
 pub fn trust_extra_ca(builder: &mut SslConnectorBuilder, pem: &str) -> Result<(), TransportError> {
-    let cert = boring::x509::X509::from_pem(pem.as_bytes())?;
-    builder.cert_store_mut().add_cert(cert)?;
+    let certs = boring::x509::X509::stack_from_pem(pem.as_bytes())?;
+    if certs.is_empty() {
+        return Err(TransportError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the bundle holds no PEM block",
+        )));
+    }
+    for cert in certs {
+        builder.cert_store_mut().add_cert(cert)?;
+    }
     Ok(())
 }
 
