@@ -106,7 +106,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         .unwrap_or_default();
     members.sort();
     let expected: Vec<(String, Vec<String>)> = [
-        ("about", &["profile", "version"][..]),
+        ("about", &["build", "profile", "version"][..]),
         ("access", &["admin_configured"]),
         (
             "api_prices",
