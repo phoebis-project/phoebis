@@ -97,17 +97,18 @@ the request runtime, so a slow analytics query never delays proxy traffic.
 The ledger flags a request the router refused before any account was asked, for the client's or a policy's cause: a
 missing, malformed or doubled key header, a refused key, a client outside Claude Code, a client drift or a missing
 header the contract requires, a guardrail block, a malformed, incomplete, late or oversized body, an unsupported
-encoding, an unknown route or method, and a model the key does not allow, one the body lacks or one that is not a
-usable model name, never a keepalive probe. The router's own refusals stay in the figures, `account_cancelled`,
+encoding, an unknown route or method, and a model the key does not allow, one the body lacks or one that is not a usable
+model name, never a keepalive probe. The router's own refusals stay in the figures, `account_cancelled`,
 `accounts_unavailable`, `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, and so does
 every outcome after an account was asked. The hourly row counts a flagged request in a map by error code and in no
-request, outcome, cache, latency or error figure, so every reader of the rollups, the Dashboard, the Analytics views,
-the pool cards and the key usage, leaves them out without a rule of its own, and the scrape's request counter skips a
-flagged request by a rule of its own. The refused requests show on the Dashboard's Refused tile, the Analytics view's
-Refused column and "Refusals by code" card, the Guardrails card for a block, the Requests view and a session's request
-list, and in `phoebis_refusals_total` ([Metrics](#metrics)). The first start after the upgrade sets the flag on the
-stored rows and moves each one's share out of its hour's counts into the map, in pages, resumed after a stopped start,
-and an hour whose rows the retention purge already removed keeps its old counts.
+request, outcome, cache, latency or error figure, nor in the slow-down's held count or held time, so every reader of the
+rollups, the Dashboard, the Analytics views, the pool cards and the key usage, leaves them out without a rule of its
+own, and the scrape's request counter skips a flagged request by a rule of its own. The refused requests show on the
+Dashboard's Refused tile, the Analytics view's Refused column and "Refusals by code" card, the Guardrails card for a
+block, the Requests view and a session's request list, and in `phoebis_refusals_total` ([Metrics](#metrics)). The first
+start after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the
+map, in pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old
+counts.
 
 ## Quota samples
 

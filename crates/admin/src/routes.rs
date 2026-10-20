@@ -2828,7 +2828,7 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
 /// `[]` in place of the sentence every route gives a body that is no object. The shape is checked on the parsed value
 /// before any member check, and the struct is read from the bytes, where the derive refuses a repeated member that a
 /// value would keep at its last occurrence.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped, so boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn parse_object<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, Response> {

@@ -642,9 +642,8 @@ async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_
         .unwrap();
         // The file as version 36 left it: the one count, holding what a credit booked before the split.
         // Migration 38 creates the reconciliations' table and migration 39 the guardrails' column and table, so each
-        // leaves before the replay adds it again. Migration 40's two request columns and migration 42's flag and
-        // refusals map leave for the same reason, and migration 41's index and two columns leave the same way, the
-        // index first.
+        // leaves before the replay adds it again. Migration 40's two request columns, migration 41's index and two
+        // columns, the index first, and migration 42's flag and refusals map leave for the same reason.
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
