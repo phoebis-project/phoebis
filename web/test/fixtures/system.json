@@ -9,7 +9,7 @@
     "ready": true,
     "dead": [],
     "ledger": {
-      "schema_version": 41,
+      "schema_version": 42,
       "written": 32,
       "dropped": 0,
       "write_failures": 0,
