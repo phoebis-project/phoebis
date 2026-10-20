@@ -435,10 +435,12 @@ after the dwell when warm"), When cold ("only when the move is free: a compactio
 Never ("the session stays until the member refuses it"), with the hint "When a session on an API-key member returns to a
 subscription member. Under Never it leaves the metered member on expiry, a cooldown or a mark alone."
 `Return dwell (s)`, from 0 to 86400, with the hint "Under Always, how long a warm session stays on the API-key member
-before it returns. 0 returns it at once.", is enabled under Always alone and stays editable while a save refused its
-value. `Wind down (min)` carries the hint "This long before a cancelled subscription ends, its account takes new
-sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end
-is set on the Accounts page." The rules are on [Moves](routing.md#moves).
+before it returns. 0 returns it at once.", is enabled under Always. Under When cold or Never it stays editable while its
+value is one the dialog refuses (not a whole number from 0 to 86400, which holds the save as typed) and while it holds
+the focus, so the keystroke that brings a refused value back in bounds leaves it editable until the focus leaves.
+`Wind down (min)` carries the hint "This long before a cancelled subscription ends, its account takes new sessions only
+as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the
+Accounts page." The rules are on [Moves](routing.md#moves).
 
 The pool routes answer each pool with its warnings on every list, create and save: static checks on settings that work
 against each other, none of which blocks a save. The dialog draws the saved pool's warnings above its groups, one line

@@ -39,7 +39,7 @@ import { dollarsUnder, GuardrailList, KeyDialog, nativeSidesOf, sumTileOf, type 
 
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
-// What a first pool needs, said on the create dialog's rail; the words stay while the refusal dots come and go.
+// What a first pool needs, said on the create dialog's rail. The words stay while the refusal dots come and go.
 const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after saving', identity: 'needed', keys: 'after saving', members: 'needed' };
 // Every field of these groups belongs to the expert view, so with the mode off a group has nothing to show and leaves
 // the rail.
@@ -147,7 +147,7 @@ const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] =
   { value: 'allow', title: 'Allow', body: 'ignore extra usage' },
   { value: 'never', title: 'Never', body: 'treat an account in extra usage as unavailable until its window resets' },
 ];
-/** Members first, lowest priority number first, then alphabetically; non-members trail alphabetically. */
+/** Members first, lowest priority number first, then alphabetically. Non-members trail alphabetically. */
 const orderedAccountIds = (accounts: Account[], members: Record<string, number>): string[] =>
   [...accounts]
     .sort((a, b) => {
@@ -245,7 +245,7 @@ export function PoolsPage() {
   const landed = useRef<string | null>(null);
   const { notify } = useSession();
 
-  // The address opens the dialog on a named group once both lists the dialog reads have loaded; the entry is then
+  // The address opens the dialog on a named group once both lists the dialog reads have loaded. The entry is then
   // replaced by the bare route, so closing the dialog, a reload or Back does not open it again.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -370,7 +370,7 @@ export function PoolsPage() {
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
         <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} />
       </div>
-      {/* A failed read leaves the cards on the last answer's items, or none before the first; this line says so. */}
+      {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
       {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
       <div className="pool-grid">
         {pools.data
@@ -492,7 +492,7 @@ function CacheTtlGrid({ disabled, hint, metered, onChange, plan }: { disabled: b
   );
 }
 
-/** One rule set's per-model overrides; the picker's state is its own, so each set adds overrides independently. */
+/** One rule set's per-model overrides. The picker's state is its own, so each set adds overrides independently. */
 function CacheTtlOverrides({
   disabled,
   label,
@@ -643,7 +643,7 @@ function PoolCard({
   onDelete,
 }: {
   accountById: Map<string, Account>;
-  /** Null until the account list is read; the status sentence then says only what the pool's verdicts carry. */
+  /** Null until the account list is read. The status sentence then says only what the pool's verdicts carry. */
   accounts: Account[] | null;
   attention: AttentionItem[];
   keys: ApiKey[];
@@ -782,7 +782,7 @@ function PoolCard({
                         {isNext ? <Badge tone="accent">next</Badge> : m && <Eligibility verdict={m.eligible} account={p.account} now={now} periodEnd={m.budgetUntil} />}
                         {!isNext && p.lastResort && <LastResort placement={p} now={now} />}
                         {!isNext && p.deferred && <Badge tone="neutral">after plan quota</Badge>}
-                        {/* The route's budget verdict says this itself; the badge stands for a member the route names
+                        {/* The route's budget verdict says this itself. The badge stands for a member the route names
                             an earlier obstacle for. */}
                         {!isNext && m && m.budgetUntil !== null && m.eligible !== 'budget' && <AtBudget periodEnd={m.budgetUntil} />}
                         <SpeedChip factor={speed.factor} hover={speed.hover} />
@@ -941,7 +941,7 @@ function ReturnRate({ buckets, error, loading }: { buckets: IdleReturnBucket[]; 
 
 /**
  * A member's spend against each budget it carries, an API-key member's whole spend and a subscription member's
- * metered spend (overage and fast answers), one line each under its name; a member without a budget draws none.
+ * metered spend (overage and fast answers), one line each under its name. A member without a budget draws none.
  */
 function MemberBudget({ member }: { member: PoolMember }) {
   // The word leads, so the operator reads at once that the plan's own traffic is not in the figure.
@@ -973,7 +973,7 @@ function AtBudget({ periodEnd }: { periodEnd: string | null }) {
   return <Badge tone="warning">{periodEnd ? `at budget until ${fmtPeriodEnd(periodEnd)}` : 'at budget'}</Badge>;
 }
 
-/** The route's verdict, as the serving table's Standing cell reads it; the account only adds when and why. */
+/** The route's verdict, as the serving table's Standing cell reads it. The account only adds when and why. */
 function Eligibility({ verdict, account, now, periodEnd }: { account: Account | undefined; now: number; periodEnd: string | null; verdict: MemberEligibility }) {
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
   if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
@@ -1037,7 +1037,7 @@ interface PoolForm {
   affinity: number;
   affinityMode: AffinityMode;
   autoModeServer: boolean;
-  /** Each member's daily and monthly budget fields as typed, empty for none; kept for an unticked member too. */
+  /** Each member's daily and monthly budget fields as typed, empty for none, and kept for an unticked member too. */
   budgets: Record<string, { daily: string; monthly: string }>;
   cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
@@ -1160,7 +1160,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   prefixTokens: String(pool.minSharedPrefixTokens),
   sessionPlacement: pool.sessionPlacement,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
-  // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
+  // Only the two settable states reach the form. A degraded or exhausted pool is still routing.
   status: pool.status === 'disabled' ? 'disabled' : 'active',
   strategy: pool.strategy,
   subagentPlacement: pool.subagentPlacement,
@@ -1185,13 +1185,13 @@ export function PoolDialog({
   idleReturns,
 }: {
   accounts: Account[];
-  /** The accounts read's error while it has never answered; the Members group names it in place of the table. */
+  /** The accounts read's error while it has never answered. The Members group names it in place of the table. */
   accountsFailed: string | null;
-  /** Whether the accounts read has answered or failed; before that no stored member is refused or marked as unlisted. */
+  /** Whether the accounts read has answered or failed. Before that no stored member is refused or marked unlisted. */
   accountsLoaded: boolean;
   /** The pool's idle-age counters from the keepalive overview, empty for a new pool or one the overview does not list. */
   idleReturns: { buckets: IdleReturnBucket[]; error: string | null; loading: boolean };
-  /** The group the address named; the reset opens on it, Identity otherwise. */
+  /** The group the address named. The reset opens on it, Identity otherwise. */
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];
   models: { label: string; value: string }[];
@@ -1263,7 +1263,7 @@ export function PoolDialog({
     setStale(null);
     setChosen(initialGroup ?? 'identity');
   }, [open, pool, initialGroup]);
-  // The server's refusal describes the form it was sent; every control writes through `setForm`, so the next edit
+  // The server's refusal describes the form it was sent. Every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
   const [refusedFor, setRefusedFor] = useState(form);
   if (refusedFor !== form) {
@@ -1475,7 +1475,7 @@ export function PoolDialog({
       <div>{text}</div>
     </div>
   );
-  // Keyed by group, so a group without a body fails to compile; `POOL_GROUPS` sets the rail order.
+  // Keyed by group, so a group without a body fails to compile. `POOL_GROUPS` sets the rail order.
   const bodies: Record<PoolGroup, ReactNode> = {
     identity: (
       <div className="cells">
