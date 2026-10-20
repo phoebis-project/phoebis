@@ -1858,6 +1858,54 @@ m.unmount();
   windows.unmount();
 }
 {
+  // jsdom lays nothing out, so the cells row reads a browser's width here and each cell its equal share of it. At 316
+  // px twelve cells of 26 px hold the 24-hour "06" and print it short, under the 40 px of the full label, while under
+  // the 12-hour setting they would cut "12 AM", so six cells of 53 px draw, wide enough for "12:00 AM". At 480 px
+  // twelve cells of 40 px hold "12 AM" but not "12:00 AM", so they print the short hour with the full time on their
+  // titles. The run is UTC, so the 5-hour zoom opens on Sep 15 at 00:00.
+  const measure = window.HTMLElement.prototype.getBoundingClientRect;
+  let row = 0;
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    const siblings = this.classList.contains('timeline__cell') ? [...(this.parentElement?.children ?? [])].filter((el) => el.classList.contains('timeline__cell')).length : 0;
+    const width = this.classList.contains('timeline__cells') ? row : siblings > 0 ? row / siblings : null;
+    return width === null ? measure.call(this) : { bottom: 30, height: 30, left: 0, right: width, top: 0, width, x: 0, y: 0 };
+  };
+  const drawn = async (width, format) => {
+    row = width;
+    // The provider applies the stored format as it mounts, so the page draws in it, and the next mount without the key
+    // draws in the 24-hour default again.
+    if (format === '12h') localStorage.setItem('phoebis.timeFormat', '12h');
+    const page = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
+    [...page.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === '5-hour')?.click();
+    await page.settle();
+    const cells = [...page.container.querySelectorAll('.timeline__cell')].map((cell) => [cell.querySelector('.timeline__cell-sub')?.textContent ?? '', cell.getAttribute('title')]);
+    page.unmount();
+    localStorage.removeItem('phoebis.timeFormat');
+    return cells;
+  };
+  const shortHours = await drawn(480, '12h');
+  const fewer = await drawn(316, '12h');
+  const twoDigits = await drawn(316, '24h');
+  window.HTMLElement.prototype.getBoundingClientRect = measure;
+  const dated = (i, per) => (i % per === 0 ? `Sep ${15 + i / per} ` : '');
+  results.push({
+    name: '/quota#quota-windows under the 12-hour setting a 5-hour cell too narrow for its full time prints the hour without its leading zero and its period, the full time on its title',
+    ok:
+      shortHours.length === 12 &&
+      shortHours.every(([sub, title], i) => sub === ['12 AM', '6 AM', '12 PM', '6 PM'][i % 4] && new RegExp(`^${dated(i, 4)}${['12', '06', '12', '06'][i % 4]}:00\\s${i % 4 < 2 ? 'AM' : 'PM'}$`).test(title ?? '')),
+    missing: [`${shortHours.length} cells`, JSON.stringify(shortHours)],
+  });
+  results.push({
+    name: '/quota#quota-windows at one width the 12-hour setting draws six 5-hour cells, each wide enough for its full time, where the 24-hour setting draws twelve with the two-digit hour',
+    ok:
+      fewer.length === 6 &&
+      fewer.every(([sub, title], i) => new RegExp(`^12:00\\s${i % 2 === 0 ? 'AM' : 'PM'}$`).test(sub) && title === null) &&
+      twoDigits.length === 12 &&
+      twoDigits.every(([sub, title], i) => sub === ['00', '06', '12', '18'][i % 4] && title === `${dated(i, 4)}${sub}:00`),
+    missing: [`12-hour ${fewer.length} cells`, JSON.stringify(fewer), `24-hour ${twoDigits.length} cells`, JSON.stringify(twoDigits)],
+  });
+}
+{
   // A period paged past a cancelled account's end draws none of its windows, the one that opened before the end and
   // spans the period's start among them. The story's end falls inside the current period, so the check moves it into
   // the week that straddles the next period's start.

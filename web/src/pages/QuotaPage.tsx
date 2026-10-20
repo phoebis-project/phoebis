@@ -9,7 +9,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
+import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
@@ -368,11 +368,11 @@ type LabelStep = 0 | 1 | 2;
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
-function spanFor(mode: Mode, offset: number, now: number) {
+function spanFor(mode: Mode, offset: number, now: number, sessionCells: number) {
   const dayStart = new Date(now).setHours(0, 0, 0, 0);
   if (mode === 'session') {
     const start = dayStart - DAY + offset * 3 * DAY;
-    return { startMs: start, endMs: start + 3 * DAY, cells: 12, cellMs: 6 * HOUR };
+    return { startMs: start, endMs: start + 3 * DAY, cells: sessionCells, cellMs: (3 * DAY) / sessionCells };
   }
   const start = dayStart - 3 * DAY + offset * 14 * DAY;
   return { startMs: start, endMs: start + 14 * DAY, cells: 14, cellMs: DAY };
@@ -407,7 +407,11 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
   const ink = useChartInk();
   const [mode, setMode] = useState<Mode>('weekly');
   const [offset, setOffset] = useState(0);
-  const span = spanFor(mode, offset, now);
+  // The cells row's width sets the 5-hour zoom's cell count and the short pair. A row no layout measured (jsdom) reads
+  // 0 and keeps twelve cells with their full pair.
+  const [rowWidth, setRowWidth] = useState(0);
+  const cycle = getTimeFormat();
+  const span = spanFor(mode, offset, now, rowWidth > 0 ? cellsFit(rowWidth, cycle) : 12);
   const width = span.endMs - span.startMs;
   const nowPct = now >= span.startMs && now < span.endMs ? ((now - span.startMs) / width) * 100 : null;
   const stamp = (at: number) => (mode === 'session' ? fmtShortTime(new Date(at).toISOString()) : `${fmtDayShort(at)} ${fmtShortTime(new Date(at).toISOString())}`);
@@ -423,16 +427,17 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
       at,
       head,
       shortHead: mode === 'weekly' ? head.charAt(0) : dayStart ? day : '',
-      shortSub: mode === 'weekly' ? day : time.replace(':00', ''),
+      shortSub: mode === 'weekly' ? day : fmtShortHour(new Date(at).toISOString()),
       sub: mode === 'weekly' ? fmtDayShort(at) : time,
       today: new Date(at).setHours(0, 0, 0, 0) === new Date(now).setHours(0, 0, 0, 0),
       weekend: [0, 6].includes(d.getDay()),
     };
   });
 
-  // Under 40 px, the width "Sep 13" takes in the axis's mono face, a day cell prints its short pair with the full words
-  // on its title. A cell no layout measured (jsdom) reads 0 and keeps the full pair.
-  const [narrow, setNarrow] = useState(false);
+  // A cell narrower than its full label prints its short pair with the full words on its title. A Weekly cell's labels
+  // carry no hour, so that zoom reads the 24-hour figure under either setting.
+  const cell = rowWidth / span.cells;
+  const narrow = cell > 0 && cell < CELL_MIN_PX[mode === 'session' ? cycle : '24h'].full;
   // Each bar label's step, keyed by its account and its start, since two lanes can open a window at the same instant.
   const [steps, setSteps] = useState<ReadonlyMap<string, LabelStep>>(() => new Map());
   const chartRef = useRef<HTMLDivElement>(null);
@@ -440,8 +445,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
   // Every label is shown whole for the reading and its hidden parts restored before paint, so a label that fell back on
   // a narrow chart draws whole again once its bar holds it. A label no layout measured (jsdom) reads as fitting.
   const measure = () => {
-    const cell = cellsRef.current?.firstElementChild?.getBoundingClientRect().width ?? 0;
-    setNarrow(cell > 0 && cell < 40);
+    setRowWidth(cellsRef.current?.getBoundingClientRect().width ?? 0);
     const chart = chartRef.current;
     if (chart === null) return;
     // A live bar's label carries its reset as a part of its own, which the share-alone step hides.

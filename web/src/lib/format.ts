@@ -185,6 +185,34 @@ export function fmtShortTime(isoTime: string): string {
   return new Date(isoTime).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' });
 }
 
+/** The hour alone in the viewer's cycle for a short timeline cell: "06" under 24h, "6 AM" or "12 PM" under 12h. */
+export function fmtShortHour(isoTime: string): string {
+  const hour = new Date(isoTime).getHours();
+  if (timeFormat === '24h') return String(hour).padStart(2, '0');
+  // Spelled here rather than by the formatter, which some ICU builds separate from the period with a narrow no-break
+  // space, so the text reads the same in every browser.
+  return `${hour % 12 === 0 ? 12 : hour % 12} ${hour < 12 ? 'AM' : 'PM'}`;
+}
+
+/**
+ * The narrowest timeline cell that holds a label, per hour cycle: `short` the short hour ("06", "12 AM") and `full` the
+ * full label ("Sep 13" under 24h, "12:00 AM" under 12h). A cell has no inline padding, so each figure is its label's
+ * width in the sub's mono face, measured in the mock pass's Chromium and rounded up: "06" 12.6 px, "12 AM" 31.5 px and
+ * "12:00 AM" 50.4 px, with the 24-hour `full` at 40 px, a margin over the 37.8 px of "Sep 13".
+ */
+export const CELL_MIN_PX: Record<TimeFormat, { full: number; short: number }> = {
+  '12h': { full: 51, short: 32 },
+  '24h': { full: 40, short: 13 },
+};
+
+/**
+ * How many cells the 5-hour timeline draws across `widthPx`: the largest divisor of twelve whose cell holds the cycle's
+ * short hour. A divisor keeps every cell a whole multiple of six hours, so each label falls on 00, 06, 12 or 18.
+ */
+export function cellsFit(widthPx: number, cycle: TimeFormat): number {
+  return [12, 6, 4, 3, 2].find((count) => widthPx / count >= CELL_MIN_PX[cycle].short) ?? 1;
+}
+
 /**
  * An instant within a day of `now` reads as its clock time alone (`15:42`, a retry at the next midnight `00:00`). One
  * further off carries its date (`Sep 18 08:42`).

@@ -234,3 +234,25 @@ test('a pace order reads the account furthest ahead of the window first and the 
   assert.deepEqual(order(weeks, '7d_fable'), ['nightly', 'studio', 'legacy'], "the model week reads the account's Fable window, an account without one last");
   assert.deepEqual(order(weeks, '7d'), ['studio', 'legacy', 'nightly'], 'the 7-day order reads the 7-day window beside it');
 });
+
+test("a short timeline cell's hour drops its leading zero and carries its period under the 12-hour setting, and reads two digits under the 24-hour one", () => {
+  // Local hours, since the cells open on the viewer's midnight and every formatter prints in the browser's zone.
+  const at = (hour) => new Date(2026, 8, 16, hour).toISOString();
+  const hours = [0, 6, 12, 18];
+  d.setTimeFormat('12h');
+  try {
+    assert.deepEqual(hours.map((hour) => d.fmtShortHour(at(hour))), ['12 AM', '6 AM', '12 PM', '6 PM']);
+  } finally {
+    d.setTimeFormat('24h');
+  }
+  assert.deepEqual(hours.map((hour) => d.fmtShortHour(at(hour))), ['00', '06', '12', '18']);
+});
+
+test('the 5-hour timeline draws fewer cells at one width under the 12-hour setting, so each cell holds its short hour', () => {
+  assert.equal(d.cellsFit(316, '24h'), 12, 'twelve cells of 26 px hold "06"');
+  assert.equal(d.cellsFit(316, '12h'), 6, 'twelve cells of 26 px cut "12 AM", six of 53 px hold it');
+  assert.equal(d.cellsFit(876, '24h'), 12);
+  assert.equal(d.cellsFit(876, '12h'), 12, 'twelve cells of 73 px hold "12 AM"');
+  assert.ok(d.CELL_MIN_PX['12h'].short > d.CELL_MIN_PX['24h'].short, `the short "12 AM" needs ${d.CELL_MIN_PX['12h'].short} px against ${d.CELL_MIN_PX['24h'].short} px for "06"`);
+  assert.ok(d.CELL_MIN_PX['12h'].full > d.CELL_MIN_PX['24h'].full, `the full "12:00 AM" needs ${d.CELL_MIN_PX['12h'].full} px against ${d.CELL_MIN_PX['24h'].full} px for "Sep 13"`);
+});

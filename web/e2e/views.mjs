@@ -3194,6 +3194,8 @@ const TIMELINE_PHONES = [
   { height: 900, width: 340 },
   { height: 900, width: 400 },
 ];
+/** The console's stored time format, which its provider applies as the page loads. */
+const TIME_FORMAT_KEY = 'phoebis.timeFormat';
 
 /**
  * The Quota windows timeline in two phone windows under the shell's 900 px breakpoint, in either zoom: the axis and
@@ -3204,8 +3206,11 @@ const TIMELINE_PHONES = [
  * Every lane stacks its head above its track, its chips wrap by their width (two rows at 400 px) inside the lane with
  * none cut, every day cell prints its short labels whole with the full words on its title (a 5-hour cell its day number
  * on the day's first cell alone), no bar's label is cut, the chart's content fits its box and the document its window,
- * and the legend stays inside the card. Then it puts the pass's window and the Weekly zoom back, so the view's shot
- * reads the desktop chart. Only the mock pass draws the section.
+ * and the legend stays inside the card. Then, on loads of its own under the 12-hour setting, the 5-hour zoom at both
+ * phone windows and the pass's own draws as many cells as the largest divisor of twelve whose cell holds "12 AM" in the
+ * sub's face, measured there with "06", "12:00 AM" and "Sep 13", and every cell prints its labels whole, a short hour
+ * with the full time on its title. The page loads again without the setting in the pass's window, so the view's shot
+ * reads the desktop chart in the Weekly zoom. Only the mock pass draws the section.
  */
 async function timelinePhone(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -3349,9 +3354,65 @@ async function timelinePhone(theme) {
     }
     await zoom('Weekly');
   }
-  await page.setViewportSize({ height: 800, width: 1280 });
-  await settle();
-  await settle();
+  try {
+    await page.evaluate((key) => localStorage.setItem(key, '12h'), TIME_FORMAT_KEY);
+    // A goto that changes the hash alone would keep the loaded app and its time format, so the page leaves first.
+    await page.goto('about:blank');
+    await loadAtOrigin('/quota#quota-windows', '.timeline');
+    await zoom('5-hour');
+    for (const size of [...TIMELINE_PHONES, { height: 800, width: 1280 }]) {
+      await page.setViewportSize(size);
+      await settle();
+      await settle();
+      const where = `at ${size.width} by ${size.height} in the 5-hour zoom under the 12-hour setting`;
+      const got = await page.evaluate(() => {
+        const tenth = (v) => Math.round(v * 10) / 10;
+        const row = document.querySelector('.timeline__cells');
+        if (!row) return null;
+        // A label's width as a cell's sub prints it, in today's bold where the face has one.
+        const face = (text) => {
+          const cell = document.createElement('div');
+          cell.className = 'timeline__cell is-today';
+          cell.style.cssText = 'left: -10000px; position: absolute; top: 0';
+          const sub = document.createElement('span');
+          sub.className = 'timeline__cell-sub';
+          sub.textContent = text;
+          cell.append(sub);
+          document.body.append(cell);
+          const width = sub.getBoundingClientRect().width;
+          cell.remove();
+          return tenth(width);
+        };
+        const fullTime = new Date(2026, 8, 16, 0).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit' });
+        return {
+          cells: [...row.querySelectorAll('.timeline__cell')].map((cell) => {
+            const [head, sub] = [cell.querySelector('.timeline__cell-head'), cell.querySelector('.timeline__cell-sub')];
+            return { cut: [head, sub].some((el) => el !== null && el.scrollWidth > el.clientWidth), head: head?.textContent ?? '', sub: sub?.textContent ?? '', title: cell.getAttribute('title') ?? '', width: tenth(cell.getBoundingClientRect().width) };
+          }),
+          faces: { '06': face('06'), '12 AM': face('12 AM'), '12:00 AM': face(fullTime), 'Sep 13': face('Sep 13') },
+          row: tenth(row.getBoundingClientRect().width),
+        };
+      });
+      measurements.push(`${theme} /quota#quota-windows timeline ${where} ${JSON.stringify(got === null ? null : { ...got, cells: got.cells.map((c) => [c.head, c.sub, c.title, c.width]), count: got.cells.length })}`);
+      if (got === null) {
+        say(`${where} no timeline to measure`);
+        continue;
+      }
+      const want = [12, 6, 4, 3, 2].find((count) => got.row / count >= got.faces['12 AM']) ?? 1;
+      if (got.cells.length !== want) say(`${where} the ${got.row}px row draws ${got.cells.length} cells, not the ${want} the largest divisor of twelve whose cell holds "12 AM" at ${got.faces['12 AM']}px`);
+      for (const cell of got.cells) {
+        const short = /^(\d{1,2}) ([AP]M)$/.exec(cell.sub);
+        if (short !== null && (short[1].startsWith('0') || !new RegExp(`(^| )${short[1].padStart(2, '0')}:00\\s${short[2]}$`).test(cell.title))) say(`${where} the short hour ${JSON.stringify(cell.sub)} stands under the title ${JSON.stringify(cell.title)}, which does not carry its full time`);
+        if (short === null && !/^\d{2}:\d{2}\s[AP]M$/.test(cell.sub)) say(`${where} a cell prints ${JSON.stringify(cell.sub)}, neither the short hour nor the full time`);
+        if (cell.cut) say(`${where} the cell ${JSON.stringify([cell.head, cell.sub])} cuts its labels`);
+      }
+    }
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), TIME_FORMAT_KEY);
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await page.goto('about:blank');
+    await loadAtOrigin('/quota#quota-windows', '.timeline');
+  }
   await atRest();
 }
 

@@ -211,7 +211,9 @@ pace and one short of it behind, the upcoming window dashed and the elapsed ones
 the share left and its reset, `59% left · Sep 19 20:10`, or with the share alone where the bar is too narrow for both,
 and a bar too narrow for its label keeps it on hover. On a narrow screen each lane stacks its account and its chips
 above its bars, the now marker crosses the bars alone with its pill under the day labels, and the day axis prints short
-labels. An account marked canceled with a saved end shows the end on its lane: no window opens after it, and the window
+labels. A 5-hour cell too narrow for its time prints the hour alone, `06` under the 24-hour time format and `6 AM` under
+the 12-hour one. Under the 12-hour format the 5-hour mode draws fewer, wider cells where twelve would be too narrow for
+`12 AM`. An account marked canceled with a saved end shows the end on its lane: no window opens after it, and the window
 that spans it stops there. The legend reads current window, upcoming, used, past window, now and plan ends, and the note
 "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the instant it resets.
 Lanes ending together compete for the same days."
