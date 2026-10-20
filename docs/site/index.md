@@ -42,8 +42,8 @@ a key. The console and this site call the account kind whose credential is an An
 kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the bootstrap
 file's `upstream` block, the `upstream_error` outcome and the `upstream_unreachable` code, the `upstream_message_id`,
 `upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric). The bootstrap file, the
-one `init` writes, names two database files: the registry at `storage.path` and the ledger at `stats.ledger_path`. This
-site calls the client Claude Code and the plugin that reports to the router the keepalive mod.
+one `init` writes, names two database files: the registry at `storage.path` and the ledger at `stats.ledger_path`. On
+this site the client is Claude Code, and the plugin that reports to the router is the keepalive mod.
 
 ## What the router does not do
 

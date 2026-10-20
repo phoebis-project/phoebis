@@ -130,7 +130,10 @@ is refused at start and by `check-config` with `the storage key does not match t
 from before the canary existed is proved against its sealed rows instead, the first 32 of each kind (credential bundles
 and API-key secrets), passing when any of them opens, and the next start seals its canary. `check-config` names such a
 registry with `registry at {path} has no key canary yet. A sealed row opens under the key, and the next start seals
-one`.
+one`. The 32-row bound leaves a dead end in two shapes: a registry without a canary whose readable credential or API-key
+rows all sit past the 32nd of their kind refuses the right key at the start, and so does one whose readable rows sit
+only among the keepalive recipe bodies, which the proof never reads, beside credential or API-key rows that do not open.
+`phoebis recover-key` tries every sealed row, so it accepts the key in both shapes and is the way out.
 
 `init` refuses a key file that exists with `{path} already exists, and init never replaces a key, since every stored
 credential is sealed under it`, and refuses a data directory that already holds a registry, so a lost key is never
@@ -337,7 +340,7 @@ On the host:
    optional here (an unset one prints `warning: environment variable {name} is unset or empty`), and `check-config`
    takes no lock and opens no socket, so it is safe to run while the old binary still serves traffic. It reads the key
    file and proves it against the registry's canary, so a key file that drifted is caught before the restart.
-3. Read the [changelog](changelog.md) for a bootstrap key that changed.
+3. Read the release's [changelog](changelog.md) entry for a bootstrap key it names as changed.
 4. Take a [backup](#backup): `phoebis backup --to <dir>`.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.
 6. Restart the service: `sudo systemctl restart phoebis`. The stop runs under one budget of 35 seconds, which cuts its

@@ -2,43 +2,43 @@
 
 A pool holds one or more accounts, each with a priority, an account belongs to one pool, and a key routes into exactly
 one pool. Every request a key presents is placed on one account of that pool by a selection that honors the session's
-pin, the pool's strategy and each account's quota. This page is for the operator tuning pools and keys and reading why
-a request landed where it did: every field of a pool and a key with its default and bounds, the client classes, the
-model rules, the selection itself, the cooldowns and the failover, and the answers a client gets when nothing can serve
-it. The views that edit these settings are on [The console](console.md), and the codes a refused client meets are on
+pin, the pool's strategy and each account's quota. This page is for the operator tuning pools and keys and reading why a
+request landed where it did: every field of a pool and a key with its default and bounds, the client classes, the model
+rules, the selection itself, the cooldowns and the failover, and the answers a client gets when nothing can serve it.
+The views that edit these settings are on [The console](console.md), and the codes a refused client meets are on
 [Refusal codes](client.md#refusal-codes).
 
 ## Catalogs
 
 An account's model list is read live from `GET /v1/models` on `api.anthropic.com` with the account's own credential, at
 startup, on the refresh interval and on demand. The listing is held until the scheduled refresh
-(`routing.catalog_refresh_seconds`) or an eviction ends it, and a failed fetch for 60 seconds from the moment its
-answer arrives. The Accounts view's catalog popup ([Accounts](console.md#accounts)), the rule editors' suggestions and
-the proxy's [models listing](client.md#the-models-listing) all read that cache, and `GET /admin/accounts/{id}/catalog`
+(`routing.catalog_refresh_seconds`) or an eviction ends it, and a failed fetch for 60 seconds from the moment its answer
+arrives. The Accounts view's catalog popup ([Accounts](console.md#accounts)), the rule editors' suggestions and the
+proxy's [models listing](client.md#the-models-listing) all read that cache, and `GET /admin/accounts/{id}/catalog`
 answers it, with `?refresh=1` to read again. Nothing about routing depends on it: every enabled member of a pool is a
-candidate for any model the rules allow, and an upstream that does not serve a model to an account says so with a
-`404` the router records as a rejection ([cooldowns](#cooldowns-and-failover)). An account whose fetch failed
-contributes nothing to a listing until the next fetch, and the popup shows the error.
+candidate for any model the rules allow, and an upstream that does not serve a model to an account says so with a `404`
+the router records as a rejection ([cooldowns](#cooldowns-and-failover)). An account whose fetch failed contributes
+nothing to a listing until the next fetch, and the popup shows the error.
 
-The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the undated
-one (`claude-sonnet-4-5`). An undated spelling is an alias for the newest dated snapshot the listing holds, so the
-router derives the dated id from the listings it caches: the newest `<spelling>-YYYYMMDD` entry across every enabled
-account, else the spelling itself (a dateless id such as `claude-sonnet-4-6` is its own snapshot). The listings are
-fetched at startup for every enabled account before the proxy listener accepts requests, waiting
-`routing.startup_fetch_seconds` (default `30`) at most, and an account still fetching then finishes in the background.
-A request's model is resolved by a lookup in that cache, never by a request of its own. The dated id is the canonical
-name the rules, the ledger, the pricing, the pins and the cooldowns use for that spelling from the session's first
-request, and the body toward the upstream keeps the client's spelling. A resolution is kept across restarts: the first
-request after a restart carries the dated id from the stored mapping even before the listings arrive, and only a fresh
-installation that reaches no listing at startup runs requests under the spelling, until the listing arrives. A listing
-that later lacks the dated entry never takes a resolution back.
+The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the undated one
+(`claude-sonnet-4-5`). An undated spelling is an alias for the newest dated snapshot the listing holds, so the router
+derives the dated id from the listings it caches: the newest `<spelling>-YYYYMMDD` entry across every enabled account,
+else the spelling itself (a dateless id such as `claude-sonnet-4-6` is its own snapshot). The listings are fetched at
+startup for every enabled account before the proxy listener accepts requests, waiting `routing.startup_fetch_seconds`
+(default `30`) at most, and an account still fetching then finishes in the background. A request's model is resolved by
+a lookup in that cache, never by a request of its own. The dated id is the canonical name the rules, the ledger, the
+pricing, the pins and the cooldowns use for that spelling from the session's first request, and the body toward the
+upstream keeps the client's spelling. A resolution is kept across restarts: the first request after a restart carries
+the dated id from the stored mapping even before the listings arrive, and only a fresh installation that reaches no
+listing at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the dated
+entry never takes a resolution back.
 
 The listings are refreshed every `routing.catalog_refresh_seconds` (default `21600`, six hours), once more within a
 minute of an upstream answering under a different snapshot than the router resolved (the alias moved), and on demand
 from the Accounts view's catalog popup and `GET /admin/accounts/{id}/catalog?refresh=1`. The popup lists the effort
-levels each model reports supporting, when the listing names them. A refresh that finds a newer snapshot for a
-spelling names the next requests by it. The pins and cooldowns already keyed on the previous dated id stay where they
-are, since a snapshot is a model of its own, and the stored mapping is updated in the same transaction.
+levels each model reports supporting, when the listing names them. A refresh that finds a newer snapshot for a spelling
+names the next requests by it. The pins and cooldowns already keyed on the previous dated id stay where they are, since
+a snapshot is a model of its own, and the stored mapping is updated in the same transaction.
 
 ## Pools
 
@@ -102,19 +102,19 @@ guardrail attached from the pool's side keeps its own revision.
 
 An unknown field in the body, or a value past its field's type, is answered `400 body must be a JSON object`, and a
 create under an id a pool already holds `409 a pool with this id exists`. A member's `priority` is a number, `0` by
-default, and lower sorts first. Naming an unknown account in `members` answers `404 account {id} not found`, naming
-one twice `409 members name account {id} twice`, and naming an account that is a member of another pool
+default, and lower sorts first. Naming an unknown account in `members` answers `404 account {id} not found`, naming one
+twice `409 members name account {id} twice`, and naming an account that is a member of another pool
 `409 account {id} is a member of pool {pool}`, the refusal that keeps an account in one pool. In each case nothing is
 written. A pool with keys cannot be deleted: `409 pool still has keys`.
 
 Every member carries a daily and a monthly spend budget, `budget_daily_usd` and `budget_monthly_usd`, each unset by
-default (no cap), above zero when set (`budget_daily_usd is above 0`, `budget_monthly_usd is above 0`) and measured
-over the UTC calendar day or month. An API-key member's whole spend counts. A subscription member's metered spend alone
-does, its overage traffic and its fast answers (a fast answer draws usage credits whatever the overage state), priced at
-API list rates from the rollups filed under `overage` and `fast`, so a budget on one bounds its extra spend in dollars
-from the router's side while its plan-funded traffic is never counted. A member whose spend reaches either budget is
-skipped for requests until that period ends, the month's end whenever the monthly budget is reached, and a keepalive
-probe pinned to it waits rather than moving the pin. A pool whose every member is at its budget answers `429` with the
+default (no cap), above zero when set (`budget_daily_usd is above 0`, `budget_monthly_usd is above 0`) and measured over
+the UTC calendar day or month. An API-key member's whole spend counts. A subscription member's metered spend alone does,
+its overage traffic and its fast answers (a fast answer draws usage credits whatever the overage state), priced at API
+list rates from the rollups filed under `overage` and `fast`, so a budget on one bounds its extra spend in dollars from
+the router's side while its plan-funded traffic is never counted. A member whose spend reaches either budget is skipped
+for requests until that period ends, the month's end whenever the monthly budget is reached, and a keepalive probe
+pinned to it waits rather than moving the pin. A pool whose every member is at its budget answers `429` with the
 `overage` claim, the same one an account in overage carries. The spend sums the member's hourly rollups, and the rows of
 an active budget period outlive `stats.rollup_retention_days` until that period ends. While the ledger is degraded (a
 batch of records failed to land and is being retried), a member with a budget reads `budget_unknown`: it is not placed
@@ -123,8 +123,8 @@ on, a session pinned to it moves to a sibling without a budget, and a pool whose
 state clears on the next landed batch.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then API
-keys) before priority. It is the operator's answer alone, on by default, and no strategy overrides it. The pool
-dialog's "Prioritize subscription accounts" toggle sets it.
+keys) before priority. It is the operator's answer alone, on by default, and no strategy overrides it. The pool dialog's
+"Prioritize subscription accounts" toggle sets it.
 
 Each strategy's rule, as the pool dialog's Strategy hint states it:
 
@@ -135,8 +135,8 @@ member scores the room left in its worst bucket. An unsampled account counts as 
 
 **`priority`**: Within the first priority tier that has an eligible account, any of them at random.
 
-**`round_robin`**: Within the first priority tier that has an eligible account, each in turn. A restart starts the
-round again.
+**`round_robin`**: Within the first priority tier that has an eligible account, each in turn. A restart starts the round
+again.
 
 The console's pool dialog offers, in its expert view, `shed_cap`, `burn_average_seconds` and `shed_dwell_seconds`
 together as three presets beside custom: balanced (0.5, 1800 s, 900 s, the default), fast (0.5, 900 s, 600 s) and
@@ -149,14 +149,14 @@ Under `when_cached` a request that carries no `cache_control` marker, and receiv
 creates no pin and lands by the strategy instead of pinning. A non-portable request keeps its pin either way.
 
 The pool's `cache_diagnostics`, the pool dialog's Cache diagnostics switch in the expert view, turns the cache
-diagnostics on for this pool's requests toward `api.anthropic.com`: the router adds the cache-diagnosis beta
-([The betas](relay.md#the-betas)) and a `diagnostics.previous_message_id` member to a body that carries a cache marker
-of the client's and a tools list, never to a token count, and never rewrites a member the client sent. The clients that
-send no member (an older Claude Code, the reduced shape) are the case the insertion exists for. The member names the
-answer the request continues: the newest answer at the deepest message boundary the request shares with an earlier
-answer of its own conversation, or of the conversation it forked from, on the serving account, else the newest answer
-of the session on that account and model. A fork names its parent's answer only until it has an answer of its own on
-that account and model. Off by default.
+diagnostics on for this pool's requests toward `api.anthropic.com`: the router adds the cache-diagnosis beta ([The
+betas](relay.md#the-betas)) and a `diagnostics.previous_message_id` member to a body that carries a cache marker of the
+client's and a tools list, never to a token count, and never rewrites a member the client sent. The clients that send no
+member (an older Claude Code, the reduced shape) are the case the insertion exists for. The member names the answer the
+request continues: the newest answer at the deepest message boundary the request shares with an earlier answer of its
+own conversation, or of the conversation it forked from, on the serving account, else the newest answer of the session
+on that account and model. A fork names its parent's answer only until it has an answer of its own on that account and
+model. Off by default.
 
 `auto_mode_server` is whether a Claude Code session's server-side auto mode checks travel to the upstream, on by
 default, and a key's own `auto_mode_server` overrides the pool's ([Keys](#keys)). What the router cuts under the off
@@ -166,25 +166,25 @@ setting and what the client does then are on [Auto mode behind the router](relay
 
 A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object carries
 `enabled` (default `false`), `inject_when_absent` (default `false`) and two rule sets, `plan` and `metered`: `plan`
-prices a subscription account on plan quota, `metered` an API-key account or a subscription account in overage. Each
-set carries `main` and `subagent` in `5m` or `1h` and `models`, a list of `{model, main, subagent}` overrides on
-canonical ids. `plan` defaults to one hour throughout and `metered` to five minutes throughout: a one-hour write costs
-a metered account 2x base input against 1.25x for five minutes, and a plan-funded account the same window share either
-way. With the policy on, every `cache_control` marker in the body is rewritten to the TTL the request's set and branch
-choose, the ones inside a tool result's own content included, the `extended-cache-ttl-2025-04-11` beta travels exactly
-when the body is one hour ([The betas](relay.md#the-betas)), and the `cch` hash is restamped when the client sent one.
-A restored placeholder `cch=00000` stays unsigned unless `proxy.sign_cch_placeholder` is on. A body whose marker the
-relay's cache TTL guard cannot reach (a key on the marker's path spelled with an escape) is refused `400` with the error
-code `body_shape`, so a TTL the policy could not enforce never travels unreported. On every other body the client's own
+prices a subscription account on plan quota, `metered` an API-key account or a subscription account in overage. Each set
+carries `main` and `subagent` in `5m` or `1h` and `models`, a list of `{model, main, subagent}` overrides on canonical
+ids. `plan` defaults to one hour throughout and `metered` to five minutes throughout: a one-hour write costs a metered
+account 2x base input against 1.25x for five minutes, and a plan-funded account the same window share either way. With
+the policy on, every `cache_control` marker in the body is rewritten to the TTL the request's set and branch choose, the
+ones inside a tool result's own content included, the `extended-cache-ttl-2025-04-11` beta travels exactly when the body
+is one hour ([The betas](relay.md#the-betas)), and the `cch` hash is restamped when the client sent one. A restored
+placeholder `cch=00000` stays unsigned unless `proxy.sign_cch_placeholder` is on. A body whose marker the relay's cache
+TTL guard cannot reach (a key on the marker's path spelled with an escape) is refused `400` with the error code
+`body_shape`, so a TTL the policy could not enforce never travels unreported. On every other body the client's own
 `CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A body that carries no marker is left as it came unless
 `inject_when_absent` is on and the request's class is not auxiliary (the class header absent, or naming `compaction`,
 `main` or `subagent`), in which case the top-level `cache_control` member is added with the TTL, before `stream`. A
 token count is never edited by the policy: its markers travel as the client sent them and no beta follows it. The
 metered set applies while the write costs money: the serving account is in overage, or is an API-key account. Every
-request, a keepalive probe's replay included, reads `main` or `subagent` by its agent, and one without an agent id
-reads as the main conversation. The TTL is priced per attempt, so a request that fails over reads its destination's
-state. Mixed TTLs across a session's requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's
-lifetime and price alone. The price of each choice is on [Pricing](statistics.md#pricing).
+request, a keepalive probe's replay included, reads `main` or `subagent` by its agent, and one without an agent id reads
+as the main conversation. The TTL is priced per attempt, so a request that fails over reads its destination's state.
+Mixed TTLs across a session's requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime
+and price alone. The price of each choice is on [Pricing](statistics.md#pricing).
 
 ## Keys
 
@@ -233,8 +233,8 @@ key cannot be re-enabled. Delete removes the key outright and detaches its reque
 A key's `body_capture_hours` keeps the bodies of every request under the key in the ledger for that many hours, the
 pool's value when the key inherits it, at most `stats.body_capture_max_hours` ([stats](installation.md#stats)). The
 console warns what the bodies hold where the operator switches capture on for a key, in the key dialog's Capture group
-([Keys](console.md#keys)): "Bodies contain the prompts, file contents, and tool results of every session using this
-key, and a session in auto mode sends the machine's permission rules with their literal text, its working and home
+([Keys](console.md#keys)): "Bodies contain the prompts, file contents, and tool results of every session using this key,
+and a session in auto mode sends the machine's permission rules with their literal text, its working and home
 directories and its git remotes with every request. Only the admin secret can read them." The capture itself and its
 reader are on [Body capture](statistics.md#body-capture).
 
@@ -269,40 +269,40 @@ matches it.
 
 ## Model rules
 
-A pool and a key each hold one ordered list of rules, and a request's model is judged against the key's processed
-list: the key's own entries first, then the pool's when the key's `model_rules_mode` is `extend` (the default), or the
-key's own entries alone under `replace`. Evaluation runs top to bottom and the first matching entry decides: a plain
-entry allows the model, a `not` entry denies it, and a model no entry matches is allowed. Both lists start empty, so
-nothing is excluded until an operator writes an entry. The list is first-match-wins and nothing else, so an allowlist
-is a list that names what it allows and ends in a catch-all denial:
+A pool and a key each hold one ordered list of rules, and a request's model is judged against the key's processed list:
+the key's own entries first, then the pool's when the key's `model_rules_mode` is `extend` (the default), or the key's
+own entries alone under `replace`. Evaluation runs top to bottom and the first matching entry decides: a plain entry
+allows the model, a `not` entry denies it, and a model no entry matches is allowed. Both lists start empty, so nothing
+is excluded until an operator writes an entry. The list is first-match-wins and nothing else, so an allowlist is a list
+that names what it allows and ends in a catch-all denial:
 
 - `[claude-opus-5, NOT *]` allows the one model and blocks the rest.
 - `[NOT *]` alone blocks everything.
 
 A rule's subject is the canonical id: the request's model with the `[1m]` suffix removed, ASCII case folded, and the
-dated id the catalog lists substituted. One entry therefore covers a model and its `[1m]` twin, and an entry for a
-model the API lists under a dated id is written as a glob: `NOT claude-sonnet-4-5*` covers `claude-sonnet-4-5`,
+dated id the catalog lists substituted. One entry therefore covers a model and its `[1m]` twin, and an entry for a model
+the API lists under a dated id is written as a glob: `NOT claude-sonnet-4-5*` covers `claude-sonnet-4-5`,
 `claude-sonnet-4-5-20250929` and the twin of either. An entry that spells an undated id exactly (`claude-sonnet-4-5`)
 never matches, because the router names that model by its dated snapshot, so an exact entry for an undated model is
 written as a glob (`claude-sonnet-4-5*`) too, and the rule editors and the Models view say so beside the list. A model
 the list denies answers `404 model_not_allowed` without reaching an upstream.
 
 The grammar is path-style: `*` matches any run of characters other than `/`, `**` any run including `/`, `?` one
-character other than `/`, a backslash quotes the character after it, and a pattern with no wildcard matches its own
-text alone. Anthropic's ids carry no slash, which is why `NOT *` reads as the catch-all above, and `NOT **` is the
-entry that also covers a name with a slash. The request log's client patterns on the Requests and Analytics views
+character other than `/`, a backslash quotes the character after it, and a pattern with no wildcard matches its own text
+alone. Anthropic's ids carry no slash, which is why `NOT *` reads as the catch-all above, and `NOT **` is the entry that
+also covers a name with a slash. The request log's client patterns on the Requests and Analytics views
 ([Requests](console.md#requests)) are another grammar, where `*` crosses everything. A pattern is refused at save time
 when it is empty, longer than 256 characters, ends in an unquoted backslash or holds three stars in a row, and the
 refusal names the entry and the reason: `model_rules[0]: pattern is empty`, `pattern is longer than 256 characters`,
 `pattern ends in an unquoted backslash`, `pattern holds three stars in a row`.
 
-The processed list of a chosen key, the accounts cooling for each model and the link to the routing log's model
-rejected and model permitted rows are on the Models view ([Models](console.md#models)).
+The processed list of a chosen key, the accounts cooling for each model and the link to the routing log's model rejected
+and model permitted rows are on the Models view ([Models](console.md#models)).
 
 ## Selection
 
-Selection keys every request by `(key id, root session, agent, canonical model)`. The router holds all routing state
-and answers every request over a channel, so two concurrent first requests of the same session cannot claim different
+Selection keys every request by `(key id, root session, agent, canonical model)`. The router holds all routing state and
+answers every request over a channel, so two concurrent first requests of the same session cannot claim different
 accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
@@ -310,9 +310,9 @@ holds wins first, for a main conversation and a subagent alike. Both rungs read 
 alone: the model, the speed, the thinking configuration and, on a model without the per-turn effort form, the effort.
 The upstream shares no cached prefix across those, so an entry of another lane is no warm prefix. Failing that, the
 deepest static boundary places a subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the
-request carries or receives a cache marker, the entry's estimate (the relay's, from the request's bytes) is above
-zero, the shared prefix is at least `min_shared_prefix_tokens` for a main conversation, and the account is not at its
-cap, without runway for the request (its rewrite and the burn of its sessions would take a window over `window_ceiling`
+request carries or receives a cache marker, the entry's estimate (the relay's, from the request's bytes) is above zero,
+the shared prefix is at least `min_shared_prefix_tokens` for a main conversation, and the account is not at its cap,
+without runway for the request (its rewrite and the burn of its sessions would take a window over `window_ceiling`
 before the window's horizon, or its worst live rate-limit bucket is full for an API-key account, see [The windows the
 router works from](#the-windows-the-router-works-from)), or winding down. The threshold binds a main conversation alone:
 a subagent cohort lands together on any shared prefix above zero, and an entry with a zero estimate places nothing for
@@ -332,15 +332,15 @@ lifetime, and a request with markers at both TTLs keeps each marker's.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, `ready` or
 `funding_required` past its retry instant, off cooldown, and not already tried by this request. A request sent fast is
-judged for the fast lane instead: it passes an account cooldown whose window is a plan window, and an account whose
-fast lane is cooling or whose usage credits the poll reads as unavailable cannot serve it. An API-key account serves it
+judged for the fast lane instead: it passes an account cooldown whose window is a plan window, and an account whose fast
+lane is cooling or whose usage credits the poll reads as unavailable cannot serve it. An API-key account serves it
 whenever it can serve at all.
 
-A pin is held per agent of a conversation, where a conversation is the session id or the conversation's own messages.
-It lasts `affinity_ttl_seconds` from its last use: while it is live and its account is still eligible, the request
-returns to that account, and stickiness wins over priority even across a later priority change. A pool with affinity
-off (`affinity_ttl_seconds` at `0`) keeps no pins at all. A keepalive probe holds while `affinity_ttl_seconds` is
-shorter than its recipe's due time, the cache TTL less the lead ([The five states](keepalive.md#the-five-states)).
+A pin is held per agent of a conversation, where a conversation is the session id or the conversation's own messages. It
+lasts `affinity_ttl_seconds` from its last use: while it is live and its account is still eligible, the request returns
+to that account, and stickiness wins over priority even across a later priority change. A pool with affinity off
+(`affinity_ttl_seconds` at `0`) keeps no pins at all. A keepalive probe holds while `affinity_ttl_seconds` is shorter
+than its recipe's due time, the cache TTL less the lead ([The five states](keepalive.md#the-five-states)).
 
 Narrowing then trims what is left. For a model with a week of its own (a canonical id containing `fable`), an account
 whose week or either shared window reads at or above 1 drops outright, unless the pool's overage policy is `allow` and
@@ -374,8 +374,8 @@ reset reads as the router's own use since it, while an API-key bucket past its r
 with no share of the router's own. Ties are random. `priority` and `round_robin` read no sample at all.
 
 
-A non-portable request, one whose body references a `file_id`, a `container` or a server-tool result, is answered by
-its live pin's account or not at all. With affinity off or no live pin, it runs the normal selection instead, and the
+A non-portable request, one whose body references a `file_id`, a `container` or a server-tool result, is answered by its
+live pin's account or not at all. With affinity off or no live pin, it runs the normal selection instead, and the
 account-scoped reference it carries may then not resolve.
 
 Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's
@@ -452,9 +452,9 @@ the wait ends at once when the first request ends without a head.
 
 ### Moves
 
-A live pin on a portable request moves only when its session sends a request, and only by one of five rules, checked
-in this order: spent, overage, return to plan, drain and shed. The first rule that finds a destination moves the pin
-and names the move after itself. A pin on an account past its subscription end reaches none of them: the
+A live pin on a portable request moves only when its session sends a request, and only by one of five rules, checked in
+this order: spent, overage, return to plan, drain and shed. The first rule that finds a destination moves the pin and
+names the move after itself. A pin on an account past its subscription end reaches none of them: the
 `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin. A request sent fast takes
 neither the spent nor the overage rule, since it draws usage credits and no plan window.
 
@@ -739,8 +739,8 @@ bracket a slowed span, `slow_down_started` and `slow_down_ended`, are on the con
 The relay classifies every upstream response head before a byte reaches the client, partitioned by account kind first,
 `oauth`, `api_key`, or `shared` for both. Within a partition the first matching row wins. Where a row names the
 fallback, it is `routing.cooldown_fallback_seconds`, default `60`, 1 to 3600, a key of the bootstrap file's
-[routing](installation.md#routing) table. Every deadline a row sets carries a second of margin, so a request sent at
-the reset is not refused by a clock a hair behind.
+[routing](installation.md#routing) table. Every deadline a row sets carries a second of margin, so a request sent at the
+reset is not refused by a clock a hair behind.
 
 **oauth**
 
@@ -759,8 +759,8 @@ evidence that the window is fine, and the rejection cools the whole account.
 
 The two model-scoped rows apply to a model whose family has a week of its own in the family table (Fable, whose week is
 `seven_day_fable`). The row cools that model on the account and recovers once a reading of that week is under 1.0. The
-claim is the `representative-claim` header: one naming the model's own week, or `seven_day_overage_included`, or none
-at all leaves the decision to these rows. A claim naming another family's week, or a week no row names (such as
+claim is the `representative-claim` header: one naming the model's own week, or `seven_day_overage_included`, or none at
+all leaves the decision to these rows. A claim naming another family's week, or a week no row names (such as
 `seven_day_opus`), cools the whole account whatever the `7d_oi` status reads, and so does any of these rejections for a
 model without a week of its own: under the shared row when the top-level `status` reads rejected, and under the row for
 headers that reject nothing otherwise.
@@ -800,10 +800,10 @@ lane. The two refusals keep a row each, so each lifts on its own evidence. A `fa
 starts for `org_spend_cap_reached`, else until the overage reset the head names, else for one hour, and the poll's next
 enabled reading lifts it earlier, leaving a `fast` row beside it standing. A `fast` row holds until the later fast
 window reset the head names, else until `Retry-After`, else for ten minutes. Both rows hold fast requests alone, and
-standard requests on the account are unaffected. A fast refusal moves the session's pin unless the pin has changed
-lanes after the refused request was selected: a session that has moved on to another lane is not asking for the fast
-lane any more. The lane compared is the one the selection left on the pin, so a fast request that left a standard
-pin's lane alone (an auxiliary class, or a request foreign to the conversation) moves that pin too.
+standard requests on the account are unaffected. A fast refusal moves the session's pin unless the pin has changed lanes
+after the refused request was selected: a session that has moved on to another lane is not asking for the fast lane any
+more. The lane compared is the one the selection left on the pin, so a fast request that left a standard pin's lane
+alone (an auxiliary class, or a request foreign to the conversation) moves that pin too.
 `DELETE /admin/accounts/{id}/cooldowns/fast` and `DELETE /admin/accounts/{id}/cooldowns/fast_credits` clear them.
 
 **shared** (either kind)
@@ -823,9 +823,9 @@ pin's lane alone (an auxiliary class, or a request foreign to the conversation) 
 | Idle bound after the head, before any byte reached the client | None | No, 502 `upstream_stalled` |
 | 200 head, body ends before its end | None | No, the request reads `incomplete` |
 
-The router classifies a rejection whose body runs past 64 KiB from its first 64 KiB, a coded body from the text those
-64 KiB decode to: a 429 cools and fails over, a 401 or a 403 `authentication_error` takes the credential path, and a
-body the verdict forwards reaches the client whole, the prefix first.
+The router classifies a rejection whose body runs past 64 KiB from its first 64 KiB, a coded body from the text those 64
+KiB decode to: a 429 cools and fails over, a 401 or a 403 `authentication_error` takes the credential path, and a body
+the verdict forwards reaches the client whole, the prefix first.
 
 The router answers a failure after the head with its own `502` while nothing of the upstream's answer has reached the
 client: `upstream_stalled` when a rejection body went silent past the idle bound, `upstream_undecodable` when the answer
@@ -864,29 +864,29 @@ router works from (see above), and the poll is the other.
 
 A 404 whose message names the model the body carried is the upstream's answer that it does not serve that model: the
 account is skipped for that model for `routing.model_rejection_seconds` (default `3600`, an hour), the request goes to
-the next member, and the ledger records `model_rejected` for the refusing account and `model_permitted` for the one
-that served it. A 404 naming no model, and every 400 and 422, reach the client as they came.
+the next member, and the ledger records `model_rejected` for the refusing account and `model_permitted` for the one that
+served it. A 404 naming no model, and every 400 and 422, reach the client as they came.
 
 Each client request visits every eligible account of the pool at most once. A same-account retry after a transport
 failure before the request was written, the one refresh replay, the one strip retry and the one retry in place keep
 their own bounds, as the paragraph after the steps says. Each attempt goes through these steps:
 
 1. Ask the router. `timed` answers `429` with `Retry-After: ceil(deadline - now)` and the three unified rate-limit
-   headers the client's automatic continue reads. `untimed` answers `503` with error code `accounts_unavailable` and
-   no `Retry-After`, since only an operator can clear it, unless the request reached it through holds alone with
-   nothing dialed: then every account is at its cap, and the answer is `429` with error code `accounts_at_cap`. Each
-   carries an Anthropic-shaped error body. `held` waits for a slot and asks again ([in-flight caps](#in-flight-caps)).
+   headers the client's automatic continue reads. `untimed` answers `503` with error code `accounts_unavailable` and no
+   `Retry-After`, since only an operator can clear it, unless the request reached it through holds alone with nothing
+   dialed: then every account is at its cap, and the answer is `429` with error code `accounts_at_cap`. Each carries an
+   Anthropic-shaped error body. `held` waits for a slot and asks again ([in-flight caps](#in-flight-caps)).
 2. Acquire the account's credential, apply its body edits, and send on its dispatch path.
-3. Classify the head. A short throttle on a portable request is waited out on the same account
-   ([retry in place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates
-   the matching pin, and returns to step 1. On a non-portable request it records the cooldown and commits the failed
-   response instead. An authentication failure is the exception: it is never committed (see the paragraph after these
-   steps), and the failover leaves the pin of an account it marks for the next selection to end. Any other row commits
-   and relays the response.
+3. Classify the head. A short throttle on a portable request is waited out on the same account ([retry in
+   place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates the matching
+   pin, and returns to step 1. On a non-portable request it records the cooldown and commits the failed response
+   instead. An authentication failure is the exception: it is never committed (see the paragraph after these steps), and
+   the failover leaves the pin of an account it marks for the next selection to end. Any other row commits and relays
+   the response.
 4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
    request. A pin this request created and whose answer is `400`, `403` or `404` is released instead, since it never
-   served, unless another turn of the session renewed it meanwhile, and so is one a non-portable request created
-   before an authentication failure that marked nothing. A `429` keeps the cooldown path of step 3.
+   served, unless another turn of the session renewed it meanwhile, and so is one a non-portable request created before
+   an authentication failure that marked nothing. A `429` keeps the cooldown path of step 3.
 
 An upstream `401`, or a `403` whose body is an `authentication_error`, never reaches the client. On an OAuth account the
 router refreshes the token and replays the request on a new token. A refresh the token endpoint refused without rotating
@@ -917,26 +917,26 @@ A stream commits at its `message_start` event or its first `error` event, whiche
 buffered, up to 64 KiB, and relayed after commit in order, and a stream that exceeds the buffer or sends no committing
 event within 30 seconds commits as received. The failover visits every eligible account once per request, since every
 failover row (a credit-balance 400, a 401, a 403, a model 404, a 429) refuses before any inference and a visit costs no
-tokens. The same-account retries keep their bounds: one transport retry after a failure that happened before the
-request was fully written, one refresh replay, one strip retry when an upstream answers 400 naming a beta or field the
-router itself added (the router strips it and retries once on the same account, correcting its own edit), and one retry
-in place for a short throttle. The connect and the TLS handshake toward the upstream have their own bound of 10
-seconds. A handshake that stalls is retried once on a fresh connection and then answered `502 upstream_unreachable`, so
-a stalled upstream costs at most 20 seconds before the client hears.
+tokens. The same-account retries keep their bounds: one transport retry after a failure that happened before the request
+was fully written, one refresh replay, one strip retry when an upstream answers 400 naming a beta or field the router
+itself added (the router strips it and retries once on the same account, correcting its own edit), and one retry in
+place for a short throttle. The connect and the TLS handshake toward the upstream have their own bound of 10 seconds. A
+handshake that stalls is retried once on a fresh connection and then answered `502 upstream_unreachable`, so a stalled
+upstream costs at most 20 seconds before the client hears.
 
 The Accounts view shows what an account is cooling under in a cooling-down block, one line per scope, the whole account
-or one model, with the reason, the deadline and a clear button, and the Models view lists the same rows grouped by
-model ([Accounts](console.md#accounts), [Models](console.md#models)).
+or one model, with the reason, the deadline and a clear button, and the Models view lists the same rows grouped by model
+([Accounts](console.md#accounts), [Models](console.md#models)).
 
 ### Retry in place
 
 A throttle on a portable request whose `Retry-After` is at or under the pool's `retry_in_place_seconds` (0 to 300,
 default 60) is waited out on the same account and retried there once, with the same credential. The relay sleeps the
 accepted delay before any byte of the answer's head reaches the client, so a bound above the client's first-byte window
-makes the client end the request and send it again. [When the client waits](client.md#when-the-client-waits) states
-the relation and the operator's choice. The cooldown row is still recorded, so a sibling request selecting meanwhile
-skips the account, and the session's pin stays where it is. The retry is a wire submission like any other and runs once
-per leg. A second throttle on the retry, a `Retry-After` past the bound or past the request's deadline, a throttle that
+makes the client end the request and send it again. [When the client waits](client.md#when-the-client-waits) states the
+relation and the operator's choice. The cooldown row is still recorded, so a sibling request selecting meanwhile skips
+the account, and the session's pin stays where it is. The retry is a wire submission like any other and runs once per
+leg. A second throttle on the retry, a `Retry-After` past the bound or past the request's deadline, a throttle that
 names no `Retry-After`, and a request bound to its account all take the failover path above.
 
 ### In-flight caps
@@ -964,14 +964,14 @@ where its cohort is.
 
 ### When nothing can serve
 
-Each answer below has one cause, and this section states the cause. The answer's status, its error type and its
-message are the refusal table's ([Refusal codes](client.md#refusal-codes)).
+Each answer below has one cause, and this section states the cause. The answer's status, its error type and its message
+are the refusal table's ([Refusal codes](client.md#refusal-codes)).
 
 With every account in the pool rate limited, the answer is `429` `accounts_exhausted` with `retry-after`,
 `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` and
 `anthropic-ratelimit-unified-representative-claim` naming the window. A cooldown that came from a bare `Retry-After` is
-rendered as `five_hour`, because the client treats an unknown claim as no claim. With every account at its in-flight
-cap past the hold, the answer is `429` `accounts_at_cap` with a `Retry-After` of at most 19 seconds ([in-flight
+rendered as `five_hour`, because the client treats an unknown claim as no claim. With every account at its in-flight cap
+past the hold, the answer is `429` `accounts_at_cap` with a `Retry-After` of at most 19 seconds ([in-flight
 caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a pool whose
 accounts are all paused, the answer is `503` `accounts_unavailable` with no `retry-after`. A request whose key moved to
 another pool between its admission and its selection gets the same `503` with `Retry-After: 1` rather than being
@@ -980,29 +980,29 @@ dispatched under the old pool's policy: the router logs a warning naming the key
 request admitted under a key that was deleted, or deleted and created again under its id, before it was routed is
 refused with the `401` admission answers a key the registry does not hold ([What the proxy
 accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget answers `429` with
-the `overage` claim, the same one an account in overage carries ([Pools](#pools)), and a probe pinned to a member at
-its budget is answered with the end of the latest period whose budget is reached as its reset, whatever its siblings
-hold. A probe whose pinned account is disabled, past its subscription's end, or a member with a budget while the ledger
-is degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one that already tried its
+the `overage` claim, the same one an account in overage carries ([Pools](#pools)), and a probe pinned to a member at its
+budget is answered with the end of the latest period whose budget is reached as its reset, whatever its siblings hold. A
+probe whose pinned account is disabled, past its subscription's end, or a member with a budget while the ledger is
+degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one that already tried its
 pinned account while a sibling could take it, where moving would otherwise land the pin on that sibling. Such a probe
 never moves the pin, and its request row reads rejected rather than exhausted, so the `pool_exhausted` condition of the
 `phoebis_attention` gauge does not count it. A probe that already tried its pinned account with no sibling to take it
 gets the pool's own answer above.
 
 Every answer the router commits loses the upstream's rate-limit headers, the `anthropic-ratelimit-*` families and the
-`anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees
-one quota, the router's. A rate limit keeps them: the upstream's own when the relay forwards a 429 or a stream whose
-first event is a `rate_limit_error`, and the three unified headers above when the router composes the exhaustion
-answer, so the client's continue arms on the reset. The upstream's `anthropic-organization-id` and `set-cookie` are
-never forwarded, and `request-id` passes either way.
+`anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees one
+quota, the router's. A rate limit keeps them: the upstream's own when the relay forwards a 429 or a stream whose first
+event is a `rate_limit_error`, and the three unified headers above when the router composes the exhaustion answer, so
+the client's continue arms on the reset. The upstream's `anthropic-organization-id` and `set-cookie` are never
+forwarded, and `request-id` passes either way.
 
 A request sent fast that no account's fast lane can take is answered locally, before any dial, with a `429`. While any
 account holds only a fast rate limit, the code is `fast_lane_exhausted` and `retry-after` the earliest fast rate-limit
-reset, in whole seconds rounded up and at least one. When every account the pool could use is refused usage credits,
-the code is `fast_credits_unavailable` and `anthropic-ratelimit-unified-overage-disabled-reason` carries the session's
-pinned account's reason, else the first account's. The router never waits for a fast reset in place: a fast `429`
-timed by `Retry-After` alone retries in place under the pool's bound as any throttle does ([retry in
-place](#retry-in-place)), and any other moves the request to a sibling or ends in one of these answers.
+reset, in whole seconds rounded up and at least one. When every account the pool could use is refused usage credits, the
+code is `fast_credits_unavailable` and `anthropic-ratelimit-unified-overage-disabled-reason` carries the session's
+pinned account's reason, else the first account's. The router never waits for a fast reset in place: a fast `429` timed
+by `Retry-After` alone retries in place under the pool's bound as any throttle does ([retry in place](#retry-in-place)),
+and any other moves the request to a sibling or ends in one of these answers.
 
 A model every account in the pool has rejected within the rejection window answers `404` `model_rejected`, and the
 [cooldowns table](#cooldowns-and-failover) says how a rejection is recorded. A pool with no member answers `503`
@@ -1012,8 +1012,8 @@ While the ledger's writer channel is at least half full, a request, a keepalive 
 account is chosen with `503` `ledger_behind` and `Retry-After: 5`, so the router never accepts a request the ledger
 cannot record. The writer's standing is on [The ledger writer](statistics.md#the-ledger-writer).
 
-Claude Code resumes a subscriber session on its own, after a usage-limit reset, only when the `429` carried all three
-of `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` (Unix seconds) and
+Claude Code resumes a subscriber session on its own, after a usage-limit reset, only when the `429` carried all three of
+`anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` (Unix seconds) and
 `anthropic-ratelimit-unified-representative-claim` naming the window (`five_hour`, `overage`, `seven_day`,
 `seven_day_opus`, `seven_day_overage_included` or `seven_day_sonnet`), with the reset at most 24 hours away.
 `Retry-After` alone arms nothing, and the client also skips arming when the claim names a model-scoped window for a
@@ -1040,13 +1040,13 @@ cools the account. For a model with a week of its own, whose narrowing reads tho
 plan-funded siblings and drops only while the poll reads its extra usage as blocked (disabled, a reason named, or the
 spend cap reached). A credits state the poll has not read yet drops nothing. A credits reading with room, taken after
 the `429`, lifts the account's spent-window cooldowns (the account-wide rate limits that name a plan window and the
-model-scoped week rows) as it lifts the fast lane's credits refusal. Otherwise the rows end on their own at the
-window's reset, at `Retry-After` or after the fallback. Under `prefer_plan` and `never`, a model with a week of its own
-passes the account over until its spent window resets.
+model-scoped week rows) as it lifts the fast lane's credits refusal. Otherwise the rows end on their own at the window's
+reset, at `Retry-After` or after the fallback. Under `prefer_plan` and `never`, a model with a week of its own passes
+the account over until its spent window resets.
 
 An account is in overage when its latest quota evidence says so, and only newer evidence, by the upstream's own clock,
-takes its place. A response head sets the flag when `anthropic-ratelimit-unified-overage-in-use` is true, and clears
-it when the header is present and false, or absent while the shared window headers are present. The poll's snapshot sets
+takes its place. A response head sets the flag when `anthropic-ratelimit-unified-overage-in-use` is true, and clears it
+when the header is present and false, or absent while the shared window headers are present. The poll's snapshot sets
 the flag when `extra_usage.is_enabled` is true and the 5-hour or 7-day utilization has reached 1.0, and clears it when
 both shared windows are below 1.0. An account with extra usage enabled keeps serving with the flag set once its plan
 quota empties, so `prefer_plan` and `never` act through this flag rather than through a cooldown. Once the
@@ -1055,14 +1055,14 @@ organization's spend cap is reached it answers `429` with the overage window rej
 week) the oauth table's model-scoped rows, which stand ahead of the shared row, take that rejection and cool that model
 alone, and for any other model it cools the account.
 
-Whether the flag still counts is one rule every reader applies alike, the selector and the keepalive scheduler
-included: an account counts as in overage while the reset its evidence names is ahead of the present instant. Evidence
-that names none stands for the cooldown fallback (`routing.cooldown_fallback_seconds`) past its observation, and is
-then re-read against the same rule.
+Whether the flag still counts is one rule every reader applies alike, the selector and the keepalive scheduler included:
+an account counts as in overage while the reset its evidence names is ahead of the present instant. Evidence that names
+none stands for the cooldown fallback (`routing.cooldown_fallback_seconds`) past its observation, and is then re-read
+against the same rule.
 
 The poll's `extra_usage` state also decides fast eligibility: an account whose credits read disabled, name a reason or
-stand at their limit serves no fast request until a later reading shows room. The newest reading per account is kept
-in the registry beside its windows and loaded at startup, so a restart judges fast requests on the credits the last poll
+stand at their limit serves no fast request until a later reading shows room. The newest reading per account is kept in
+the registry beside its windows and loaded at startup, so a restart judges fast requests on the credits the last poll
 read. It goes with the windows when the account is deleted, and an account created again under the same id starts with
 none. A request sent fast draws usage credits and no plan window, so neither `prefer_plan` nor `never` holds it off an
 account in overage.

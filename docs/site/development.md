@@ -255,11 +255,10 @@ profile against a new build:
    `ANTHROPIC_API_KEY` or a real `CLAUDE_CODE_OAUTH_TOKEN` in the environment
    (`capture-baseline.sh: refusing to run with a real ANTHROPIC_API_KEY set`) and where `unshare -rn` does not work,
    and otherwise re-executes itself in the loopback-only namespace, drives the three credential modes, the first-party
-   override a second time, and a gzip-forced run past the recording receiver (the forced run records a plain body,
-   since the 2.1.286 client gzips toward `api.anthropic.com` alone), records the ClientHello through the CONNECT
-   receiver, and ends with `python3 scripts/build-fixtures.py --check <output-dir>`, exiting with that command's status.
-   The system prompt the client sends embeds the current date, so a re-capture taken on another day differs there, and
-   `--check` prints a bounded diff per body so that shows as a date difference rather than a shape change.
+   override a second time, and a gzip-forced run past the recording receiver, records the ClientHello through the
+   CONNECT receiver, and ends with `python3 scripts/build-fixtures.py --check <output-dir>`, exiting with that command's
+   status. The system prompt the client sends embeds the current date, so a re-capture taken on another day differs
+   there, and `--check` prints a bounded diff per body so that shows as a date difference rather than a shape change.
 2. Read the diff. A header added or renamed, a beta list that changed, or a new body field is the signal that the
    client has moved past the pinned profile.
 3. The control plane (the token exchange and the profile, usage and roles calls) is not captured by the script: it

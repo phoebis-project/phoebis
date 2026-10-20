@@ -50,17 +50,17 @@ then.
 
 Both of the console's starts, for a new account and for an existing one, are `claude_ai` logins, which authorize at
 `claude.com`. A `console` login, which authorizes at `platform.claude.com`, is available through the API. A pairing
-session expires ten minutes after it starts, the window Claude Code gives a pasted callback before treating it as
-stale, and the dialog counts the time down. A new start from the same console session cancels the pairing left
-standing, for an existing account and for a new one alike, and the old link stops working. A pairing another session
-started, or one being confirmed, answers `409 a pairing session is already in progress for this account` and has to
-finish or expire first.
+session expires ten minutes after it starts, the window Claude Code gives a pasted callback before treating it as stale,
+and the dialog counts the time down. A new start from the same console session cancels the pairing left standing, for an
+existing account and for a new one alike, and the old link stops working. A start while another session's pairing
+stands, or while one is being confirmed, answers `409 a pairing session is already in progress for this account`, and
+the standing pairing has to finish or expire first.
 
 ## With curl
 
 The `curl` lines below are the same flow by hand, with the admin secret as a bearer. `Authorization: Bearer` with the
 secret is admitted without a cookie and without the `Origin` check, and every bearer call shares one session, so a
-pairing one bearer call starts the next confirms. A cookie session's mutation that carries an `Origin` must name the
+pairing one bearer call starts the next confirms. A mutation without a bearer that carries an `Origin` must name the
 request's own `Host` with it, `https://` where the admin listener terminates TLS or a front says the browser's leg does
 ([admin](installation.md#admin)). A request with a body carries `Content-Type: application/json`, or the router answers
 `415 content type must be application/json`. The lines name the loopback admin listener of the Quick start,
@@ -88,7 +88,7 @@ curl -sS -X POST http://127.0.0.1:8081/admin/oauth/sessions \
 
 Open the `authorization_url` in a browser and sign in. The browser lands on the loopback redirect,
 `http://localhost:{port}/callback?code=...&state=...`, which fails to load. Paste it back as `url`, or send the code
-alone as `code` with the session's state as `state`:
+alone as `code` with the `state` parameter of the `authorization_url` as `state`:
 
 ```sh
 curl -sS -X POST http://127.0.0.1:8081/admin/oauth/sessions/$ID/callback \

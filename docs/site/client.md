@@ -146,11 +146,12 @@ binding a session to its process needs no wrapper script. Installing and configu
 
 `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is an optional line the block does not carry, worth setting for Fable 5.1 sessions in
 a pool of API-key accounts with cache warming on: at a 0.025x read price, a five-minute entry kept warm by probes stays
-cheaper on a metered account than a one-hour entry ([Cache TTL](routing.md#cache-ttl)). Leave it unset in a pool of
-plan-funded accounts, where a write costs the same window share at either TTL and a five-minute entry takes 15 probes an
-hour against 1.11 for a one-hour entry ([The four fields](keepalive.md#the-four-fields)), and unset without warming.
-Through a pool with a cache TTL policy the variable has no effect, since the pool decides
-([Cache TTL](routing.md#cache-ttl), [Keepalive](keepalive.md)).
+cheaper on a metered account than a one-hour entry for idle warming of up to about 2.2 hours, past which the one-hour
+entry costs less ([Cache TTL](routing.md#cache-ttl)). Leave it unset in a pool of plan-funded accounts, where a write
+costs the same window share at either TTL and a five-minute entry takes 15 probes an hour against 1.11 for a one-hour
+entry ([The four fields](keepalive.md#the-four-fields)), and unset without warming. Through a pool with a cache TTL
+policy the variable has no effect, since the pool decides ([Cache TTL](routing.md#cache-ttl),
+[Keepalive](keepalive.md)).
 
 ## The required set
 
@@ -344,20 +345,18 @@ wrong or missing key is refused exactly as `/v1/messages` refuses it, in the Ant
 
 ## The models listing
 
-`GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every
-enabled account of the key's pool in state `ready` is asked for its catalog through the router's cache
-([Catalogs](routing.md#catalogs)),
-the same cache the router derives a model's dated id from, so a request naming an undated id is routed, priced and
-recorded under the newest dated snapshot the listing holds for it. The pool's and the key's
-[model rules](routing.md#model-rules) are applied to each id, one row is kept per id (the first account in priority
-order that lists it), and the rows are sorted by id. The shape is the API's own: `data[]` of `id`, `type`,
+`GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every enabled
+account of the key's pool in state `ready` is asked for its catalog through the router's cache
+([Catalogs](routing.md#catalogs)), the same cache the router derives a model's dated id from, so a request naming an
+undated id is routed, priced and recorded under the newest dated snapshot the listing holds for it. The pool's and the
+key's [model rules](routing.md#model-rules) are applied to each id, one row is kept per id (the first account in
+priority order that lists it), and the rows are sorted by id. The shape is the API's own: `data[]` of `id`, `type`,
 `display_name`, `created_at`, `max_input_tokens` and `max_tokens` as the upstream reports them, with `first_id`,
-`last_id` and `has_more`. `limit` (1 to 1000, default 20), `after_id` and `before_id` page it, and a `limit` outside
-its range is refused `400` `invalid_limit`.
-An account whose fetch failed
-contributes nothing until the next fetch, and a model that is cooling down on an account still lists.
-`GET /v1/models/{id}` answers the one row, or `404` `model_not_found` with the message `model: {id}`. An id with a
-slash may be sent as is or percent-encoded.
+`last_id` and `has_more`. `limit` (1 to 1000, default 20), `after_id` and `before_id` page it, and a `limit` outside its
+range is refused `400` `invalid_limit`. The listing answers any user agent that holds a key. An account whose fetch
+failed contributes nothing until the next fetch, and a model that is cooling down on an account still lists. `GET
+/v1/models/{id}` answers the one row, or `404` `model_not_found` with the message `model: {id}`. An id with a slash may
+be sent as is or percent-encoded.
 
 Beside every model whose `max_input_tokens` is above 200,000 the listing carries a twin whose id ends in `[1m]` and
 whose display name ends in ` (1M Context)`, with the same figures. Claude Code behind a gateway sizes its context

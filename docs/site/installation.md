@@ -36,14 +36,15 @@ GitHub CLI: `GH_TOKEN=<token> gh release download <version> --repo daystrom-labs
 cargo build --release
 ```
 
-The binary lands at `target/release/phoebis`. The build needs a Unix host, Linux or macOS: the store's lock and
-permission checks, the backup and the bootstrap file's loader use `std::os::unix::fs`, and the service's stop signal is
-the Unix `SIGTERM`, so the router does not build on Windows. A Windows machine runs it on a Linux host or in a Linux
-runtime instead. The toolchain is pinned in `rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which
-needs cmake, clang and libclang. The embedded console needs Node 26 or later, and npm on the path: the build script
-checks `node --version` against that range, then runs `npm ci` and `npm run build` in `web/` whenever the bundle is
-missing or older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds `web/dist` as it is, and a
-build with no bundle on disk embeds a placeholder page, which the admin listener then serves in place of the console.
+The binary lands at `target/release/phoebis`. The build needs a Unix host, Linux or macOS (untested): the store's lock
+and permission checks, the backup and the bootstrap file's loader use `std::os::unix::fs`, and the service's stop signal
+is the Unix `SIGTERM`, so the router does not build on Windows. A Windows machine runs it on a Linux host or in a Linux
+runtime instead and reaches it as [A second machine](second-machine.md) describes. The toolchain is pinned in
+`rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which needs cmake, clang and libclang. The embedded
+console needs Node 26 or later, and npm on the path: the build script checks `node --version` against that range, then
+runs `npm ci` and `npm run build` in `web/` whenever the bundle is missing or older than its sources.
+`PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds `web/dist` as it is, and a build with no bundle on disk embeds
+a placeholder page, which the admin listener then serves in place of the console.
 
 ## Install as a service
 
@@ -93,7 +94,8 @@ Then validate the file before enabling the service:
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
 ```
 
-With both price files left uninstalled, `check-config` names the shipped revisions on its two table lines:
+With both price files left uninstalled, `check-config` names the shipped revisions on its two table lines, and its
+`account tiers` count names the tiers the base rows size, leaving out a tier only a regime sizes:
 
 ```text
 api prices: built in (2 revisions, in force 2026-10-08, 9 models), since /etc/phoebis/api_prices.yaml was not found
@@ -110,8 +112,8 @@ while an entry is held.
 variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the environment file is optional for it.
 The service, `status` and `tls reload` refuse an unset secret, and the start, `check-config`, `status` and `tls reload`
 refuse a secret of another shape with the line [Environment variables](#environment-variables) gives. `phoebis health`
-loads the file without resolving its secrets and refuses none. Once the check is clean, the owner warnings for the key
-file and the data directory aside, since root runs it and `phoebis` owns them, `sudo systemctl enable --now phoebis`.
+loads the file without resolving its secrets and refuses none. Once the check is clean, the owner warnings for what
+`phoebis` owns aside, since root runs the check, `sudo systemctl enable --now phoebis`.
 
 ## Run the container
 
@@ -395,7 +397,7 @@ proxy:
   # body_read_seconds: 60
   # key_body_reads: 128
   # max_request_bytes: 33554432
-  # Signs a restored cch=00000 with this build's formula, off until a server rejects the placeholder.
+  # Signs a restored cch=00000 with this build's formula. Leave it off until a server rejects the placeholder.
   # sign_cch_placeholder: false
   # How the edited body leaves: auto mirrors the client, on always gzip, off always identity.
   # upstream_gzip: auto

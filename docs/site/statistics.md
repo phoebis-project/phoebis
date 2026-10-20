@@ -444,6 +444,40 @@ records or more, half its 4,096 ([Refusal codes](client.md#refusal-codes)).
 again, and `phoebis_ledger_parked_priced_total` counts the priced records parked since start
 ([the ledger writer](#the-ledger-writer)).
 
+Each family carries the meaning below, the text a `# HELP` line would hold:
+
+- `phoebis_account_cooldown_seconds` reads the seconds left on each cooldown an account is under, one series per scope.
+- `phoebis_account_overage_in_use` reads 1 for an account in overage, billing extra usage past its plan, and 0 for any
+  other account.
+- `phoebis_account_ratelimit_utilization` reads the latest utilization each quota window of an account reported, 1 at
+  the window's limit.
+- `phoebis_attempts_total` counts the attempts on the upstream, by account, model and the attempt's outcome.
+- `phoebis_attention` reads 1 while an attention condition holds on its subject and 0 once it clears
+  ([Conditions and gauges](#conditions-and-gauges)).
+- `phoebis_bus_dropped_total` counts the events the in-process event bus dropped for a subscriber whose queue was full.
+- `phoebis_bus_subscriber_panics_total` counts the panics that stopped a subscriber of the event bus.
+- `phoebis_keepalive_agents` reads the agents the keepalive engine retains, one series per state.
+- `phoebis_keepalive_probes_total` counts the keepalive engine's probes, by outcome and pool.
+- `phoebis_keepalive_skipped_total` counts the due probes the keepalive engine withheld, by pool and recipe state.
+- `phoebis_ledger_behind_refusals_total` counts the requests answered `ledger_behind` because the ledger's writer
+  channel held half its capacity or more.
+- `phoebis_ledger_degraded` reads 1 from a batch the ledger could not write until a batch lands and the spend is read
+  again, and 0 otherwise.
+- `phoebis_ledger_dropped_total` counts the records the ledger dropped unwritten, by the table each was bound for.
+- `phoebis_ledger_parked_priced_total` counts the priced records the ledger parked since the start.
+- `phoebis_ledger_queued` reads the records waiting in the ledger's writer channel.
+- `phoebis_pins_active` reads the live session pins of each pool.
+- `phoebis_pricing_unknown_model_total` counts the requests with token usage whose model the price entry in force does
+  not price.
+- `phoebis_requests_total` counts the requests the ledger recorded, by key, kind and outcome.
+- `phoebis_router_dropped_reports_total` counts the reports the routing loop's closed queue refused at shutdown, by
+  report kind.
+- `phoebis_router_writer_degraded` reads 1 while writes past the routing state writer's bound wait in memory, and 0
+  otherwise.
+- `phoebis_router_writer_depth` reads the batches waiting in the routing state writer's channel.
+- `phoebis_tokens_total` counts the tokens the upstream reported, by account, kind and model.
+- `phoebis_upstream_ttfb_seconds` measures the seconds from an upstream attempt's start to its response head, by model.
+
 ## The console's views
 
 The views that show the figures above are described on [The console](console.md), each with its figures, filters and

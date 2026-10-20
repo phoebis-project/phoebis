@@ -2,19 +2,19 @@
 
 What the router changes on the wire between Claude Code and Anthropic, what it sends on its own, its contract with the
 keepalive mod and how long it waits on an upstream. The client's environment block, the refusal table and the models
-listing are on [The client](client.md), the cooldown tables on
-[Pools, keys and routing](routing.md#cooldowns-and-failover), and the mod's install and settings on
-[The keepalive mod](keepalive-mod.md).
+listing are on [The client](client.md), the cooldown tables on [Pools, keys and
+routing](routing.md#cooldowns-and-failover), and the mod's install and settings on [The keepalive
+mod](keepalive-mod.md).
 
 ## The frame
 
-The request the upstream receives is the one Claude Code sent, header order and spelling included
-([Headers and transport](#headers-and-transport)). The router edits the body and the head where the account requires it
-(the credential, the account's identity, the OAuth claim), where the operator switched an edit on (a pool field or a
+The request the upstream receives is the one Claude Code sent, header order and spelling included ([Headers and
+transport](#headers-and-transport)). The router edits the body and the head where the account requires it (the
+credential, the account's identity, the OAuth claim), where the operator switched an edit on (a pool field or a
 bootstrap key), and where it owns the value (the framing headers, the folded model, the restored billing fields). Three
-request kinds pass the same handler: an inference request
-(`POST /v1/messages`), a token count (a path ending in `/count_tokens`) and a probe, the keepalive engine's replay of a
-kept request ([How a probe works](keepalive.md#how-a-probe-works)).
+request kinds pass the same handler: an inference request (`POST /v1/messages`), a token count (a path ending in
+`/count_tokens`) and a probe, the keepalive engine's replay of a kept request ([How a probe
+works](keepalive.md#how-a-probe-works)).
 
 A request body arrives as `gzip` or identity, and the router inflates a gzip body before any read or edit, so every
 check and every edit sees the plain bytes. A token count gets the `safeguards` cut, the model fold, the credential, the
@@ -365,7 +365,8 @@ exists to prevent, so the connection is refused instead.
 ## What the router sends on its own
 
 The polls, the fetches and the probes leave the router with no client behind them. A poll and a fetch have no switch,
-and neither has the credential refresh that a poll or a fetch draws ahead of the token's expiry. A probe has the pool's.
+and the credential refresh that a poll or a fetch draws ahead of the token's expiry has none either. A probe has the
+pool's.
 
 **The usage poll.** Every 300 seconds the router reads the usage endpoint of every OAuth account that holds a
 credential, a paused account included, because a paused account's quota is still the operator's to watch. The call
