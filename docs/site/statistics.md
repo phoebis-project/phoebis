@@ -490,7 +490,9 @@ Each family carries the meaning below, the text a `# HELP` line would hold:
 - `phoebis_pins_active` reads the live session pins of each pool.
 - `phoebis_pricing_unknown_model_total` counts the requests with token usage whose model the price entry in force does
   not price.
-- `phoebis_requests_total` counts the requests the ledger recorded, by key, kind and outcome.
+- `phoebis_refusals_total` counts the requests the router refused before any account was asked, by code, key and kind.
+- `phoebis_requests_total` counts the requests the ledger recorded, by key, kind and outcome, a request the router
+  refused before any account was asked left out.
 - `phoebis_router_dropped_reports_total` counts the reports the routing loop's closed queue refused at shutdown, by
   report kind.
 - `phoebis_router_writer_degraded` reads 1 while writes past the routing state writer's bound wait in memory, and 0
