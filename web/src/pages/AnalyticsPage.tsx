@@ -19,7 +19,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, GUARDRAIL_BLOCKED, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, ratioOff, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, GUARDRAIL_BLOCKED, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, ratioOff, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -546,7 +546,7 @@ export function AnalyticsPage() {
     // registry's. A dimension with no option list of its own falls back to the keys the breakdown answered.
     const listed = groupBy === 'account' ? options.accountId : groupBy === 'key' ? options.keyId : groupBy === 'model' ? options.model : groupBy === 'pool' ? options.poolId : [];
     const keys = listed.length ? listed.map((o) => o.value) : groups.map((g) => g.key);
-    return (key: string) => (groupBy === 'account' ? accountColor(ink, slotOf(key)) : ink.series[Math.min(7, keys.indexOf(key) < 0 ? 7 : keys.indexOf(key))]);
+    return (key: string) => (groupBy === 'account' ? accountColor(ink, slotOf(key)) : ink.series[slotIndex(keys, key)]);
   }, [options, groups, groupBy, ink, slotOf]);
 
   const axis = timeAxis(bucketMs, ink);
@@ -1021,7 +1021,7 @@ export function AnalyticsPage() {
             <Tile label="Net saving" value={netTile.value} note={netTile.note} title={netTile.title} tone={netTile.critical ? 'critical' : undefined} error={costError} />
             <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
           </div>
-          <div className="grid-2">
+          <div className="grid-2 warming-grid">
             <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
               <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
                 <CartesianGrid vertical={false} stroke={ink.grid} />

@@ -4801,6 +4801,38 @@ async function burnLoneCard(theme) {
 }
 
 /**
+ * The Cache warming tab's grid of five cards, two to a row at 1280 by 800: an odd last card spans the width of the grid
+ * it sits in, so the tab draws no empty half, and its title keeps the type of the card before it, Kept-warm requests.
+ */
+async function warmingLoneCard(theme) {
+  const say = (what) => failures.push(`${theme} /analytics Cache warming: ${what}`);
+  try {
+    if (!(await tabTo(theme, 'Cache warming'))) return;
+    const read = await page.evaluate(() => {
+      const grid = document.querySelector('#cache-warming > .grid-2');
+      const head = (card) => {
+        const title = card?.querySelector('.card__title');
+        if (!title) return null;
+        const s = getComputedStyle(title);
+        return { title: title.textContent?.trim() ?? '', type: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}/${s.lineHeight}` };
+      };
+      const last = grid?.lastElementChild;
+      return grid && last ? { before: head(last.previousElementSibling), cards: grid.children.length, grid: Math.round(grid.getBoundingClientRect().width), last: { ...head(last), width: Math.round(last.getBoundingClientRect().width) } } : null;
+    });
+    measurements.push(`${theme} /analytics Cache warming grid ${JSON.stringify(read)}`);
+    if (read === null) {
+      say('no grid to measure');
+      return;
+    }
+    if (read.cards % 2 === 1 && Math.abs(read.last.width - read.grid) > 1) say(`${read.last.title} is ${read.last.width}px wide in a ${read.grid}px grid of ${read.cards} cards, leaving a half empty`);
+    for (const what of compare(read.last, read.before, ['type'], `the ${read.last.title} title against the ${read.before?.title} title`)) say(what);
+  } finally {
+    await tabTo(theme, 'Traffic');
+    await atRest();
+  }
+}
+
+/**
  * The default set over every page of the list, walked with Next on a load of its own and measured as the first page
  * is: a later page can hold longer cells, or an outcome word that widens the Status column, which the first page's
  * fit never sees. Recorded rather than asserted, since room for them would have to come from another default column.
@@ -9067,6 +9099,7 @@ try {
       if (view.path === '/keys') await keysLayout(theme);
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
+      if (view.path === '/analytics') await warmingLoneCard(theme);
       // The chip line's dock and the bar's measure load their addresses themselves and leave the bare page.
       if (view.path === '/analytics') await stickyStrip(theme, true);
       if (view.path === '/analytics') await barRow(theme, view.path);

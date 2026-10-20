@@ -1120,3 +1120,18 @@ test('the error rate leaves the requests a guardrail blocked out of both sides, 
   assert.equal(d.errorRateOf({ errors: {}, requests: 0, succeeded: 0 }), 0, 'no request rates zero');
   assert.equal(d.blockedOf({ errors: Object.create({ guardrail_blocked: 5 }) }), 0, 'an inherited count is no count');
 });
+
+test('a color slot skips the empty key, so the first named key takes slot 0 and the empty key the fallback slot 7', () => {
+  const keys = ['', 'a', 'b'];
+  assert.deepEqual(['a', 'b', ''].map((k) => d.slotIndex(keys, k)), [0, 1, 7], 'the named keys count from 0 past the empty key, which takes slot 7');
+});
+
+test('a key not listed and a key past the eighth named one take the fallback slot 7', () => {
+  const named = ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9'];
+  assert.equal(d.slotIndex(['', 'a', 'b'], 'c'), 7, 'a key not listed');
+  assert.equal(d.slotIndex(['', ...named], 'k9'), 7, 'the ninth named key');
+});
+
+test('without an empty key the color slots follow the named keys in their order', () => {
+  assert.equal(d.slotIndex(['a', 'b'], 'b'), 1);
+});

@@ -99,20 +99,21 @@ meter's 140 px floor), the request table's fit (asserted in the router pass and 
 runs past the card at 1280 by 800, and under the 7-day range read a day and an hour on, where every Time cell prints its
 date on one line inside its cell), its columns (Client the fill, the Status, Attempts and links cells
 wrapping, the width past the card recorded in the mock pass), its text at 1920 by 1080 in the mock pass (no client
-class or agent type cut, each read on its own span), the request pages' widths, walked on a load of
-their own once every view's shot is taken, the pagers of both logs (three buttons 32 px square on
-each, the request log's page-size select 32 px, each footer one control tall with its padding and its border), the
-request log's range control (the group 32 px with its six pills 28 px at one top, the group against the split Refresh
-button and the search field on height and top, the Custom pill's width recorded), the speed chip, and the cache miss
-reason, effort and request class chips (each against the turn origin chip at 26 px, on an address that holds them), the
-Cost split's rings under native (each center figure inside its ring, two side by side in the mock pass), the native Cost
-by table (its width recorded, every column inside its wrap at 1280 by 800), the filter bar of every list view at 1280 by
-800 and 1440 by 900, at rest, with the view's chips and, on a ranged view, with a span across midnight (the row 32 px on
-one line with every control 32 px at one top and a segmented's pills 28 px, the bar 32 px at rest and 66 px with a chip
-line, 49 and 83 px as the Analytics sticky bar, each chip 26 px with its word in `--ink-2` and its values in `--ink`,
-the chip line on one line, the first card's head below the bar, on a card view the next element and the tiles below it,
-on Analytics the Group by select against Add filter, and on the routing log and Analytics the width of the row's slots
-and gaps at rest under the view's bound, and at 950 by 800 on Analytics and Requests the bar's scroll width at most its
+class or agent type cut, each read on its own span), the Cache warming grid (an odd last card spanning
+its row, its title in the type of the card before it), the request pages' widths, walked on a load of their own once
+every view's shot is taken, the pagers of both logs (three buttons 32 px square on each, the
+request log's page-size select 32 px, each footer one control tall with its padding and its border), the request log's
+range control (the group 32 px with its six pills 28 px at one top, the group against the split Refresh button and the
+search field on height and top, the Custom pill's width recorded), the speed chip, and the cache miss reason, effort and
+request class chips (each against the turn origin chip at 26 px, on an address that holds them), the Cost split's rings
+under native (each center figure inside its ring, two side by side in the mock pass), the native Cost by table (its
+width recorded, every column inside its wrap at 1280 by 800), the filter bar of every list view at 1280 by 800 and 1440
+by 900, at rest, with the view's chips and, on a ranged view, with a span across midnight (the row 32 px on one line
+with every control 32 px at one top and a segmented's pills 28 px, the bar 32 px at rest and 66 px with a chip line, 49
+and 83 px as the Analytics sticky bar, each chip 26 px with its word in `--ink-2` and its values in `--ink`, the chip
+line on one line, the first card's head below the bar, on a card view the next element and the tiles below it, on
+Analytics the Group by select against Add filter, and on the routing log and Analytics the width of the row's slots and
+gaps at rest under the view's bound, and at 950 by 800 on Analytics and Requests the bar's scroll width at most its
 client width with the count inside the window, the trailing slots wrapped), the Kinds list through Add filter on the
 routing log (Select all, the eight presets and the 42 kinds, its popover 8 px inside the window at 1280 by 800), the
 split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count beside it

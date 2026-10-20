@@ -501,6 +501,15 @@ export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup): CostHead
 }
 
 /**
+ * A group's color slot among the range's keys, the empty key skipped so the first named key takes slot 0. The empty
+ * key, a key not listed and any key past the eighth take slot 7.
+ */
+export function slotIndex(keys: readonly string[], key: string): number {
+  const i = key === '' ? -1 : keys.filter((k) => k !== '').indexOf(key);
+  return Math.min(7, i < 0 ? 7 : i);
+}
+
+/**
  * Per group the 7-day share (solid) and the model week's (dashed) per bucket as `<group>:7d` and `<group>:week`, the
  * 5-hour share beside them as `<group>:5h` for the tooltip, a gap (null) where a bucket has none, per group the key its
  * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label under `groupBy`,

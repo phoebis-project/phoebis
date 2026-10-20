@@ -15284,6 +15284,18 @@ expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by ou
     missing: [JSON.stringify(tiles), JSON.stringify(legend), cards.join(','), columns.join(',')],
   });
 }
+{
+  // Five cards in two columns leave the last one alone on its row. jsdom lays nothing out, so the span is read off the
+  // stylesheet's rule for the grid's class, and the browser pass measures the card's width.
+  const grid = m.container.querySelector('#cache-warming > .grid-2');
+  const cards = [...(grid?.children ?? [])].map((c) => (c.classList.contains('card') ? (c.querySelector('.card__title')?.textContent?.trim() ?? '') : `not a card: ${c.className}`));
+  const span = declarationsOf('.warming-grid > .card:last-child:nth-child(odd)')['grid-column'] ?? 'absent';
+  results.push({
+    name: "/analytics cache warming's grid ends its five cards on Kept-warm tokens, and its odd last card spans the row",
+    ok: grid?.classList.contains('warming-grid') === true && cards.length === 5 && cards.every((t) => !t.startsWith('not a card')) && cards.at(-1) === 'Kept-warm tokens' && span === '1 / -1',
+    missing: [`grid class ${grid?.className ?? 'no grid'}`, cards.join(','), `grid-column ${span}`],
+  });
+}
 await tab(m, 'Accounts');
 expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak 7d, extra usage', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
