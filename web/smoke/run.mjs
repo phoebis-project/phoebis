@@ -12128,41 +12128,48 @@ m.unmount();
 }
 
 // The routing log's Models filter lists the catalog in the cost model's tier order, which the shell reads off its
-// settings answer. Here that answer lands after the catalog and orders the tiers the other way round from the shipped
-// model, so the filter's order can only come from it.
+// settings answer. Here that answer lands after the catalog and orders the tiers the other way round from the pair
+// the mounts before it left, so the filter's order can only come from it.
 {
   const { getSettings } = api;
-  let release = () => {};
-  const held = new Promise((resolve) => {
-    release = resolve;
-  });
   let reversed = null;
   api.getSettings = async (...args) => {
     const settings = await getSettings.apply(api, args);
-    await held;
     reversed = { modelTier: settings.subscriptionCosts.modelTier, tierOrder: [...settings.subscriptionCosts.tierOrder].reverse() };
     return { ...settings, subscriptionCosts: { ...settings.subscriptionCosts, tierOrder: reversed.tierOrder } };
   };
+  const held = deferNextCall('getSettings');
   const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
   // The Models list sits behind Add filter, so each reading opens its step and closes the box again.
-  const listed = async () => {
-    await addFilter(page, 'Model');
+  const listed = async (on) => {
+    await addFilter(on, 'Model');
     const names = boxOptions().map((o) => o.textContent?.trim());
-    await closeBoxes(page);
+    await closeBoxes(on);
     return names;
   };
-  const before = await listed();
-  release();
+  const before = await listed(page);
+  held.release();
   await page.settle(400);
-  const after = await listed();
+  const after = await listed(page);
   page.unmount();
+  held.restore();
   api.getSettings = getSettings;
+  // The tiers the shell sets outlive its mount, so a mount on the mock's own answer puts its pair back for the cases
+  // below.
+  const again = await mount('/routing-log', { now: CLOCK_ORIGIN });
+  const back = await listed(again);
+  again.unmount();
   const ids = (await api.listCatalog()).map((model) => model.id);
   const shipped = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
   results.push({
     name: "/routing-log the Models filter lists the catalog in the cost model's tier order once the settings answer, even when the catalog answered first",
-    ok: before.length === ids.length && reversed !== null && JSON.stringify(after) === JSON.stringify(tierOrder(ids, reversed)) && JSON.stringify(after) !== JSON.stringify(tierOrder(ids, shipped)),
-    missing: [JSON.stringify(before), JSON.stringify(after), reversed === null ? 'no settings answer' : JSON.stringify(tierOrder(ids, reversed))],
+    ok:
+      before.length === ids.length &&
+      reversed !== null &&
+      JSON.stringify(after) === JSON.stringify(tierOrder(ids, reversed)) &&
+      JSON.stringify(after) !== JSON.stringify(tierOrder(ids, shipped)) &&
+      JSON.stringify(back) === JSON.stringify(tierOrder(ids, shipped)),
+    missing: [JSON.stringify(before), JSON.stringify(after), reversed === null ? 'no settings answer' : JSON.stringify(tierOrder(ids, reversed)), JSON.stringify(back)],
   });
 }
 
@@ -13762,7 +13769,7 @@ m.unmount();
           // Each marked pin's Rewrite cell reads its rewrite as the Max 20x equivalent of the 7-day window, on the
           // API-key annex the pick planned it for as much as on a plan.
           const rewrites = [...(detail?.querySelectorAll('.event-detail__pins tbody tr') ?? [])].map((tr) => tr.children[5]?.textContent ?? '');
-          const marked = (e?.detail.pins ?? []).flatMap((p, i) => (p.marked ? [[rewrites[i], p.rewrite === null ? null : `${fmtShare(p.rewrite)} of 20x 7d`]] : []));
+          const marked = (e?.detail.pins ?? []).flatMap((p, i) => (p.marked ? [[rewrites[i], p.rewrite === null ? null : `${fmtShare(p.rewrite)} of 20x 7-day`]] : []));
           return (
             named &&
             (popoverRowOf(round, 'fired by') ?? []).includes('fired by slow-down') && (popoverRowOf(round, 'stretch') ?? []).includes('stretch 42 min') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
@@ -14309,9 +14316,10 @@ m.unmount();
     page.unmount();
   }
   {
-    // Each event kind opens to its pairs: When to the second in UTC, then the account and the pool as links, then the
-    // kind's own. The wind-down is dated at the instant it fires, five days past the pinned clock, so no range up to
-    // the clock lists it: its page is mounted on a clock a minute past the event, its `to` a minute past the event.
+    // Each event kind opens to its pairs: When to the second in the viewer's zone, which the smoke's UTC zone prints as
+    // the UTC instant with no zone word, then the account and the pool as links, then the kind's own. The wind-down is
+    // dated at the instant it fires, five days past the pinned clock, so no range up to the clock lists it: its page is
+    // mounted on a clock a minute past the event, its `to` a minute past the event.
     const OWN = {
       account_state_changed: ['From', 'To', 'Cause', 'Detail', 'Effect'],
       budget_period_ended: ['Previous period', 'Spent', 'Period start'],
@@ -14360,7 +14368,6 @@ m.unmount();
       'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
       'window_cleared', 'window_reset', 'window_spent',
     ];
-    const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
     // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect and
     // the backoff's span.
@@ -14399,7 +14406,7 @@ m.unmount();
       scan(kind, detail);
       const pairs = kvRows(detail?.querySelector(':scope > .kv'));
       const href = (label) => pairs.find((p) => p.label === label)?.dd?.querySelector('a')?.getAttribute('href') ?? null;
-      const head = [['When', utc(at)], ...(e.accountId ? [['Account', e.accountId]] : []), ...(e.poolId ? [['Pool', e.poolId]] : [])];
+      const head = [['When', fmtAbsolute(e.at)], ...(e.accountId ? [['Account', e.accountId]] : []), ...(e.poolId ? [['Pool', e.poolId]] : [])];
       if (kind.startsWith('model_')) modelLinks[kind] = { event: e, links: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))])), texts: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.textContent)])) };
       results.push({
         name: `/routing-log the ${kind} detail reads its pairs`,
@@ -14551,7 +14558,7 @@ m.unmount();
   }
   {
     // A value joined by a comma or a semicolon is two values in one place. A digit group's comma (`12,345`) joins
-    // nothing, and the user agent is the one value that carries its own commas as the client sent them.
+    // nothing, and the user agent carries its own commas as the client sent them.
     const JOINED = /(?<!\d),|,(?!\d)|;/;
     const wrong = [];
     let read = 0;
@@ -14559,12 +14566,14 @@ m.unmount();
       const nodes = [...root.querySelectorAll('.chip, .kv dd, td, .decision-card__sentence, .strip-station__word, .strip-station__second > span, .strip-candidate__account, .strip-terminus__word')];
       for (const n of nodes) {
         if (n.closest('.kv__row')?.querySelector('dt')?.textContent === 'User agent') continue;
+        // The When pair's commas are the absolute date's own separators inside one instant.
+        if (n.closest('.kv__row')?.querySelector('dt')?.textContent === 'When') continue;
         read += 1;
         const text = n.textContent ?? '';
         if (JOINED.test(text)) wrong.push(`${where}: ${text.slice(0, 80)}`);
       }
     }
-    results.push({ name: '/routing-log no chip, value or cell joins values with a comma or a semicolon, the user agent excepted', ok: scanned.length > 40 && read > 1000 && wrong.length === 0, missing: [`${scanned.length} panels, ${read} read`, ...wrong.slice(0, 8)] });
+    results.push({ name: '/routing-log no chip, value or cell joins values with a comma or a semicolon, the user agent and the When excepted', ok: scanned.length > 40 && read > 1000 && wrong.length === 0, missing: [`${scanned.length} panels, ${read} read`, ...wrong.slice(0, 8)] });
   }
   m.unmount();
 }

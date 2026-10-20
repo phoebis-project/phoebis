@@ -1134,21 +1134,21 @@ until "Latest 3" folds them again. The foot offers the three widenings after "Wi
 this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A
 record the retention purged reads "The record left with the retention", and one still loading "Loading the record".
 
-An event row opens to a panel of pairs: When to the second in UTC, the account and the pool as links, then the kind's
-own pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour
+An event row opens to a panel of pairs: When to the second, the account and the pool as links, then the kind's own
+pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour
 either side, and "Details", which opens the request's drawer. An account state change names who moved the state:
 `credential refused`, `credit balance`, `funding retried`, `refresh failed`, `by hand` or `paired`, and a deleted
 account's last row reads `deleted`. A pin moved panel names the account the pin left, the one it landed on, the reason
-and what moved it, where a rule's gate read the destination, Destination fit (`fits`, `rewrite only` or `least bad`)
-and Runway (a span, `none` or `unbounded`), and on a failover's move its Cause, `429 on 5h` or `fast lane 429` for a
-cooldown and `re-auth required by credential refused` for a mark, in the account state panel's words. A shedding
-round's panel reads Started by, Trigger (`5h projection 99% at 18:20 over the ceiling 95%`,
+and what moved it, where a rule's gate read the destination, Destination fit (`fits`, `rewrite only` or `least bad`) and
+Runway (a span, `none` or `unbounded`), and on a failover's move its Cause, `429 on 5h` or `fast lane 429` for a
+cooldown and `re-auth required by credential refused` for a mark, in the account state panel's words. A shedding round's
+panel reads Started by, Trigger (`5h projection 99% at 18:20 over the ceiling 95%`,
 `7d projection 96% in 5 h over the ceiling 95%`, or `5h stretch 42 min over the threshold 30 min` for a round the
 stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the projection` or `the slow-down`),
 Excess (`9.5 %/h`), Cap with the target and the burn removed, Unit, Burn average, Warm sessions, the Pins table
 (Session, Agent, Warmth, Burn, Last prompt, Rewrite as the Max 20x equivalent of the pin's weekly window, labeled
-`of 20x 7d` or `of 20x Fable`, Destination, Mark), Skipped (one chip per pin, its session and its reason, `off window`
-for a pin whose model does not draw the window that fired), Planned destinations, Outcome (`marked 2`, or
+`of 20x 7-day` or `of 20x Fable week`, Destination, Mark), Skipped (one chip per pin, its session and its reason,
+`off window` for a pin whose model does not draw the window that fired), Planned destinations, Outcome (`marked 2`, or
 `nothing to mark: no runway`), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin, Reason
 (`healed: the 5h projection read 91% under the ceiling`, `healed: the stretch read 24 min under the threshold 30 min`
 for a mark the stretch made, `moved` or `released`), Marked (when, on which account) and Standing for, and a reservation

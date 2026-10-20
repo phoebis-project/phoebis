@@ -4,7 +4,7 @@ import { ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { moveLabel, own } from './analytics';
 import { compareByModelTier } from './costs';
 import type { ChipText } from './filterBar';
-import { fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel } from './format';
+import { equivalentWord, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel } from './format';
 import { planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
@@ -1622,8 +1622,6 @@ export interface DetailPair {
   table?: { head: string[]; rows: Chip[][] };
 }
 
-/** An instant to the second in UTC, the detail's When. */
-const utcSecond = (ms: number) => `${new Date(ms).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
 const RULE_MOVES = new Set(['drain', 'overage', 'return_to_plan', 'shed', 'spent']);
 /** What an account's new state means for routing, by the state it moved to. */
 const STATE_EFFECT: Record<string, string> = {
@@ -1657,7 +1655,7 @@ const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad',
  *  which a model rejection reads its cooldown's until off. */
 export function detailPairs(row: RoutingEvent, now: number, rows: readonly RoutingLogRow[]): DetailPair[] {
   const d = row.detail;
-  const pairs: DetailPair[] = [{ chips: [plain(utcSecond(atOf(row)))], label: 'When' }];
+  const pairs: DetailPair[] = [{ chips: [plain(fmtAbsolute(row.at))], label: 'When' }];
   if (row.accountId !== null) pairs.push({ chips: [accountChip(row.accountId)], label: 'Account' });
   if (row.poolId !== null) pairs.push({ chips: [{ entity: { id: row.poolId, kind: 'pool' }, value: row.poolId }], label: 'Pool' });
   const add = (label: string, ...chips: (Chip | null)[]) => {
@@ -1966,7 +1964,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
                 plain(p.cold === true ? 'cold' : 'warm'),
                 plain(b === null ? '-' : hourlyShare(b)),
                 plain(last === null ? '-' : fmtCompact(last)),
-                plain(rewrite === null ? '-' : rewriteWindow === null ? fmtShare(rewrite) : `${fmtShare(rewrite)} of 20x ${wordOf(WINDOW_WORD, rewriteWindow)}`),
+                plain(rewrite === null ? '-' : rewriteWindow === null ? fmtShare(rewrite) : `${fmtShare(rewrite)} of 20x ${equivalentWord(rewriteWindow)}`),
                 planned === null ? plain('-') : accountChip(planned),
                 plain(p.marked === true ? 'marked' : skip !== null ? words(skip) : (str(p.note) ?? '-')),
               ];

@@ -993,11 +993,12 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   for (const [kind, [detail, own]] of Object.entries(DETAIL_EVENTS)) {
     const row = event(kind, detail, { actor: 'admin', agentId: 'main', keyId: 'desktop', model: 'claude-haiku-4-5-20251001', poolId: 'all', requestId: 'req_1', sessionId: 's1-0000-4000' });
     const pairs = d.detailPairs(row, NOW, []);
-    assert.deepEqual(pairs.slice(0, 3).map((p) => [p.label, texts(p.chips)]), [['When', ['2026-09-16 14:00:00 UTC']], ['Account', ['primary']], ['Pool', ['all']]], kind);
+    assert.deepEqual(pairs.slice(0, 3).map((p) => [p.label, texts(p.chips)]), [['When', [d.fmtAbsolute(iso(ms(14, 0)))]], ['Account', ['primary']], ['Pool', ['all']]], kind);
     assert.deepEqual(pairs[1].chips[0].entity, { id: 'primary', kind: 'account' }, kind);
     assert.deepEqual(pairs[2].chips[0].entity, { id: 'all', kind: 'pool' }, kind);
     assert.deepEqual(pairs.slice(3).map((p) => p.label), own, kind);
-    for (const p of pairs) for (const c of p.chips) assert.ok(!/(?<!\d),|,(?!\d)|;/.test(chipText(c)), `${kind} ${p.label}: ${chipText(c)}`);
+    // The When pair's commas are the absolute date's own separators inside one instant.
+    for (const p of pairs) for (const c of p.chips) assert.ok(p.label === 'When' || !/(?<!\d),|,(?!\d)|;/.test(chipText(c)), `${kind} ${p.label}: ${chipText(c)}`);
   }
   // A mark's move is a failover, and its cause reads in the account state card's words.
   const marked = Object.fromEntries(d.detailPairs(event('pin_migrated', DETAIL_EVENTS.pin_migrated[0]), NOW, []).map((p) => [p.label, texts(p.chips)]));
@@ -1007,7 +1008,7 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Pins');
   assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark']);
   assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [
-    ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x Fable', 'secondary', 'marked'],
+    ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x Fable week', 'secondary', 'marked'],
     ['s2', 'd93b', 'warm', '-', '48K', '-', '-', 'off window'],
   ]);
   const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Survive a restart');
@@ -1021,12 +1022,13 @@ test("a round's off-window pin reads its word and the rewrite cell names its uni
     return { rows: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => [chipText(r[5]), chipText(r[7])]), skipped: texts(pairs.find((p) => p.label === 'Skipped')?.chips ?? []) };
   };
   // The Fable pin's rewrite is the 20x equivalent of its week, and the Opus pin, which draws no Fable week, sat out.
-  assert.deepEqual(drawn(detail), { rows: [['0.5% of 20x Fable', 'marked'], ['-', 'off window']], skipped: ['s2: off window'] });
+  assert.deepEqual(drawn(detail), { rows: [['0.5% of 20x Fable week', 'marked'], ['-', 'off window']], skipped: ['s2: off window'] });
   assert.deepEqual(read(event('shedding_round', detail)).facts, ['pins 1 of 2'], 'the count reads every listed pin, the one left out included');
   // On a 5-hour round every pin is on the window, and a model with no week of its own prices its rewrite on the 7-day.
   const fiveHour = (pin) => drawn({ ...detail, pins: [pin], window: 'five_hour' }).rows[0][0];
   const sonnet = { ...detail.pins[0], model: 'claude-sonnet-5', rewrite_window: 'seven_day' };
-  assert.equal(fiveHour(sonnet), '0.5% of 20x 7d');
+  assert.equal(fiveHour(sonnet), '0.5% of 20x 7-day');
+  assert.equal(fiveHour({ ...sonnet, rewrite: 0 }), '0% of 20x 7-day', 'a zero rewrite keeps the window word');
   const unnamed = { ...sonnet };
   delete unnamed.rewrite_window;
   assert.equal(fiveHour(unnamed), '0.5%', 'a pin whose record names no window draws the bare share');
@@ -1035,7 +1037,7 @@ test("a round's off-window pin reads its word and the rewrite cell names its uni
 test('a cleared window reads its readings before and after, its unchanged reset and its source, and nothing of why', () => {
   const pairs = (detail) => Object.fromEntries(d.detailPairs(event('window_cleared', detail), NOW, []).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual(pairs(DETAIL_EVENTS.window_cleared[0]), {
-    When: ['2026-09-16 14:00:00 UTC'],
+    When: [d.fmtAbsolute(iso(ms(14, 0)))],
     Account: ['primary'],
     Window: ['5h'],
     Before: ['100%'],
@@ -1054,7 +1056,7 @@ test('the two slow-down events read their pairs and effects', () => {
   const pairs = (kind, detail) => Object.fromEntries(d.detailPairs(event(kind, detail, { poolId: 'work' }), NOW, []).map((p) => [p.label, texts(p.chips)]));
   const started = pairs('slow_down_started', { demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 });
   assert.deepEqual(started, {
-    When: ['2026-09-16 14:00:00 UTC'],
+    When: [d.fmtAbsolute(iso(ms(14, 0)))],
     Account: ['primary'],
     Pool: ['work'],
     Speed: ['0.5x'],
@@ -1065,7 +1067,7 @@ test('the two slow-down events read their pairs and effects', () => {
   });
   // The span runs to the read that returned the factor to 1, without the wait that closes it.
   const ended = pairs('slow_down_ended', { duration_ms: 5_180_000, factor_min: 0.35, held_ms: 36_000, since: ms(9, 12) });
-  assert.deepEqual(ended, { When: ['2026-09-16 14:00:00 UTC'], Account: ['primary'], Pool: ['work'], Lasted: ['1 h 26 min'], Slowest: ['0.35x'], Held: ['36 s'], Effect: ["requests of the account's sessions pass unheld again"] });
+  assert.deepEqual(ended, { When: [d.fmtAbsolute(iso(ms(14, 0)))], Account: ['primary'], Pool: ['work'], Lasted: ['1 h 26 min'], Slowest: ['0.35x'], Held: ['36 s'], Effect: ["requests of the account's sessions pass unheld again"] });
   // Two decimals with a trailing zero dropped, as the speed chips read the factor.
   assert.deepEqual(pairs('slow_down_started', { demand: 0.1286, factor: 0.734, reset: ms(18, 20), stretch_ms: 1_620_000, threshold_ms: 1_800_000 }).Speed, ['0.73x']);
 });
@@ -1283,7 +1285,7 @@ test("an account edit's drawer reads each pair and the replaced secret beside th
   const pairs = (diff, kind = 'account_updated', target = 'annex') =>
     d.detailPairs(event('registry_changed', { diff, kind, target }, { accountId: null, actor: 'admin', at: iso(ms(9, 8, 30)) }), NOW, []).map((p) => [p.label, texts(p.chips)]);
   assert.deepEqual(pairs({ label: { from: 'annex', to: 'Studio annex' }, secret_replaced: true }), [
-    ['When', ['2026-09-16 09:08:30 UTC']],
+    ['When', [d.fmtAbsolute(iso(ms(9, 8, 30)))]],
     ['Change', ['account edited', 'annex']],
     ['label', ['from annex', 'to Studio annex']],
     ['Secret', ['replaced']],
