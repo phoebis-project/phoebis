@@ -4,7 +4,7 @@ import { accountById } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById } from './pools';
-import { CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
+import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead } from './time';
@@ -68,15 +68,16 @@ const sessionSpec: {
 const SESSION_EXPIRE_SECONDS = 86_400;
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
-// so the earlier holder's rows count for its own row below, never for the live session that shares their id.
+// so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
+// request moves the session's last request and adds to no count, as the query sums the unrefused rows alone.
 const activityOf = (keyId: string | null, keyGeneration: number, sessionId: string) => `${keyId}|${keyGeneration}|${sessionId}`;
 const ledgered = new Map<string, { last: string; requests: number }>();
 for (const r of REQUESTS) {
   if (r.sessionId === null || r.kind === 'probe') continue;
   const id = activityOf(r.keyId, r.keyGeneration, r.sessionId);
   const seen = ledgered.get(id);
-  if (!seen) ledgered.set(id, { last: r.at, requests: 1 });
-  else ledgered.set(id, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
+  if (!seen) ledgered.set(id, { last: r.at, requests: r.refused ? 0 : 1 });
+  else ledgered.set(id, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + (r.refused ? 0 : 1) });
 }
 
 /** The weight `model` prices at on the 5-hour window (a dated id reads its undated name), its model tier's latest
@@ -469,6 +470,47 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
     presenceAgeSeconds: null,
     requests: holderRows.length,
     sessionId: SESSION_IDS[0],
+    shedFrom: null,
+    shedReason: null,
+  });
+}
+
+// The desktop session whose every request the key's own guardrail refused before any account was asked. The router
+// lists it off the ledger's rows with no pin and no recipe, so a drifting or blocked client stays visible, and the
+// activity fold gives it a count of none and the newest refusal as its last request.
+const blockedGeneration = Date.parse(keyById.get('desktop')!.createdAt);
+const blocked = ledgered.get(activityOf('desktop', blockedGeneration, BLOCKED_SESSION_ID));
+const blockedLast = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === blockedGeneration && r.sessionId === BLOCKED_SESSION_ID);
+if (blocked && blockedLast) {
+  SESSIONS.push({
+    ...SESSION_SAMPLE,
+    accountId: null,
+    agentId: null,
+    agents: 0,
+    burn: null,
+    burnAt: null,
+    burnEquivalent: null,
+    burnUnit: null,
+    cacheTtlMs: null,
+    companion: 'none',
+    companionSince: null,
+    createdAt: null,
+    epoch: null,
+    forkDepth: null,
+    forkedFrom: null,
+    historical: false,
+    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+    keyGeneration: blockedGeneration,
+    keyId: 'desktop',
+    lastInputTokens: null,
+    lastRefreshAt: null,
+    lastRequestAt: blocked.last,
+    lastUsedAt: null,
+    model: blockedLast.canonicalModel,
+    pinned: false,
+    presenceAgeSeconds: null,
+    requests: blocked.requests,
+    sessionId: BLOCKED_SESSION_ID,
     shedFrom: null,
     shedReason: null,
   });

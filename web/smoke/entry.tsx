@@ -9,7 +9,7 @@ import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
 import { installClock } from '@/lib/clock';
 import { planLabel } from '@/lib/quota';
-import { installMockClock } from '@/mock';
+import { inFlight, installMockClock } from '@/mock';
 import { SETTINGS_WIRE } from '@/mock/operations';
 import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVENTS, REQUESTS } from '@/mock/requests';
 import { SETTINGS_SAMPLE } from '@/mock/samples';
@@ -211,6 +211,25 @@ export interface Mounted {
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/**
+ * A mounted view draws its headings and skeletons at once while the mock answers through `latency` on a real timer, so
+ * the signal is the mock's own: two reads of the container's text 50 ms apart that agree, are non-empty and each find
+ * the in-flight counter at zero. One zero read is not enough, since a read can fall between an answer's timer and the
+ * call the next render makes, while the text still shows the frame before it, such as the session check's splash. The
+ * wait is bounded at 5 s, so a mount that draws nothing waits the whole bound and goes on.
+ */
+async function settled(container: HTMLElement): Promise<void> {
+  const started = Date.now();
+  let last: string | null = null;
+  while (Date.now() - started < 5_000) {
+    await wait(50);
+    const text = container.textContent ?? '';
+    const idle = inFlight() === 0;
+    if (idle && text !== '' && text === last) return;
+    last = idle ? text : null;
+  }
+}
+
 function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate'], location: Mounted['location']): Mounted {
   return {
     container,
@@ -246,13 +265,13 @@ export async function mount(path: string, options: { now?: number } = {}): Promi
       </AppSettingsProvider>
     </SessionProvider>,
   );
-  await wait(600);
+  await settled(container);
   return mounted(
     container,
     root,
     async (p) => {
       await router.navigate(p);
-      await wait(600);
+      await settled(container);
     },
     () => {
       const { hash, pathname, search } = router.state.location;
@@ -276,7 +295,7 @@ export async function mountNode(node: ReactNode): Promise<Mounted> {
       </AppSettingsProvider>
     </SessionProvider>,
   );
-  await wait(600);
+  await settled(container);
   return mounted(
     container,
     root,

@@ -330,6 +330,71 @@ async fn a_patch_is_fenced_on_the_revision_and_the_incarnation() {
 }
 
 #[tokio::test]
+async fn a_pool_save_opened_before_a_guardrail_side_attachment_answers_409_stale_edit_and_the_reread_carries_it(
+) {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    created(app, &cookie, "g1", j!({})).await;
+    let pools = show(app, &cookie, "/admin/pools").await;
+    let read = row(&pools, "pools", "main")["revision"].clone();
+    let attached = patch(
+        app,
+        "/admin/guardrails/g1",
+        r#"{"pools":["main"]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(attached.status(), StatusCode::OK);
+    let stale = patch(
+        app,
+        "/admin/pools/main",
+        &j!({"guardrails": [], "expected_revision": read}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(stale.headers()["x-phoebis-error-code"], "stale_edit");
+    let pools = show(app, &cookie, "/admin/pools").await;
+    assert_eq!(
+        placed(&row(&pools, "pools", "main")["guardrails"]),
+        at(&[("g1", 0)]),
+        "the reread carries the attachment the stale save would have dropped"
+    );
+}
+
+#[tokio::test]
+async fn a_key_save_opened_before_a_guardrail_side_attachment_answers_409_stale_edit() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    created(app, &cookie, "g1", j!({})).await;
+    let keys = show(app, &cookie, "/admin/keys").await;
+    let read = row(&keys, "keys", "desktop")["revision"].clone();
+    let attached = patch(
+        app,
+        "/admin/guardrails/g1",
+        r#"{"keys":["desktop"]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(attached.status(), StatusCode::OK);
+    let stale = patch(
+        app,
+        "/admin/keys/desktop",
+        &j!({"guardrails": [], "expected_revision": read}).to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(stale.headers()["x-phoebis-error-code"], "stale_edit");
+    let keys = show(app, &cookie, "/admin/keys").await;
+    assert_eq!(
+        placed(&row(&keys, "keys", "desktop")["guardrails"]),
+        at(&[("g1", 0)]),
+        "the reread carries the attachment the stale save would have dropped"
+    );
+}
+
+#[tokio::test]
 async fn a_delete_answers_204_then_404() {
     let (parts, cookie) = seeded().await;
     let app = &parts.app;
@@ -390,6 +455,14 @@ async fn every_400_sentence_is_answered_one_by_one() {
         (
             j!({"id": "g1", "name": "Prompt Is Too Long!", "conditions": [c]}),
             "name must not contain \"prompt is too long\"",
+        ),
+        (
+            j!({"id": "g1", "name": "Model: Opus Only", "conditions": [c]}),
+            "name must not contain \"model:\"",
+        ),
+        (
+            j!({"id": "g1", "name": "oauth TOKEN has been REVOKED", "conditions": [c]}),
+            "name must not contain \"OAuth token has been revoked\"",
         ),
         (
             j!({"id": "g1", "name": "G", "description": long, "conditions": [c]}),
@@ -562,6 +635,36 @@ async fn every_400_sentence_is_answered_one_by_one() {
             .iter()
             .all(|key| key["id"] != "spare" && key["guardrails"] == j!([])),
         "no refused key write landed: {keys}"
+    );
+}
+
+#[tokio::test]
+async fn an_array_body_is_refused_as_no_object_on_the_three_guardrail_routes() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let row = created(app, &cookie, "g1", j!({})).await;
+    for (method, route) in [
+        ("POST", "/admin/guardrails"),
+        ("PATCH", "/admin/guardrails/g1"),
+        ("POST", "/admin/guardrails/test"),
+    ] {
+        let response = match method {
+            "POST" => post(app, route, "[]", Some(&cookie)).await,
+            _ => patch(app, route, "[]", Some(&cookie)).await,
+        };
+        assert_eq!(
+            refusal(response).await,
+            (
+                StatusCode::BAD_REQUEST,
+                "body must be a JSON object".to_string()
+            ),
+            "{method} {route}"
+        );
+    }
+    assert_eq!(
+        show(app, &cookie, "/admin/guardrails").await,
+        j!({"guardrails": [row]}),
+        "no refused write landed"
     );
 }
 
@@ -1733,6 +1836,48 @@ async fn an_uncaptured_row_a_probe_and_a_row_whose_body_is_gone_are_skipped_with
         ["r1-fork", "r2-classifier", "r3-fork", "r8-classifier"]
     );
     assert_eq!(answer["totals"]["sampled"], 4);
+}
+
+#[tokio::test]
+async fn a_sample_one_short_of_its_limit_answers_its_bodied_rows_in_order() {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    let response = post(
+        app,
+        "/admin/keys",
+        r#"{"id":"ci","label":"CI","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    // The two newest rows leave the sample one short of its limit, and the captured rows after them have no body to
+    // read until the last, the first row past a full page.
+    let rows = phoebis_admin::SAMPLE_PAGE + 1;
+    let id = |n: usize| format!("ci-{n:02}");
+    for n in 1..=rows {
+        let row = fork_row(&id(n), n as i64, "ci");
+        if n <= 2 || n == rows {
+            write_row(&parts, row, Some(FORK));
+        } else {
+            write_row(
+                &parts,
+                RequestRecord {
+                    bodies_captured: true,
+                    ..row
+                },
+                None,
+            );
+        }
+    }
+    let (status, answer) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "key_id": "ci", "limit": 3}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(sample_ids(&answer), [id(1), id(2), id(rows)]);
+    assert_eq!(answer["totals"]["sampled"], 3);
 }
 
 #[tokio::test]

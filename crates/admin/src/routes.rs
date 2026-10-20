@@ -53,7 +53,9 @@ const COOKIE_NAME: &str = "phoebis_admin";
 
 const LOGIN_PATH: &str = "/admin/session";
 
-pub fn router(state: Arc<AdminState>) -> Router {
+/// The route table and the document its registrations build, with no state bound, so the path count reads the
+/// document without an `AdminState`.
+pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
     let (router, mut api) = OpenApiRouter::with_openapi(openapi::Document::openapi())
         .routes(routes!(list_accounts, accounts::create))
         .routes(routes!(show_account, accounts::patch, accounts::remove))
@@ -119,6 +121,11 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/{*rest}", any(unknown_admin_route))
         .split_for_parts();
     openapi::Examples.modify(&mut api);
+    (router, api)
+}
+
+pub fn router(state: Arc<AdminState>) -> Router {
+    let (router, api) = parts();
     let document = Bytes::from(api.to_json().expect("the admin document serializes"));
     let build = state.build;
     router
@@ -131,6 +138,12 @@ pub fn router(state: Arc<AdminState>) -> Router {
             }),
         )
         .with_state(state)
+}
+
+/// How many paths the served document holds, read off the document itself, so the merged-app test asserts the
+/// router serves the admin crate's document rather than a figure written twice.
+pub fn path_count() -> usize {
+    parts().1.paths.paths.len()
 }
 
 /// Who is calling, as the gate resolved them: the handle that names this admin session in pairing
@@ -2924,6 +2937,26 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
+/// A JSON array deserializes into a struct whose members all default, so a route would answer `id is required` to
+/// `[]` in place of the sentence every route gives a body that is no object. The shape is checked on the parsed value
+/// before any member check, and the struct is read from the bytes, where the derive refuses a repeated member that a
+/// value would keep at its last occurrence.
+// The error is a rendered HTTP response, returned once per request and dropped, so boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_object<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, Response> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| failure(StatusCode::BAD_REQUEST, "body must be a JSON object"))?;
+    if !value.is_object() {
+        return Err(failure(
+            StatusCode::BAD_REQUEST,
+            "body must be a JSON object",
+        ));
+    }
+    serde_json::from_slice(body)
+        .map_err(|_| failure(StatusCode::BAD_REQUEST, "body must be a JSON object"))
+}
+
 /// The reports of one member, any period: what `phoebis_routing::budget_deadline` reads, so the routes answer the
 /// selector's own verdict rather than a copy of its rule.
 pub(crate) fn spend_rows<'a>(
@@ -3028,10 +3061,14 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{same_authority, spend_rows};
+    use super::{parse_object, same_authority, spend_rows};
     use crate::openapi::round_trip::round_trips;
+    use axum::body::Bytes;
+    use axum::http::StatusCode;
     use phoebis_routing::MemberSpend;
     use phoebis_store::BudgetPeriod;
+    use serde::Deserialize;
+    use serde_json::{json, Value};
 
     #[test]
     fn same_authority_names_the_requests_own_host_and_requires_https_when_asked() {
@@ -3110,6 +3147,63 @@ mod tests {
         assert!(
             spend_rows(&spends, "other", "a").is_empty(),
             "the same account under another pool reads none"
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_object_reads_an_object_and_refuses_an_array_a_string_and_malformed_bytes() {
+        #[derive(Debug, Default, Deserialize, PartialEq)]
+        #[serde(default)]
+        struct Pair {
+            a: u32,
+            b: u32,
+        }
+        assert_eq!(
+            parse_object::<Pair>(&Bytes::from_static(br#"{"a": 1}"#)).ok(),
+            Some(Pair { a: 1, b: 0 })
+        );
+        for body in [&b"[]"[..], br#""x""#, b"{"] {
+            let Err(response) = parse_object::<Pair>(&Bytes::copy_from_slice(body)) else {
+                panic!("{} read as an object", String::from_utf8_lossy(body));
+            };
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(
+                (status, serde_json::from_slice::<Value>(&bytes).unwrap()),
+                (
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "body must be a JSON object"})
+                ),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_object_refuses_a_body_that_repeats_a_member() {
+        #[derive(Debug, Default, Deserialize, PartialEq)]
+        #[serde(default)]
+        struct Pair {
+            a: u32,
+            b: u32,
+        }
+        let body = br#"{"a": 1, "a": 2}"#;
+        let Err(response) = parse_object::<Pair>(&Bytes::from_static(body)) else {
+            panic!("a repeated member read as an object");
+        };
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap()),
+            (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "body must be a JSON object"})
+            )
         );
     }
 

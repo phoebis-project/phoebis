@@ -23,8 +23,8 @@ use utoipa::ToSchema;
 use crate::guardrails::{distinct_ids, AttachmentIndex, GuardrailRef};
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
-    double_option, failure, failure_with_code, fence_token, present, reload_or_refuse,
-    store_failure, CreatedId,
+    double_option, failure, failure_with_code, fence_token, parse_object, present,
+    reload_or_refuse, store_failure, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
@@ -688,8 +688,9 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     ),
 )]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
-    let Ok(input) = serde_json::from_slice::<PoolInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: PoolInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     // A new pool starts with no guardrail, so the create's transaction writes the pool and its members alone.
     if input.guardrails.is_some() {
@@ -804,8 +805,9 @@ pub(crate) async fn patch(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    let Ok(input) = serde_json::from_slice::<PoolInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: PoolInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     let mut row = match state.store.pool(&id) {
         Ok(Some(row)) => row,
@@ -931,7 +933,7 @@ pub(crate) async fn remove(
     request_body(content = MembersInput, description = "The same shape and validation as `members` on `POST /admin/pools`, replacing the whole membership list", content_type = "application/json"),
     responses(
         (status = 200, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
-        (status = 400, description = "- `body must carry a members list`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must carry a members list"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to a body without a `members` list, an unknown field in an entry, or a value past its field's type\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `pool not found`\n- `account {id} not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 409, description = "- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`", body = ErrorBody, example = json!({"error": "account {id} is a member of pool {pool}"})),
         (status = 500, response = StorageFailure),
@@ -943,8 +945,9 @@ pub(crate) async fn set_members(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    let Ok(input) = serde_json::from_slice::<MembersInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must carry a members list");
+    let input: MembersInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     let mut row = match state.store.pool(&id) {
         Ok(Some(row)) => row,

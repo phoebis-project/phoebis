@@ -45,8 +45,15 @@ export function installMockClock(next: MockClock | null): void {
   mockClock = next ?? wallClock;
 }
 
-// A short delay keeps loading states honest without making the mock feel slow.
-const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => mockClock.setTimeout(() => resolve(value), ms));
+let pending = 0;
+// A short delay keeps loading states honest without making the mock feel slow. The answers in flight are counted so
+// a harness settles on the mock's own signal rather than on a fixed wait.
+const latency = <T,>(value: T, ms = 120): Promise<T> => {
+  pending += 1;
+  return new Promise((resolve) => mockClock.setTimeout(() => { pending -= 1; resolve(value); }, ms));
+};
+/** How many mock answers are still on their timer. */
+export const inFlight = (): number => pending;
 
 /** How long a confirm's first usage poll takes to land, on the mock's clock: the few seconds its answer names. */
 const FIRST_POLL_MS = 2_000;
@@ -110,7 +117,9 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
   return null;
 };
 
-/** The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes. */
+/**
+ * The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes.
+ */
 const engineRefusal = (input: PoolInput): string | null => {
   const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
   if (!(input.windowCeiling >= 0.5 && input.windowCeiling <= 1)) return 'window_ceiling is between 0.5 and 1.0';
@@ -481,18 +490,23 @@ export class MockApi implements Api {
   }
 
   /** A subject's list replaced whole from its own side, positions 0 to n-1 in the given order. */
-  private setSubjectGuardrails(kind: 'keys' | 'pools', subjectId: string, ids: string[]) {
+  private setSubjectGuardrails(kind: 'keys' | 'pools', subjectId: string, ids: string[], moveStamps = true) {
     this.guardrails = this.guardrails.map((g) => {
       const others = g[kind].filter((a) => a.id !== subjectId);
       const at = ids.indexOf(g.id);
-      return withAttachments(g, kind, at < 0 ? others : [...others, { id: subjectId, label: subjectId, position: at }]);
+      const held = others.length < g[kind].length;
+      const next = withAttachments(g, kind, at < 0 ? others : [...others, { id: subjectId, label: subjectId, position: at }]);
+      // A guardrail dialog opened before a save presents a stamp the row no longer carries, as the routes refuse it. A
+      // reorder leaves the guardrail's membership, and a subject delete removes its attachments as the store's delete
+      // does, so neither moves a stamp.
+      return !moveStamps || held === (at >= 0) ? next : { ...next, ...restamp(g) };
     });
   }
 
   /**
-   * The bound of a write from the guardrail's side over the lists it would leave, pool by pool in id order: a named pool
-   * takes the guardrail at the end of its list, a named key at the end of its own, and every key of a named pool and
-   * every named key is counted against its pool's list. An absent list leaves that kind's lists as they stand.
+   * The bound of a write from the guardrail's side over the lists it would leave, pool by pool in id order: a named
+   * pool takes the guardrail at the end of its list, a named key at the end of its own, and every key of a named pool
+   * and every named key is counted against its pool's list. An absent list leaves that kind's lists as they stand.
    */
   private sideBoundRefusal(id: string, pools: string[] | undefined, keys: string[] | undefined): string | null {
     const place = (list: string[], attached: boolean) => (attached ? (list.includes(id) ? list : [...list, id]) : list.filter((x) => x !== id));
@@ -525,7 +539,11 @@ export class MockApi implements Api {
     if (input.name !== undefined) {
       if (bytes(input.name) > 256) return 'name is at most 256 bytes';
       if (input.name === '') return 'name is required';
-      if (input.name.toLowerCase().includes('prompt is too long')) return 'name must not contain "prompt is too long"';
+      // The route refuses each phrase the client reads specially in an error's message, matched in any case and
+      // answered as its list spells it.
+      const lowered = input.name.toLowerCase();
+      const phrase = ['model:', 'OAuth token has been revoked', 'prompt is too long'].find((p) => lowered.includes(p.toLowerCase()));
+      if (phrase !== undefined) return `name must not contain "${phrase}"`;
     }
     if (input.description !== undefined && bytes(input.description) > 256) return 'description is at most 256 bytes';
     if (input.mode !== undefined && !GUARDRAIL_MODE_VALUES.some((m) => m === input.mode)) return 'mode is observe or enforce';
@@ -726,6 +744,12 @@ export class MockApi implements Api {
     const stamp = preset === undefined ? null : { currentVersion: preset.version, customized: false, id: preset.id, version: preset.version };
     const row: Guardrail = { ...blank, keys: this.attached(blank, 'keys', input.keys), pools: this.attached(blank, 'pools', input.pools), preset: this.presetStateOf(stamp, blank.conditions) };
     this.guardrails = [...this.guardrails, row];
+    // A pool or key dialog opened before the create presents a stamp the row no longer carries, as the routes
+    // refuse it.
+    const movedPools = new Set(row.pools.map((a) => a.id));
+    const movedKeys = new Set(row.keys.map((a) => a.id));
+    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
+    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
     return latency(this.guardrailView(row), 300);
   }
 
@@ -822,6 +846,12 @@ export class MockApi implements Api {
     this.buriedGuardrails.set(id, Math.floor(row.revision / INCARNATION_STAMP));
     // The attachments live on the row, so they leave with it and every other guardrail keeps its positions.
     this.guardrails = this.guardrails.filter((g) => g.id !== id);
+    // A pool or key dialog opened before the delete presents a stamp the row no longer carries, as the routes
+    // refuse it.
+    const movedPools = new Set(row.pools.map((a) => a.id));
+    const movedKeys = new Set(row.keys.map((a) => a.id));
+    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
+    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
     return latency(undefined, 200);
   }
 
@@ -829,8 +859,9 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
-    // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two tables.
-    this.setSubjectGuardrails('keys', id, []);
+    // The key's attachments go in the delete's own transaction, since one subject column cannot cascade from two
+    // tables.
+    this.setSubjectGuardrails('keys', id, [], false);
     return latency(undefined, 200);
   }
 
@@ -840,7 +871,7 @@ export class MockApi implements Api {
     const pool = this.pools.find((p) => p.id === id);
     if (pool) this.buriedPools.set(id, Math.floor(pool.revision / INCARNATION_STAMP));
     this.pools = this.pools.filter((p) => p.id !== id);
-    this.setSubjectGuardrails('pools', id, []);
+    this.setSubjectGuardrails('pools', id, [], false);
     return latency(undefined, 200);
   }
 
@@ -977,32 +1008,37 @@ export class MockApi implements Api {
       const startMs = Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000;
       const at = iso(startMs);
       const { billedUsd, equivalent } = requestSidesOf(last24h.filter((r) => Date.parse(r.at) >= startMs && Date.parse(r.at) < startMs + 3_600_000));
-      hourlyMap.set(at, { at, billed: billedUsd, cost: 0, equivalent, errors: 0, requests: 0, tokens: 0 });
+      hourlyMap.set(at, { at, billed: billedUsd, cost: 0, equivalent, errors: 0, refused: 0, requests: 0, tokens: 0 });
     }
     let tokens = 0;
     let cached = 0;
     let cost = 0;
     const errorCodes = new Map<string, number>();
-    // A guardrail block is a refusal the operator asked for, so it is no error of the router's: the rate, the hourly
-    // errors and the top code leave it out, while the request count keeps it, since the router received it.
-    const blocked = (r: RequestLog) => r.errorCode === 'guardrail_blocked';
-    const rated = last24h.filter((r) => !blocked(r));
+    const refusalCodes = new Map<string, number>();
+    const rated = last24h.filter((r) => !r.refused);
     for (const r of last24h) {
       const at = iso(Math.floor(Date.parse(r.at) / 3_600_000) * 3_600_000);
       const bucket = hourlyMap.get(at);
+      // The ledger's fold books a refused request under its refusals map and nothing else.
+      if (r.refused) {
+        if (r.errorCode) refusalCodes.set(r.errorCode, (refusalCodes.get(r.errorCode) ?? 0) + 1);
+        if (bucket) bucket.refused += 1;
+        continue;
+      }
       const total = r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output;
       tokens += total;
       cached += r.usage.cacheRead;
       cost += r.costUsd;
-      if (r.errorCode && !blocked(r)) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
+      if (r.errorCode) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
       if (bucket) {
         bucket.requests += 1;
         bucket.tokens += total;
         bucket.cost += r.costUsd;
-        if (r.status !== 200 && !blocked(r)) bucket.errors += 1;
+        if (r.status !== 200) bucket.errors += 1;
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
+    const topRefusal = [...refusalCodes.entries()].sort((a, b) => b[1] - a[1])[0];
     const day = requestSidesOf(last24h);
     return latency({
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
@@ -1013,10 +1049,12 @@ export class MockApi implements Api {
       errorRate24h: rated.length ? rated.filter((r) => r.status !== 200).length / rated.length : null,
       estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
-      requests24h: last24h.length,
+      refused24h: last24h.length - rated.length,
+      requests24h: rated.length,
       tokens24h: tokens,
       tokensCached24h: cached,
       topErrorCode: top ? top[0] : null,
+      topRefusalCode: topRefusal ? topRefusal[0] : null,
     });
   }
 
@@ -1262,8 +1300,8 @@ export class MockApi implements Api {
   }
 
   /**
-   * The edit route's checks in its order. An edit stamps the guardrail alone: the attachments it changes from its side
-   * leave the pools' and keys' stamps where they were.
+   * The edit route's checks in its order. An edit stamps the guardrail and every pool and key it attaches or detaches,
+   * so a dialog of either side opened before it is refused as stale.
    */
   async updateGuardrail(id: string, input: Partial<GuardrailInput>, revision?: number): Promise<Guardrail> {
     const current = this.guardrails.find((g) => g.id === id);
@@ -1297,6 +1335,15 @@ export class MockApi implements Api {
       ...restamp(current),
     };
     this.guardrails = this.guardrails.map((g) => (g.id === id ? next : g));
+    const changed = (kind: 'keys' | 'pools') => {
+      const before = new Set(current[kind].map((a) => a.id));
+      const after = new Set(next[kind].map((a) => a.id));
+      return new Set([...before, ...after].filter((s) => before.has(s) !== after.has(s)));
+    };
+    const movedPools = changed('pools');
+    const movedKeys = changed('keys');
+    this.pools = this.pools.map((p) => (movedPools.has(p.id) ? { ...p, ...restamp(p) } : p));
+    this.keys = this.keys.map((k) => (movedKeys.has(k.id) ? { ...k, ...restamp(k) } : k));
     return latency(this.guardrailView(next), 250);
   }
 

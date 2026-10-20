@@ -104,6 +104,9 @@ pub struct RequestRecord {
     pub guardrail_id: Option<String>,
     /// Every guardrail that matched, in evaluation order, empty on a row from before the table.
     pub guardrails: Vec<GuardrailMatchRecord>,
+    /// The router refused the request before it asked any account, for the client's or a policy's cause, so the
+    /// figures leave it out and the logs keep it. A row from before the column reads what the step's backfill set.
+    pub refused: bool,
 }
 
 /// One row of `request_guardrails`: a guardrail that matched the request, its place in the evaluation order and

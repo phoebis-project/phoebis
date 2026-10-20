@@ -205,8 +205,52 @@ async function atRest() {
 }
 
 /**
- * The grouped dialog on a mock-only fixture that carries the pool dialog's sixteen groups under five parents: the
- * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 21 entries without
+ * The open dialog's frame and rail as the browser lays them out, run in the page, so the grouped-dialog fixture and the
+ * Pools dialog read the rail alike. The headroom is the room the rail keeps below its last entry, which the next group
+ * spends, and `firstBelow` is the first group past the rail's content bottom, null while every group fits.
+ */
+function railFit() {
+  const dialog = document.querySelector('dialog[open]');
+  const rail = dialog.querySelector('.dialog-rail');
+  const box = dialog.getBoundingClientRect();
+  const top = rail.getBoundingClientRect().top;
+  const paddingBottom = parseFloat(getComputedStyle(rail).paddingBottom);
+  // scrollHeight never reads under clientHeight, so the entries' own height is taken from the last run's edge.
+  const runs = rail.querySelectorAll('.dialog-rail__run');
+  const last = runs[runs.length - 1];
+  const entries = last ? last.getBoundingClientRect().bottom - top + paddingBottom : null;
+  // The bottom padding counts toward scrollHeight, so a group that ends inside it already scrolls the rail and the fold
+  // is the content box's bottom.
+  const fold = top + rail.clientHeight - paddingBottom;
+  const below = [...rail.querySelectorAll('.dialog-rail__group')].find((g) => g.getBoundingClientRect().bottom > fold);
+  const wrapped = [...rail.querySelectorAll('button')]
+    .filter((b) => {
+      const style = getComputedStyle(b);
+      return b.getBoundingClientRect().height > parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 0.5;
+    })
+    .map((b) => b.querySelector('.dialog-rail__label')?.textContent);
+  // A label too wide for its row ends in an ellipsis rather than wrapping, so the cut is read apart from the wrap.
+  const truncated = [...rail.querySelectorAll('.dialog-rail__label')].filter((l) => l.scrollWidth > l.clientWidth).map((l) => l.textContent);
+  return {
+    firstBelow: below ? (below.querySelector('.dialog-rail__label')?.textContent ?? null) : null,
+    frame: { height: box.height, width: box.width },
+    groups: rail.querySelectorAll('.dialog-rail__group').length,
+    headroom: entries === null ? null : Math.round((rail.clientHeight - entries) * 100) / 100,
+    parents: rail.querySelectorAll('.dialog-rail__parent').length,
+    rail: { clientHeight: rail.clientHeight, clientWidth: rail.clientWidth, entries, scrollHeight: rail.scrollHeight, scrollWidth: rail.scrollWidth, width: rail.getBoundingClientRect().width },
+    truncated,
+    wrapped,
+  };
+}
+
+/** A rail that scrolls fails the fixture's check and the Pools dialog's read in one sentence, so the two read alike. */
+function railScrolls(read) {
+  return `the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px, ${read.firstBelow} is the first group below the fold`;
+}
+
+/**
+ * The grouped dialog on a mock-only fixture that carries the pool dialog's eighteen groups under five parents: the
+ * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 23 entries without
  * scrolling either way at the pass's viewport. The two longest labels are read chosen, refused, and both, since the
  * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
@@ -235,38 +279,14 @@ async function groupedDialogFixture(theme) {
     await settle();
   };
   const check = async (state) => {
-    const read = await page.evaluate(() => {
-      const dialog = document.querySelector('dialog[open]');
-      const rail = dialog.querySelector('.dialog-rail');
-      const box = dialog.getBoundingClientRect();
-      // scrollHeight never reads under clientHeight, so the entries' own height is taken from the last run's edge.
-      const runs = rail.querySelectorAll('.dialog-rail__run');
-      const last = runs[runs.length - 1];
-      const entries = last ? last.getBoundingClientRect().bottom - rail.getBoundingClientRect().top + parseFloat(getComputedStyle(rail).paddingBottom) : null;
-      const wrapped = [...rail.querySelectorAll('button')]
-        .filter((b) => {
-          const style = getComputedStyle(b);
-          return b.getBoundingClientRect().height > parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 0.5;
-        })
-        .map((b) => b.querySelector('.dialog-rail__label')?.textContent);
-      // A label too wide for its row ends in an ellipsis rather than wrapping, so the cut is read apart from the wrap.
-      const truncated = [...rail.querySelectorAll('.dialog-rail__label')].filter((l) => l.scrollWidth > l.clientWidth).map((l) => l.textContent);
-      return {
-        frame: { height: box.height, width: box.width },
-        groups: rail.querySelectorAll('.dialog-rail__group').length,
-        parents: rail.querySelectorAll('.dialog-rail__parent').length,
-        rail: { clientHeight: rail.clientHeight, clientWidth: rail.clientWidth, entries, scrollHeight: rail.scrollHeight, scrollWidth: rail.scrollWidth, width: rail.getBoundingClientRect().width },
-        truncated,
-        wrapped,
-      };
-    });
+    const read = await page.evaluate(railFit);
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
     if (read.groups !== 18 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 18 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
-    if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
+    if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(railScrolls(read));
     if (read.rail.scrollWidth > read.rail.clientWidth) sayIn(`the rail overflows sideways: ${read.rail.scrollWidth} px of entries in ${read.rail.clientWidth} px`);
   };
   const levels = async (state) => {
@@ -714,6 +734,42 @@ async function attentionLineNarrow(theme) {
   await settle();
   const wide = await read();
   if (!wide || wide.wrapped || Math.abs(wide.height - 22) > 0.5) failures.push(`${theme} /: back at 1280 px the attention line reads ${JSON.stringify(wide)}, not one 22 px row`);
+}
+
+/**
+ * The dashboard's stat grid at the pass's viewport and at 400 by 900: all five tiles drawn, wrapping as the grid's
+ * columns let them, and none past the grid's right edge. The tiles and the rows they fill go to the measurements at
+ * both widths, and the viewport is the pass's again after.
+ */
+async function statGrid(theme) {
+  const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
+  const read = () =>
+    page.evaluate(() => {
+      const grid = document.querySelector('.stat-grid');
+      if (!grid) return null;
+      const right = grid.getBoundingClientRect().right;
+      const tiles = [...grid.querySelectorAll(':scope > .stat')].map((t) => t.getBoundingClientRect());
+      return { past: tiles.filter((t) => t.right > right + 0.5).length, rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length };
+    });
+  try {
+    for (const width of [viewport.width, 400]) {
+      if (width !== viewport.width) {
+        await page.setViewportSize({ height: 900, width });
+        await settle();
+      }
+      const grid = await read();
+      measurements.push(`${theme} / stat grid at ${width} px: ${grid?.tiles ?? 0} tiles over ${grid?.rows ?? 0} rows`);
+      const say = (what) => failures.push(`${theme} /: at ${width} px the stat grid ${what}`);
+      if (!grid) say('is not drawn');
+      else {
+        if (grid.tiles < 5) say(`draws ${grid.tiles} tiles, not five`);
+        if (grid.past > 0) say(`draws ${grid.past} tiles past its right edge`);
+      }
+    }
+  } finally {
+    await page.setViewportSize(viewport);
+    await settle();
+  }
 }
 
 /** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
@@ -2271,6 +2327,36 @@ async function poolDialogWalk(theme, mode) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+}
+
+/**
+ * The grouped-dialog fixture's rail read on the real pool dialog of the first pool of the pass, opened on Identity in
+ * the expert view, where the rail draws all eighteen groups: its headroom goes to the measurements beside the
+ * fixture's, and a rail that scrolls names its first group below the fold.
+ */
+async function poolRailFit(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog, expert view: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  let read;
+  try {
+    await expertView(true);
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+    await dialog.locator('.dialog-rail__group[data-group="identity"]').click();
+    await settle();
+    read = await page.evaluate(railFit);
+  } catch (error) {
+    say(`the rail was never read on Identity (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
+    return;
+  }
+  measurements.push(`${theme} /pools expert dialog rail ${JSON.stringify(read)}`);
+  if (read.rail.scrollHeight > read.rail.clientHeight) say(railScrolls(read));
+  await closeByEscape(dialog, `${theme} /pools expert dialog rail`, say);
+  await expertView(false).catch(() => {});
+  await atRest();
 }
 
 /**
@@ -5171,12 +5257,13 @@ async function freshRowTint(theme, path) {
 /**
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
  * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
- * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
- * type and its track), Fast mode spend against the first tile, Cost under a fresh browser's native position (the tile
- * box and its figure's type). Migration rewrites, which grows taller than its row partner with the held chart under
- * its moves, stands against Failovers (title type, card width, the row's top and height, the first chart's height),
- * and in the mock pass, whose story holds requests for the slow-down, draws the held chart's bars in the warning tone.
- * The cards are read on the Traffic tab and the tiles on Cost.
+ * Effort levels against Errors by code (title type, and where both draw bars, the bar row, its label type and its
+ * track), Fast mode spend against the first tile, Cost under a fresh browser's native position (the tile box and its
+ * figure's type). Effort levels ends the grid alone, so it spans the grid's row. Refusals by code follows Errors by
+ * code, so the grid pairs it with Failovers (title type, card width, the row's top and height), and Migration
+ * rewrites, which grows taller than its row partner with the held chart under its moves, with Requests by speed (the
+ * same, and the first chart's height). In the mock pass, whose story holds requests for the slow-down, the rewrites
+ * card draws the held chart's bars in the warning tone. The cards are read on the Traffic tab and the tiles on Cost.
  */
 async function trafficCards(theme) {
   // The cards and tiles the shown tab draws; one on another tab is not mounted and reads as null.
@@ -5195,6 +5282,7 @@ async function trafficCards(theme) {
           charts: el.querySelectorAll('.recharts-responsive-container').length,
           height: Math.round(el.getBoundingClientRect().height),
           label: type(bar?.children[0]),
+          row: Math.round(el.parentElement.getBoundingClientRect().width),
           section: el.closest('.analytics-section')?.id ?? null,
           title: type(el.querySelector('.card__title')),
           top: Math.round(el.getBoundingClientRect().top),
@@ -5219,7 +5307,7 @@ async function trafficCards(theme) {
         const b = el.getBoundingClientRect();
         return { height: Math.round(b.height), value: type(el.querySelector('.stat__value')), width: Math.round(b.width) };
       };
-      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), failovers: box('Failovers'), fastSpend: tile('Fast mode spend'), held, outcome: box('Requests by outcome'), rewrites: box('Migration rewrites'), speed: box('Requests by speed') };
+      return { cost: tile('Cost'), effort: box('Effort levels'), errors: box('Errors by code'), failovers: box('Failovers'), fastSpend: tile('Fast mode spend'), held, outcome: box('Requests by outcome'), refusals: box('Refusals by code'), rewrites: box('Migration rewrites'), speed: box('Requests by speed') };
     });
   try {
     if (!(await tabTo(theme, 'Traffic'))) return;
@@ -5230,10 +5318,12 @@ async function trafficCards(theme) {
     measurements.push(`${theme} /analytics speed and effort ${JSON.stringify(read)}`);
     failures.push(...compare(read.speed, read.outcome, ['chart', 'section', 'title', 'width'], `${theme} /analytics: "Requests by speed" against "Requests by outcome"`));
     const bars = read.effort?.bar !== null && read.errors?.bar !== null ? ['bar', 'label', 'track'] : [];
-    failures.push(...compare(read.effort, read.errors, ['section', 'title', 'width', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
+    failures.push(...compare(read.effort, read.errors, ['section', 'title', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
+    if (read.effort && Math.abs(read.effort.width - read.effort.row) > 1) failures.push(`${theme} /analytics: the Effort levels card ends the grid alone at ${read.effort.width}px, not across its ${read.effort.row}px row`);
     failures.push(...compare(read.fastSpend, read.cost, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Cost`));
     if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
-    failures.push(...compare(read.rewrites, read.failovers, ['chart', 'height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Failovers"`));
+    failures.push(...compare(read.refusals, read.failovers, ['height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Refusals by code" against "Failovers"`));
+    failures.push(...compare(read.rewrites, read.speed, ['chart', 'height', 'section', 'title', 'top', 'width'], `${theme} /analytics: "Migration rewrites" against "Requests by speed"`));
     if (mock && (read.rewrites?.charts !== 2 || !read.held || read.held.bars === 0)) failures.push(`${theme} /analytics: the story holds requests for the slow-down, yet the rewrites card draws no held bar under its moves (${JSON.stringify(read.held)})`);
     if (read.held && read.held.fills.some((fill) => fill !== read.held.warning)) failures.push(`${theme} /analytics: the held bars draw ${read.held.fills.join(', ')}, not the warning ink ${read.held.warning}`);
   } finally {
@@ -7380,8 +7470,9 @@ const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Guardrails', 'Sessions', '
  * and a flat rail of six groups that fits it, 8 px apart with no line between them and a refusal dot 6 px after its
  * label on its line, each group inside one window of the body with the layout `groupGeometry` reads, the derived id
  * under a new key's typed Name, the moving warning leading Key on an edit that changes the pool, the bodies warning
- * leading Capture while capture is on, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every
- * dialog leaves by Escape, through the discard question where the walk changed it.
+ * leading Capture while capture is on, the mode badge ending at one x in the desktop key's inherited and own guardrail
+ * rows, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every dialog leaves by Escape, through
+ * the discard question where the walk changed it.
  */
 async function keyDialogGeometry(theme) {
   const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
@@ -7488,6 +7579,45 @@ async function keyDialogGeometry(theme) {
     }
   }
   await expertView(false).catch(() => {});
+  // The walk cannot read the mode badge: its create mode draws no own guardrail row, and its edit moves the key to
+  // another pool at the Key group, which drops the pool's inherited rows. The mock's desktop key holds both kinds of
+  // row, and the router's seed attaches no guardrail, so a missing row fails the mock pass alone.
+  const badgeAt = 'edit, Guardrails';
+  const sayBadge = (what) => (mock ? sayIn(badgeAt, what) : measurements.push(`${theme} /keys dialog ${badgeAt}: ${what}`));
+  const desktop = rows.filter({ has: page.locator('td:first-child > b', { hasText: /^desktop$/i }) }).first();
+  if ((await desktop.count()) === 0) sayBadge('no desktop key to open');
+  else {
+    try {
+      await openBy(editOf(desktop));
+      await railEntry(dialog, 'Guardrails').click();
+      await settle();
+      // The trailing slot fixes where the badge ends, and its start moves with the mode's word, so the right edges are
+      // the ones that agree.
+      const read = await dialog.locator('section.dialog-group[aria-label="Guardrails"]').evaluate((group) => {
+        const own = 'li.pattern-editor__row:not(.pattern-editor__row--inherited)';
+        const box = (selector) => group.querySelector(selector)?.getBoundingClientRect() ?? null;
+        const inherited = box('li.pattern-editor__row--inherited .badge');
+        const badge = box(`${own} .badge`);
+        const actions = box(`${own} .pattern-editor__actions`);
+        const buttons = [...group.querySelectorAll(`${own} .pattern-editor__actions button`)].map((b) => b.getBoundingClientRect());
+        const span = buttons.length ? +(buttons[buttons.length - 1].right - buttons[0].left).toFixed(2) : null;
+        return { actions: actions && +actions.width.toFixed(2), buttons: span, inherited: inherited && +inherited.right.toFixed(2), own: badge && +badge.right.toFixed(2) };
+      });
+      const missing = [read.inherited === null && 'inherited row', read.own === null && 'own row'].filter(Boolean);
+      if (missing.length) sayBadge(`no ${missing.join(' and no ')} with a mode badge to read`);
+      else {
+        measurements.push(`${theme} /keys dialog ${badgeAt}: badge x inherited ${read.inherited} own ${read.own}, actions ${read.actions} px`);
+        if (Math.abs(read.inherited - read.own) > 1) sayIn(badgeAt, `the mode badge sits at ${read.inherited} in an inherited row and ${read.own} in an own row`);
+        // The slot keeps its width whatever the buttons measure, so buttons that outgrow it spill over the badge while
+        // both badges stay aligned. The spill runs toward the row's start, which the slot's scrollWidth does not count.
+        if (read.buttons === null || Math.abs(read.buttons - read.actions) > 1) sayIn(badgeAt, `the own row's buttons span ${read.buttons} px in a ${read.actions} px trailing slot`);
+      }
+      await close(badgeAt);
+    } catch (error) {
+      sayIn(badgeAt, error instanceof Error ? error.message : String(error));
+      await close(badgeAt).catch(() => {});
+    }
+  }
   // The route refuses to re-enable a revoked key, so its dialog draws the switch disabled; a router with no revoked key
   // says so.
   const revoked = rows.filter({ has: page.locator('td:nth-child(7) .badge', { hasText: /^revoked$/ }) }).first();
@@ -8785,6 +8915,7 @@ try {
       if (view.path === '/') {
         await sidebarBrand(theme);
         await attentionLine(theme);
+        await statGrid(theme);
         await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {
@@ -8827,6 +8958,7 @@ try {
         await poolMemberPins(theme);
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
+        await poolRailFit(theme);
         await poolKeyMenus(theme);
       }
       if (view.path === '/analytics') {

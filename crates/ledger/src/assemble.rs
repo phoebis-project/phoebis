@@ -617,6 +617,13 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         response_len_seen,
         expires_at: complete.finished_at + observed.body_capture_hours as i64 * 3_600_000,
     });
+    // An incomplete trail keeps the completion's attempt number, so a refusal after an attempt whose selection the
+    // bus lost keeps its count and stays a rejected request.
+    let attempt_count = if trail_complete {
+        attempts.len() as u32
+    } else {
+        complete.attempt as u32
+    };
     let request = RequestRecord {
         id: observed.request_id.clone(),
         received_at: observed.received_at,
@@ -634,11 +641,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         origin: observed.origin.as_str().into(),
         status: (complete.status != 0).then_some(complete.status),
         outcome: complete.outcome.as_str().into(),
-        attempts: if trail_complete {
-            attempts.len() as u32
-        } else {
-            complete.attempt as u32
-        },
+        attempts: attempt_count,
         request_bytes: Some(request_len),
         response_bytes: complete.response_bytes,
         ttfb_ms: complete.ttfb_ms,
@@ -711,6 +714,14 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 blocked: m.blocked,
             })
             .collect(),
+        // The ledger's reading of the row's own facts, as the drift and the contract members above are: the relay's
+        // outcome and the bus's completion carry no flag.
+        refused: crate::refusals::is_refusal(
+            observed.kind.as_str(),
+            complete.outcome.as_str(),
+            complete.error_code.as_deref(),
+            attempt_count,
+        ),
     };
     records.push(Record::Request {
         request,
@@ -1495,6 +1506,43 @@ mod tests {
             (request.attempts, attempts.len()),
             (2, 1),
             "the count is the one the completion names, not the length of the trail that arrived"
+        );
+    }
+
+    /// The reselect after an attempt can refuse a request with a code the refusal list names. Where the bus lost
+    /// that attempt's selection the trail holds no row, so the flag has to read the count the row stores.
+    #[test]
+    fn a_refusal_after_a_lost_selection_keeps_its_attempt_count_and_is_not_refused() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r12", Some("k")));
+        let records = a.observe(complete(
+            "r12",
+            1,
+            Some("a"),
+            Outcome::Rejected,
+            403,
+            Some("client_not_allowed"),
+        ));
+        assert_eq!(records.len(), 2, "the request and a gap");
+        let Record::Event(gap) = &records[0] else {
+            panic!()
+        };
+        let detail: serde_json::Value =
+            serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            (detail["request_id"].as_str(), detail["reason"].as_str()),
+            (Some("r12"), Some("attempt_missing"))
+        );
+        let Record::Request {
+            request, attempts, ..
+        } = &records[1]
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (attempts.len(), request.attempts, request.refused),
+            (0, 1, false),
+            "an empty trail, the completion's count, and a rejected request rather than a refusal"
         );
     }
 

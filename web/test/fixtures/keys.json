@@ -25,8 +25,8 @@
         "effective_auto_mode_server": true,
         "prefix": "KxtrG2cq",
         "created_at": 1791721000000,
-        "updated_at": 1791721000000,
-        "revision": 6189767511104,
+        "updated_at": 1791721000001,
+        "revision": 6189767511105,
         "rotated_at": null,
         "last_used_at": null,
         "retired_secret_last_used_at": null,
@@ -61,7 +61,7 @@
             }
           },
           "estimated": true,
-          "requests": 9,
+          "requests": 7,
           "tokens": 14400
         },
         "lifetime": {
@@ -76,7 +76,7 @@
             }
           },
           "estimated": true,
-          "requests": 9
+          "requests": 7
         }
       }
     ]

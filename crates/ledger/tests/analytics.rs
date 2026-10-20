@@ -1113,6 +1113,392 @@ fn a_replace_that_moves_the_serving_attempt_empties_the_old_accounts_reading() {
     assert_eq!(peak(&db, "b"), Some(0.4));
 }
 
+/// A request the router refused under `key` before it asked any account, flagged as the landing flags it.
+fn refusal(id: &str, key: &str) -> RequestRecord {
+    RequestRecord {
+        id: id.into(),
+        received_at: 3_700_000,
+        finished_at: Some(3_700_004),
+        key_id: Some(key.into()),
+        pool_id: Some("p".into()),
+        model: "m".into(),
+        canonical_model: "m".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(403),
+        outcome: "rejected".into(),
+        attempts: 0,
+        duration_ms: Some(4),
+        error_code: Some("guardrail_blocked".into()),
+        refused: true,
+        ..Default::default()
+    }
+}
+
+fn all_rows(db: &LedgerDb) -> Vec<RollupRow> {
+    db.read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap()
+}
+
+/// A row's key with the figures a reader sums for requests: requests, rejected, uncached requests, the errors map,
+/// the duration histogram's count and the refusals map.
+type Figures = (
+    String,
+    u64,
+    u64,
+    u64,
+    BTreeMap<String, u64>,
+    u64,
+    BTreeMap<String, u64>,
+);
+
+fn request_figures(row: &RollupRow) -> Figures {
+    (
+        row.key_id.clone(),
+        row.requests,
+        row.rejected,
+        row.uncached_requests,
+        row.errors.clone(),
+        row.duration_hist.count(),
+        row.refusals.clone(),
+    )
+}
+
+fn blocked(n: u64) -> BTreeMap<String, u64> {
+    BTreeMap::from([("guardrail_blocked".to_string(), n)])
+}
+
+#[test]
+fn a_flagged_request_folds_into_its_hours_refusals_map_and_under_no_other_figure() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
+    let rows = all_rows(&db);
+    assert_eq!(rows.len(), 1, "one row for the refused request's hour");
+    assert_eq!(rows[0].hour, hour_of(3_700_000));
+    assert_eq!(
+        request_figures(&rows[0]),
+        ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1)),
+        "the refusal sits in the map alone: no request, no rejected, no uncached request, no error, no duration"
+    );
+}
+
+#[test]
+fn a_rejection_after_an_attempt_folds_as_a_rejected_request_as_before() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let request = RequestRecord {
+        status: Some(403),
+        outcome: "rejected".into(),
+        attempts: 1,
+        duration_ms: Some(4),
+        error_code: Some("client_not_allowed".into()),
+        refused: false,
+        ..replaced("r1")
+    };
+    let attempt = AttemptRecord {
+        request_id: "r1".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        started_at: 3_700_000,
+        outcome: "failed".into(),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+    let rows = all_rows(&db);
+    assert_eq!(rows.len(), 1, "one row for the attempt's account");
+    assert_eq!(
+        (
+            rows[0].requests,
+            rows[0].rejected,
+            rows[0].errors.clone(),
+            rows[0].refusals.clone()
+        ),
+        (
+            1,
+            1,
+            BTreeMap::from([("client_not_allowed".to_string(), 1)]),
+            BTreeMap::new()
+        ),
+        "an account was asked, so the rejection counts as a request and an error"
+    );
+}
+
+#[test]
+fn a_replaced_flagged_request_leaves_its_old_row_and_a_row_of_refusals_alone_is_kept() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
+    db.insert_request(&refusal("r1", "k2"), &[], None).unwrap();
+    assert_eq!(
+        all_rows(&db)
+            .iter()
+            .map(request_figures)
+            .collect::<Vec<_>>(),
+        [("k2".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1))],
+        "the old row held the refusal alone and goes, the new row holds the map alone and stays"
+    );
+
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Landed without an attempt row, the served request files under the unattributed account the refusal's row names:
+    // a request with an attempt files under that attempt's account, a row of its own.
+    db.insert_request(&replaced("s1"), &[], None).unwrap();
+    db.insert_request(&refusal("r1", "k"), &[], None).unwrap();
+    assert_eq!(
+        all_rows(&db)
+            .iter()
+            .map(|r| (r.key_id.as_str(), r.requests, r.refusals.clone()))
+            .collect::<Vec<_>>(),
+        [("k", 1, blocked(1))],
+        "the served request and the refusal share the row before the replace"
+    );
+    db.insert_request(&refusal("r1", "k2"), &[], None).unwrap();
+    let rows = all_rows(&db);
+    let row = |key: &str| {
+        rows.iter()
+            .find(|r| r.key_id == key)
+            .unwrap_or_else(|| panic!("a row under {key}: {rows:?}"))
+    };
+    assert_eq!(
+        (
+            row("k").requests,
+            row("k").succeeded,
+            row("k").refusals.clone()
+        ),
+        (1, 1, BTreeMap::new()),
+        "the row keeps the served request and gives the refusal up"
+    );
+    assert_eq!(row("k2").refusals, blocked(1));
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
+fn the_start_time_pass_moves_the_stored_refusals_and_leaves_a_request_after_an_attempt_alone() {
+    use phoebis_ledger::{refold_refusals, REFUSALS_BACKFILL_KEY};
+
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Landed unflagged, as the fold read every refusal before the flag existed, then flagged by id as the step's
+    // backfill flags the rows it matches.
+    let stored = RequestRecord {
+        refused: false,
+        ..refusal("r1", "k")
+    };
+    db.insert_request(&stored, &[], None).unwrap();
+    let after_an_attempt = RequestRecord {
+        status: Some(403),
+        outcome: "rejected".into(),
+        attempts: 1,
+        duration_ms: Some(4),
+        error_code: Some("client_not_allowed".into()),
+        ..replaced("r2")
+    };
+    let attempt = AttemptRecord {
+        request_id: "r2".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        started_at: 3_700_000,
+        outcome: "failed".into(),
+        ..Default::default()
+    };
+    db.insert_request(&after_an_attempt, &[attempt], None)
+        .unwrap();
+    db.write(|c| {
+        c.execute(
+            "UPDATE requests SET refused = 1 WHERE id IN (?1)",
+            rusqlite::params!["r1"],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let now = 3_700_000 + DAY_MS;
+    assert_eq!(
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, now).unwrap(),
+        1,
+        "the one flagged request moved"
+    );
+    let rows = all_rows(&db);
+    let on = |account: &str| {
+        rows.iter()
+            .find(|r| r.account_id == account)
+            .unwrap_or_else(|| panic!("a row on {account}: {rows:?}"))
+    };
+    assert_eq!(
+        request_figures(on(UNATTRIBUTED)),
+        ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1)),
+        "the refusal's request, rejected, uncached request, error and duration moved into the map"
+    );
+    assert_eq!(
+        (
+            on("a").requests,
+            on("a").rejected,
+            on("a").errors.clone(),
+            on("a").refusals.clone()
+        ),
+        (
+            1,
+            1,
+            BTreeMap::from([("client_not_allowed".to_string(), 1)]),
+            BTreeMap::new()
+        ),
+        "the rejection after an attempt keeps its figures"
+    );
+    let mark: serde_json::Value = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                [REFUSALS_BACKFILL_KEY],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .map(|text| serde_json::from_str(&text).expect("the mark is JSON"))
+        .expect("the pass wrote its mark");
+    assert_eq!(mark["done_at"].as_i64(), Some(now));
+    assert_eq!(
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, now + DAY_MS).unwrap(),
+        0,
+        "the mark stands, so a second start moves nothing"
+    );
+    assert_eq!(all_rows(&db), rows);
+}
+
+/// An older build keyed a refusal's row by the raw `User-Agent` and `standard` speed, where today's fold keys the cut
+/// agent and the speed the request asked for. The pass takes the refusal's figures out of the row that holds them and
+/// books it under today's key, and a row of the same key parts that holds no such refusal keeps its figures.
+#[test]
+fn the_start_time_pass_takes_a_refusal_out_of_the_row_an_older_fold_keyed_it_under() {
+    use phoebis_ledger::refold_refusals;
+
+    const RAW_AGENT: &str = "claude-cli/2.1.302 (external, cli)";
+    const CUT_AGENT: &str = "claude-cli/2.1.302";
+    let db = LedgerDb::open_in_memory().unwrap();
+    let stored = RequestRecord {
+        refused: false,
+        user_agent: Some(RAW_AGENT.into()),
+        requested_speed: Some("fast".into()),
+        ..refusal("r1", "k")
+    };
+    db.insert_request(&stored, &[], None).unwrap();
+    // Landed without an attempt, the served request shares every part of the refusal's key but the agent and speed.
+    db.insert_request(&replaced("s1"), &[], None).unwrap();
+    db.write(|c| {
+        c.execute(
+            "UPDATE rollups_hourly SET user_agent = ?1, speed = 'standard' WHERE user_agent = ?2",
+            rusqlite::params![RAW_AGENT, CUT_AGENT],
+        )?;
+        c.execute(
+            "UPDATE requests SET refused = 1 WHERE id IN (?1)",
+            rusqlite::params!["r1"],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let requests = |rows: &[RollupRow]| rows.iter().map(|r| r.requests).sum::<u64>();
+    let before = all_rows(&db);
+    assert_eq!(
+        requests(&before),
+        2,
+        "the older fold booked the refusal as a request"
+    );
+    let served = before
+        .iter()
+        .find(|r| r.user_agent == UNATTRIBUTED)
+        .cloned()
+        .expect("the served request's row");
+    let now = 3_700_000 + DAY_MS;
+    assert_eq!(
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, now).unwrap(),
+        1
+    );
+    let after = all_rows(&db);
+    assert!(
+        after.iter().all(|r| r.user_agent != RAW_AGENT),
+        "the older row held the refusal alone and went: {after:?}"
+    );
+    let folded = after
+        .iter()
+        .find(|r| r.user_agent == CUT_AGENT)
+        .unwrap_or_else(|| panic!("a row under today's key: {after:?}"));
+    assert_eq!(
+        (folded.speed.as_str(), request_figures(folded)),
+        (
+            "fast",
+            ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1))
+        ),
+        "today's key holds the refusal in the map alone"
+    );
+    assert_eq!(
+        requests(&after),
+        1,
+        "the hour's requests fell by the refusal"
+    );
+    assert_eq!(
+        after.iter().find(|r| r.user_agent == UNATTRIBUTED),
+        Some(&served),
+        "the served request's row holds no refusal, so the pass left it"
+    );
+}
+
+/// A retention of 90 days bounds the pass as it bounds the purge: a flagged row received before the cutoff keeps the
+/// figures the older fold gave it, and one inside the window moves.
+#[test]
+fn the_start_time_pass_leaves_a_refusal_older_than_the_retention_and_moves_one_inside_it() {
+    use phoebis_ledger::{refold_refusals, REFUSALS_BACKFILL_KEY};
+
+    let now = 3_700_000 + 200 * DAY_MS;
+    let at = |id: &str, received_at: i64| RequestRecord {
+        refused: false,
+        received_at,
+        finished_at: Some(received_at + 4),
+        ..refusal(id, "k")
+    };
+    let old = at("old", now - 91 * DAY_MS);
+    let recent = at("recent", now - DAY_MS);
+    let db = LedgerDb::open_in_memory().unwrap();
+    for request in [&old, &recent] {
+        db.insert_request(request, &[], None).unwrap();
+    }
+    db.write(|c| {
+        c.execute(
+            "UPDATE requests SET refused = 1 WHERE id IN (?1, ?2)",
+            rusqlite::params!["old", "recent"],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        refold_refusals(&db, &PriceRevisions::shipped(), 90, now).unwrap(),
+        1,
+        "the request inside the window alone"
+    );
+    let rows = all_rows(&db);
+    let in_hour_of = |request: &RequestRecord| {
+        rows.iter()
+            .find(|r| r.hour == hour_of(request.received_at))
+            .map(request_figures)
+            .unwrap_or_else(|| panic!("a row in {}'s hour: {rows:?}", request.id))
+    };
+    assert_eq!(
+        in_hour_of(&old),
+        ("k".to_string(), 1, 1, 1, blocked(1), 1, BTreeMap::new()),
+        "the refusal past the retention keeps the older fold's figures"
+    );
+    assert_eq!(
+        in_hour_of(&recent),
+        ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1)),
+        "the refusal inside the window moved into the map"
+    );
+    let mark: serde_json::Value = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                [REFUSALS_BACKFILL_KEY],
+                |r| r.get::<_, String>(0),
+            )?)
+        })
+        .map(|text| serde_json::from_str(&text).expect("the mark is JSON"))
+        .expect("the pass wrote its mark");
+    assert_eq!(mark["done_at"].as_i64(), Some(now));
+}
+
 #[test]
 fn merged_histogram_percentiles_lie_within_one_bucket_of_the_exact_percentiles() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -7111,10 +7497,10 @@ async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_
     );
 }
 
-/// A guardrail's block is a refusal the operator asked for: the day's error rate and its most common code leave the
-/// blocked requests out, numerator and denominator and the hour's errors alike, and the day's requests keep them.
+/// A row the landing did not flag is a rejected request like any other: the day's requests, the hour's errors, the
+/// error rate and the most common code count its guardrail blocks with the other rejections.
 #[tokio::test]
-async fn the_dashboard_leaves_the_blocked_requests_out_of_the_rate_and_the_top_code_and_keeps_them_in_the_requests(
+async fn the_dashboard_counts_an_unflagged_block_in_the_rate_and_the_top_code_like_any_other_rejection(
 ) {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     let row = |n: usize, outcome: &str, status: u16, code: Option<&str>| RequestRecord {
@@ -7150,11 +7536,196 @@ async fn the_dashboard_leaves_the_blocked_requests_out_of_the_rate_and_the_top_c
         .expect("the planted hour");
     assert_eq!(
         (day.requests_24h, point.requests, point.errors),
-        (10, 10, 1),
-        "the blocked requests count among the requests and not among the hour's errors"
+        (10, 10, 4),
+        "the unflagged blocks count among the requests and among the hour's errors"
     );
-    assert_eq!(day.error_rate_24h, Some(1.0 / 7.0));
-    assert_eq!(day.top_error_code.as_deref(), Some("upstream_error"));
+    assert_eq!(day.error_rate_24h, Some(4.0 / 10.0));
+    assert_eq!(day.top_error_code.as_deref(), Some("guardrail_blocked"));
+}
+
+/// Six requests of the key `desktop` in the minute before `WEEKDAY_OFF_PEAK` on the pool `p`: two guardrail blocks
+/// and a contract refusal, each flagged with no attempt as the landing flags a refusal, a `client_not_allowed`
+/// rejection after one attempt, a succeeded request and a 529. The succeeded request and the two blocks share the
+/// session `s1`, the contract refusal is alone on `s2`, and the rejection and the 529 carry no session.
+fn plant_asked_and_refused(db: &LedgerDb) {
+    let row = |n: i64, session: Option<&str>, outcome: &str, status: u16, code: Option<&str>| {
+        RequestRecord {
+            id: format!("r{n}"),
+            received_at: WEEKDAY_OFF_PEAK - 60_000 + n,
+            finished_at: Some(WEEKDAY_OFF_PEAK - 60_000 + n + 4),
+            key_id: Some("desktop".into()),
+            pool_id: Some("p".into()),
+            session_id: session.map(String::from),
+            model: "claude-opus-5-5".into(),
+            canonical_model: "claude-opus-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(status),
+            outcome: outcome.into(),
+            duration_ms: Some(4),
+            error_code: code.map(String::from),
+            ..RequestRecord::default()
+        }
+    };
+    let refused = |n: i64, session: &str, status: u16, code: &str| RequestRecord {
+        attempts: 0,
+        refused: true,
+        ..row(n, Some(session), "rejected", status, Some(code))
+    };
+    let asked = |n: i64, outcome: &str, status: u16, code: Option<&str>, session: Option<&str>| {
+        let attempt = AttemptRecord {
+            request_id: format!("r{n}"),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            started_at: WEEKDAY_OFF_PEAK - 60_000 + n,
+            upstream_status: Some(status),
+            outcome: if status == 200 { "succeeded" } else { "failed" }.into(),
+            ..Default::default()
+        };
+        let request = RequestRecord {
+            attempts: 1,
+            ..row(n, session, outcome, status, code)
+        };
+        (request, vec![attempt])
+    };
+    for request in [
+        refused(0, "s1", 403, "guardrail_blocked"),
+        refused(1, "s1", 403, "guardrail_blocked"),
+        refused(2, "s2", 400, "client_contract"),
+    ] {
+        db.insert_request(&request, &[], None).unwrap();
+    }
+    for (request, attempts) in [
+        asked(3, "rejected", 403, Some("client_not_allowed"), None),
+        asked(4, "succeeded", 200, None, Some("s1")),
+        asked(5, "failed", 529, Some("overloaded_error"), None),
+    ] {
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+}
+
+/// The pool's traffic and the key's totals read the folded rows, which hold the asked requests alone, so the refused
+/// requests stay out of the requests and the failed count without a rule of the readers' own.
+#[tokio::test]
+async fn the_pool_traffic_and_the_key_totals_count_the_asked_requests_alone() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_asked_and_refused(&db);
+    let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
+    let traffic =
+        phoebis_ledger::pool_traffic(&db, "p", hour, hour + 3_600, 3_600, &PRICES, &COSTS)
+            .await
+            .unwrap();
+    assert_eq!(
+        (traffic[0].requests, traffic[0].failed),
+        (3, 2),
+        "the rejection and the 529 among the three asked requests"
+    );
+    let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
+    let totals = db
+        .read_blocking(|c| key_request_totals(c, hour, hour + 3_600, &live, &PRICES, &COSTS))
+        .unwrap();
+    assert_eq!(totals["desktop"].requests, 3, "the three asked requests");
+}
+
+/// The day's requests, its error rate and its most common error code read the asked requests alone, and the refused
+/// requests read in the day's refused count, its most common refusal code and the hour's refused count.
+#[tokio::test]
+async fn the_dashboard_leaves_the_refused_requests_out_of_its_counts_and_reads_them_in_its_own_members(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_asked_and_refused(&db);
+    let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
+    let day = phoebis_ledger::dashboard(&db, WEEKDAY_OFF_PEAK, &PRICES, &COSTS)
+        .await
+        .unwrap();
+    let point = day
+        .hourly
+        .iter()
+        .find(|h| h.at == hour * 1_000)
+        .expect("the planted hour");
+    assert_eq!(
+        (day.requests_24h, point.requests, point.refused),
+        (3, 3, 3),
+        "the rejection and the two served requests are the requests, the three refusals the refused"
+    );
+    assert_eq!(
+        day.error_rate_24h,
+        Some(2.0 / 3.0),
+        "the failed and the rejected over the three asked requests"
+    );
+    assert!(
+        matches!(
+            day.top_error_code.as_deref(),
+            Some("client_not_allowed" | "overloaded_error")
+        ),
+        "an asked request's code, never a refusal's: {:?}",
+        day.top_error_code
+    );
+    assert_eq!(
+        (day.refused_24h, day.top_refusal_code.as_deref()),
+        (3, Some("guardrail_blocked")),
+        "two blocks over one contract refusal"
+    );
+}
+
+/// A group reads its refused requests in its refused count and its refusals by code, apart from its requests.
+#[test]
+fn the_breakdown_answers_refused_and_refusals_per_group() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_asked_and_refused(&db);
+    let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default());
+    let groups = breakdown(&filtered, "key", false, &live, &[], None, &PRICES, &COSTS);
+    let desktop = group(&groups, "desktop");
+    assert_eq!(
+        (desktop.requests, desktop.refused, desktop.refusals.clone()),
+        (
+            3,
+            3,
+            BTreeMap::from([
+                ("client_contract".to_string(), 1),
+                ("guardrail_blocked".to_string(), 2),
+            ])
+        ),
+        "the refused requests beside the three asked ones and not among them"
+    );
+}
+
+/// A session's count leaves its refused requests out, while the refused rows stay in the window that picks a
+/// session's newest request, so a session whose every request was refused is still listed.
+#[test]
+fn a_sessions_count_leaves_its_refused_requests_out_and_a_session_of_refusals_alone_is_still_listed(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_asked_and_refused(&db);
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_activity(c, WEEKDAY_OFF_PEAK - 3_600_000))
+        .unwrap();
+    let session = |id: &str| {
+        sessions
+            .iter()
+            .find(|s| s.session_id == id)
+            .unwrap_or_else(|| panic!("the session {id} is listed: {sessions:?}"))
+    };
+    assert_eq!(
+        sessions.len(),
+        2,
+        "the rejection and the 529 carry no session: {sessions:?}"
+    );
+    assert_eq!(
+        session("s1").requests,
+        1,
+        "the served request, the two blocks left out"
+    );
+    assert_eq!(
+        (session("s2").requests, session("s2").last_request_at),
+        (0, WEEKDAY_OFF_PEAK - 60_000 + 2),
+        "the contract refusal alone, listed with its newest request"
+    );
 }
 
 /// A probe on a model the revision does not list consumed quota all the same, so its row prices its counts and its

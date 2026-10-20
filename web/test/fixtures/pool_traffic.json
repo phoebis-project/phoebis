@@ -399,8 +399,8 @@
       },
       {
         "at": 1791716400000,
-        "requests": 6,
-        "failed": 3,
+        "requests": 4,
+        "failed": 1,
         "tokens": 9000,
         "cost_usd": 0.017750000000000002,
         "billed_usd": 0.0071,

@@ -329,6 +329,13 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// the rows written since. No backfill: a row from before reads NULL, which no such filter answers. The same step gives
 /// each account hour the longest time a wall on the account arrived before its window's reset under a stretch round,
 /// so the figure outlives the trailing day the `wall_reached` condition covers. An hour from before reads 0.
+///
+/// Version 42: the request row flags a refusal the router issued before it asked any account for the client's or a
+/// policy's cause, and an hourly rollup row counts such requests by error code in a map of their own, apart from every
+/// other figure, so a reader that sums the row's requests, outcomes, cache figures, histograms and errors sees none of
+/// them. The flag is set on every stored rejected row other than a probe with one of the refusal codes and no attempt,
+/// and the first start after the step takes each such row's share out of the hourly row that holds it, whichever
+/// fold keyed that row, and into the map.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -1057,4 +1064,5 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, acc
 CREATE INDEX requests_landed_at ON requests(landed_at);
 ALTER TABLE account_rollups_hourly ADD COLUMN wall_early_ms INTEGER NOT NULL DEFAULT 0;",
     ),
+    (42, crate::refusals::REFUSED_STEP_SQL),
 ];

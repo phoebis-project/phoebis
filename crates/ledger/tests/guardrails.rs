@@ -107,11 +107,14 @@ async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_
         let db = LedgerDb::open(&path).unwrap();
         db.insert_request(&request("before", 1_000, "k", Vec::new()), &[], None)
             .unwrap();
-        // Migration 40's two request columns and migration 41's index and two columns leave too, the index before
-        // the column SQLite refuses to drop while indexed, so the replay from 38 adds them again.
+        // Migration 40's two request columns, migration 41's index and two columns and migration 42's flag and
+        // refusals map leave too, the index before the column SQLite refuses to drop while indexed, so the replay from
+        // 38 adds them again.
         db.write(|c| {
             c.execute_batch(
-                "DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
+                "ALTER TABLE requests DROP COLUMN refused; \
+                 ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
+                 DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms; \
                  ALTER TABLE requests DROP COLUMN classifier; \
                  ALTER TABLE requests DROP COLUMN client_contract; \
@@ -128,7 +131,7 @@ async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_
         (&fresh, "the fresh ledger"),
         (&migrated, "the ledger at 38"),
     ] {
-        assert_eq!(db.schema_version().await.unwrap(), 41, "{which}");
+        assert_eq!(db.schema_version().await.unwrap(), 42, "{which}");
         assert!(
             names(db, "SELECT name FROM pragma_table_info('requests')")
                 .iter()
@@ -467,7 +470,11 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         [matched("g-watch", 0, false), matched("g-block", 1, true)]
     );
     assert!(row.bodies_captured);
-    let stored = h.db.bodies("blocked").await.unwrap().expect("the body row");
+    let stored =
+        h.db.bodies("blocked", clock_of(&h)())
+            .await
+            .unwrap()
+            .expect("the body row");
     assert_eq!(stored.request_body, body);
     assert_eq!(stored.expires_at, NOW + 5 + 24 * 3_600_000);
     up.shutdown().await;

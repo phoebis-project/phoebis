@@ -5918,3 +5918,59 @@ async fn the_tls_reload_route_answers_401_without_a_session_and_an_empty_list_wh
     assert_eq!(reloaded.status(), 200);
     assert_eq!(json(reloaded).await, serde_json::json!({"listeners": []}));
 }
+
+#[tokio::test]
+async fn an_array_body_is_refused_as_no_object_on_the_pool_and_key_routes() {
+    use common::{get, json, login, patch, post, put};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (route, body) in [
+        (
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","members":[{"account_id":"business","priority":0}]}"#,
+        ),
+        (
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        ),
+    ] {
+        assert_eq!(
+            post(&app, route, body, Some(&cookie)).await.status(),
+            201,
+            "{route}"
+        );
+    }
+    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let keys = json(get(&app, "/admin/keys", Some(&cookie)).await).await;
+    // Serde's sequence form reads `[[]]` as a members list with no entry, so a parse that took it would empty the pool.
+    for (method, route, body) in [
+        ("POST", "/admin/pools", "[]"),
+        ("PATCH", "/admin/pools/main", "[]"),
+        ("PUT", "/admin/pools/main/members", "[]"),
+        ("PUT", "/admin/pools/main/members", "[[]]"),
+        ("POST", "/admin/keys", "[]"),
+        ("PATCH", "/admin/keys/desktop", "[]"),
+    ] {
+        let response = match method {
+            "POST" => post(&app, route, body, Some(&cookie)).await,
+            "PATCH" => patch(&app, route, body, Some(&cookie)).await,
+            _ => put(&app, route, body, Some(&cookie)).await,
+        };
+        let status = response.status().as_u16();
+        assert_eq!(
+            (status, json(response).await["error"].clone()),
+            (400, serde_json::json!("body must be a JSON object")),
+            "{method} {route} {body}"
+        );
+    }
+    assert_eq!(
+        json(get(&app, "/admin/pools", Some(&cookie)).await).await,
+        pools,
+        "no refused pool write landed"
+    );
+    assert_eq!(
+        json(get(&app, "/admin/keys", Some(&cookie)).await).await,
+        keys,
+        "no refused key write landed"
+    );
+}

@@ -104,7 +104,11 @@ async fn a_pool_with_capture_stores_both_bodies_for_a_key_without_an_override() 
     let (id, body) = one_request(&h).await;
     let (row, _) = ledgered(&h, &id).await;
     assert!(row.bodies_captured && !row.request_truncated);
-    let bodies = h.db.bodies(&id).await.unwrap().expect("captured");
+    let bodies =
+        h.db.bodies(&id, clock_of(&h)())
+            .await
+            .unwrap()
+            .expect("captured");
     assert!(
         bodies
             .request_body
@@ -145,7 +149,11 @@ async fn a_capture_past_the_cap_says_how_much_it_dropped() {
         row.response_truncated && !row.request_truncated,
         "the response ran past the cap; the request body never does"
     );
-    let bodies = h.db.bodies(&id).await.unwrap().expect("captured");
+    let bodies =
+        h.db.bodies(&id, clock_of(&h)())
+            .await
+            .unwrap()
+            .expect("captured");
     assert_eq!(
         bodies.response_body.as_ref().map(Vec::len),
         Some(MAX_CAPTURED_BODY),
@@ -176,7 +184,11 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
     let (row, _) = ledgered(&off, &id).await;
     assert!(!row.bodies_captured);
     assert!(
-        off.db.bodies(&id).await.unwrap().is_none(),
+        off.db
+            .bodies(&id, clock_of(&off)())
+            .await
+            .unwrap()
+            .is_none(),
         "a key override of 0 stores nothing while its pool captures"
     );
     let six = harness(
@@ -190,7 +202,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
     let (row, _) = ledgered(&six, &id).await;
     let bodies = six
         .db
-        .bodies(&id)
+        .bodies(&id, clock_of(&six)())
         .await
         .unwrap()
         .expect("captured under the key's own hours");
@@ -220,12 +232,61 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
             ..Purged::default()
         }
     );
-    assert!(six.db.bodies(&id).await.unwrap().is_none());
+    assert!(six
+        .db
+        .bodies(&id, clock_of(&six)())
+        .await
+        .unwrap()
+        .is_none());
     assert!(
         six.db.request(&id).await.unwrap().is_some(),
         "the request row outlives its bodies"
     );
     up.shutdown().await;
+}
+
+/// The read answers as the purge's next pass will leave the table, so a body whose expiry has come reads as purged
+/// before the pass deletes it.
+#[tokio::test]
+async fn a_body_at_or_past_its_expiry_answers_none_and_one_before_it_answers_some() {
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    let expires_at = 7 * 3_600_000;
+    db.insert_request(
+        &phoebis_ledger::RequestRecord {
+            id: "r1".into(),
+            received_at: 1_000,
+            finished_at: Some(1_500),
+            model: "m".into(),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            bodies_captured: true,
+            ..Default::default()
+        },
+        &[],
+        Some(&phoebis_ledger::BodyRecord {
+            request_id: "r1".into(),
+            request_body: b"{}".to_vec(),
+            response_body: Some(b"hi".to_vec()),
+            request_len_seen: 2,
+            response_len_seen: 2,
+            expires_at,
+        }),
+    )
+    .unwrap();
+    assert!(
+        db.bodies("r1", expires_at - 1).await.unwrap().is_some(),
+        "one millisecond before its expiry the body is served"
+    );
+    assert!(
+        db.bodies("r1", expires_at).await.unwrap().is_none(),
+        "at its expiry the body reads as purged"
+    );
+    assert!(
+        db.bodies("r1", expires_at + 1).await.unwrap().is_none(),
+        "and past it"
+    );
 }
 
 #[tokio::test]

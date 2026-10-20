@@ -584,6 +584,11 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
         "the admin listener's 56 paths"
     );
     assert_eq!(
+        phoebis_admin::path_count(),
+        document["paths"].as_object().unwrap().len(),
+        "the exported count is the document's"
+    );
+    assert_eq!(
         operations(&document).len(),
         69,
         "the admin listener's 69 operations"

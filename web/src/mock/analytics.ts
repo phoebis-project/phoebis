@@ -5,7 +5,7 @@ import type {
 import { bucketShare } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { equivalentOf, modelWeeks, pricedWindow, shareOrFallback, tierCapacity, type Usage } from '@/lib/costs';
-import { emptyCounts } from '@/lib/counts';
+import { countOf, emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -68,6 +68,8 @@ export interface HourlyRollup {
   probeMigrated: number;
   /** `held` counts the probes the router refused with `503 ledger_behind` while its ledger caught up, outside `failed`. */
   probes: { failed: number; held: number; ok: number; skipped: number };
+  /** The refused requests of the row by error code, counted here and under none of `requests`. */
+  refusals: Record<string, number>;
   /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
   requestClass: string;
   /** `client_gone` counts the streams the client closed, which the relay files as failed under that code. */
@@ -322,6 +324,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const cacheMissReasons = emptyCacheMissReasons();
   // Every name a row carries, as the ledger rolls up whatever the beta sent, not only the ones the console knows.
   for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasons)) cacheMissReasons[reason] = missCount(cacheMissReasons, reason) + n;
+  const refusals = emptyCounts();
+  for (const r of counted) for (const [code, n] of Object.entries(r.refusals)) refusals[code] = countOf(refusals, code) + n;
   const wastedProbeReasons = emptyWastedProbeReasons();
   for (const r of probeRows) for (const reason of WASTED_PROBE_REASONS) wastedProbeReasons[reason] += r.wastedProbeReasons[reason];
 
@@ -360,7 +364,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     costShares: shares.costShares,
     costUsd: sum(counted, (r) => r.costUsd),
     errors,
-    // The fixture ledger records neither an exhausted pool nor a rejected request.
+    // The fixture ledger records no exhausted pool, and its refused requests file under the refusals map and never
+    // under Rejected.
     exhausted: 0,
     expiredBetweenTurns: sum(counted, (r) => r.expiredBetweenTurns),
     failed: overloaded + upstreamError + clientGone,
@@ -387,6 +392,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), planOk: sum(planRows(probeRows), (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
     probeShares: shares.probeShares,
     rateLimited,
+    refusals,
+    refused: Object.values(refusals).reduce((n, c) => n + c, 0),
     rejected: 0,
     requests,
     savingShares: shares.savingShares,

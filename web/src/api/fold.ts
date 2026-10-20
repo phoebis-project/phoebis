@@ -53,6 +53,8 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   probeShares: null,
   probeUnpriced: { five_hour: false, seven_day: false },
   rateLimited: 0,
+  refusals: emptyCounts(),
+  refused: 0,
   rejected: 0,
   requests: 0,
   savingEquivalent: {},
@@ -227,6 +229,12 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
       g.probes.held += 1;
       continue;
     }
+    // The ledger's rule once more: a refused request counts under the map and `refused` and under nothing else.
+    if (r.refused) {
+      g.refused += 1;
+      if (r.errorCode) g.refusals[r.errorCode] = countOf(g.refusals, r.errorCode) + 1;
+      continue;
+    }
     const list = lists.get(key) ?? [];
     list.push(r);
     lists.set(key, list);
@@ -377,7 +385,7 @@ function orFlags(into: Record<string, boolean>, from: Record<string, boolean>) {
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
-    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
+    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
     out.cost = plusSplit(out.cost, g.cost);
     out.billed = plusSplit(out.billed, g.billed);
     addByWindow(out.costEquivalent, g.costEquivalent, (a, b) => a + b);
@@ -394,6 +402,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     out.planOutputTokens = plusKnown(out.planOutputTokens, g.planOutputTokens);
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;
+    for (const [code, n] of Object.entries(g.refusals)) out.refusals[code] = countOf(out.refusals, code) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
     const kept = out.keptWarm;

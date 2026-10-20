@@ -40,7 +40,7 @@ Each operation names its request (path segments, query parameters, or body field
 
 /// The document's static half: the info block, the one relative server, the seventeen tags in the API page's area order
 /// (`docs/site/api-reference.md`), the bearer requirement on every operation, and the four shared responses. The paths
-/// join it in `router()`.
+/// join it in `routes::parts()`.
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Phoebis Router admin API"),
@@ -69,7 +69,7 @@ Each operation names its request (path segments, query parameters, or body field
         (name = "Dashboard"),
         (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \
             before any account is selected, attached to pools and keys in order. `observe` records each match on the \
-            request, `enforce` refuses a matching request with `400 guardrail_blocked`."),
+            request, `enforce` refuses a matching request with `403 guardrail_blocked`."),
         (name = "Keepalive"),
         (name = "Keys", description = "The secret is answered on `POST /admin/keys` and `POST /admin/keys/{id}/rotate` \
             and nowhere else. A `key_json` answer never carries the digest either."),
@@ -623,6 +623,10 @@ pub(crate) struct BreakdownRow {
     pub cost_usd: f64,
     /// By error code.
     pub errors: BTreeMap<String, u64>,
+    /// The refused requests of the group, the sum of `refusals`, not in `requests`.
+    pub refused: u64,
+    /// The refused requests of the group by error code.
+    pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
     pub histograms: HistogramsView,
     pub percentiles: PercentilesView,
@@ -814,6 +818,7 @@ pub(crate) struct HourPointView {
     /// The hour's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
     pub equivalent: SharedEquivalentView,
     pub errors: u64,
+    pub refused: u64,
     pub requests: u64,
     pub tokens: u64,
 }

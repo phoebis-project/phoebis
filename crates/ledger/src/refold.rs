@@ -323,7 +323,7 @@ fn requests_after(
         .collect()
 }
 
-fn read_meta<T: for<'de> Deserialize<'de>>(
+pub(crate) fn read_meta<T: for<'de> Deserialize<'de>>(
     conn: &Connection,
     key: &str,
 ) -> Result<Option<T>, LedgerError> {
@@ -335,7 +335,11 @@ fn read_meta<T: for<'de> Deserialize<'de>>(
     Ok(text.map(|text| serde_json::from_str(&text)).transpose()?)
 }
 
-fn write_meta(tx: &Transaction<'_>, key: &str, value: &impl Serialize) -> Result<(), LedgerError> {
+pub(crate) fn write_meta(
+    tx: &Transaction<'_>,
+    key: &str,
+    value: &impl Serialize,
+) -> Result<(), LedgerError> {
     tx.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
         params![key, serde_json::to_string(value)?],
@@ -347,23 +351,23 @@ fn write_meta(tx: &Transaction<'_>, key: &str, value: &impl Serialize) -> Result
 const PAGE: usize = 1_000;
 
 #[cfg(not(test))]
-fn page_size() -> usize {
+pub(crate) fn page_size() -> usize {
     PAGE
 }
 
 #[cfg(test)]
-fn page_size() -> usize {
+pub(crate) fn page_size() -> usize {
     TEST_PAGE.get().unwrap_or(PAGE)
 }
 
 #[cfg(not(test))]
-fn fail_after_page(_pages: usize) -> Result<(), LedgerError> {
+pub(crate) fn fail_after_page(_pages: usize) -> Result<(), LedgerError> {
     Ok(())
 }
 
 /// The failure a test injects once a pass has committed the pages it names, so the resume has a pass to finish.
 #[cfg(test)]
-fn fail_after_page(pages: usize) -> Result<(), LedgerError> {
+pub(crate) fn fail_after_page(pages: usize) -> Result<(), LedgerError> {
     if FAIL_AFTER_PAGES.get() == Some(pages) {
         return Err(LedgerError::Io(std::io::Error::other(
             "injected failure after a committed page",
@@ -375,9 +379,9 @@ fn fail_after_page(pages: usize) -> Result<(), LedgerError> {
 #[cfg(test)]
 thread_local! {
     /// The page size a test sets in place of `PAGE`, so a pass of three requests runs three pages.
-    static TEST_PAGE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    pub(crate) static TEST_PAGE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// The pages a pass commits before it fails, which a test sets to interrupt a pass after a committed page.
-    static FAIL_AFTER_PAGES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    pub(crate) static FAIL_AFTER_PAGES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]

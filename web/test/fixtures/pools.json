@@ -85,8 +85,8 @@
         "auto_mode_server": true,
         "body_capture_hours": 24,
         "created_at": 1791721000000,
-        "updated_at": 1791721000000,
-        "revision": 6189767511104,
+        "updated_at": 1791721000001,
+        "revision": 6189767511105,
         "members": [
           {
             "account_id": "business",
@@ -138,7 +138,7 @@
           }
         ],
         "status": "active",
-        "requests_24h": 10,
+        "requests_24h": 8,
         "cost_24h": 0.028450000000000007,
         "billed_24h": 0.010700000000000001,
         "equivalent_24h": {
@@ -545,8 +545,8 @@
           },
           {
             "at": 1791716400000,
-            "requests": 6,
-            "failed": 3,
+            "requests": 4,
+            "failed": 1,
             "tokens": 9000,
             "cost_usd": 0.017750000000000002,
             "billed_usd": 0.0071,

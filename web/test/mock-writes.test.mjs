@@ -234,6 +234,33 @@ test('a pool or key save over a revision the row no longer carries is refused as
   await assert.rejects(() => api.updateKey('laptop', edit, key.revision), staleAs(KEY_STALE), 'the stamp moved past the sent token');
 });
 
+test('a pool or key save opened before a guardrail-side attachment is refused as stale, and a reread lists the guardrail', async () => {
+  const api = await signedIn();
+  const pool = (await api.listPools()).find((p) => p.id === 'all');
+  const key = await storyKey(api, 'laptop');
+  const conditions = [{ operator: 'equals', subject: 'request_class', value: 'auxiliary' }];
+  const attached = await api.createGuardrail({ conditions, description: '', enabled: true, keys: ['laptop'], mode: 'observe', name: 'Fresh', pools: ['all'] });
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.revision), staleAs(POOL_STALE));
+  const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
+  await assert.rejects(() => api.updateKey('laptop', edit, key.revision), staleAs(KEY_STALE));
+  assert.ok((await api.listPools()).find((p) => p.id === 'all').guardrails.some((r) => r.id === attached.id), 'the reread pool lists the guardrail');
+  assert.ok((await storyKey(api, 'laptop')).guardrails.some((r) => r.id === attached.id), 'the reread key lists the guardrail');
+});
+
+test('a guardrail save opened before a pool-side detach is refused as stale', async () => {
+  const api = await signedIn();
+  const GUARDRAIL_STALE = 'the guardrail changed while it was being edited, so reload and try again';
+  const read = await api.getGuardrail('subagent-status-summary');
+  const pool = (await api.listPools()).find((p) => p.id === 'all');
+  await api.updatePool('all', { ...poolInputOf(pool), guardrails: [] }, pool.revision);
+  await assert.rejects(() => api.updateGuardrail('subagent-status-summary', { mode: 'enforce' }, read.revision), staleAs(GUARDRAIL_STALE));
+  const detached = await api.getGuardrail('subagent-status-summary');
+  assert.ok(detached.revision > read.revision, "the detach moves the guardrail's revision");
+  const emptied = (await api.listPools()).find((p) => p.id === 'all');
+  await api.updatePool('all', { ...poolInputOf(emptied), guardrails: ['subagent-status-summary'] }, emptied.revision);
+  assert.ok((await api.getGuardrail('subagent-status-summary')).revision > detached.revision, "the attach moves the guardrail's revision");
+});
+
 test('an editor opened before its pool or key was deleted and created again is refused as stale and stores nothing', async () => {
   const api = await signedIn();
   const fresh = { ...(await storyPool(api)), members: [], name: 'fresh' };
@@ -646,6 +673,9 @@ test('a_guardrail_is_created_edited_attached_and_deleted_on_the_mock_with_the_ro
   await assert.rejects(() => api.createGuardrail({ ...input, conditions: [] }), refusedAs(400, 'conditions holds 1 to 16 entries'));
   await assert.rejects(() => api.createGuardrail({ ...input, conditions: [...conditions, { operator: 'present', subject: 'header' }] }), refusedAs(400, 'conditions[1]: name is required'));
   await assert.rejects(() => api.createGuardrail({ ...input, keys: ['ghost'] }), refusedAs(404, 'key ghost not found'));
+  await assert.rejects(() => api.createGuardrail({ ...input, name: 'Model: Opus Only' }), refusedAs(400, 'name must not contain "model:"'));
+  await assert.rejects(() => api.createGuardrail({ ...input, name: 'oauth TOKEN has been REVOKED' }), refusedAs(400, 'name must not contain "OAuth token has been revoked"'));
+  await assert.rejects(() => api.createGuardrail({ ...input, name: 'Prompt Is Too Long!' }), refusedAs(400, 'name must not contain "prompt is too long"'));
   assert.deepEqual(await ids(), before, 'a refused create stores nothing');
 
   const fresh = await api.createGuardrail({ ...input, keys: ['laptop'], pools: ['all'] });

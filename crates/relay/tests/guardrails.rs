@@ -218,10 +218,10 @@ async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_i
             answer.message.as_str()
         ),
         (
-            400,
+            403,
             Some("guardrail_blocked"),
             Some("false"),
-            "invalid_request_error",
+            "permission_error",
             r#"blocked by guardrail "Subagent status summary""#
         )
     );
@@ -257,9 +257,76 @@ async fn an_enforcing_pool_guardrail_refuses_the_fork_before_the_upstream_sees_i
             complete.error_code.as_deref(),
             complete.attempt
         ),
-        (Outcome::Rejected, 400, Some("guardrail_blocked"), 0)
+        (Outcome::Rejected, 403, Some("guardrail_blocked"), 0)
     );
     up.shutdown().await;
+}
+
+/// The routes refuse a name that carries one of the client's phrases, but a row stored before that rule can hold
+/// one. "model:" or "OAuth token has been revoked" in a 403's message would start the client's own handling, so the
+/// block answers by the id for a stored name that carries any phrase of the list.
+async fn answered_by_the_id(id: &str, name: &str) {
+    let up = upstream().await;
+    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
+    // The store writes a name the routes would refuse, as a row stored before the rule holds one.
+    let row = guardrail(id, name, GuardrailMode::Enforce, fork_conditions());
+    guarded(&h, &row, &["main"], &[]).await;
+    let answer = send(&h, &mut sub, fork()).await;
+    assert_eq!(
+        (
+            answer.status,
+            answer.header("x-phoebis-error-code"),
+            answer.error_type.as_str(),
+            answer.message.clone()
+        ),
+        (
+            403,
+            Some("guardrail_blocked"),
+            "permission_error",
+            format!("blocked by guardrail \"{id}\"")
+        )
+    );
+    let message = answer.message.to_lowercase();
+    for phrase in [
+        "model:",
+        "oauth token has been revoked",
+        "prompt is too long",
+    ] {
+        assert!(!message.contains(phrase), "{message} carries {phrase}");
+    }
+    assert!(
+        up.requests().is_empty(),
+        "the block stays enforced, so nothing went upstream"
+    );
+    let [Event::RequestObserved(_), Event::RequestComplete(complete)] = answer.events.as_slice()
+    else {
+        panic!("{:?}", answer.events)
+    };
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.status,
+            complete.error_code.as_deref(),
+            complete.attempt
+        ),
+        (Outcome::Rejected, 403, Some("guardrail_blocked"), 0)
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stored_name_carrying_the_model_access_phrase_is_answered_by_the_guardrails_id() {
+    answered_by_the_id("model-phrase", "Model: Opus Only").await;
+}
+
+#[tokio::test]
+async fn a_stored_name_carrying_the_token_refresh_phrase_is_answered_by_the_guardrails_id() {
+    answered_by_the_id("token-phrase", "oauth TOKEN has been REVOKED").await;
+}
+
+#[tokio::test]
+async fn a_stored_name_carrying_the_compaction_phrase_is_answered_by_the_guardrails_id() {
+    answered_by_the_id("compaction-phrase", "Prompt is too long, trimmed").await;
 }
 
 #[tokio::test]
@@ -300,7 +367,7 @@ async fn a_block_wins_over_the_keys_model_rules() {
     let answer = send(&h, &mut sub, fork()).await;
     assert_eq!(
         (answer.status, answer.header("x-phoebis-error-code")),
-        (400, Some("guardrail_blocked")),
+        (403, Some("guardrail_blocked")),
         "the model rules alone answer model_not_allowed for this model"
     );
     up.shutdown().await;
@@ -368,7 +435,7 @@ async fn a_count_tokens_request_is_evaluated() {
     let answer = send(&h, &mut sub, req).await;
     assert_eq!(
         (answer.status, answer.header("x-phoebis-error-code")),
-        (400, Some("guardrail_blocked"))
+        (403, Some("guardrail_blocked"))
     );
     assert!(up.requests().is_empty());
     let observed = answer.observed();
@@ -376,6 +443,91 @@ async fn a_count_tokens_request_is_evaluated() {
         (observed.kind, observed.guardrail_id.as_deref()),
         (Kind::CountTokens, Some("summary"))
     );
+    up.shutdown().await;
+}
+
+/// The fork and its body with a `deep` member last, `arrays` nested arrays around one number, so every member the
+/// relay reads comes before it.
+async fn fork_nested(arrays: usize) -> (Request<Body>, String) {
+    let (req, body) = with_bytes(fork()).await;
+    let body = String::from_utf8(body.to_vec()).expect("the fork's body is text");
+    let close = body.rfind('}').expect("the fork's body is an object");
+    let nested = format!(
+        r#"{},"deep":{}1{}}}"#,
+        &body[..close],
+        "[".repeat(arrays),
+        "]".repeat(arrays)
+    );
+    let (parts, _) = req.into_parts();
+    (
+        Request::from_parts(parts, Body::from(nested.clone())),
+        nested,
+    )
+}
+
+/// serde's recursion limit of 128 counts the root, so 127 arrays under it are the shallowest nesting the
+/// guardrails' parse refuses, and a `body` condition would read such a body as no body at all. The shallower body
+/// meets an enforcing guardrail, whose 403 shows the parse read the tools: `tools present` is false on a body the
+/// parse cannot read.
+#[tokio::test]
+async fn a_body_at_serdes_limit_is_refused_invalid_body_under_a_tools_present_guardrail_and_one_level_shallower_is_evaluated(
+) {
+    const REFUSED: usize = 127;
+    let up = upstream().await;
+    let (h, mut sub) = harness(&up, PoolSpec::default()).await;
+    let tools_present = Condition {
+        subject: Subject::Body,
+        operator: Operator::Present,
+        value: None,
+        name: None,
+        path: Some("tools".into()),
+        selector: None,
+    };
+    let row = guardrail(
+        "tools",
+        "Tools present",
+        GuardrailMode::Enforce,
+        vec![tools_present],
+    );
+    guarded(&h, &row, &["main"], &[]).await;
+
+    let (deep, body) = fork_nested(REFUSED).await;
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_err(),
+        "serde refuses {REFUSED} arrays under the root"
+    );
+    let answer = send(&h, &mut sub, deep).await;
+    assert_eq!(
+        (
+            answer.status,
+            answer.header("x-phoebis-error-code"),
+            answer.error_type.as_str(),
+            answer.message.as_str()
+        ),
+        (
+            400,
+            Some("invalid_body"),
+            "invalid_request_error",
+            "the request body nests deeper than the relay reads"
+        )
+    );
+    assert!(
+        up.requests().is_empty(),
+        "admission refused the body, so nothing went upstream"
+    );
+
+    let (shallow, body) = fork_nested(REFUSED - 1).await;
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_ok(),
+        "serde reads one level shallower"
+    );
+    let answer = send(&h, &mut sub, shallow).await;
+    assert_eq!(
+        (answer.status, answer.header("x-phoebis-error-code")),
+        (403, Some("guardrail_blocked"))
+    );
+    assert_eq!(answer.observed().guardrail_id.as_deref(), Some("tools"));
+    assert!(up.requests().is_empty());
     up.shutdown().await;
 }
 
@@ -412,7 +564,7 @@ async fn a_header_condition_reads_a_sent_headers_value_and_a_header_the_request_
             answer.message.as_str()
         ),
         (
-            400,
+            403,
             Some("guardrail_blocked"),
             r#"blocked by guardrail "Research team""#
         )
@@ -458,7 +610,7 @@ async fn a_user_agent_condition_reads_the_header_cut_to_256_bytes_as_the_row_kee
     let answer = send(&h, &mut sub, req).await;
     assert_eq!(
         (answer.status, answer.header("x-phoebis-error-code")),
-        (400, Some("guardrail_blocked")),
+        (403, Some("guardrail_blocked")),
         "the condition compares the first 256 bytes of the header"
     );
     assert_eq!(
@@ -519,7 +671,7 @@ async fn an_unmatched_guardrail_ahead_of_the_enforcing_one_does_not_move_the_blo
             answer.message.as_str()
         ),
         (
-            400,
+            403,
             Some("guardrail_blocked"),
             r#"blocked by guardrail "Subagent status summary""#
         )
@@ -551,7 +703,7 @@ async fn a_blocked_requests_observed_event_carries_the_body_and_the_keys_capture
     guarded(&h, &row, &["main"], &[]).await;
     let (req, sent) = with_bytes(fork()).await;
     let answer = send(&h, &mut sub, req).await;
-    assert_eq!(answer.status, 400);
+    assert_eq!(answer.status, 403);
     let observed = answer.observed();
     assert_eq!(observed.guardrail_id.as_deref(), Some("summary"));
     assert_eq!(
@@ -573,7 +725,7 @@ async fn a_second_request_on_the_key_is_admitted_after_a_block() {
     let (h, mut sub) = harness(&up, PoolSpec::default()).await;
     let row = summary(GuardrailMode::Enforce);
     guarded(&h, &row, &["main"], &[]).await;
-    assert_eq!(send(&h, &mut sub, fork()).await.status, 400);
+    assert_eq!(send(&h, &mut sub, fork()).await.status, 403);
     assert_eq!(
         h.router.in_flight().key("desktop"),
         0,

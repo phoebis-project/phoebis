@@ -92,6 +92,24 @@ the percentile, and the value carries the error of the bucket it falls in.
 Every ledger read the admin routes, the usage page, and the metrics listener make runs on a blocking worker off
 the request runtime, so a slow analytics query never delays proxy traffic.
 
+## Refused requests
+
+The ledger flags a request the router refused before any account was asked, for the client's or a policy's cause: a
+missing, malformed or doubled key header, a refused key, a client outside Claude Code, a client drift or a missing
+header the contract requires, a guardrail block, a malformed, incomplete, late or oversized body, an unsupported
+encoding, an unknown route or method, and a model the key does not allow, one the body lacks or one that is not a usable
+model name, never a keepalive probe. The router's own refusals stay in the figures, `account_cancelled`,
+`accounts_unavailable`, `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, and so does
+every outcome after an account was asked. The hourly row counts a flagged request in a map by error code and in no
+request, outcome, cache, latency or error figure, nor in the slow-down's held count or held time, so every reader of the
+rollups, the Dashboard, the Analytics views, the pool cards and the key usage, leaves them out without a rule of its
+own, and the scrape's request counter skips a flagged request by a rule of its own. The refused requests show on the
+Dashboard's Refused tile, the Analytics view's Refused column and "Refusals by code" card, the Guardrails card for a
+block, the Requests view and a session's request list, and in `phoebis_refusals_total` ([Metrics](#metrics)). The first
+start after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the
+map, in pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old
+counts.
+
 ## Quota samples
 
 Quota samples arrive from two sources. Every response head from an OAuth account carries the unified rate-limit
@@ -389,7 +407,7 @@ between the old and the new threshold inside the retained window stays priced at
 ## Metrics
 
 `stats.metrics_listen` (`127.0.0.1:9464` by default) serves `/metrics` in Prometheus text format and nothing else. It
-speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-three
+speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-four
 families are rendered, each with a `# TYPE` line and no `# HELP` line:
 
 | Metric | Type | Labels |
@@ -411,6 +429,7 @@ families are rendered, each with a `# TYPE` line and no `# HELP` line:
 | `phoebis_ledger_queued` | gauge | none |
 | `phoebis_pins_active` | gauge | `pool` |
 | `phoebis_pricing_unknown_model_total` | counter | none |
+| `phoebis_refusals_total` | counter | `code`, `key`, `kind` |
 | `phoebis_requests_total` | counter | `key`, `kind`, `outcome` |
 | `phoebis_router_dropped_reports_total` | counter | `kind` |
 | `phoebis_router_writer_degraded` | gauge | none |
@@ -423,6 +442,8 @@ own id or, for a dated id priced under its undated base, that base, and every ot
 downstream caller cannot grow the label set by naming models it likes. `phoebis_tokens_total` counts under five `kind`
 values, `cache_read`, `cache_write_1h`, `cache_write_5m`, `input` and `output`, and `phoebis_upstream_ttfb_seconds` uses
 the same 64 log-spaced buckets the rollups use, with an overflow bucket.
+`phoebis_refusals_total` counts the requests the router refused before any account was asked, under the refusal's code,
+the key and the kind, the requests `phoebis_requests_total` leaves out ([Refused requests](#refused-requests)).
 `phoebis_keepalive_probes_total` counts each probe under its pool and one of four outcomes: `landed` when it read the
 whole prefix back, or wrote it on the account a migration moved it to, `cold` when the upstream served it without that
 read, `failed` when the upstream did not serve it, and `held` when the router refused it with `503 ledger_behind` while
@@ -481,7 +502,7 @@ Each family carries the meaning below, the text a `# HELP` line would hold:
 ## The console's views
 
 The views that show the figures above are described on [The console](console.md), each with its figures, filters and
-controls: the [Dashboard](console.md#dashboard) with its attention line, four 24-hour tiles and two capacity rings,
+controls: the [Dashboard](console.md#dashboard) with its attention line, five 24-hour tiles and two capacity rings,
 [Models](console.md#models) with the rules a key's requests are judged by, and [Settings](console.md#settings) with
 the About card that names each price table's path and date.
 

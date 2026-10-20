@@ -9,7 +9,8 @@ const LEN: usize = 5;
 
 /// How deep the scanner follows nesting. The scanners recurse, and this runs on an authenticated but still
 /// caller-controlled body, so without a bound a few thousand nested arrays end the process rather than the
-/// request. Real Messages bodies nest a handful of levels.
+/// request. Real Messages bodies nest a handful of levels. Counted with the root, as serde's recursion limit
+/// counts it, so admission refuses what the guardrails' `parse_body` cannot read.
 const MAX_DEPTH: usize = 128;
 
 #[derive(Debug, thiserror::Error)]
@@ -108,12 +109,13 @@ fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
 /// member's key bytes in turn. Stops on the first member `matches` answers true for, `s` left positioned right
 /// after that member's colon, its value not yet read; returns the key's opening quote. `None` on a syntax
 /// error, or an object that closes with no match. The one object-member scan every span helper walks through,
-/// so a fix to key matching lands once.
+/// so a fix to key matching lands once. The object counts as one level while its members are skipped, as `sign`'s
+/// walk counts it, so a span helper gives up on a skipped member of the root at the depth `sign` refuses.
 fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> Option<usize> {
     if !s.eat(b'{') {
         return None;
     }
-    loop {
+    s.inside(|s| loop {
         s.ws();
         let member_start = s.pos;
         let (ks, ke) = s.string().ok()?;
@@ -130,7 +132,7 @@ fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> O
         if !s.eat(b',') {
             return None;
         }
-    }
+    })
 }
 
 /// Hands `visit` each top-level member's key in body order, decoded, until `visit` answers true. Keys are
@@ -149,7 +151,7 @@ fn visit_top_level_keys(body: &[u8], mut visit: impl FnMut(&str) -> bool) -> Res
     if !s.eat(b'{') {
         return Err(CchError::Json(s.pos));
     }
-    loop {
+    s.inside(|s| loop {
         s.ws();
         if s.eat(b'}') {
             return Ok(());
@@ -172,7 +174,7 @@ fn visit_top_level_keys(body: &[u8], mut visit: impl FnMut(&str) -> bool) -> Res
             return Ok(());
         }
         return Err(CchError::Json(s.pos));
-    }
+    })
 }
 
 /// The first of `names` whose decoded key appears more than once among the top-level object's members.
@@ -447,38 +449,40 @@ fn cache_control_walk(body: &[u8], keys: Keys) -> Result<Vec<(usize, usize)>, Cc
     if !s.eat(b'{') {
         return Err(CchError::Json(s.pos));
     }
-    s.ws();
-    if s.eat(b'}') {
-        return Ok(spans);
-    }
-    loop {
+    s.inside(|s| {
         s.ws();
-        let (ks, ke) = s.string()?;
-        s.ws();
-        if !s.eat(b':') {
-            return Err(CchError::Json(s.pos));
+        if s.eat(b'}') {
+            return Ok(spans);
         }
-        s.ws();
-        match key_name(body, ks, ke, keys).as_ref() {
-            b"cache_control" => {
-                let start = s.pos;
-                s.value(false)?;
-                spans.push((start, s.pos));
+        loop {
+            s.ws();
+            let (ks, ke) = s.string()?;
+            s.ws();
+            if !s.eat(b':') {
+                return Err(CchError::Json(s.pos));
             }
-            b"system" | b"tools" => block_array(&mut s, &mut spans, false, keys)?,
-            b"messages" => message_array(&mut s, &mut spans, keys)?,
-            _ => s.value(false)?,
+            s.ws();
+            match key_name(body, ks, ke, keys).as_ref() {
+                b"cache_control" => {
+                    let start = s.pos;
+                    s.value(false)?;
+                    spans.push((start, s.pos));
+                }
+                b"system" | b"tools" => block_array(s, &mut spans, false, keys)?,
+                b"messages" => message_array(s, &mut spans, keys)?,
+                _ => s.value(false)?,
+            }
+            s.ws();
+            if s.eat(b',') {
+                continue;
+            }
+            if !s.eat(b'}') {
+                return Err(CchError::Json(s.pos));
+            }
+            break;
         }
-        s.ws();
-        if s.eat(b',') {
-            continue;
-        }
-        if !s.eat(b'}') {
-            return Err(CchError::Json(s.pos));
-        }
-        break;
-    }
-    Ok(spans)
+        Ok(spans)
+    })
 }
 
 /// The array behind `system` or `tools`, or a `messages[]` element's `content`: each object entry's own
@@ -700,29 +704,31 @@ fn each_decoded_member<'a>(
     if !s.eat(b'{') {
         return Err(CchError::Json(s.pos));
     }
-    s.ws();
-    if s.eat(b'}') {
-        return Ok(());
-    }
-    loop {
+    s.inside(|s| {
         s.ws();
-        let (ks, ke) = s.string()?;
-        s.ws();
-        if !s.eat(b':') {
-            return Err(CchError::Json(s.pos));
+        if s.eat(b'}') {
+            return Ok(());
         }
-        s.ws();
-        let body = s.body;
-        member(s, key_name(body, ks, ke, Keys::Decoded).as_ref())?;
-        s.ws();
-        if s.eat(b',') {
-            continue;
+        loop {
+            s.ws();
+            let (ks, ke) = s.string()?;
+            s.ws();
+            if !s.eat(b':') {
+                return Err(CchError::Json(s.pos));
+            }
+            s.ws();
+            let body = s.body;
+            member(s, key_name(body, ks, ke, Keys::Decoded).as_ref())?;
+            s.ws();
+            if s.eat(b',') {
+                continue;
+            }
+            if !s.eat(b'}') {
+                return Err(CchError::Json(s.pos));
+            }
+            return Ok(());
         }
-        if !s.eat(b'}') {
-            return Err(CchError::Json(s.pos));
-        }
-        return Ok(());
-    }
+    })
 }
 
 /// A `system` value: when it is an array whose first element is an object, `member` is handed each of that object's
@@ -820,7 +826,7 @@ fn each_string_token(
         Some(b'[') => b']',
         _ => return s.value(false),
     };
-    if s.depth >= MAX_DEPTH {
+    if s.depth + 1 >= MAX_DEPTH {
         return Err(CchError::TooDeep(s.pos));
     }
     s.depth += 1;
@@ -973,13 +979,22 @@ impl<'a> Scanner<'a> {
             false
         }
     }
+    /// Runs `walk` one level down, for a walker that eats a container's opening bracket itself rather than
+    /// entering it through `value`, so the container counts toward the depth `value` checks, and on every way out
+    /// the depth is back where it was.
+    fn inside<T>(&mut self, walk: impl FnOnce(&mut Self) -> T) -> T {
+        self.depth += 1;
+        let walked = walk(self);
+        self.depth -= 1;
+        walked
+    }
     fn value(&mut self, collect: bool) -> Result<(), CchError> {
         self.ws();
         match self.body.get(self.pos) {
             // The one place either container is entered from, so counting here bounds the recursion for the
             // collecting and the non-collecting walk alike.
             Some(b'{') | Some(b'[') => {
-                if self.depth >= MAX_DEPTH {
+                if self.depth + 1 >= MAX_DEPTH {
                     return Err(CchError::TooDeep(self.pos));
                 }
                 self.depth += 1;
@@ -1173,6 +1188,69 @@ mod tests {
             string_member_span(&body, &["model"]),
             None,
             "the span scanner gives up at the same depth instead of recursing"
+        );
+    }
+
+    /// The guardrails read a body through serde, so a body the scanners admit past serde's limit reaches a `body`
+    /// condition as no body at all.
+    #[test]
+    fn the_scanners_refuse_the_depth_serde_refuses_and_admit_the_depth_it_reads() {
+        let mut verdicts = Vec::new();
+        for depth in MAX_DEPTH - 2..=MAX_DEPTH {
+            let body = nested(depth);
+            let reads = serde_json::from_slice::<serde_json::Value>(&body).is_ok();
+            verdicts.push(reads);
+            if reads {
+                let admitted =
+                    format!("serde reads {depth} arrays under the root, so the scanners do");
+                assert!(sign(&body).is_ok(), "{admitted}");
+                assert!(
+                    string_member_span(&body, &["model"]).is_some(),
+                    "{admitted}"
+                );
+                assert!(
+                    matches!(repeated_top_level_member(&body, &["model"]), Ok(None)),
+                    "{admitted}"
+                );
+                assert!(
+                    matches!(first_system_block_member_count(&body, "text"), Ok(1)),
+                    "{admitted}"
+                );
+                assert!(
+                    matches!(cache_control_spans(&body), Ok(spans) if spans.is_empty()),
+                    "{admitted}"
+                );
+            } else {
+                let refused =
+                    format!("serde refuses {depth} arrays under the root, so the scanners do");
+                assert!(
+                    matches!(sign(&body), Err(CchError::TooDeep(_))),
+                    "{refused}"
+                );
+                assert_eq!(string_member_span(&body, &["model"]), None, "{refused}");
+                assert!(
+                    matches!(
+                        repeated_top_level_member(&body, &["model"]),
+                        Err(CchError::TooDeep(_))
+                    ),
+                    "{refused}"
+                );
+                assert!(
+                    matches!(
+                        first_system_block_member_count(&body, "text"),
+                        Err(CchError::TooDeep(_))
+                    ),
+                    "{refused}"
+                );
+                assert!(
+                    matches!(cache_control_spans(&body), Err(CchError::TooDeep(_))),
+                    "{refused}"
+                );
+            }
+        }
+        assert!(
+            verdicts.contains(&true) && verdicts.contains(&false),
+            "the range holds a depth serde reads and one it refuses: {verdicts:?}"
         );
     }
 
