@@ -287,8 +287,9 @@ hours, then one line per member by priority, then account id: the account's labe
 off on it), the member's eligibility, the five-hour and seven-day windows in whole percent (`-` with no sample) and the
 Fable week when the account has one, then the nearest reset as `resets {HH:MM}` or, under a cooldown, `until {HH:MM}
 {reason}`, with the scope ahead of the reason (`fast`, `fast_credits`, `model:{canonical}`) when the cooldown holds less
-than the whole account. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts no
-pool holds, with their state, and is left out when there are none.
+than the whole account. A member in the `disconnected` or `reauth_required` state prints `-` under both windows, since
+the router answers it none. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts
+no pool holds, with their state, and is left out when there are none.
 
 The pins block is the sessions route's answer, one line per session that holds a pin: the route groups pins by key
 generation and session and prefers the main agent's pin, so a session whose subagent is pinned to another account shows

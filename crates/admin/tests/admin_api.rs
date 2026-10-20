@@ -2280,6 +2280,162 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
     assert_eq!(business["windows"], held, "{business}");
 }
 
+/// `business` as `GET /admin/accounts/{id}` and the list answer it, in that order.
+async fn business_as_read_and_listed(h: &common::Polled, cookie: &str) -> [serde_json::Value; 2] {
+    use common::{get, json};
+    let read = json(get(&h.app, "/admin/accounts/business", Some(cookie)).await).await;
+    let listed = json(get(&h.app, "/admin/accounts", Some(cookie)).await).await;
+    let row = listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap()
+        .clone();
+    [read, row]
+}
+
+/// `business` with a reading on each of the view's two windows paths, the router's reported 5-hour window beside a
+/// fast-lane reading and the ledger's rows of today for both plan windows, so the router's reading answers the 5-hour
+/// window and the ledger's row the week. The endpoint refuses one poll, so the row carries a poll standing that a
+/// moved state can drop. Answers the account as its own `GET` reads it before any state moves.
+async fn business_with_both_windows_paths() -> (common::Polled, String, serde_json::Value) {
+    use common::{login, wait_json, NOW};
+    use phoebis_ledger::QuotaSampleRecord;
+    use phoebis_routing::{Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let reading = |utilization, reset, observed_at| WindowReading {
+        utilization,
+        reset: Some(reset),
+        observed_at,
+        source: WindowSource::Head,
+    };
+    h.router
+        .report(Report::Sample {
+            account_id: "business".into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(0.25, NOW + 3_600_000, NOW - 60_000))
+                .with(
+                    phoebis_relay::FAST_INPUT,
+                    reading(0.3, NOW + 60_000, NOW - 30_000),
+                ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    let read_at = NOW - 42_000;
+    let row = |window: &str, utilization| QuotaSampleRecord {
+        account_id: "business".into(),
+        bucket: phoebis_ledger::bucket_of(read_at),
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: None,
+        source: "head".into(),
+        observed_at: Some(read_at),
+    };
+    h.db.insert_samples(&[row("five_hour", 0.4), row("seven_day", 0.5)], None)
+        .unwrap();
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    h.usage.poll("business").await.unwrap();
+    let before = wait_json(&h.app, "/admin/accounts/business", &cookie, |v| {
+        !v["fast_lane"].is_null()
+    })
+    .await;
+    let drawn: Vec<(&str, f64)> = before["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| {
+            (
+                w["id"].as_str().unwrap(),
+                w["utilization"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(drawn, [("five_hour", 0.25), ("seven_day", 0.5)], "{before}");
+    assert!(!before["usage"]["poll"].is_null(), "{before}");
+    (h, cookie, before)
+}
+
+/// The poll asks no disconnected account, so the moved row's poll standing reads as `poll_standing` answers it for one,
+/// while the router's held windows still compose its `error` and `fetched_at`.
+#[tokio::test]
+async fn a_disconnected_oauth_account_answers_no_window_whatever_the_router_and_the_ledger_hold() {
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    h.store
+        .set_state(
+            "business",
+            phoebis_store::AccountState::Disconnected,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    let poll_less = serde_json::json!({
+        "error": before["usage"]["error"],
+        "fetched_at": before["usage"]["fetched_at"],
+        "held_until": null,
+        "poll": null,
+    });
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["state"], "disconnected", "{after}");
+        assert_eq!(after["fast_lane"], before["fast_lane"], "{after}");
+        assert_eq!(after["usage"], poll_less, "{after}");
+        assert_eq!(after["windows"], serde_json::json!([]), "{after}");
+    }
+}
+
+#[tokio::test]
+async fn a_reauth_required_oauth_account_answers_no_window_whatever_the_router_and_the_ledger_hold()
+{
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    h.store
+        .set_state(
+            "business",
+            phoebis_store::AccountState::ReauthRequired,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["state"], "reauth_required", "{after}");
+        assert_eq!(after["fast_lane"], before["fast_lane"], "{after}");
+        assert_eq!(after["usage"], before["usage"], "{after}");
+        assert_eq!(after["windows"], serde_json::json!([]), "{after}");
+    }
+}
+
+#[tokio::test]
+async fn a_ready_oauth_account_answers_the_windows_the_router_and_the_ledger_hold() {
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["state"], "ready", "{after}");
+        assert_eq!(after["windows"], before["windows"], "{after}");
+    }
+}
+
+#[tokio::test]
+async fn a_funding_required_oauth_account_keeps_the_windows_the_router_and_the_ledger_hold() {
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    h.store
+        .set_state(
+            "business",
+            phoebis_store::AccountState::FundingRequired,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["state"], "funding_required", "{after}");
+        assert_eq!(after["windows"], before["windows"], "{after}");
+    }
+}
+
 #[tokio::test]
 async fn re_pairing_to_a_different_upstream_account_is_rejected() {
     use common::{delete, get, json, login, post};

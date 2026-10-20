@@ -161,7 +161,8 @@ the scheduled poll does", and at the right edge the split Refresh button, whose 
 needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section bar shows one of two sections at a time:
 Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. A card's
 reading is the router's reported sample where the router holds one for the window and the ledger's [quota
-sample](statistics.md#quota-samples) otherwise.
+sample](statistics.md#quota-samples) otherwise. The router answers no quota window for an account in the `disconnected`
+or `reauth_required` state, whatever reading it held before, so no view draws one for it.
 
 Accounts draws a card per account, sorted "Default order", "Soonest recovery", "5-hour pace", "7-day pace" or "7-day
 Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the

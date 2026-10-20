@@ -1143,6 +1143,31 @@ async fn the_system_and_about_answers_declare_the_build_beside_the_version() {
 }
 
 #[tokio::test]
+async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_account_answers_none()
+{
+    let (_app, _up, document) = document().await;
+    let windows = &document["components"]["schemas"]["Account"]["properties"]["windows"];
+    // utoipa joins the doc comment's lines with line breaks, which the reference renders as spaces.
+    let description = windows["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert_eq!(
+        description.as_deref(),
+        Some(
+            "The account's quota windows: the router's reported sample first and the ledger's samples of today for \
+             the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an \
+             `oauth` account in the `disconnected` or `reauth_required` state, whose last reading the view no longer \
+             answers."
+        ),
+        "{windows}"
+    );
+    assert_eq!(
+        windows["type"], "array",
+        "the member stays an array, empty for the two states: {windows}"
+    );
+}
+
+#[tokio::test]
 async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_field() {
     let (_app, _up, document) = document().await;
     for name in [

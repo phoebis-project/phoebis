@@ -2144,6 +2144,9 @@ pub(crate) struct Account {
     /// The whole object null for an `api_key` account or an `oauth` account with no profile document yet and not
     /// cancelled.
     pub subscription: Option<AccountSubscription>,
+    /// The account's quota windows: the router's reported sample first and the ledger's samples of today for the
+    /// rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
+    /// account in the `disconnected` or `reauth_required` state, whose last reading the view no longer answers.
     pub windows: Vec<AccountWindow>,
     /// The account's slow-down entry in force as the router reads it, null on an api_key account, an untiered account
     /// or one with no 5-hour reading, an account in no pool, a pool with the slow-down off, and an account no pinned
@@ -2479,13 +2482,21 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             trial_ends_at: s.trial_ends_at,
             ends_at: term.ends_at,
         });
+    // The token manager hands out no token for an `oauth` account in either state, its credential gone or refused, so
+    // neither the poll nor a request reads it until it pairs again: what the router and the ledger still hold is its
+    // last reading, which both paths below would draw as live.
+    let windows_withheld = row.kind == AccountKind::Oauth
+        && matches!(
+            row.state,
+            AccountState::Disconnected | AccountState::ReauthRequired
+        );
     // The router holds a reading the moment the poll or a head reports it, while the ledger's row waits on the writer,
     // so a refresh's reading shows as soon as the refresh answers. The ledger's rows fill each plan window the router
     // holds no reading of, and every window of an api_key account.
     let reported = ctx
         .reported
         .get(&row.id)
-        .filter(|_| row.kind == AccountKind::Oauth);
+        .filter(|_| row.kind == AccountKind::Oauth && !windows_withheld);
     let mut windows: Vec<AccountWindow> = reported
         .map(|sample| held_windows(sample, end, now))
         .unwrap_or_default()
@@ -2509,7 +2520,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     windows.extend(
         ctx.quota
             .iter()
-            .filter(|q| q.account_id == row.id)
+            .filter(|q| !windows_withheld && q.account_id == row.id)
             .filter(|q| {
                 !reported
                     .is_some_and(|s| is_plan_window(&q.window) && s.reading(&q.window).is_some())
