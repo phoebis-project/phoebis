@@ -560,6 +560,13 @@ async fn land_all(ledger: &Ledger, records: Vec<Record>) {
     }
 }
 
+/// `ms` as the UTC time a log line names, or the raw milliseconds for one out of range.
+pub(crate) fn utc_stamp(ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(ms)
+        .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|_| ms.to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn writer(
     db: Arc<LedgerDb>,
@@ -682,7 +689,10 @@ async fn writer(
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                     .is_err()
                 {
-                    tracing::debug!(deadline, "a replay whose caller gave up at its deadline is dropped unrun");
+                    tracing::debug!(
+                        deadline = %utc_stamp(deadline),
+                        "a replay whose caller gave up at its deadline is dropped unrun"
+                    );
                     continue;
                 }
                 if clock() >= deadline {
@@ -2048,6 +2058,12 @@ mod tests {
             retention_days: LedgerConfig::default().retention_days,
         };
         (ledger, rx)
+    }
+
+    #[test]
+    fn a_log_lines_instant_prints_in_utc_with_the_zone_named_or_raw_when_out_of_range() {
+        assert_eq!(utc_stamp(1_760_961_787_123), "2025-10-20 12:03:07 UTC");
+        assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
     }
 
     #[test]

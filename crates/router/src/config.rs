@@ -170,9 +170,11 @@ pub struct UsageConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
-    /// How often every enabled upstream's model listing is read again, 60 to 604800.
+    /// How often every enabled account's model listing is read again, 60 to 604800.
     #[serde(default = "default_catalog_refresh")]
     pub catalog_refresh_seconds: u64,
+    /// How long an account is cooled when a rate limit's rejection names neither a reset nor a `retry-after`, and
+    /// how long overage evidence that names no reset stands, 1 to 3600.
     #[serde(default = "default_cooldown_fallback")]
     pub cooldown_fallback_seconds: u64,
     /// How long an account is skipped for a model it answered 404 for.

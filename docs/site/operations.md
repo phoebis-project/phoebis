@@ -296,9 +296,10 @@ generation and session and prefers the main agent's pin, so a session whose suba
 its main agent's line. Each line carries the first twelve characters of the session id, the agent id or `-`, the
 account, and `pinned {age} ago, {model}`, or, on a pin a move stamped, `shed from {account}, {age} ago` when a shedding
 round moved the session off that account and `failed over from {account}, {age} ago` when a failover landed it, followed
-by `, keepalive {state}` and `next probe {HH:MM}` while the keepalive engine tracks it. Times print in the local zone as
-`HH:MM`, with the date in front as `MM-DD` when it is not today, and ages print in their largest whole unit as `12s`,
-`4m`, `3h` or `2d`. The block reads `pins: none` when no session holds a pin.
+by `, keepalive {state}` and `next probe {HH:MM}` while the keepalive engine tracks it. Times on the screen print in the
+host's zone as `HH:MM`, with the date in front as `MM-DD` when it is not today, while the router's log lines print their
+instants in UTC with the zone named. Ages print in their largest whole unit as `12s`, `4m`, `3h` or `2d`. The block
+reads `pins: none` when no session holds a pin.
 
 A read that fails prints one line in its section, such as `pools: the admin listener did not answer on {url}: {reason}`
 or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is down, the

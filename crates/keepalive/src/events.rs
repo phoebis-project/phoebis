@@ -332,8 +332,9 @@ impl Inner {
             .agent_id
             .clone()
             .unwrap_or_else(|| MAIN_AGENT.to_string());
-        // The lease renews on a heartbeat only, as the Go engine had it; agent_start, activity, and state
-        // report the agent, not the companion's own liveness, so they leave it alone.
+        // Both `session_start` paths in `start`, the same-instance re-adoption and the new registration, set the
+        // lease, and among the later reports a heartbeat alone renews it, as the Go engine had it. `activity`,
+        // `agent_start` and `state` report the agent, not the companion's own liveness, so they leave it alone.
         let renews_lease = ev.event == "heartbeat";
         match ev.event.as_str() {
             "heartbeat" => {}
