@@ -130,7 +130,7 @@ reads it: an estimate rather than a bill, since tier and batch modifiers are not
 the rate-limit windows, never this number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the
 binary. `stats.api_prices_path` replaces its whole list with a file of the operator's own, Settings names each table's
 path and date on its About card, and the cost reference dialog the Sessions view opens draws the table ([The cost
-reference](console.md#the-cost-reference)). An attempt on a model the entry in force does not price reads no cost
+reference](console.md#the-cost-reference)). A request on a model the entry in force does not price reads no cost
 estimate and is counted in `phoebis_pricing_unknown_model_total`.
 
 The file is a list of revisions under its one key, `revisions`: each entry carries an `effective` date in `YYYY-MM-DD`

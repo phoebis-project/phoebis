@@ -125,15 +125,17 @@ empty file, and any other shape is refused with `storage key file must hold exac
 with at most one trailing newline`.
 
 The registry carries a canary sealed under the key at its first open, and every open proves the key against it before
-any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
-is refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry
-from before the canary existed is proved against its sealed rows instead, the first 32 of each kind (credential bundles
-and API-key secrets), passing when any of them opens, and the next start seals its canary. `check-config` names such a
+any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved, is
+refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry from
+before the canary existed is proved against its sealed rows instead, the first 32 of each kind (credential bundles and
+API-key secrets), passing when any of them opens, and the next start seals its canary. `check-config` names such a
 registry with `registry at {path} has no key canary yet. A sealed row opens under the key, and the next start seals
 one`. The 32-row bound leaves a dead end in two shapes: a registry without a canary whose readable credential or API-key
 rows all sit past the 32nd of their kind refuses the right key at the start, and so does one whose readable rows sit
 only among the keepalive recipe bodies, which the proof never reads, beside credential or API-key rows that do not open.
-`phoebis recover-key` tries every sealed row, so it accepts the key in both shapes and is the way out.
+`phoebis recover-key` scans every sealed row, so it reads the right key as matching and refuses to discard, and it seals
+no canary: neither command leads out of either shape, so a registry in one needs a backup taken after its canary was
+sealed.
 
 `init` refuses a key file that exists with `{path} already exists, and init never replaces a key, since every stored
 credential is sealed under it`, and refuses a data directory that already holds a registry, so a lost key is never
