@@ -478,7 +478,8 @@ unauthenticated caller can reach, and it ignores a bearer.
 
 A wrong secret answers `401 secret does not match`. Five failed logins within a minute refuse every login after them
 with `429 too many failed logins, try again in a minute` until the minute passes. A session ends after 15 minutes idle
-or 12 hours after it was opened, whichever comes first.
+or 12 hours after it was opened, whichever comes first. A login with "Stay logged in" keeps its session for 30 days from
+its last read, across a restart, until a secret rotation or a logout of a kept login, which ends every kept login.
 
 Refused with:
 
@@ -789,7 +790,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Limit | Value |
 | --- | --- |
 | Admin login throttle | Five failed logins per minute, then `too many failed logins, try again in a minute`. |
-| Admin session lifetime | 15 minutes idle, 12 hours absolute. |
+| Admin session lifetime | 15 minutes idle, 12 hours absolute. With "Stay logged in", 30 days from the last read, across a restart, until a secret rotation or a kept logout. |
 | Chunk framing | 1 KiB per chunk-size line and 16 KiB of trailers from an upstream. |
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
 | Cooldown booking | Seven days ahead of each announcement, and a later announcement books the next stretch. |

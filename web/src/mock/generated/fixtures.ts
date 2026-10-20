@@ -15208,6 +15208,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
+      "persistent": false,
       "session_id": "Lqpop5Un53s8Mca3Excrj-T6f6jaeP19zlUV0M7H17M"
     }
   },

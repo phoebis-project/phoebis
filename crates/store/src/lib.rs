@@ -495,6 +495,24 @@ impl Store {
         read_version(&self.conn.lock().expect(LOCK_POISONED))
     }
 
+    /// The epoch the persistent admin tokens' key folds in, 0 before the first persistent logout.
+    pub fn admin_session_epoch(&self) -> Result<u64, StoreError> {
+        read_admin_session_epoch(&self.conn.lock().expect(LOCK_POISONED))
+    }
+
+    /// Moves the epoch on by one and answers the new value.
+    pub fn bump_admin_session_epoch(&self) -> Result<u64, StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction()?;
+        let epoch = read_admin_session_epoch(&tx)? + 1;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('admin_session_epoch', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![epoch.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(epoch)
+    }
+
     /// The key an in-memory snapshot digests presented secrets with, so a comparison never needs the raw
     /// storage key outside the store.
     pub fn digest_key(&self) -> [u8; 32] {
@@ -1379,6 +1397,28 @@ fn read_version(conn: &Connection) -> Result<u32, StoreError> {
     Ok(stored.and_then(|v| v.parse().ok()).unwrap_or(1))
 }
 
+/// A value that does not parse is refused rather than read as 0, which would let every token signed before the first
+/// persistent logout verify again.
+fn read_admin_session_epoch(conn: &Connection) -> Result<u64, StoreError> {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'admin_session_epoch'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(stored) = stored else {
+        return Ok(0);
+    };
+    stored.parse().map_err(|error| {
+        StoreError::Sqlite(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        ))
+    })
+}
+
 /// Shared by `Store::api_key_digest` and the router task's in-memory snapshot, so both digest a presented
 /// secret with the exact same function.
 pub fn digest_with(key: &[u8; 32], secret: &[u8]) -> [u8; 32] {
@@ -1445,6 +1485,21 @@ mod tests {
                 },
             )
             .unwrap();
+    }
+
+    #[test]
+    fn the_admin_session_epoch_reads_zero_on_a_new_registry_and_a_bump_holds_across_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("router.sqlite");
+        let key = StorageKey::generate();
+        let store = Store::open(&db, &key).unwrap();
+        assert_eq!(store.admin_session_epoch().unwrap(), 0);
+        assert_eq!(store.bump_admin_session_epoch().unwrap(), 1);
+        assert_eq!(store.admin_session_epoch().unwrap(), 1);
+        drop(store);
+        let store = Store::open(&db, &key).unwrap();
+        assert_eq!(store.admin_session_epoch().unwrap(), 1);
+        assert_eq!(store.bump_admin_session_epoch().unwrap(), 2);
     }
 
     #[test]

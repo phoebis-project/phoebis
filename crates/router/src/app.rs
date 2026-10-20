@@ -83,7 +83,7 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// An unattended browser must not keep an admin session usable, and no session outlives the day it was
-/// opened on.
+/// opened on. A login that asks to stay lives by its signed token's 30 days instead.
 const SESSION_ABSOLUTE: Duration = Duration::from_secs(43_200);
 const SESSION_IDLE: Duration = Duration::from_secs(900);
 
@@ -389,7 +389,15 @@ pub async fn run_until(
     let keepalive_gauge_source = keepalive.gauge_source();
     let vault = Arc::new(PairingVault::new());
     let pairing = Arc::new(PairingSessions::new());
-    let sessions = Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE));
+    let sessions = Arc::new(
+        Sessions::new(
+            SESSION_IDLE,
+            SESSION_ABSOLUTE,
+            Secret::new(config.admin.secret.expose()),
+            store.clone(),
+        )
+        .context("reading the admin session epoch from the store")?,
+    );
     // The admin state takes the manager; the shutdown drains its refreshes after the admin listener is gone.
     let refreshes = manager.clone();
     let admin = Arc::new(AdminState {

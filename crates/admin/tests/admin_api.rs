@@ -104,6 +104,219 @@ fn cookie_attributes(response: &axum::http::Response<axum::body::Body>) -> Strin
         .to_string()
 }
 
+const KEPT_LOGIN: &str = r#"{"secret":"admin-secret","stay_logged_in":true}"#;
+
+/// The cookie a kept login's answer sets, after checking it is one line of the login's shape and 30-day life. The
+/// messages name the attributes alone, since the value is the session's credential.
+fn renewal_of(response: &axum::http::Response<axum::body::Body>, what: &str) -> String {
+    let lines: Vec<&str> = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "{what}: the answer renews the kept login's cookie"
+    );
+    let (_, attributes) = lines[0].split_once(';').unwrap();
+    assert_eq!(
+        attributes, " Path=/admin; HttpOnly; SameSite=Strict; Max-Age=2592000",
+        "{what}: the renewal keeps the login's attributes and its 30 days"
+    );
+    common::cookie_of(response)
+}
+
+/// One `Set-Cookie` line, the logout's clear, checked without printing a line that might carry a token.
+fn assert_clear_alone(response: &axum::http::Response<axum::body::Body>, what: &str) {
+    let lines: Vec<&str> = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "{what}: one Set-Cookie line");
+    assert!(
+        lines[0] == "phoebis_admin=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0",
+        "{what}: the line is the clear"
+    );
+}
+
+#[tokio::test]
+async fn a_kept_login_sets_a_thirty_day_cookie_that_a_restart_on_the_same_store_verifies() {
+    use common::{cookie_of, get, json, post};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let login = post(&app, "/admin/session", KEPT_LOGIN, None).await;
+    assert_eq!(login.status(), 204);
+    let attributes = cookie_attributes(&login);
+    let (_, attributes) = attributes.split_once(';').unwrap();
+    assert_eq!(
+        attributes, " Path=/admin; HttpOnly; SameSite=Strict; Max-Age=2592000",
+        "a kept login's cookie lives 30 days beside the login's attributes"
+    );
+    let cookie = cookie_of(&login);
+    // The same store under the same secret, as the next start of the router reads them.
+    let (restarted, _up, _, _) = common::admin_parts_on(store).await;
+    let shown = get(&restarted, "/admin/session", Some(&cookie)).await;
+    assert_eq!(
+        shown.status(),
+        200,
+        "the restarted sessions verify the token"
+    );
+    assert_eq!(json(shown).await["persistent"], true);
+}
+
+#[tokio::test]
+async fn every_answer_to_a_kept_login_renews_its_cookie_under_the_same_session_id() {
+    use common::{cookie_of, get, json, post};
+    let (app, _up) = common::admin_app().await;
+    let first = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let mut cookie = first.clone();
+    let mut ids = Vec::new();
+    for (method, path) in [
+        ("GET", "/admin/session"),
+        ("GET", "/admin/accounts"),
+        ("POST", "/admin/accounts/business/pause"),
+        ("GET", "/admin/no-such-route"),
+        ("GET", "/admin/session"),
+    ] {
+        let answer = match method {
+            "GET" => get(&app, path, Some(&cookie)).await,
+            _ => post(&app, path, "", Some(&cookie)).await,
+        };
+        let renewed = renewal_of(&answer, &format!("{method} {path}"));
+        assert!(
+            renewed != cookie,
+            "{method} {path}: a fresh issue instant and nonce"
+        );
+        if path == "/admin/session" {
+            ids.push(json(answer).await["session_id"].clone());
+        }
+        cookie = renewed;
+    }
+    let last = json(get(&app, "/admin/session", Some(&cookie)).await).await;
+    ids.push(last["session_id"].clone());
+    assert!(ids[0].is_string());
+    assert!(
+        ids.iter().all(|id| *id == ids[0]),
+        "one session id under every renewed cookie"
+    );
+    assert_eq!(
+        get(&app, "/admin/session", Some(&first)).await.status(),
+        200,
+        "a renewal leaves the earlier token valid to its own expiry"
+    );
+}
+
+#[tokio::test]
+async fn the_session_answer_reads_persistent_for_a_kept_login_alone() {
+    use common::{cookie_of, get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let kept = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let plain = login(&app, "admin-secret").await;
+    assert_eq!(
+        json(get(&app, "/admin/session", Some(&kept)).await).await["persistent"],
+        true
+    );
+    let answer = get(&app, "/admin/session", Some(&plain)).await;
+    assert!(
+        answer.headers().get("set-cookie").is_none(),
+        "a login without the flag keeps today's cookie, renewed by nothing"
+    );
+    assert_eq!(json(answer).await["persistent"], false);
+}
+
+#[tokio::test]
+async fn a_pairing_started_under_a_kept_login_completes_under_each_renewed_cookie() {
+    use common::{cookie_of, delete, get, json, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let started = post(
+        &app,
+        "/admin/oauth/sessions",
+        r#"{"account_id":"business","login":"claude_ai"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(started.status(), 201);
+    let cookie = renewal_of(&started, "the pairing's start");
+    let id = json(started).await["id"].as_str().unwrap().to_string();
+    let shown = get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await;
+    assert_eq!(
+        shown.status(),
+        200,
+        "the renewed cookie names the session that started the pairing"
+    );
+    let cookie = renewal_of(&shown, "the pairing's show");
+    assert_eq!(json(shown).await["status"], "pending");
+    let cancelled = delete(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await;
+    assert_eq!(cancelled.status(), 204);
+    renewal_of(&cancelled, "the pairing's cancel");
+}
+
+#[tokio::test]
+async fn a_kept_logout_answers_its_clear_alone_and_ends_every_kept_token_across_a_restart() {
+    use common::{cookie_of, delete, get, post};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let first = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let renewed = renewal_of(&get(&app, "/admin/session", Some(&first)).await, "a read");
+    let other = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let out = delete(&app, "/admin/session", Some(&renewed)).await;
+    assert_eq!(out.status(), 204);
+    assert_clear_alone(&out, "the kept logout");
+    let (restarted, _up, _, _) = common::admin_parts_on(store).await;
+    for (cookie, what) in [
+        (&first, "the first token"),
+        (&renewed, "the renewed token"),
+        (&other, "another kept login's token"),
+    ] {
+        assert_eq!(
+            get(&app, "/admin/session", Some(cookie)).await.status(),
+            401,
+            "{what} on this process"
+        );
+        assert_eq!(
+            get(&restarted, "/admin/session", Some(cookie))
+                .await
+                .status(),
+            401,
+            "{what} after a restart"
+        );
+    }
+    let fresh = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    assert_eq!(
+        get(&app, "/admin/session", Some(&fresh)).await.status(),
+        200
+    );
+    assert_eq!(
+        get(&restarted, "/admin/session", Some(&fresh))
+            .await
+            .status(),
+        200,
+        "a kept login after the logout verifies after a restart"
+    );
+}
+
+#[tokio::test]
+async fn a_logout_under_a_token_shaped_cookie_that_fails_verification_leaves_the_epoch_unmoved() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use common::{cookie_of, delete, get, json, post};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let kept = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let mut forged = URL_SAFE_NO_PAD.decode(&kept).unwrap();
+    *forged.last_mut().unwrap() ^= 1;
+    let forged = URL_SAFE_NO_PAD.encode(forged);
+    let out = delete(&app, "/admin/session", Some(&forged)).await;
+    assert_eq!(out.status(), 204);
+    assert_clear_alone(&out, "a logout under a forged token");
+    assert_eq!(store.admin_session_epoch().unwrap(), 0);
+    let shown = get(&app, "/admin/session", Some(&kept)).await;
+    assert_eq!(shown.status(), 200, "the kept login was not ended");
+    assert_eq!(json(shown).await["persistent"], true);
+}
+
 #[tokio::test]
 async fn a_foreign_origin_is_refused_and_a_missing_one_is_admitted() {
     use common::{json, login, post, post_from, send_with_host};
@@ -436,7 +649,7 @@ async fn a_bearer_admits_a_read_and_a_mutation_without_a_cookie_or_an_origin() {
     assert_eq!(whoami.status(), 200);
     assert_eq!(
         json(whoami).await,
-        serde_json::json!({"session_id": "bearer"})
+        serde_json::json!({"persistent": false, "session_id": "bearer"})
     );
     // The scheme word is matched ignoring case, and the JSON rule still holds under a bearer.
     let lower = authorized(
@@ -3012,8 +3225,8 @@ async fn the_session_route_answers_the_session_id_and_settings_say_the_admin_sec
     assert_eq!(
         me.as_object()
             .map(|m| m.keys().cloned().collect::<Vec<_>>()),
-        Some(vec!["session_id".to_string()]),
-        "the session answer names the session and nothing else: {me}"
+        Some(vec!["persistent".to_string(), "session_id".to_string()]),
+        "the session answer names the session and its kind and nothing else: {me}"
     );
     assert!(
         me["session_id"].as_str().is_some_and(|id| id != cookie),

@@ -50,7 +50,7 @@ const TAGS: [&str; 18] = [
 const REFUSALS: &[(&str, &[u16])] = &[
     ("session_show", &[]),
     ("session_login", &[400, 401, 429]),
-    ("session_logout", &[]),
+    ("session_logout", &[500]),
     ("accounts_list", &[500]),
     ("accounts_create", &[400, 404, 409, 500, 502, 503]),
     ("account_show", &[404, 500]),
@@ -1065,6 +1065,35 @@ async fn a_session_row_answers_its_context_figures_and_agent_lines_as_null_or_th
             "AgentContext.{member}: a line with no turn answers null"
         );
     }
+}
+
+#[tokio::test]
+async fn the_login_takes_stay_logged_in_false_by_default_and_the_session_answers_persistent() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let input = &schemas["LoginInput"];
+    assert_eq!(
+        input["properties"]["stay_logged_in"]["type"], "boolean",
+        "{input}"
+    );
+    assert_eq!(input["properties"]["stay_logged_in"]["default"], false);
+    assert!(
+        !input["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "stay_logged_in")),
+        "a login may leave the flag out: {input}"
+    );
+    let view = &schemas["SessionView"];
+    assert_eq!(
+        view["properties"]["persistent"]["type"], "boolean",
+        "{view}"
+    );
+    assert!(
+        view["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "persistent")),
+        "every session answer carries the member: {view}"
+    );
 }
 
 #[tokio::test]

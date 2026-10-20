@@ -39,6 +39,7 @@ use utoipa::{Modify, OpenApi, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
+use crate::session::{Authenticated, PERSISTENT_LIFE};
 use crate::{
     accounts, analytics, attention, dashboard, guardrails, keepalive, keys, models, openapi, pools,
     pricing, requests, sessions, settings, tls, AdminState, LoginError, NewAccount,
@@ -140,6 +141,9 @@ pub(crate) struct Caller {
     pub session_id: String,
     /// `"bearer"` or `"session"`.
     pub credential: &'static str,
+    /// A kept login's token the gate verified. False for a map session and the bearer, so only a verified token
+    /// moves the session epoch at a logout.
+    pub persistent: bool,
 }
 
 /// The session id every bearer caller carries, so a pairing one scripted call starts the next confirms.
@@ -168,7 +172,12 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
     let mut response = match admit(&state, &mut request) {
         None => {
             let caller = request.extensions().get::<Caller>().cloned();
-            let response = next.run(request).await;
+            // Taken out before the handler runs, so the renewed token never reaches a handler.
+            let renewal = request.extensions_mut().remove::<Renewal>();
+            let mut response = next.run(request).await;
+            if let Some(Renewal(cookie)) = renewal {
+                response.headers_mut().append(SET_COOKIE, cookie);
+            }
             if mutation {
                 log_mutation(&method, &route, &path, caller.as_ref(), &response);
             }
@@ -328,6 +337,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
                 request.extensions_mut().insert(Caller {
                     session_id: BEARER_SESSION_ID.to_string(),
                     credential: "bearer",
+                    persistent: false,
                 });
                 None
             }
@@ -341,13 +351,31 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         };
     }
 
-    let session_id = presented_cookie(request.headers())
+    let session = presented_cookie(request.headers())
         .and_then(|cookie| state.sessions.authenticate(&cookie, (state.clock)()));
-    match session_id {
-        Some(session_id) => {
+    match session {
+        Some(Authenticated::Map { id }) => {
             request.extensions_mut().insert(Caller {
-                session_id,
+                session_id: id,
                 credential: "session",
+                persistent: false,
+            });
+            None
+        }
+        Some(Authenticated::Persistent { id, renewed_cookie }) => {
+            // The logout answers its clear alone: a renewal beside it would leave the browser a live token.
+            if !(method == Method::DELETE && path == LOGIN_PATH) {
+                let secure = state.tls || forwarded_https(request.headers());
+                // A base64url token and fixed attributes always make a header value. Were one ever refused, the
+                // answer would go without its renewal and the presented token would stay valid to its own end.
+                if let Ok(cookie) = HeaderValue::from_str(&kept_cookie(&renewed_cookie, secure)) {
+                    request.extensions_mut().insert(Renewal(cookie));
+                }
+            }
+            request.extensions_mut().insert(Caller {
+                session_id: id,
+                credential: "session",
+                persistent: true,
             });
             None
         }
@@ -417,11 +445,33 @@ fn presented_cookie(headers: &HeaderMap) -> Option<String> {
     })
 }
 
+/// The `Set-Cookie` a kept login's answer carries, the gate's handoff from `admit` to the answer.
+#[derive(Clone)]
+struct Renewal(HeaderValue);
+
+/// The login's attributes with the token's 30 days as `Max-Age`, so the browser keeps the cookie as long as the
+/// router would verify it.
+fn kept_cookie(token: &str, secure: bool) -> String {
+    let mut attributes = format!(
+        "{COOKIE_NAME}={token}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age={}",
+        PERSISTENT_LIFE.as_secs()
+    );
+    if secure {
+        attributes.push_str("; Secure");
+    }
+    attributes
+}
+
 /// The login's body.
 #[derive(serde::Deserialize, ToSchema)]
 pub(crate) struct LoginInput {
     /// The admin secret.
     pub secret: String,
+    /// Keep the login for 30 days from its last read, across a restart, until a secret rotation or a logout of a kept
+    /// login. False or absent, the session lives 15 minutes idle and 12 hours in all.
+    #[serde(default)]
+    #[schema(default = false)]
+    pub stay_logged_in: bool,
 }
 
 /// Whether the cookie the console holds still names a session, by the id pairing ownership uses, never by the
@@ -429,7 +479,10 @@ pub(crate) struct LoginInput {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionView {
-    /// The session's id as pairing ownership and the mutation log name it. `bearer` for a bearer caller.
+    /// True for a login that asked to stay, false for a plain login and for a bearer caller.
+    pub persistent: bool,
+    /// The session's id as pairing ownership and the mutation log name it, the same across a kept login's renewals.
+    /// `bearer` for a bearer caller.
     #[schema(example = "bearer")]
     pub session_id: String,
 }
@@ -445,10 +498,10 @@ pub(crate) struct SessionView {
     path = "/admin/session",
     operation_id = "session_login",
     tag = "Session",
-    request_body(content = LoginInput, description = "The admin secret", content_type = "application/json"),
+    request_body(content = LoginInput, description = "The admin secret, and `stay_logged_in` for a login that stays", content_type = "application/json"),
     responses(
         (status = 204, description = "Logged in. The `phoebis_admin` cookie is set and the answer carries no body.",
-            headers(("Set-Cookie" = String, description = "`phoebis_admin=<token>; Path=/admin; HttpOnly; SameSite=Strict`, with `; Secure` where the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`"))),
+            headers(("Set-Cookie" = String, description = "`phoebis_admin=<token>; Path=/admin; HttpOnly; SameSite=Strict`, with `; Secure` where the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`. The session lives 15 minutes idle and 12 hours in all. With `stay_logged_in` true the token is signed and the cookie carries `; Max-Age=2592000` before any `; Secure`: the session lives 30 days from its last read, across a restart, every answer to it sets a renewed cookie of the same shape and life, and a secret rotation or a logout of a kept login ends it."))),
         (status = 400, description = "`body must carry a secret`", body = ErrorBody, example = json!({"error": "body must carry a secret"})),
         (status = 401, description = "`secret does not match`", body = ErrorBody, example = json!({"error": "secret does not match"})),
         (status = 429, description = "`too many failed logins, try again in a minute`", body = ErrorBody, example = json!({"error": "too many failed logins, try again in a minute"})),
@@ -459,18 +512,28 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
     let Ok(input) = serde_json::from_slice::<LoginInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must carry a secret");
     };
-    match state
-        .sessions
-        .login(&input.secret, &state.secrets, (state.clock)())
-    {
-        Ok(cookie) => {
-            let mut attributes =
-                format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
-            if state.tls || forwarded_https(&headers) {
-                attributes.push_str("; Secure");
-            }
-            set_cookie(StatusCode::NO_CONTENT, &attributes)
-        }
+    let now = (state.clock)();
+    let secure = state.tls || forwarded_https(&headers);
+    let login = if input.stay_logged_in {
+        state
+            .sessions
+            .login_persistent(&input.secret, now)
+            .map(|token| kept_cookie(&token, secure))
+    } else {
+        state
+            .sessions
+            .login(&input.secret, &state.secrets, now)
+            .map(|cookie| {
+                let mut attributes =
+                    format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
+                if secure {
+                    attributes.push_str("; Secure");
+                }
+                attributes
+            })
+    };
+    match login {
+        Ok(attributes) => set_cookie(StatusCode::NO_CONTENT, &attributes),
         Err(LoginError::Throttled) => failure(
             StatusCode::TOO_MANY_REQUESTS,
             "too many failed logins, try again in a minute",
@@ -482,19 +545,33 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
 /// End the caller's own session.
 ///
 /// The gate admits this operation without a live session: a cookie that names no session, an expired one included,
-/// answers the same `204` and the same clear, so a tab holding a dead cookie can still drop it.
+/// answers the same `204` and the same clear, so a tab holding a dead cookie can still drop it. The logout of a kept
+/// login ends every kept login of the install, on this process and after a restart.
 #[utoipa::path(
     delete,
     path = "/admin/session",
     operation_id = "session_logout",
     tag = "Session",
     responses(
-        (status = 204, description = "The session is ended and the browser's cookie cleared.",
+        (status = 204, description = "The session is ended and the browser's cookie cleared. A kept login's logout ends every kept login, each browser's included, and the answer carries the clear alone.",
             headers(("Set-Cookie" = String, description = "`phoebis_admin=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0`"))),
+        (status = 500, response = StorageFailure),
     ),
     security(),
 )]
-async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Response {
+async fn logout(
+    State(state): State<Arc<AdminState>>,
+    caller: Option<Extension<Caller>>,
+    headers: HeaderMap,
+) -> Response {
+    // The gate's verdict alone moves the epoch: it admits this route with no live session, so a cookie that only
+    // looks like a token must end nothing.
+    if caller.is_some_and(|Extension(caller)| caller.persistent) {
+        // A refused bump leaves the kept logins valid, so the answer says the logout failed.
+        if let Err(error) = state.sessions.logout_persistent() {
+            return store_failure(error);
+        }
+    }
     if let Some(cookie) = presented_cookie(&headers) {
         state.sessions.logout(&cookie);
     }
@@ -508,8 +585,8 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
 
 /// Whether the cookie the console holds still names a session.
 ///
-/// Answers `session_id`, the id pairing ownership uses, never the cookie value. A bearer caller answers
-/// `session_id` `bearer`.
+/// Answers `session_id`, the id pairing ownership uses, never the cookie value, and `persistent`, true for a login
+/// that asked to stay. A bearer caller answers `session_id` `bearer` and `persistent` false.
 #[utoipa::path(
     get,
     path = "/admin/session",
@@ -519,6 +596,7 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
 )]
 async fn whoami(Extension(caller): Extension<Caller>) -> Response {
     Json(SessionView {
+        persistent: caller.persistent,
         session_id: caller.session_id,
     })
     .into_response()

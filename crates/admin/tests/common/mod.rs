@@ -1108,10 +1108,15 @@ async fn build_app_routed(
     });
     let vault = Arc::new(PairingVault::new());
     let pairing = Arc::new(PairingSessions::new());
-    let sessions = Arc::new(Sessions::new(
-        Duration::from_secs(900),
-        Duration::from_secs(43_200),
-    ));
+    let sessions = Arc::new(
+        Sessions::new(
+            Duration::from_secs(900),
+            Duration::from_secs(43_200),
+            Secret::new("admin-secret"),
+            store.clone(),
+        )
+        .unwrap(),
+    );
     let state = Arc::new(AdminState {
         store: store.clone(),
         manager: manager.clone(),
