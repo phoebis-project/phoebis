@@ -12278,7 +12278,7 @@ m.unmount();
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 33 && ['+ Mark cleared', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        events.length === 35 && ['+ Mark cleared', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -12306,7 +12306,7 @@ m.unmount();
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 40 && back.checked === 40,
+        back.address === null && back.chip === 'no kinds chip' && back.options === 42 && back.checked === 42,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -13469,8 +13469,9 @@ m.unmount();
   {
     // The Fable-week round on nightly at 08:30: the 5-hour window opened 19 minutes before, under all's hold of an
     // hour, so the shed rule's Round group reads the window's age and hold, and the Fable week fires in its place. The
-    // round lists the Opus pin off the window after the Fable pin, its member's last, so it marks nothing.
-    const name = "/routing-log the Fable-week round's card lists the Opus pin off the window and marks nothing";
+    // round lists the Fable pin on the fast lane and the Opus pin off the window, both left out before the walk, so it
+    // marks nothing off the window.
+    const name = "/routing-log the Fable-week round's card lists the Fable pin on the fast lane and the Opus pin off the window and marks nothing off the window";
     const id = 'req_3e7a5c19-f84';
     if ((await api.getDecision(id, 1)) === null) results.push({ name, ok: false, missing: ['no decision of the story at 08:30 on nightly'] });
     else {
@@ -13493,8 +13494,8 @@ m.unmount();
           JSON.stringify(labels) === JSON.stringify(['trigger', 'excess', 'fired by', 'age 5h', 'age hold 5h', 'target', 'round', 'marked', 'marks', 'skipped']) &&
           (popoverRowOf(round, 'age 5h') ?? []).includes('age 5h 19 min') && (popoverRowOf(round, 'age hold 5h') ?? []).includes('age hold 5h 1 h') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
           JSON.stringify(facts) === JSON.stringify(['pins 0 of 2']) &&
-          JSON.stringify(pins.map((cells) => [cells[3] === '-', cells[5], cells[7]])) === JSON.stringify([[false, '-', 'last pin'], [true, '-', 'off window']]) &&
-          JSON.stringify(pairs.Outcome) === JSON.stringify(['nothing to mark: last pin']),
+          JSON.stringify(pins.map((cells) => [cells[3] === '-', cells[5], cells[7]])) === JSON.stringify([[true, '-', 'fast lane'], [true, '-', 'off window']]) &&
+          JSON.stringify(pairs.Outcome) === JSON.stringify(['nothing to mark: off window']),
         missing: [labels.join(' / '), rowsRead(round), facts.join(' / '), JSON.stringify(pins), JSON.stringify(pairs.Outcome ?? null)],
       });
       page.unmount();
@@ -14340,6 +14341,7 @@ m.unmount();
       pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
       poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
+      poll_failed: ['Endpoint', 'Status', 'Error'],
       refresh_failed: ['Error'],
       refresh_succeeded: ['Access token', 'Refresh token'],
       refresh_uncertain: ['Error'],
@@ -14356,6 +14358,7 @@ m.unmount();
       shedding_round: ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
       slow_down_ended: ['Lasted', 'Slowest', 'Held', 'Effect'],
       slow_down_started: ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect'],
+      stream_interrupted: ['Request', 'Code', 'Text', 'Bytes relayed', 'Upstream request', 'Attempt'],
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_cleared: ['Window', 'Before', 'After', 'Reset', 'Read from'],
@@ -14364,17 +14367,19 @@ m.unmount();
     };
     const EVENT_KINDS = [
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
-      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
-      'window_cleared', 'window_reset', 'window_spent',
+      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed', 'refresh_failed',
+      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'stream_interrupted',
+      'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
     ];
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
-    // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect and
-    // the backoff's span.
+    // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect, the
+    // backoff's span, the failed poll's answer and the cut's figures, the last two read off nightly's 503 seed and the
+    // undecodable row's seed.
     const VALUES = {
       account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
       ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
+      poll_failed: (e) => ({ Endpoint: [e.detail.endpoint], Error: [e.detail.error], Status: [String(e.detail.status)] }),
       mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
       registry_changed: (e) => (e.detail.diff?.secret_replaced === true ? { Secret: ['replaced'] } : {}),
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
@@ -14387,6 +14392,14 @@ m.unmount();
         Reset: [hhmm(e.detail.reset)],
         Speed: [`${e.detail.factor}x`],
         Stretch: ['27 min of 30 min'],
+      }),
+      stream_interrupted: (e) => ({
+        Attempt: [String(e.detail.attempt)],
+        'Bytes relayed': [String(e.detail.bytes_relayed)],
+        Code: [e.detail.code],
+        Request: [e.requestId],
+        Text: [e.detail.text],
+        'Upstream request': [e.detail.upstream_request_id],
       }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound'] }),
     };

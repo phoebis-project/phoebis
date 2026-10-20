@@ -275,12 +275,12 @@ test('every label of the table is used at least once and no fact key lacks a lab
 test('every event kind has its words and its tone', () => {
   const kinds = [
     'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
-    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-    'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
-    'window_cleared', 'window_reset', 'window_spent',
+    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed', 'refresh_failed',
+    'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'stream_interrupted', 'warm_prefix_expired',
+    'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
-  assert.equal(kinds.length, 33);
+  assert.equal(kinds.length, 35);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
@@ -310,7 +310,8 @@ test('the step and verdict words', () => {
   assert.equal(d.STEP_NAME.selection, 'Rest of the walk');
   const tones = {
     answered: 'critical', blocked: 'warning', booked: 'good', bound: 'good', chosen: 'good', dropped: 'warning', exhausted: 'critical', fell_through: 'warning', fired: 'warning', fits: 'good', found: 'neutral', held: 'warning',
-    least_bad: 'warning', match: 'good', moved: 'warning', no: 'neutral', no_runway: 'neutral', none: 'neutral', not_run: 'neutral', off: 'neutral', passed: 'good', placed: 'good', preferred: 'warning', refused: 'critical',
+    least_bad: 'warning', match: 'good', moved: 'warning', no: 'neutral', no_runway: 'neutral', none: 'neutral', not_run: 'neutral', off: 'neutral', off_window: 'neutral', passed: 'good', placed: 'good',
+    preferred: 'warning', refused: 'critical',
     released: 'warning', renewed: 'good', rewrite_only: 'warning',
   };
   for (const [verdict, tone] of Object.entries(tones)) assert.equal(d.verdictTone(verdict), tone, verdict);
@@ -959,6 +960,7 @@ const DETAIL_EVENTS = {
   pin_released: [{ agent_id: 'main' }, ['Actor', 'Key', 'Session', 'Agent', 'Model']],
   poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
   poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
+  poll_failed: [{ endpoint: 'usage', error: 'usage request rejected with status 503', status: 503, transport: false }, ['Endpoint', 'Status', 'Error']],
   refresh_failed: [{ cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }, ['Error']],
   refresh_succeeded: [{ access_expires_at: ms(20, 52), refresh_expires_at: ms(20, 52) + 58 * 24 * HOUR, until: ms(20, 52) }, ['Access token', 'Refresh token']],
   refresh_uncertain: [{ cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }, ['Error']],
@@ -981,6 +983,10 @@ const DETAIL_EVENTS = {
   ],
   slow_down_ended: [{ duration_ms: 5_180_000, factor_min: 0.35, held_ms: 36_000, since: ms(9, 12) }, ['Lasted', 'Slowest', 'Held', 'Effect']],
   slow_down_started: [{ demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 }, ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect']],
+  stream_interrupted: [
+    { attempt: 1, bytes_relayed: 18_432, code: 'stream_cut', text: 'connection reset by peer', upstream_request_id: 'req_011CUcut' },
+    ['Request', 'Code', 'Text', 'Bytes relayed', 'Upstream request', 'Attempt'],
+  ],
   warm_prefix_expired: [{ cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000, written_at: ms(14, 19, 52) }, entries: 1, root: 's0' }, ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed']],
   wind_down_started: [{ end_source: 'cancelled', ends_at: ms(15, 0), wind_down_minutes: 30 }, ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from']],
   window_cleared: [{ reset: ms(15, 42), source: 'poll', source_request_id: null, utilization: 0, utilization_before: 1, window: 'five_hour' }, ['Window', 'Before', 'After', 'Reset', 'Read from']],
@@ -1120,6 +1126,54 @@ test("a shedding round's rates read share per hour of the window that fired: the
   // A round whose order read the dollar table names it, and its rates still read window share per hour.
   const dollars = { ...round, detail: { ...round.detail, unit: 'usd' } };
   assert.deepEqual(drawn(dollars), { cap: ['20%', 'target 2.4 %/h', 'removed 7.0 %/h'], pins: ['7.0 %/h'], share: false, unit: ['usd'] });
+});
+
+test('a failed usage poll and a stream cut after its head read their words, their presets and their pairs', () => {
+  assert.deepEqual([d.EVENT_KIND_LABEL.poll_failed, d.EVENT_KIND_LABEL.stream_interrupted], ['poll failed', 'stream interrupted']);
+  const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
+  assert.deepEqual([presetOf('poll_failed'), presetOf('stream_interrupted')], ['account state and windows', 'exhaustion and refusals']);
+  assert.equal(d.ALL_KINDS.length, 42, 'the six decision kinds, probe and the 35 event kinds');
+  const pairs = (kind, detail, o) => d.detailPairs(event(kind, detail, o), NOW, []).map((p) => [p.label, texts(p.chips)]);
+  // A transport failure answered no status, so the pair says what failed in its place.
+  assert.deepEqual(pairs('poll_failed', { endpoint: 'profile', error: 'transport: connection refused (os error 111)', status: null, transport: true }).slice(1), [
+    ['Account', ['primary']],
+    ['Endpoint', ['profile']],
+    ['Status', ['transport failure']],
+    ['Error', ['transport: connection refused (os error 111)']],
+  ]);
+  assert.deepEqual(pairs('poll_failed', { endpoint: 'usage', error: 'usage request rejected with status 503', status: 503, transport: false }).slice(2), [
+    ['Endpoint', ['usage']],
+    ['Status', ['503']],
+    ['Error', ['usage request rejected with status 503']],
+  ]);
+  // The upstream's own request id keeps its underscores, as the request drawer prints it.
+  const cut = { attempt: 2, bytes_relayed: 18_432, code: 'stream_stalled', text: 'no chunk for 30 s', upstream_request_id: 'req_011CUcut_7a' };
+  const own = { model: 'claude-sonnet-4-6', requestId: 'req_5e2f7a19-b03', sessionId: 's1-0000-4000' };
+  assert.deepEqual(pairs('stream_interrupted', cut, own).slice(2), [
+    ['Request', ['req_5e2f7a19-b03']],
+    ['Code', ['stream_stalled']],
+    ['Text', ['no chunk for 30 s']],
+    ['Bytes relayed', ['18,432']],
+    ['Upstream request', ['req_011CUcut_7a']],
+    ['Attempt', ['2']],
+  ]);
+  const request = d.detailPairs(event('stream_interrupted', cut, own), NOW, []).find((p) => p.label === 'Request').chips[0];
+  assert.equal(request.href, '/requests/req_5e2f7a19-b03');
+  assert.deepEqual(pairs('stream_interrupted', { ...cut, upstream_request_id: null }, own).map(([label]) => label).slice(2), ['Request', 'Code', 'Text', 'Bytes relayed', 'Attempt'], 'a head with no request id draws no Upstream request');
+});
+
+test("a round that walked no pin and left one out off the window that fired reads off window as its reason", () => {
+  const pin = (o) => ({ agent_id: 'main', burn: null, cold: false, key_id: 'desktop', last_input_tokens: 61_000, marked: false, model: 'claude-opus-5', note: null, per_rewrite: null, planned: null, rewrite: null, runway_ms: null, session_id: 'e3b8d1f6-4a29', skip: 'off_window', ...o });
+  const detail = {
+    burn_average_seconds: 1_800, burn_sum: 0, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.012, horizon: ms(18, 20), marks: [], outcome: 'nothing_to_mark', persisted: true,
+    pins: [pin({ model: 'claude-fable-5-1', note: 'current', session_id: '89cd1c92-5f0e', skip: 'fast_lane' }), pin({})], projection: 0.97, reason: 'off_window', removed: 0, shed_cap: 0.5, target: 0,
+    unit: 'window_share', utilization: 0.65, warm_sessions: 'when_needed', window: 'seven_day_fable',
+  };
+  const outcome = d.detailPairs(event('shedding_round', detail), NOW, []).find((p) => p.label === 'Outcome');
+  // Guards: the Outcome row prints any reason through its words, and an unknown word reads neutral.
+  assert.deepEqual(texts(outcome.chips), ['nothing to mark: off window']);
+  assert.equal(d.verdictTone('off_window'), 'neutral');
+  assert.ok(d.TONED_VERDICTS.has('off_window'), 'the word is one the scheme names a tone for, as no_runway is');
 });
 
 test('the pin moved, shedding round, cleared mark and expired reservation details read their pairs', () => {

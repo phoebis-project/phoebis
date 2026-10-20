@@ -135,7 +135,7 @@ test("a dimension whose list did not load carries the failure's words, and a lis
 
 test('every kind belongs to exactly one preset and a preset is exactly its members', () => {
   const members = d.KIND_PRESETS.flatMap((p) => p.members);
-  assert.equal(d.ALL_KINDS.length, 40);
+  assert.equal(d.ALL_KINDS.length, 42);
   assert.equal(new Set(members).size, members.length, 'no kind stands in two presets');
   assert.deepEqual([...members].sort(), [...d.ALL_KINDS].sort(), 'the presets together are every kind the Kinds list offers');
   assert.deepEqual(
@@ -143,8 +143,8 @@ test('every kind belongs to exactly one preset and a preset is exactly its membe
     [
       ['placements and pins', 7],
       ['moves and holds', 7],
-      ['exhaustion and refusals', 4],
-      ['account state and windows', 10],
+      ['exhaustion and refusals', 5],
+      ['account state and windows', 11],
       ['cooldowns and backoff', 4],
       ['keepalive', 2],
       ['registry changes', 4],

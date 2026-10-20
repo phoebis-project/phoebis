@@ -156,6 +156,7 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   pin_released: 'pin released',
   poll_backoff_ended: 'poll backoff ended',
   poll_backoff_started: 'poll backoff started',
+  poll_failed: 'poll failed',
   refresh_failed: 'refresh failed',
   refresh_succeeded: 'refresh succeeded',
   refresh_uncertain: 'refresh uncertain',
@@ -165,6 +166,7 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   shedding_round: 'shedding round',
   slow_down_ended: 'slow-down ended',
   slow_down_started: 'slow-down started',
+  stream_interrupted: 'stream interrupted',
   warm_prefix_expired: 'warm prefix expired',
   wind_down_started: 'wind-down started',
   window_cleared: 'window cleared',
@@ -182,15 +184,15 @@ export interface KindPreset {
 export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired', 'reservation_expired'] },
   { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started', 'slow_down_started', 'slow_down_ended'] },
-  { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached'] },
-  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'refresh_succeeded', 'refresh_uncertain'] },
+  { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached', 'stream_interrupted'] },
+  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'poll_failed', 'refresh_succeeded', 'refresh_uncertain'] },
   { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
   { label: 'keepalive', members: ['probe', 'warm_prefix_expired'] },
   { label: 'registry changes', members: ['registry_changed', 'catalog_changed', 'model_permitted', 'model_rejected'] },
   { label: 'router life cycle', members: ['router_started', 'ledger_gap'] },
 ];
 
-/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 33 event kinds. */
+/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 35 event kinds. */
 export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
 
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
@@ -262,7 +264,7 @@ export const STEP_NAME: Record<string, string> = {
 const GOOD = new Set(['booked', 'bound', 'chosen', 'fits', 'match', 'passed', 'placed', 'renewed']);
 const WARNING = new Set(['blocked', 'dropped', 'fell_through', 'fired', 'held', 'least_bad', 'moved', 'preferred', 'released', 'rewrite_only']);
 const CRITICAL = new Set(['answered', 'exhausted', 'refused']);
-const NEUTRAL = new Set(['found', 'no', 'no_runway', 'none', 'not_run', 'off']);
+const NEUTRAL = new Set(['found', 'no', 'no_runway', 'none', 'not_run', 'off', 'off_window']);
 
 /**
  * Every word the scheme names a tone for, the neutral ones included, so a fixture test can tell a toned word from an
@@ -1830,6 +1832,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Last clean poll', time(d.last_clean_poll_at));
       add('Effect', plain("decisions read this account's windows from response heads alone"));
       break;
+    case 'poll_failed': {
+      const status = num(d.status);
+      add('Endpoint', text(d.endpoint));
+      add('Status', d.transport === true ? plain('transport failure') : status === null ? null : plain(String(status)));
+      add('Error', text(d.error));
+      break;
+    }
     case 'refresh_failed':
     case 'refresh_succeeded':
     case 'refresh_uncertain':
@@ -2034,6 +2043,19 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Demand', demand === null ? null : plain(hourlyShare(demand)));
       add('Reset', time(d.reset));
       add('Effect', plain("requests of the account's sessions wait their cycle times the slow-down up to the hold"));
+      break;
+    }
+    case 'stream_interrupted': {
+      const attempt = num(d.attempt);
+      const code = str(d.code);
+      const upstream = str(d.upstream_request_id);
+      add('Request', request);
+      add('Code', code === null ? null : plain(code));
+      add('Text', text(d.text));
+      add('Bytes relayed', count(d.bytes_relayed));
+      // The upstream's id keeps its underscores, which `text` would read as spaces, and prints as the request drawer's.
+      add('Upstream request', upstream === null ? null : { mono: true, value: upstream });
+      add('Attempt', attempt === null ? null : plain(String(attempt)));
       break;
     }
     case 'warm_prefix_expired': {

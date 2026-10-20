@@ -1540,7 +1540,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(read.api_key > 0 && read.oauth > 0, `the pins the pick read by destination kind: ${JSON.stringify(read)}`);
   });
 
-  test(`the Fable-week round lists its Opus pin off the window after the Fable pin and marks nothing for the last pin, at ${at}`, async () => {
+  test(`the Fable-week round lists its Fable pin on the fast lane and its Opus pin off the window and marks nothing off the window, at ${at}`, async () => {
     const s = await story;
     const records = await decisionsOf(s);
     const r = records.find((x) => x.requestId === 'req_3e7a5c19-f84' && x.seq === 1);
@@ -1558,12 +1558,56 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const e = (await logOf(s)).find((row) => row.type === 'event' && row.kind === 'shedding_round' && row.requestId === r.requestId);
     assert.ok(e, "the round's event");
     const [fable, opus] = e.detail.pins;
+    // Both pins leave before the walk, so neither carries a figure and the round removes nothing.
+    const figures = (p) => [p.burn, p.per_rewrite, p.rewrite, p.planned];
     assert.deepEqual(
-      [e.accountId, e.detail.window, e.detail.pins.map((p) => p.model), fable.skip, opus.skip, [opus.burn, opus.per_rewrite, opus.rewrite, opus.planned], e.detail.marks, e.detail.outcome, e.detail.reason],
-      ['nightly', 'seven_day_fable', ['claude-fable-5-1', 'claude-opus-5'], 'last_pin', 'off_window', [null, null, null, null], [], 'nothing_to_mark', 'last_pin'],
+      [e.accountId, e.detail.window, e.detail.pins.map((p) => p.model), fable.skip, opus.skip, figures(fable), figures(opus), e.detail.burn_sum, e.detail.marks, e.detail.outcome, e.detail.reason],
+      ['nightly', 'seven_day_fable', ['claude-fable-5-1', 'claude-opus-5'], 'fast_lane', 'off_window', [null, null, null, null], [null, null, null, null], 0, [], 'nothing_to_mark', 'off_window'],
     );
     // The 5-hour window opened 19 minutes before, under the hold of twice all's half-hour average.
     assert.deepEqual([value('age_five_hour'), value('hold_five_hour')].map((f) => [f?.value, f?.unit]), [[1_140_000, 'ms'], [3_600_000, 'ms']]);
+  });
+
+  test(`a round reads off the window exactly where it walked no pin and left one out off the window that fired, at ${at}`, async () => {
+    const s = await story;
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
+    // The words a pin leaves the round under before the walk, which the router writes on the left-out rows alone.
+    const LEFT_OUT = ['fast_lane', 'off_window'];
+    for (const e of rounds) {
+      const walked = e.detail.pins.filter((p) => !LEFT_OUT.includes(p.skip));
+      const offWindow = walked.length === 0 && e.detail.pins.some((p) => p.skip === 'off_window');
+      assert.equal(e.detail.reason === 'off_window', offWindow, `${e.requestId}: ${e.detail.reason}`);
+    }
+    assert.deepEqual(rounds.filter((e) => e.detail.reason === 'off_window').map((e) => [e.requestId, e.accountId, e.detail.outcome]), [['req_3e7a5c19-f84', 'nightly', 'nothing_to_mark']]);
+  });
+
+  test(`the story writes one failed usage poll and one stream cut after its head with their detail members, at ${at}`, async () => {
+    const s = await story;
+    const log = await logOf(s);
+    const polls = log.filter((row) => row.type === 'event' && row.kind === 'poll_failed');
+    assert.equal(polls.length, 1);
+    const [poll] = polls;
+    // A 503 is neither the poll's 200, its 429 nor the usage endpoint's 401, so the poll records it as a passing fault.
+    assert.deepEqual([poll.accountId, Object.keys(poll.detail).sort(), poll.detail.endpoint, poll.detail.status, poll.detail.transport], ['nightly', ['endpoint', 'error', 'status', 'transport'], 'usage', 503, false]);
+    assert.ok(typeof poll.detail.error === 'string' && poll.detail.error.length > 0, 'the error the poll recorded');
+    const cuts = log.filter((row) => row.type === 'event' && row.kind === 'stream_interrupted');
+    assert.equal(cuts.length, 1);
+    const [cut] = cuts;
+    const r = s.lib.requestById.get(cut.requestId);
+    assert.ok(r, `the cut names a request of the story: ${cut.requestId}`);
+    const a = r.attempts.at(-1);
+    // The row is written at the attempt's completion on the account that served the head, under the request's own
+    // session, model and error word.
+    assert.deepEqual(
+      [cut.requestId, cut.at, cut.accountId, cut.sessionId, cut.model, Object.keys(cut.detail).sort()],
+      ['req_5e2f7a19-b03', new Date(Date.parse(a.startedAt) + a.durationMs).toISOString(), a.accountId, r.sessionId, r.canonicalModel, ['attempt', 'bytes_relayed', 'code', 'text', 'upstream_request_id']],
+    );
+    assert.deepEqual([cut.detail.code, cut.detail.attempt, cut.detail.upstream_request_id], [r.errorCode, a.index + 1, a.upstreamRequestId]);
+    // The relay forwarded none of the stream it could not decode.
+    assert.deepEqual([cut.detail.bytes_relayed, r.usage.output], [0, 0]);
+    assert.ok(typeof cut.detail.text === 'string' && cut.detail.text.length > 0, "the error's own words");
+    // A joined value would read as two in the panel, so neither seed's words carries a comma or a semicolon.
+    for (const words of [poll.detail.error, cut.detail.text]) assert.ok(!/[,;]/.test(words), words);
   });
 
   test(`a booking a request ended without usage expires once at the request's end, with the cause its end carries, at ${at}`, async () => {

@@ -127,8 +127,8 @@ interface Spec {
 }
 
 /**
- * A pin of a round in the round's order, with its burn per hour on the window that fired. A pin whose model does not
- * draw that window leaves the round before the order with no burn.
+ * A pin of a round in the round's order, with its burn per hour on the window that fired. A pin on the fast lane, or
+ * one whose model does not draw that window, leaves the round before the order with no burn.
  */
 interface RoundPin {
   agentId: string;
@@ -864,14 +864,21 @@ function triggerOf(source: RecordCandidate, windows: string[], ceiling: number, 
   return null;
 }
 
+/** The skip words of a pin that leaves the round before the walk. */
+const LEFT_OUT_SKIPS = ['fast_lane', 'off_window'];
+
 /**
  * A round's figures off its pins: the burn it could remove, its target under the cap, what its marks removed, the
  * pins it skipped as the shed line names them, and its outcome with the reason a round that marked nothing records.
+ * The reason is the deepest class a walked pin's skip names, `off_window` where no pin was walked and one left out was
+ * off the window that fired, and `unpriced` where neither names one, as the router ranks them.
  */
 function roundOf(round: ShedRound, excess: number, pool: PoolSeed) {
   const burnSum = round5(round.pins.reduce((n, p) => n + (p.burn ?? 0), 0));
-  const skips = round.pins.flatMap((p) => (p.skip === null ? [] : [p.skip]));
-  const reason = round.marks.length > 0 ? null : (['no_runway', 'unpriced', 'last_pin', 'standing'].find((w) => skips.includes(w)) ?? 'unpriced');
+  const walked = round.pins.filter((p) => p.skip === null || !LEFT_OUT_SKIPS.includes(p.skip));
+  const skips = walked.flatMap((p) => (p.skip === null ? [] : [p.skip]));
+  if (walked.length === 0 && round.pins.some((p) => p.skip === 'off_window')) skips.push('off_window');
+  const reason = round.marks.length > 0 ? null : (['no_runway', 'off_window', 'unpriced', 'last_pin', 'standing'].find((w) => skips.includes(w)) ?? 'unpriced');
   return {
     burnSum,
     outcome: round.marks.length > 0 ? `marked ${round.marks.length}` : 'nothing_to_mark',
@@ -1614,12 +1621,13 @@ const STRETCH_PINS: RoundPin[] = [
 ];
 
 /**
- * Nightly's Fable-week round, its two pins in the round's order: the Fable session's pin, then an Opus pin, whose model
- * draws no Fable week and so burns nothing there. The Opus pin leaves the round before the order and counts toward no
- * total, which leaves the Fable pin its member's last on the week, so the walk marks nothing.
+ * Nightly's Fable-week round, its two pins as the round lists them: the Fable session's pin, which runs on the fast
+ * lane and so holds no share of the plan's week, then an Opus pin, whose model draws no Fable week. Both leave the
+ * round before the walk with no burn, the fast-lane pin first, so no pin enters the walk and the round reads off the
+ * window as its reason.
  */
 const FABLE_WEEK_PINS: RoundPin[] = [
-  { agentId: 'main', burn: 0.03, cold: false, keyId: 'desktop', lastInputTokens: 81_000, marked: false, model: 'claude-fable-5-1', note: 'current', sessionId: sessionId('89cd1c92'), skip: 'last_pin' },
+  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 81_000, marked: false, model: 'claude-fable-5-1', note: 'current', sessionId: sessionId('89cd1c92'), skip: 'fast_lane' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 61_000, marked: false, model: 'claude-opus-5', note: null, sessionId: 'e3b8d1f6-4a29-4c71-9d05-6b2a8f3c7e14', skip: 'off_window' },
 ];
 
@@ -1791,7 +1799,7 @@ function storySpecs(): Spec[] {
     // 19 minutes old at the round, under all's hold of an hour, and its projection past the ceiling rides a burn that
     // still carries the previous window's: the hold keeps it from firing, and the Fable week fires in its place. The
     // Opus pin draws no Fable week, so the round lists it and counts nothing of it. The burns replace the account's, so
-    // the 5-hour burn stands beside the Fable pin's.
+    // the 5-hour burn stands beside the Fable week's.
     at('req_3e2b9d47-c18', 1, 1, t(8, 21, 40), 'placed', 'nightly'),
     at('req_3e7a5c19-f84', 1, 1, t(8, 30), 'renewed', 'nightly', {
       burns: { nightly: { five_hour: 0.019, seven_day_fable: 0.03 } },
@@ -2280,6 +2288,8 @@ function buildEvents(): RoutingEvent[] {
   const pool = poolById.get('all')!;
   const annex = accountOf.get('annex')!;
   const beforeReset = oauthWindows('primary', fiveHourReset - 1, () => OLDER_FACTOR).find((w) => w.id === '5h')?.utilization ?? null;
+  const undecodable = requestById.get('req_5e2f7a19-b03')!;
+  const cutAttempt = undecodable.attempts[undecodable.attempts.length - 1];
   seeds.push(
     ...[roundEvent('req_1eaa9bc1-a18/1', ROUND_PINS), roundEvent('req_9f2e7c5a-c49/2', STRETCH_PINS), roundEvent('req_6e1f3b98-a24/1', NO_RUNWAY_PINS), roundEvent('req_3e7a5c19-f84/1', FABLE_WEEK_PINS)].flatMap((e) => (e === null ? [] : [e])),
     ...markCleared(),
@@ -2288,12 +2298,26 @@ function buildEvents(): RoutingEvent[] {
     // The story hour.
     ...expiries(),
     { accountId: 'secondary', at: iso(t(13, 48, 20)), detail: { attempts: 1, endpoint: 'usage', last_clean_poll_at: t(13, 43), next_attempt_at: t(13, 53), reason: '429' }, kind: 'poll_backoff_started' },
+    // Primary's head arrived and the relay could not decode the stream after it, so the attempt's completion records the
+    // cut with the request's error word and none of the body relayed.
+    {
+      accountId: cutAttempt.accountId,
+      at: iso(Date.parse(cutAttempt.startedAt) + (cutAttempt.durationMs ?? 0)),
+      detail: { attempt: cutAttempt.index + 1, bytes_relayed: 0, code: undecodable.errorCode, text: 'error decoding response body', upstream_request_id: cutAttempt.upstreamRequestId },
+      kind: 'stream_interrupted',
+      model: undecodable.canonicalModel,
+      requestId: undecodable.id,
+      sessionId: undecodable.sessionId,
+    },
     // Earlier the same day.
     // The refresh rows in the router's shape: primary's commit names its credential's expiry, and nightly's two
     // failures name their class beside the text the manager stored.
     { accountId: 'primary', at: iso(t(12, 52, 10)), detail: { access_expires_at: primaryAccess, refresh_expires_at: primaryRefresh, until: primaryAccess }, kind: 'refresh_succeeded' },
     { accountId: 'nightly', at: iso(t(12, 19, 40)), detail: { cause: 'transport', error: 'transport: connection refused (os error 111)' }, kind: 'refresh_failed' },
     { accountId: 'nightly', at: iso(t(12, 20)), detail: { cause: 'refresh_response_lost', error: 'refresh response lost: connection reset by peer' }, kind: 'refresh_uncertain' },
+    // A usage poll the endpoint answered 503: neither its 200, its 429 nor its 401, so it passes as a fault and the
+    // next poll reads clean.
+    { accountId: 'nightly', at: iso(t(12, 26, 40)), detail: { endpoint: 'usage', error: 'usage request rejected with status 503', status: 503, transport: false }, kind: 'poll_failed' },
     { accountId: 'research', at: iso(t(12, 41, 7)), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(t(12, 41, 7)) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     { accountId: 'overflow', at: iso(t(11, 30, 12)), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
@@ -2359,9 +2383,9 @@ const DECISION_KINDS: readonly string[] = ['exhausted', 'held', 'moved', 'placed
 /** Every event kind the ledger writes, as the route validates `kinds` against them. */
 const EVENT_KINDS: readonly string[] = [
   'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
-  'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'refresh_failed',
-  'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'warm_prefix_expired', 'wind_down_started',
-  'window_cleared', 'window_reset', 'window_spent',
+  'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed', 'refresh_failed',
+  'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'stream_interrupted', 'warm_prefix_expired',
+  'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
 ];
 
 /** The route's merged order: newest first, a decision before an event at one instant. */

@@ -1148,8 +1148,9 @@ stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (
 Excess (`9.5 %/h`), Cap with the target and the burn removed, Unit, Burn average, Warm sessions, the Pins table
 (Session, Agent, Warmth, Burn, Last prompt, Rewrite as the Max 20x equivalent of the pin's weekly window, labeled
 `of 20x 7-day` or `of 20x Fable week`, Destination, Mark), Skipped (one chip per pin, its session and its reason,
-`off window` for a pin whose model does not draw the window that fired), Planned destinations, Outcome (`marked 2`, or
-`nothing to mark: no runway`), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin, Reason
+`off window` for a pin whose model does not draw the window that fired), Planned destinations, Outcome (`marked 2`,
+`nothing to mark: no runway`, or `nothing to mark: off window` for a round that walked no pin and left one out off the
+window that fired), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin, Reason
 (`healed: the 5h projection read 91% under the ceiling`, `healed: the stretch read 24 min under the threshold 30 min`
 for a mark the stretch made, `moved` or `released`), Marked (when, on which account) and Standing for, and a reservation
 expired panel reads Request, Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect
