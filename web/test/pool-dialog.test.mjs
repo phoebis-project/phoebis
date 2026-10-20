@@ -214,3 +214,13 @@ test('an idle window set above the break-even reads a note under its field and i
   assert.deepEqual(linesOf(idleField()), ['Costs 133% to 2880% of one re-write at the saved 1d · capped at the break-even, 46m to 17h 6m'], 'a field at 0 reads the break-even it runs to beside the saved window, and no note');
   assert.equal(note(), undefined, 'no note while the field reads 0');
 });
+
+test('a new pool opens with the switch to keep prompt caches warm off, and free to turn on', async () => {
+  holdSettings();
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts, accountsLoaded: true, pool: null }));
+  const warm = container.querySelector('dialog[open] section.dialog-group[aria-label="Keepalive"] button[role="switch"][aria-label="Keep prompt caches warm"]');
+  assert.ok(warm, 'the Keepalive group holds the switch');
+  assert.equal(warm.getAttribute('aria-checked'), 'false', 'the switch starts off');
+  assert.equal(warm.disabled, false, "the new form's affinity of an hour leaves the switch enabled, so off is the form's own value");
+});

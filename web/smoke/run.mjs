@@ -6177,6 +6177,34 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(200);
 }
 {
+  // The dialog sends the switch on every save, so a new pool starts where the router's default policy does, with
+  // warming off. The case saves one through the dialog to read what it sent, deletes it, and mounts the page again,
+  // since the page's own reread waits five seconds and the cases below read the story's pools.
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  // The new form's affinity of an hour leaves the switch enabled, so the state it reads is the form's own value.
+  const warm = group(dlg, 'Keepalive')?.querySelector('button[role="switch"][aria-label="Keep prompt caches warm"]');
+  const opened = [warm ? String(warm.getAttribute('aria-checked')) : 'no switch', String(warm?.disabled)];
+  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
+  if (nameInput) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(nameInput, 'warmless');
+  nameInput?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(150);
+  dlg?.querySelector('.members-table tbody tr input[type="checkbox"]')?.click();
+  await m.settle(150);
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create pool')?.click();
+  await m.settle(700);
+  const written = (await api.listPools()).find((p) => p.id === 'warmless');
+  results.push({
+    name: '/pools a new pool opens with the switch to keep prompt caches warm off and saves with warming off',
+    ok: opened[0] === 'false' && opened[1] === 'false' && written?.keepalive.enabled === false,
+    missing: [...opened, written ? `keepalive.enabled ${written.keepalive.enabled}` : 'no pool warmless written', m.container.querySelector('dialog[open] .dialog__status')?.textContent ?? ''],
+  });
+  await api.deletePool('warmless');
+  m.unmount();
+  m = await mount('/pools');
+}
+{
   // A new pool's id is derived from its name the way the create call derives it, so a name whose id a listed pool holds
   // is held in the dialog rather than refused by the route with an id the operator never saw.
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();

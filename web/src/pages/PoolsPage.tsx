@@ -1088,7 +1088,7 @@ const blankForm = (): PoolForm => ({
   guardrails: [],
   horizonOn: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds !== null,
   horizonSeconds: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds ?? 3_600,
-  keepalive: true,
+  keepalive: false,
   maxIdleSeconds: KEEPALIVE_DEFAULTS.maxIdleSeconds,
   maxParkedOn: KEEPALIVE_DEFAULTS.maxParkedSeconds !== null,
   maxParkedSeconds: KEEPALIVE_DEFAULTS.maxParkedSeconds ?? 3_600,
