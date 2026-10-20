@@ -61,14 +61,15 @@ wrapping, a failed poll's reason cut inside its line and whole in its title), th
 split between its reset and its projection with each part on one line inside the cell, the window grid inside its card)
 and each live window's pace mark (inside its meter and taller than the track), the timeline's chips on the Quota windows
 section (each inside its column, a chip with a share in the background and ink of the card chip of the same tone,
-primary's used fill at the share the page computed, each live bar's body and used fill its lane's color at two
-strengths, and the label's ink at 4.5:1 or better over both for every color a lane can take), the timeline at 340 and
-400 by 900 (each lane's head above its track, the now line at the chart's now share on every track and its pill in the
-axis row, the chips wrapping inside the lane with none cut, every day cell's short labels whole, no bar's label cut and
-nothing scrolling sideways), the timeline under the 12-hour setting in the 5-hour zoom at 340 and 400 by 900 and 1280 by
-800 (mock pass, on loads of its own: as many cells as the largest divisor of twelve whose cell holds "12 AM" in the
-sub's face, every cell's labels whole and a short hour's full time on its title), the Quota cards' one height (the
-head's and the foot's rules at one offset on every card),
+primary's used fill at the share the page computed, the now line at the chart's now share of primary's track within a
+pixel, each live bar's body and used fill its lane's color at two strengths, and the label's ink at 4.5:1 or better over
+both for every color a lane can take), the timeline at 340 and 400 by 900 (each lane's head above its track, the now
+line at the chart's now share on every track and its pill in the axis row, the day grid crossing no lane's head and
+starting at the tracks' left, the chips wrapping inside the lane with none cut, every day cell's short labels whole, no
+bar's label cut and nothing scrolling sideways), the timeline under the 12-hour setting in the 5-hour zoom at 340 and
+400 by 900 and 1280 by 800 (mock pass, on loads of its own: as many cells as the largest divisor of twelve whose cell
+holds "12 AM" in the sub's face, every cell's labels whole and a short hour's full time on its title), the Quota cards'
+one height (the head's and the foot's rules at one offset on every card),
 every Quota card's meters at least 120 px wide, its window cells inside its padding, its chip column as wide as its
 widest chip and its reset column as wide as its widest label within its 150 px bound, a split label read by its wider
 part, at 1280 by 800 with two cards in a row in the mock pass and in a window that sets two cards on the card grid's

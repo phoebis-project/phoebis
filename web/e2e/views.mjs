@@ -3085,6 +3085,14 @@ async function quotaChips(theme) {
 }
 
 /**
+ * The chart's now share as the page writes it, the last factor of the now line's calc, read in the page on the line.
+ * Both timeline measures read the share here, so a calc of another form reads NaN in both.
+ */
+function nowShareOf(el) {
+  return Number(/\*\s*([-\d.e]+)\)\s*$/.exec(el.style.left)?.[1] ?? NaN);
+}
+
+/**
  * The timeline on the Quota windows section against its lane chips, its lanes' swatches and its now line: every lane
  * chip fits its fixed column on one line, and a chip with a share draws the background and ink of the card chip of the
  * same tone. Every live bar draws its account's color at two strengths, read against the dot that names the lane: its
@@ -3093,7 +3101,8 @@ async function quotaChips(theme) {
  * lane can take, each series color and the muted one, read off a bar drawn through the bar's own rules off screen.
  * Primary's fill lays out at the share the page computed, within a pixel, and its end stands past the now line where
  * its weekly window answers a lead ahead of pace and short of it where the lead is behind, as the card's meter words
- * the pace. Only the mock pass draws the section.
+ * the pace. The now line stands at the chart's now share of primary's track, within a pixel, the share a finite
+ * number. Only the mock pass draws the section.
  */
 async function quotaLaneChips(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
@@ -3102,6 +3111,7 @@ async function quotaLaneChips(theme) {
     const bar = lane?.querySelector('.lane__bar--live') ?? null;
     const used = bar?.querySelector('.lane__used') ?? null;
     const now = document.querySelector('.timeline__now')?.getBoundingClientRect() ?? null;
+    const track = lane?.querySelector('.lane__track')?.getBoundingClientRect() ?? null;
     const probe = document.createElement('span');
     probe.style.background = 'var(--surface)';
     document.body.append(probe);
@@ -3121,6 +3131,7 @@ async function quotaLaneChips(theme) {
     return {
       chips: [...document.querySelectorAll('.tl-chip')].map((el) => ({ background: getComputedStyle(el).backgroundColor, client: el.clientWidth, color: getComputedStyle(el).color, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '', tone: [...el.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? null })),
       fill: bar && used ? { bar: bar.getBoundingClientRect().width, end: Math.round(used.getBoundingClientRect().right * 10) / 10, now: now ? Math.round((now.left + now.width / 2) * 10) / 10 : null, share: parseFloat(used.style.width), width: used.getBoundingClientRect().width } : null,
+      line: now && track ? { at: now.left + now.width / 2, left: track.left, width: track.width } : null,
       // The label starts where the fill starts, so it crosses the fill and then the body past it.
       live: [...document.querySelectorAll('.lane__bar--live')].map((el) => {
         const row = el.closest('.lane');
@@ -3187,6 +3198,14 @@ async function quotaLaneChips(theme) {
     else if (pace > 0 && read.fill.end <= read.fill.now) say(`primary's fill ends at ${read.fill.end}px, short of the now line at ${read.fill.now}px, where its window reads ${JSON.stringify(reading)}`);
     else if (pace < 0 && read.fill.end >= read.fill.now) say(`primary's fill ends at ${read.fill.end}px, past the now line at ${read.fill.now}px, where its window reads ${JSON.stringify(reading)}`);
   }
+  const nowLine = page.locator('.timeline__now');
+  const share = (await nowLine.count()) > 0 ? await nowLine.first().evaluate(nowShareOf) : null;
+  const tenth = (v) => Math.round(v * 10) / 10;
+  const line = read.line && share !== null ? { at: tenth(read.line.at), share, track: { left: tenth(read.line.left), width: tenth(read.line.width) }, want: tenth(read.line.left + read.line.width * share) } : null;
+  measurements.push(`${theme} /quota#quota-windows now line over primary's track ${JSON.stringify(line)}`);
+  if (mock && share === null) say('the current period draws no now line');
+  else if (share !== null && !Number.isFinite(share)) say(`the now line's calc carries no finite share, reading ${share}`);
+  else if (line !== null && Math.abs(line.at - line.want) > 1) say(`the now line stands at ${line.at}px, not at ${line.want}px where the chart's now share ${share} of primary's track lies`);
 }
 
 /** The phone windows the timeline is read at: the 340 px nothing may scroll sideways from, and a common phone. */
@@ -3203,6 +3222,7 @@ const TIME_FORMAT_KEY = 'phoebis.timeFormat';
  * head and track start at the lane's content left and the day cells and the raster over the tracks' left, within a
  * pixel. The now line crosses each lane's track at the chart's now share of the track, within a pixel, and no lane's
  * head, and its "now" pill stands in the axis row under the day cells' labels at the same share, clear of every head.
+ * The now share is a finite number, and no cell of the day grid crosses a lane's head.
  * Every lane stacks its head above its track, its chips wrap by their width (two rows at 400 px) inside the lane with
  * none cut, every day cell prints its short labels whole with the full words on its title (a 5-hour cell its day number
  * on the day's first cell alone), no bar's label is cut, the chart's content fits its box and the document its window,
@@ -3214,8 +3234,10 @@ const TIME_FORMAT_KEY = 'phoebis.timeFormat';
  */
 async function timelinePhone(theme) {
   const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
-  const read = () =>
-    page.evaluate(() => {
+  const read = async () => {
+    const nowLine = page.locator('.timeline__now');
+    const share = (await nowLine.count()) > 0 ? await nowLine.first().evaluate(nowShareOf) : null;
+    return page.evaluate((share) => {
       const tenth = (v) => Math.round(v * 10) / 10;
       const chart = document.querySelector('.timeline__chart');
       const lanes = document.querySelector('.timeline__lanes');
@@ -3225,8 +3247,6 @@ async function timelinePhone(theme) {
       const contentLeft = (el) => tenth(box(el).left + el.clientLeft + parseFloat(getComputedStyle(el).paddingLeft));
       const style = getComputedStyle(chart);
       const now = document.querySelector('.timeline__now');
-      // The page writes the now share as the last factor of the line's calc.
-      const share = now ? Number(/\*\s*([-\d.e]+)\)\s*$/.exec(now.style.left)?.[1] ?? NaN) : null;
       const track = document.querySelector('.lane__track');
       const cells = document.querySelector('.timeline__cells');
       const legend = document.querySelector('.timeline__legend');
@@ -3236,6 +3256,8 @@ async function timelinePhone(theme) {
       // Every drawn piece of the now line and its pill, whichever shape the chart takes.
       const lines = [...document.querySelectorAll('.timeline__now, .lane__now')].filter(visible).map(box);
       const pills = [...document.querySelectorAll('.timeline__now-label, .timeline__now-pill')].filter(visible).map(box);
+      // Every drawn cell of the day grid, the chart's own or a track's piece, whichever shape the chart takes.
+      const grid = [...document.querySelectorAll('.timeline__raster span, .lane__raster span')].filter(visible).map(box);
       const heads = [...document.querySelectorAll('.lane__head')].map(box);
       const subs = [...document.querySelectorAll('.timeline__cell-sub')].map(box);
       const axisBox = box(document.querySelector('.timeline__axis'));
@@ -3271,6 +3293,7 @@ async function timelinePhone(theme) {
             nowAt: row ? [...row.querySelectorAll('.lane__now')].filter(visible).map((mark) => tenth(box(mark).left + box(mark).width / 2)) : [],
             nowOnHead: head !== null && lines.some((line) => overlap(line, box(head))),
             nowWant: row && share !== null ? tenth(box(row).left + box(row).width * share) : null,
+            rasterOnHead: head !== null && grid.some((cell) => overlap(cell, box(head))),
             track: row ? tenth(box(row).left) : null,
             trackTop: row ? tenth(box(row).top) : null,
           };
@@ -3279,13 +3302,14 @@ async function timelinePhone(theme) {
         now: share === null ? null : { chartWide: now !== null && visible(now), share },
         pills: pills.map((pill) => ({ at: tenth(pill.left + pill.width / 2), inAxis: inside(pill, axisBox), onCells: subs.some((sub) => overlap(pill, sub)), onHead: heads.some((head) => overlap(pill, head)), want: cells && share !== null ? tenth(box(cells).left + box(cells).width * share) : null })),
         raster: (() => {
-          const raster = document.querySelector('.timeline__raster');
+          const raster = [...document.querySelectorAll('.timeline__raster, .lane__raster')].find(visible);
           return raster ? tenth(box(raster).left) : null;
         })(),
         trackLeft: track ? tenth(box(track).left) : null,
         trackRight: track ? tenth(box(track).right) : null,
       };
-    });
+    }, share);
+  };
   const zoom = async (label) => {
     await page.locator('.timeline .segmented button', { hasText: label }).click();
     await settle();
@@ -3312,6 +3336,7 @@ async function timelinePhone(theme) {
       if (lane.chipsCut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsCut)} are cut`);
       if (where.startsWith('at 400 ') && lane.chipRows !== 2) say(`${where} ${lane.name}'s three chips take ${lane.chipRows} rows, where two share the first`);
       if (lane.nowOnHead) say(`${where} the now line crosses ${lane.name}'s head`);
+      if (lane.rasterOnHead) say(`${where} the day grid crosses ${lane.name}'s head`);
       if (got.now !== null && (lane.nowAt.length !== 1 || Math.abs(lane.nowAt[0] - lane.nowWant) > 1)) say(`${where} the now line crosses ${lane.name}'s track at ${JSON.stringify(lane.nowAt)}, not once at ${lane.nowWant}px where the chart's now share ${got.now.share} of the track lies`);
     }
     if (got.trackLeft !== null) {
@@ -3319,6 +3344,7 @@ async function timelinePhone(theme) {
       if (got.cellsLeft === null || Math.abs(got.cellsLeft - got.trackLeft) > 1 || Math.abs(got.cellsRight - got.trackRight) > 1) say(`${where} the day cells span ${got.cellsLeft}px to ${got.cellsRight}px over tracks from ${got.trackLeft}px to ${got.trackRight}px`);
     }
     if (mock && got.now === null) say(`${where} the current period draws no now line`);
+    if (got.now !== null && !Number.isFinite(got.now.share)) say(`${where} the now line's calc carries no finite share, reading ${got.now.share}`);
     if (got.now?.chartWide) say(`${where} the now line runs down the whole chart, over the lanes' heads`);
     if (got.now !== null && got.pills.length !== 1) say(`${where} the now line draws ${got.pills.length} pills, not one`);
     for (const pill of got.pills) {

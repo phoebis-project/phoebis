@@ -403,6 +403,12 @@ function LaneChip({ label, window: w, now }: { label: string; now: number; windo
   );
 }
 
+/** The day grid's columns, one builder for the chart's grid and each track's piece of it, so both shapes draw the same
+ *  columns and weekend tint. */
+function rasterCells(cells: { at: number; weekend: boolean }[]) {
+  return cells.map((c) => <span key={c.at} className={c.weekend ? 'is-weekend' : ''} />);
+}
+
 function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: number; slotOf: (id: string) => number | null }) {
   const ink = useChartInk();
   const [mode, setMode] = useState<Mode>('weekly');
@@ -548,14 +554,13 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
           {/* One raster and one now line for the whole chart rather than a copy
               per lane, so both read as a single ruler down the rows. Under
               900 px the stacked heads cross the chart, so each track draws its
-              own piece of the line there (`lane__now`). */}
+              own piece of the grid and of the line there (`lane__raster`,
+              `lane__now`). */}
           <div className="timeline__raster" aria-hidden>
-            {cells.map((c) => (
-              <span key={c.at} className={c.weekend ? 'is-weekend' : ''} />
-            ))}
+            {rasterCells(cells)}
           </div>
           {nowPct !== null && (
-            <div className="timeline__now" style={{ left: `calc(var(--tl-left) + var(--tl-gap) + (100% - var(--tl-left) - var(--tl-gap)) * ${nowPct / 100})` }}>
+            <div className="timeline__now" style={{ left: `calc(var(--tl-pad) + var(--tl-left) + var(--tl-gap) + (100% - 2 * var(--tl-pad) - var(--tl-left) - var(--tl-gap)) * ${nowPct / 100})` }}>
               <span className="timeline__now-label">now</span>
             </div>
           )}
@@ -599,6 +604,10 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
                   </div>
                 </div>
                 <div className="lane__track">
+                  {/* First in the track, so the bars paint over it. */}
+                  <span className="lane__raster" aria-hidden>
+                    {rasterCells(cells)}
+                  </span>
                   {bars.map((b) => {
                     const from = Math.max(b.start, span.startMs);
                     const to = Math.min(b.stop, span.endMs);

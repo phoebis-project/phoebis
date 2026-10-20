@@ -857,6 +857,8 @@
   --tl-chip: 176px;
   --tl-left: 300px;
   --tl-gap: 14px;
+  /* The lanes' side padding, which the grid's edges and the now line's offset read too, so both sit over the tracks. */
+  --tl-pad: 12px;
 
   overflow: hidden;
   border: 1px solid var(--hairline);
@@ -881,6 +883,7 @@
   text-transform: uppercase;
 }
 
+.lane__raster,
 .timeline__cells,
 .timeline__raster {
   display: grid;
@@ -918,23 +921,25 @@
 
 .timeline__lanes {
   position: relative;
-  padding: 0 12px;
+  padding: 0 var(--tl-pad);
 }
 
 /* Day columns drawn once behind every row, so the rule is unbroken top to bottom. */
 .timeline__raster {
   position: absolute;
   top: 0;
-  right: 12px;
+  right: var(--tl-pad);
   bottom: 0;
-  left: calc(var(--tl-left) + var(--tl-gap) + 12px);
+  left: calc(var(--tl-left) + var(--tl-gap) + var(--tl-pad));
   z-index: 0;
 }
 
+.lane__raster span,
 .timeline__raster span {
   border-left: 1px solid color-mix(in srgb, var(--grid) 55%, transparent);
 }
 
+.lane__raster span.is-weekend,
 .timeline__raster span.is-weekend {
   background: color-mix(in srgb, var(--surface-3) 30%, transparent);
 }
@@ -965,9 +970,10 @@
   border-radius: var(--radius-pill);
 }
 
-/* The now line's pieces of the stacked shape, drawn under 900 px alone. */
-.timeline__now-pill,
-.lane__now {
+/* The now line's and the day grid's pieces of the stacked shape, drawn under 900 px alone. */
+.lane__now,
+.lane__raster,
+.timeline__now-pill {
   display: none;
 }
 
@@ -1244,9 +1250,10 @@
     width: auto;
   }
 
-  /* A line down the whole chart would cross every stacked head, so each track draws its own piece of it, and the pill
-     takes a band of the axis row under the day labels. */
-  .timeline__now {
+  /* A line or a grid down the whole chart would cross every stacked head, so each track draws its own piece of both,
+     and the line's pill takes a band of the axis row under the day labels. */
+  .timeline__now,
+  .timeline__raster {
     display: none;
   }
 
@@ -1272,6 +1279,13 @@
     pointer-events: none;
     background: var(--accent);
     transform: translateX(-0.5px);
+  }
+
+  .lane__raster {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    display: grid;
   }
 }
 
