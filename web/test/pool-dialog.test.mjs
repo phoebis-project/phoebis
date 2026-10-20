@@ -181,3 +181,36 @@ test("the key override is unbounded with the floor's sentence until the settings
   assert.equal(field()?.getAttribute('max'), String(LIMIT), 'the limit lands as the ceiling');
   assert.equal(statusOf(container), `Save is held: Capture hours is a whole number from 1 to ${LIMIT}.`);
 });
+
+test('an idle window set above the break-even reads a note under its field and its cost from the set value, while 0 and the other two ceilings read the cap', async () => {
+  holdSettings();
+  const pool = pools.find((p) => p.id === 'jobs');
+  assert.ok(pool && pool.keepalive.maxIdleSeconds > pool.keepaliveResolved.breakEvenSeconds.max, 'the mock holds a pool whose idle window is set above its whole break-even');
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts, accountsLoaded: true, pool }));
+  const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
+  const keepalive = () => container.querySelector('dialog[open] section.dialog-group[aria-label="Keepalive"]');
+  const linesOf = (el) => [...(el?.querySelectorAll('.keepalive-resolved') ?? [])].map((l) => l.textContent.replace(/\s+/g, ' ').trim());
+  const idleField = () => fieldIn(container, 'Max idle (s)');
+  const note = () => [...(idleField()?.querySelectorAll('.keepalive-resolved') ?? [])].find((l) => l.textContent.startsWith('Above the break-even'));
+  assert.deepEqual(linesOf(idleField()), ['Costs 133% to 2880% of one re-write', 'Above the break-even, 46m to 17h 6m'], 'the cost line priced from the set day, then the note with the break-even it lies above');
+  assert.equal(note()?.getAttribute('title'), BREAK_EVEN_HINT, "the note carries the break-even's hint");
+  assert.equal(idleField()?.textContent.includes('capped at the break-even'), false, 'a window above the break-even reads no cap');
+  // The pool's affinity of 0 blocks warming and with it every keepalive control, so the case raises the pin to an
+  // hour and switches warming on before it reaches the two switched ceilings.
+  const affinity = [...container.querySelectorAll('dialog[open] [aria-label="Session affinity"] .pill')].find((b) => b.textContent.trim() === '1h');
+  act(() => affinity?.click());
+  act(() => keepalive()?.querySelector('button[role="switch"][aria-label="Keep prompt caches warm"]')?.click());
+  for (const label of ['Max parked (s)', 'Scheduled horizon (s)']) {
+    act(() => keepalive()?.querySelector(`button[role="switch"][aria-label="${label}"]`)?.click());
+    type(keepalive()?.querySelector(`input[aria-label="${label}"]`), '200000');
+  }
+  assert.deepEqual(
+    linesOf(keepalive()),
+    ['Costs 133% to 2880% of one re-write', 'Above the break-even, 46m to 17h 6m', 'Capped at the break-even, 46m to 17h 6m', 'Capped at the break-even, 46m to 17h 6m'],
+    'the parked and horizon ceilings switched on past the break-even keep the cap the router applies to them',
+  );
+  type(idleField()?.querySelector('input'), '0');
+  assert.deepEqual(linesOf(idleField()), ['Costs 133% to 2880% of one re-write at the saved 1d · capped at the break-even, 46m to 17h 6m'], 'a field at 0 reads the break-even it runs to beside the saved window, and no note');
+  assert.equal(note(), undefined, 'no note while the field reads 0');
+});

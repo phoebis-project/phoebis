@@ -4506,6 +4506,43 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 }
 {
+  // The `jobs` seed sets a day of idle window above its whole break-even, Haiku's dollar rows on both TTLs, and this
+  // case reads it before any other case saves the pool. Its affinity of 0 disables the keepalive fields, which the case
+  // leaves, so the save sends the stored policy back. The mock composes a save's break-even from every dollar row on
+  // both TTLs, wider than the seed's Haiku alone, so the saved dialog reads the wider range, and the cost line prices
+  // the set day at both ends.
+  const linesOf = (dlg) => [...(group(dlg, 'Keepalive')?.querySelectorAll('.keepalive-resolved') ?? [])].map((l) => l.textContent?.replace(/\s+/g, ' ').trim());
+  const open = async () => {
+    [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool jobs')?.click();
+    await m.settle(300);
+    const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+    rail(dlg, 'keepalive')?.click();
+    await m.settle(120);
+    return dlg;
+  };
+  const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const seeded = await open();
+  const idleDisabled = group(seeded, 'Keepalive')?.querySelector('input[type="number"]')?.disabled;
+  const before = linesOf(seeded);
+  foot(seeded, 'Save pool')?.click();
+  await m.settle(700);
+  const closed = m.container.querySelector('dialog[open]') === null;
+  const saved = await open();
+  const after = linesOf(saved);
+  foot(saved, 'Cancel')?.click();
+  await m.settle(200);
+  results.push({
+    name: '/pools a saved idle window above the break-even keeps its note and prices its cost from the set value',
+    ok:
+      idleDisabled === true &&
+      closed &&
+      JSON.stringify(before) === JSON.stringify(['Costs 133% to 2880% of one re-write', 'Above the break-even, 46m to 17h 6m', 'Break-even: 46m to 17h 6m', 'Break-even: 46m to 17h 6m']) &&
+      JSON.stringify(after) === JSON.stringify(['Costs 33% to 2880% of one re-write', 'Above the break-even, 46m to 2d 23h', 'Break-even: 46m to 2d 23h', 'Break-even: 46m to 2d 23h']) &&
+      m.container.querySelector('dialog[open]') === null,
+    missing: [String(idleDisabled), String(closed), ...before, ...after].map(String),
+  });
+}
+{
   // jobs' switch turned off in its dialog and saved reads on its badge, and the route adds the warning that says so.
   // Turned on again, the badge reads its ceiling once more.
   const badge = () =>
@@ -4606,8 +4643,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok: JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% of one re-write', 'Break-even: 1d 20h', 'Break-even: 1d 20h']) && breakEvens.length === 2 && breakEvens.every((h) => h === BREAK_EVEN_HINT) && shareTitle === SHARE_HINT,
       missing: [...linesOf(dlg).map(String), ...breakEvens.map(String), String(shareTitle)],
     });
-    // The router's share is the saved window's, so a typed window names the window the share belongs to, while the cap
-    // follows the field as typed, 0 reading as the break-even.
+    // The router's share is the saved window's, so a typed window names the window the share belongs to, while the
+    // break-even's words follow the field as typed: a window above the break-even runs as set under the note, and 0
+    // runs to the break-even.
     const idleField = hint(dlg)?.querySelector('input[type="number"]');
     const setIdle = async (value) => {
       if (idleField) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(idleField, value);
@@ -4615,17 +4653,21 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       await m.settle(120);
     };
     await setIdle('200000');
-    const past = linesOf(dlg)[0];
+    const above = linesOf(dlg);
     await setIdle('0');
-    const zero = linesOf(dlg)[0];
+    const zero = linesOf(dlg);
     await setIdle('3600');
+    const set = linesOf(dlg);
     results.push({
-      name: '/pools an idle window past the break-even, or 0, reads the break-even it runs to beside the saved window\'s share',
-      ok: past === 'Costs 2% of one re-write at the saved 1h · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
-      missing: [String(past), String(zero), String(linesOf(dlg)[0])],
+      name: "/pools an idle window above the break-even reads the note under the saved window's share, and 0 the break-even it runs to",
+      ok:
+        JSON.stringify(above) === JSON.stringify(['Costs 2% of one re-write at the saved 1h', 'Above the break-even, 1d 20h', 'Break-even: 1d 20h', 'Break-even: 1d 20h']) &&
+        JSON.stringify(zero) === JSON.stringify(['Costs 2% of one re-write at the saved 1h · capped at the break-even, 1d 20h', 'Break-even: 1d 20h', 'Break-even: 1d 20h']) &&
+        JSON.stringify(set) === JSON.stringify(['Costs 2% of one re-write', 'Break-even: 1d 20h', 'Break-even: 1d 20h']),
+      missing: [...above, ...zero, ...set].map(String),
     });
     // The router caps the parked and the scheduled ceilings at the same break-even, so one switched on past it reads
-    // the figure it runs to, as the idle window does.
+    // the figure it runs to.
     const switchOn = async (label, value) => {
       hint(dlg)?.querySelector(`button[role="switch"][aria-label="${label}"]`)?.click();
       await m.settle(120);
@@ -4648,7 +4690,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await cancel(dlg);
   }
   await api.updatePool('work', { ...poolInput(storyWork), members: storyWork.members.map(memberOf) });
-  // The story's `all` resolves to a range: the card and the dialog read both ends.
+  // The story's `all` resolves to a range: the card and the dialog read both ends, while its hour of idle window lies
+  // above the five-minute break-even of `overflow`'s dollar rows, so the dialog notes it.
   const allLine = ceilingsOf('all')?.textContent;
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
   await m.settle(300);
@@ -4658,7 +4701,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
     results.push({
       name: '/pools a pool whose combinations differ reads both ends on its card and in its dialog',
-      ok: allLine === 'idle 46m to 1h · parked 46m to 44h · horizon 46m to 44h' && JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% to 92% of one re-write · capped at the break-even, 46m to 1h', 'Break-even: 46m to 1d 20h', 'Break-even: 46m to 1d 20h']),
+      ok: allLine === 'idle 1h · parked 46m to 44h · horizon 46m to 44h' && JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% to 120% of one re-write', 'Above the break-even, 46m to 1d 20h', 'Break-even: 46m to 1d 20h', 'Break-even: 46m to 1d 20h']),
       missing: [String(allLine), ...linesOf(dlg).map(String)],
     });
     await cancel(dlg);
@@ -5197,7 +5240,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const keepalive = group(dlg, 'Keepalive');
     expect('/pools the Keepalive group explains its three fields and their off words', keepalive?.textContent ?? '', [
       'Max idle (s)',
-      "The idle window of the main conversation. 0 and anything above the recipe's break-even read as the break-even.",
+      "The idle window of the main conversation. 0 is the recipe's break-even, and a value above the break-even runs as set.",
       'Max parked (s)',
       "How long a park on a background command or a subagent is probed. Off is the recipe's break-even.",
       'Scheduled horizon (s)',

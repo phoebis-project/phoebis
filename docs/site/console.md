@@ -466,9 +466,11 @@ as a badge (enforce in the warning tone, observe muted), `off` on a disabled one
 run before a key's own." and the link "Manage guardrails" to the [Guardrails](#guardrails) view. On create the group
 reads "Guardrails can be attached once the pool is saved." and no control. Keepalive holds the switch "Keep prompt
 caches warm", the three ceilings and the return rate: a ceiling left off reads the break-even it resolves to,
-`Break-even: {range}`, one switched on past the break-even reads `Capped at the break-even, {range}`, the idle window
-reads its cost as a share of one re-write, `Costs {pct} of one re-write`, and while the field reads 0 or more than the
-break-even, the window in effect, `capped at the break-even, {time}`, with `at the saved {time}` for an unsaved edit.
+`Break-even: {range}`, a parked or horizon ceiling switched on past the break-even reads `Capped at the break-even,
+{range}`, and the idle window reads its cost as a share of one re-write priced from the set value, `Costs {pct} of one
+re-write`, with `at the saved {time}` for an unsaved edit. While the idle field reads 0 the cost line adds the window in
+effect, `capped at the break-even, {time}`, and while the field reads more than the break-even the note `Above the
+break-even, {range}` follows on a line of its own with the break-even's figures, since the window runs as set.
 Return rate by idle age lists the pool's ten buckets with the windows that returned out of those that reached it and a
 bar of the rate, or "No idle windows recorded yet". The ceilings are explained under [The four
 fields](keepalive.md#the-four-fields) and the buckets under [The return rate by idle

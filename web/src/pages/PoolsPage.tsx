@@ -105,11 +105,19 @@ function BreakEven({ range }: { range: Range }) {
 /** A ceiling past the break-even's low end, as the router caps it: the figures it runs to, or null below the cap. */
 const cappedAt = (seconds: number, breakEven: Range): Range | null =>
   seconds > breakEven.min ? { max: Math.min(seconds, breakEven.max), min: Math.min(seconds, breakEven.min) } : null;
-/** Beside a ceiling switched on past the break-even: the figures it is capped at, as the idle window's note reads them. */
+/** Beside a parked or horizon ceiling switched on past the break-even: the figures the router caps it at. */
 function CappedAt({ range }: { range: Range }) {
   return (
     <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
       Capped at the break-even, <RangeFigures range={range} />
+    </span>
+  );
+}
+/** Under the idle window set past the break-even: the note that the ceiling lies above it, as the router runs it. */
+function AboveBreakEven({ range }: { range: Range }) {
+  return (
+    <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
+      Above the break-even, <RangeFigures range={range} />
     </span>
   );
 }
@@ -1282,15 +1290,11 @@ export function PoolDialog({
   const warming = form.keepalive && !keepaliveBlocked;
   // The router's figures for the saved pool. The console holds no price, so an unsaved edit moves none of them.
   const resolved = pool?.keepaliveResolved ?? null;
-  // 0 and a field past the break-even both read as the break-even, which is then the window in effect.
-  const idleCapped: Range | null =
-    resolved && (form.maxIdleSeconds === 0 || form.maxIdleSeconds > resolved.breakEvenSeconds.min)
-      ? {
-          max: form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds.max : Math.min(form.maxIdleSeconds, resolved.breakEvenSeconds.max),
-          min: form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds.min : Math.min(form.maxIdleSeconds, resolved.breakEvenSeconds.min),
-        }
-      : null;
-  // The router caps the two ceilings at the one break-even too, so a ceiling switched on past it names the one in effect.
+  // 0 runs the window to the break-even and any other figure runs as set, above the break-even too, which the note
+  // names.
+  const idleAtBreakEven: Range | null = resolved && form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds : null;
+  const idleAbove: Range | null = resolved && form.maxIdleSeconds > resolved.breakEvenSeconds.min ? resolved.breakEvenSeconds : null;
+  // The router caps the two ceilings at the one break-even, so a ceiling switched on past it names the one in effect.
   const parkedCapped = resolved && form.maxParkedOn ? cappedAt(form.maxParkedSeconds, resolved.breakEvenSeconds) : null;
   const scheduledCapped = resolved && form.horizonOn ? cappedAt(form.horizonSeconds, resolved.breakEvenSeconds) : null;
   // The share is the router's for the saved window, so a typed window names the window the share belongs to.
@@ -2290,19 +2294,20 @@ export function PoolDialog({
             label={KEEPALIVE_FIELD_LABELS.maxIdleSeconds}
             hint={
               <>
-                The idle window of the main conversation. 0 and anything above the recipe&apos;s break-even read as the break-even.
+                The idle window of the main conversation. 0 is the recipe&apos;s break-even, and a value above the break-even runs as set.
                 {resolved && (
                   <span className="keepalive-resolved">
                     <span title={SHARE_HINT}>
                       Costs {shareText(resolved.idleShare)} of one re-write{shareOf}
                     </span>
-                    {idleCapped && (
+                    {idleAtBreakEven && (
                       <>
-                        {' · '}capped at the break-even, <RangeFigures range={idleCapped} />
+                        {' · '}capped at the break-even, <RangeFigures range={idleAtBreakEven} />
                       </>
                     )}
                   </span>
                 )}
+                {idleAbove && <AboveBreakEven range={idleAbove} />}
               </>
             }
           >

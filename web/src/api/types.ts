@@ -313,7 +313,10 @@ export interface Range {
 
 export interface PoolKeepalive {
   enabled: boolean;
-  /** The idle window of the main conversation in seconds. 0 and any value above the recipe's break-even read as the break-even. */
+  /**
+   * The idle window of the main conversation in seconds. 0 is the recipe's break-even, and a value above the break-even
+   * runs as set.
+   */
   maxIdleSeconds: number;
   /** How long a park on a background command or a subagent is probed. Null is the recipe's break-even. */
   maxParkedSeconds: number | null;

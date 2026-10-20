@@ -64,12 +64,12 @@ const figures = (breakEven: Range, idle: Range, share: Range): Resolved => ({ br
  * idle window and both ceilings null. The mock holds no price, so they are written out here. A plan recipe breaks even
  * on the cost model's multipliers whatever its model: 44.1 hours on the hour, 3 hours 16 minutes on five minutes. The
  * dollar rows span the price table: Sonnet, Haiku and the older Opus rows break even first, Fable last, and on five
- * minutes the first of them also cap the hour of idle window.
+ * minutes the first rows' break-even lies under the hour of idle window, whose share reads above one there.
  */
 const FIGURES: Record<'dollars' | 'plan', Record<CacheTtl, Resolved>> = {
   dollars: {
     '1h': figures(span(61_560, 255_960), one(3_600), span(0.0139, 0.0556)),
-    '5m': figures(span(2_760, 11_760), span(2_760, 3_600), span(0.3, 0.92)),
+    '5m': figures(span(2_760, 11_760), one(3_600), span(0.3, 1.2)),
   },
   plan: {
     '1h': figures(one(158_760), one(3_600), one(0.0222)),
@@ -102,17 +102,18 @@ export function composedFor(kinds: AccountKind[], cacheTtl: PoolCacheTtl): Pool[
 }
 
 /**
- * What the route answers once a save sets `policy`: the three ceilings capped at the stored break-even, a null or a
- * zero reading as the break-even, and the idle share moved with the window, since a window's probes cost in proportion
- * to its length. An approximation: the router keeps each combination apart, while this recomputes the low and the high
- * end alone, so where the two ends come from different combinations (the five-minute 0.92 and the hour's 3,600 s on
- * `jobs`) a save answers a share range the router would not. The break-even depends on prices alone and stays.
+ * What the route answers once a save sets `policy`: a nonzero idle window at its figure, above the break-even too, and
+ * 0 at the break-even, the parked and horizon ceilings capped at the stored break-even with a null reading as it, and
+ * the idle share moved with the window, since a window's probes cost in proportion to its length. An approximation: the
+ * router keeps each combination apart, while this recomputes the low and the high end alone, so where the two ends come
+ * from different combinations (a window of 0 on `jobs`, the five minutes' break-even at the low end beside the hour's
+ * share) a save answers a share range the router would not. The break-even depends on prices alone and stays.
  */
 export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKeepalive): Pool['keepaliveResolved'] {
   if (resolved === null) return null;
   const be = resolved.breakEvenSeconds;
   const capped = (seconds: number | null): Range => (seconds === null ? be : { max: Math.min(seconds, be.max), min: Math.min(seconds, be.min) });
-  const idle = capped(policy.maxIdleSeconds === 0 ? null : policy.maxIdleSeconds);
+  const idle = policy.maxIdleSeconds === 0 ? be : one(policy.maxIdleSeconds);
   const share = (end: 'max' | 'min') => (resolved.idleSeconds[end] > 0 ? (resolved.idleShare[end] * idle[end]) / resolved.idleSeconds[end] : resolved.idleShare[end]);
   return { breakEvenSeconds: be, horizonSeconds: capped(policy.scheduledHorizonSeconds), idleSeconds: idle, idleShare: { max: share('max'), min: share('min') }, parkedSeconds: capped(policy.maxParkedSeconds) };
 }
@@ -236,14 +237,15 @@ const POOL_ROWS: PoolSeed[] = [
     windDownMinutes: 120,
     movesPerHour: {},
     affinityTtlSeconds: 0,
-    keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
+    keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false, maxIdleSeconds: 86_400 },
     // Haiku alone in dollars on both TTLs, since the cache TTL policy leaves the markers as sent: 46 minutes on five
-    // minutes, which also caps the hour of idle window, to 17.1 hours on the hour.
+    // minutes to 17.1 hours on the hour. The idle window is set to a day, above the whole break-even, so it runs as set
+    // and its share reads above one on both TTLs.
     keepaliveResolved: {
       breakEvenSeconds: { max: 61_560, min: 2_760 },
       horizonSeconds: { max: 61_560, min: 2_760 },
-      idleSeconds: { max: 3_600, min: 2_760 },
-      idleShare: { max: 0.92, min: 0.0556 },
+      idleSeconds: one(86_400),
+      idleShare: { max: 28.8, min: 1.334 },
       parkedSeconds: { max: 61_560, min: 2_760 },
     },
     autoModeServer: true,
