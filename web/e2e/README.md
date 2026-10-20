@@ -108,7 +108,7 @@ the chip line on one line, the first card's head below the bar, on a card view t
 on Analytics the Group by select against Add filter, and on the routing log and Analytics the width of the row's slots
 and gaps at rest under the view's bound, and at 950 by 800 on Analytics and Requests the bar's scroll width at most its
 client width with the count inside the window, the trailing slots wrapped), the Kinds list through Add filter on the
-routing log (Select all, the eight presets and the 40 kinds, its popover 8 px inside the window at 1280 by 800), the
+routing log (Select all, the eight presets and the 42 kinds, its popover 8 px inside the window at 1280 by 800), the
 split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count beside it
 never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request landing
 below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a top row's
