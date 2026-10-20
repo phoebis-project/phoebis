@@ -16,7 +16,7 @@ import type { Option } from '@/components/ui/OptionList';
 import { figuresValue, Tile } from '@/components/ui/Tile';
 import { Badge, Button, Card, ErrorState, Meter, Segmented, Skeleton } from '@/components/ui/primitives';
 import { FilterBar } from '@/components/FilterBar';
-import { GroupBy, GroupsButton } from '@/components/GroupBy';
+import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
 import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, GUARDRAIL_BLOCKED, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, ratioOff, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
@@ -391,7 +391,7 @@ export function AnalyticsPage() {
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
   const guardrailCounts = useAsync(() => (tab === 'traffic' ? api.getAnalyticsGuardrails({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab, generation], reload);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
-  const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation], reload);
+  const bySpeed = useAsync(() => ((tab === 'traffic' || tab === 'cost') && sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
   const byEffort = useAsync(() => (tab === 'traffic' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
   // cannot carry (Traffic, Latency and the Cache token charts read every row), so those sections read a second query
@@ -617,7 +617,7 @@ export function AnalyticsPage() {
         sticky
         update={update}
       >
-        <GroupBy onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
+        <GroupByControl onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
         {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
       </FilterBar>
       {!log.stale && log.data?.partial && (

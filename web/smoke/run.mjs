@@ -15027,6 +15027,28 @@ m.unmount();
   failed.unmount();
 }
 
+// The speed series feeds Traffic's speed card and Cost's Fast mode spend tile, so a tab that draws neither sends no
+// speed read. Each tab mounts a page of its own, since a switch to Latency sends no speed read whether the page gates
+// it or not.
+{
+  const speedReadsOn = async (path) => {
+    const spy = countCalls('getAnalyticsSeries');
+    const page = await mount(path, { now: CLOCK_ORIGIN });
+    await page.settle();
+    const reads = spy.calls.filter(([q]) => q?.groupBy === 'speed').length;
+    spy.restore();
+    page.unmount();
+    return reads;
+  };
+  const onLatency = await speedReadsOn('/analytics#latency');
+  const onTraffic = await speedReadsOn('/analytics#traffic');
+  results.push({
+    name: '/analytics a mount on Traffic reads the speed series once and a mount on Latency, which draws no speed figure, reads none',
+    ok: onLatency === 0 && onTraffic === 1,
+    missing: [`${onLatency} speed reads on Latency`, `${onTraffic} speed reads on Traffic`],
+  });
+}
+
 // Every filter control moves the window's end, and a custom range that has ended keeps its window while the clock runs
 // on, so there only the retry's generation sends the reads again. The account rollups on the Accounts tab and the burn
 // read on the Burn tab read the window alone, so a read of either is a moved end.
