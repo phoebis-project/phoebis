@@ -1447,6 +1447,13 @@ impl Engine {
     }
 }
 
+/// `ms` as the UTC time a log line names, or the raw milliseconds for one out of range.
+pub(crate) fn utc_stamp(ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(ms)
+        .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|_| ms.to_string())
+}
+
 impl Inner {
     /// A fresh engine's own state, and the fixture a unit test builds one agent onto: the one place every field
     /// is named, so a field this struct gains needs no second literal to keep in step.
@@ -1808,13 +1815,23 @@ impl Inner {
             return true;
         }
         if agent.paused {
-            tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
-                "a paused keepalive recipe's entry expired, so its prompt was dropped");
+            tracing::info!(
+                key = %key.0,
+                agent = %agent_id,
+                expires = %utc_stamp(expires),
+                late_ms = now - expires,
+                "a paused keepalive recipe's entry expired, so its prompt was dropped"
+            );
             self.drop_paused_prompt(key, agent_id);
             return true;
         }
-        tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
-            "a keepalive recipe lapsed before its probe, so the probe was skipped");
+        tracing::info!(
+            key = %key.0,
+            agent = %agent_id,
+            expires = %utc_stamp(expires),
+            late_ms = now - expires,
+            "a keepalive recipe lapsed before its probe, so the probe was skipped"
+        );
         if !agent.hold_counted {
             // The lapse is what withholds the probe, so it counts under the state the discard below leaves.
             lapsed.push(Skipped::of(
@@ -3796,6 +3813,12 @@ pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_log_lines_instant_prints_in_utc_with_the_zone_named_or_raw_when_out_of_range() {
+        assert_eq!(utc_stamp(1_760_961_787_123), "2025-10-20 12:03:07 UTC");
+        assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
+    }
 
     /// `ALL` is kept by hand. The cycle below names every variant with no wildcard, so a variant the enum gains stops
     /// this test compiling until it joins the cycle, and the walk then wants it in `ALL`.
