@@ -1316,7 +1316,7 @@ function storyRequests(): RequestLog[] {
 /** The laptop session whose subagent the client forks every 30 seconds for a status line. */
 const FORK_SESSION_ID = '9e4c2b7a-5d31-4f86-a0b9-3c7e1d5f2a48';
 /** The desktop session whose summary forks the key's own guardrail refused. */
-const BLOCKED_SESSION_ID = '2b8f5e1c-7a46-4d93-b1e0-6c9a3f4d7e25';
+export const BLOCKED_SESSION_ID = '2b8f5e1c-7a46-4d93-b1e0-6c9a3f4d7e25';
 /** The pool's guardrail matched first, at its pool position, and the key's own refused the request. */
 const BLOCKED_MATCHES: GuardrailMatch[] = [
   { blocked: false, id: 'subagent-status-summary', position: 0 },

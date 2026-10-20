@@ -18891,7 +18891,8 @@ m.unmount();
   const first = rowsOf(page)[0];
   const labels = (await toggleMenu(page, first)).map((b) => b.textContent?.trim() ?? '');
   await toggleMenu(page, first);
-  const quiet = rowsOf(page).find((tr) => Number(sessionCell(page, tr, 'Requests')?.textContent) === 0);
+  // A count of 0 also reads on a session whose every request was refused, whose rows the log lists.
+  const quiet = rowsOf(page).find((tr) => sessionOf(page, tr)?.lastRequestAt === null);
   const off = await entryOf(page, quiet);
   await toggleMenu(page, quiet);
   // A row inside the hour, one past it inside six hours and one past six hours inside a day, where the story has them.
@@ -19727,7 +19728,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     ok: heads()[0] === '' && heads()[1] === 'Session' && rows().length > 0 && rows().every((r) => r.lastElementChild?.querySelector('.menu__trigger') !== null && r.lastElementChild?.textContent?.trim() === '···'),
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
-  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 23, missing: [String(rows().length)] });
+  results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 24, missing: [String(rows().length)] });
   {
     // The session the mod released whole keeps its row and reads main's released state, though its expanded detail
     // draws no line.
@@ -19838,7 +19839,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 23 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 21, missing: expiries.slice(0, 3) });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 24 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 22, missing: expiries.slice(0, 3) });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
@@ -20055,9 +20056,12 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     }
   }
 
-  // A session with no ledgered requests cannot open the analytics view.
+  // A session with no ledgered row cannot open the analytics view. A count of 0 also reads on a session whose every
+  // request was refused, so the row is found by its last request instead.
+  const ledgerSessions = await api.listSessions();
+  const rowOfSession = (s) => (s === undefined ? undefined : rows().find((r) => r.id === `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`));
   const busyRow = () => rows().find((r) => Number(cell(r, 'Requests')?.textContent?.trim()) > 0);
-  const barren = rows().find((r) => Number(cell(r, 'Requests')?.textContent?.trim()) === 0);
+  const barren = rowOfSession(ledgerSessions.find((s) => !s.historical && s.lastRequestAt === null));
   const openMenu = async (row) => {
     row?.querySelector('.menu__trigger')?.click();
     await m.settle(120);
@@ -20103,6 +20107,36 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const jumps = (await openMenu(busyRow())).filter((b) => b.textContent?.trim() === 'View in analytics');
     results.push({ name: '/sessions enables the jump with ledgered requests', ok: jumps.length === 1 && jumps.every((b) => !b.disabled), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
     await openMenu(busyRow());
+  }
+  {
+    // The count leaves a refused request out, while the log lists it and the session's analytics fold holds it, so a
+    // session whose every request was refused opens both views. One with no ledgered row has nothing to open.
+    const ledgerJumps = (items) => items.filter((b) => ['View in analytics', 'View in requests'].includes(b.textContent?.trim() ?? ''));
+    const read = async (row) => {
+      const count = cell(row, 'Requests');
+      const jumps = ledgerJumps(await openMenu(row));
+      await openMenu(row);
+      return { count: count?.textContent?.trim() ?? null, hover: count?.getAttribute('title') ?? null, jumps: jumps.map((b) => ({ disabled: b.disabled, title: b.getAttribute('title') })), muted: count?.querySelector('.muted') != null };
+    };
+    const refusedOnly = ledgerSessions.find((s) => !s.historical && s.requests === 0 && s.lastRequestAt !== null);
+    const refused = await read(rowOfSession(refusedOnly));
+    // Found again, since the navigation above drew the table anew.
+    const unledgered = await read(rowOfSession(ledgerSessions.find((s) => !s.historical && s.lastRequestAt === null)));
+    results.push({
+      name: '/sessions a session whose every request was refused opens both ledger views under a muted 0 with no hover, and one with no ledgered row keeps the hint',
+      ok:
+        refusedOnly !== undefined &&
+        refused.count === '0' &&
+        refused.muted &&
+        refused.hover === null &&
+        refused.jumps.length === 2 &&
+        refused.jumps.every((j) => !j.disabled && j.title === null) &&
+        unledgered.count === '0' &&
+        (unledgered.hover ?? '').includes('no ledgered requests') &&
+        unledgered.jumps.length === 2 &&
+        unledgered.jumps.every((j) => j.disabled && (j.title ?? '').includes('no ledgered requests')),
+      missing: [refusedOnly === undefined ? 'no refusal-only session' : `${refusedOnly.keyId} ${refusedOnly.sessionId}`, JSON.stringify(refused), JSON.stringify(unledgered)],
+    });
   }
   {
     const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
@@ -20209,7 +20243,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   expandAll?.click();
   await m.settle(250);
   const open = m.container.querySelectorAll('.srow__detail').length;
-  results.push({ name: '/sessions Expand all opens every row', ok: open === 23, missing: [String(open)] });
+  results.push({ name: '/sessions Expand all opens every row', ok: open === 24, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
   expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
@@ -20499,7 +20533,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 22, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 23, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',

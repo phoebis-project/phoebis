@@ -908,7 +908,8 @@ all" or "Collapse all". The Session column is always drawn, and the eleven other
 or hides, are Key, Model, Account, Runway, Last used, Requests, Last request, Agents, Companion, Cache
 warming and Next probe, with Agents, Last request and Next probe hidden by default.
 Requests counts the session's requests, the ones the router refused before any account was asked left out, and "View in
-requests" lists those with the rest.
+requests" lists those with the rest, so a session whose every request was refused still opens its analytics and its
+request log.
 Session takes the card's free width and keeps at least 74 px, and a set of columns wider than the
 card scrolls inside it.
 Runway reads the time until the projection of the pin's account reaches the ceiling on the window that binds,
