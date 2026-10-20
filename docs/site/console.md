@@ -337,10 +337,12 @@ subscription accounts, and its hover notes "A request for a Fable model is place
 this card does not draw." Pins reads the member's active pins, one per agent and model as the card's Active pins fact
 counts them, a muted `0` for none. Then "Traffic, 24h" draws requests per hour with a 3-hour average, or "No traffic in
 the last 24h", and the facts Members, Keys, Requests 24h, Cost 24h, Active pins, Warnings and Moves in the last hour.
-Warnings counts the pool's warnings with their sentences on hover, and its figure opens the dialog on the group of the
-first warning's first field. The figure of Moves in the last hour opens the routing log on the pool's moved decisions,
-and its hover lists the moves by reason. "Delete" asks `Delete pool {name}`: "Deletes the pool and its memberships. Its
-keys must be moved or revoked first."
+Active pins counts every pin under the pool's keys, as the Dashboard's Sessions card does. A pin outlives its account's
+membership, so where the figure exceeds the sum of the Pins column, a line under it reads `{n} on a former member`, or
+`{n} on former members` for more than one. Warnings counts the pool's warnings with their sentences on hover, and its
+figure opens the dialog on the group of the first warning's first field. The figure of Moves in the last hour opens the
+routing log on the pool's moved decisions, and its hover lists the moves by reason. "Delete" asks `Delete pool {name}`:
+"Deletes the pool and its memberships. Its keys must be moved or revoked first."
 
 The pool dialog, "Create pool" or `Edit pool {name}`, is grouped: a rail "Pool settings" on the left, one group open
 at a time, a status line reading "Every group saves together." or `Save is held: {reason}` (a pool that changed since

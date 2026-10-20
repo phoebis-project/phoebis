@@ -596,18 +596,25 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const x of runner) assert.equal(x.lastUsedAt, x.lastRequestAt, `${x.sessionId}'s last use`);
   });
 
-  test(`each pool's active pins count one pin per key, session, agent and model under its keys, its members' sum to it, and the dashboard's are their sum, at ${at}`, async () => {
+  test(`each pool's active pins count one pin per key, session, agent and model under its keys, its members' sum and the pins on accounts outside them to it, and the dashboard's are their sum, at ${at}`, async () => {
     const s = await story;
     const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
     const live = pinnedRecipesOf(s, await s.api.listKeepaliveRecipes());
     // A pinned session no recipe warms holds one pin per agent all the same.
     const unwarmed = (poolId, accountId) => sum(s.sessions.filter((x) => x.pinned && x.keepalive.state === null && poolOf.get(x.keyId) === poolId && (accountId === undefined || x.accountId === accountId)), (x) => x.agents);
     const pins = (poolId, accountId) => new Set(live.filter((r) => poolOf.get(r.keyId) === poolId && (accountId === undefined || r.accountId === accountId)).map(pinOf)).size + unwarmed(poolId, accountId);
+    const above = {};
     for (const p of s.pools) {
       assert.equal(p.activePins, pins(p.id), `${p.id}'s active pins`);
       for (const m of p.members) assert.equal(m.activePins, pins(p.id, m.accountId), `${p.id}'s ${m.accountId}`);
-      assert.equal(sum(p.members, (m) => m.activePins), p.activePins, `${p.id}'s members sum to its figure`);
+      // A pin under the pool's keys on an account the pool no longer lists counts in its figure and in no member's.
+      const listed = new Set(p.members.map((m) => m.accountId));
+      const pinnedOn = new Set([...live.filter((r) => poolOf.get(r.keyId) === p.id).map((r) => r.accountId), ...s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).map((x) => x.accountId)]);
+      const outside = sum([...pinnedOn].filter((a) => !listed.has(a)), (a) => pins(p.id, a));
+      assert.equal(sum(p.members, (m) => m.activePins) + outside, p.activePins, `${p.id}'s members' sum and the ${outside} pins on accounts outside them make its figure`);
+      above[p.id] = p.activePins - sum(p.members, (m) => m.activePins);
     }
+    assert.deepEqual(above, { all: 0, jobs: 0, work: 1 }, 'work holds one pin on a former member and the other pools none');
     assert.ok(s.pools.some((p) => p.activePins > s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).length), 'a pool holds more pins than pinned sessions');
     assert.equal(s.overview.activePins, sum(s.pools, (p) => p.activePins), "the dashboard's active pins");
   });

@@ -20,7 +20,7 @@ import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, 
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
-import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins } from './operations';
+import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE, memberPins, pinsUnderPool } from './operations';
 import { KEYS, POOLS, composedFor, resolvedFor, servedFigures } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
@@ -338,8 +338,11 @@ const writtenMember = (m: PoolInput['members'][number], account: Account | undef
   return { ...member, eligible: eligible(member) };
 };
 
-/** A pool's pins are its members', summed whenever read, so the figure and the members cannot disagree. */
-const poolPins = (p: Pick<Pool, 'members'>): number => p.members.reduce((n, m) => n + m.activePins, 0);
+/**
+ * A pool's pins are every pin under its keys. A pin on a member that left the pool counts here and in no member's
+ * cell.
+ */
+const poolPins = (p: Pick<Pool, 'id'>): number => pinsUnderPool(p.id);
 
 /**
  * The route's `keys=` rule: `<id>@<generation>` names one lifetime and a bare id the live key's, so an earlier

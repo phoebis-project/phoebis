@@ -1654,10 +1654,11 @@ async function utilizationCeiling(theme) {
 }
 
 /**
- * Every pool card's member Pins cells sum to its Active pins tile. The route counts both under the pool's keys, the
- * pool's whole and each member's on its own account, so a column that drifts from the tile is a read gone wrong. The
- * router's seed leaves a pin under its pool's member, so in the router pass a card whose members sum to 0 compares
- * nothing.
+ * Every pool card's member Pins cells sum to its Active pins figure, short of it by the pins the line under the figure
+ * names on a former member. The route counts the pool's whole under its keys and each member's on its own account, so
+ * the two differ by the pins on an account that left the pool, a card whose column meets its figure draws no line, and
+ * any other gap is a read gone wrong. The router's seed leaves a pin under its pool's member, so in the router pass a
+ * card whose members sum to 0 compares nothing.
  */
 async function poolMemberPins(theme) {
   const say = (what) => failures.push(`${theme} /pools member pins: ${what}`);
@@ -1665,8 +1666,11 @@ async function poolMemberPins(theme) {
   const cards = await page.evaluate(() =>
     [...document.querySelectorAll('.pool')].map((card) => {
       const tile = [...card.querySelectorAll('.pool__stats > div')].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Active pins');
+      const figure = tile?.querySelector('dd');
       return {
-        active: tile?.querySelector('dd')?.textContent ?? null,
+        // The figure is the tile's first text, apart from the line under it.
+        active: figure?.firstChild?.textContent ?? null,
+        former: figure?.querySelector('.sub')?.textContent ?? null,
         members: [...card.querySelectorAll('.serving tbody tr')].map((tr) => tr.lastElementChild?.textContent ?? null),
         name: card.querySelector('.card__title')?.textContent ?? '',
       };
@@ -1678,10 +1682,56 @@ async function poolMemberPins(theme) {
     const active = count(card.active);
     const members = card.members.map(count);
     const sum = members.reduce((n, x) => n + x, 0);
+    const former = card.former === null ? 0 : Number(/^(\d+) on (a former member|former members)$/.exec(card.former.trim())?.[1] ?? Number.NaN);
     if (Number.isNaN(active)) say(`the ${card.name} card draws no Active pins figure`);
     else if (members.some(Number.isNaN)) say(`the ${card.name} card's Pins column reads ${JSON.stringify(card.members)}`);
-    else if (sum !== active) say(`the ${card.name} card's members hold ${members.join(' + ')} = ${sum} pins, not its Active pins ${active}`);
+    else if (Number.isNaN(former) || (card.former !== null && former === 0)) say(`the ${card.name} card's line under Active pins reads ${JSON.stringify(card.former)}`);
+    else if (sum + former !== active) say(`the ${card.name} card's members hold ${members.join(' + ')} = ${sum} pins and its line names ${former} on a former member, not its Active pins ${active}`);
     else if (!mock && sum === 0) say(`the ${card.name} card's members hold no pin, so the sum proves nothing`);
+  }
+}
+
+/**
+ * The Active pins tile's line under its figure, the pins on an account that left the pool: in the mock pass the work
+ * card's alone, reading "1 on a former member". It stands inside its tile below the figure's box, in the ink of the
+ * card's labels and the type of the serving table's sub line (a member's budget line), at a normal weight.
+ */
+async function poolFormerPins(theme) {
+  const say = (what) => failures.push(`${theme} /pools former pins: ${what}`);
+  const read = await page.evaluate(() => {
+    const type = (el) => (el ? { color: getComputedStyle(el).color, fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight } : null);
+    return {
+      cards: [...document.querySelectorAll('.pool')].map((card) => {
+        const tile = [...card.querySelectorAll('.pool__stats > div')].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Active pins');
+        const dd = tile?.querySelector('dd');
+        const line = dd?.querySelector('.sub') ?? null;
+        // The figure's box is its text node's, which the dd's box would stretch over the line too.
+        const range = document.createRange();
+        if (dd?.firstChild) range.selectNodeContents(dd.firstChild);
+        const figure = dd?.firstChild ? range.getBoundingClientRect() : null;
+        const box = tile?.getBoundingClientRect();
+        const at = line?.getBoundingClientRect();
+        return {
+          below: !!figure && !!at && at.top >= figure.bottom - 0.5,
+          inside: !!box && !!at && at.left >= box.left - 0.5 && at.right <= box.right + 0.5 && at.top >= box.top - 0.5 && at.bottom <= box.bottom + 0.5,
+          label: type(tile?.querySelector('dt') ?? null),
+          line: type(line),
+          name: card.querySelector('.card__title')?.textContent ?? '',
+          text: line?.textContent ?? null,
+        };
+      }),
+      tableSub: type(document.querySelector('.pool .serving .sub')),
+    };
+  });
+  measurements.push(`${theme} /pools former pins ${JSON.stringify(read)}`);
+  const drawn = read.cards.filter((c) => c.text !== null).map((c) => [c.name, c.text]);
+  if (mock && JSON.stringify(drawn) !== JSON.stringify([['work', '1 on a former member']])) say(`the cards draw ${JSON.stringify(drawn)}, not the work card's "1 on a former member" alone`);
+  for (const c of read.cards.filter((x) => x.text !== null)) {
+    if (!c.inside) say(`the ${c.name} card's line leaves its tile`);
+    if (!c.below) say(`the ${c.name} card's line does not stand below its figure`);
+    if (c.line?.fontWeight !== '400') say(`the ${c.name} card's line is at weight ${c.line?.fontWeight}`);
+    for (const what of compare(c.line, c.label, ['color'], `the ${c.name} card's line against its labels`)) say(what);
+    for (const what of compare(c.line, read.tableSub, ['color', 'fontSize'], `the ${c.name} card's line against the serving table's sub line`)) say(what);
   }
 }
 
@@ -8914,6 +8964,7 @@ try {
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
         await poolMemberPins(theme);
+        await poolFormerPins(theme);
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
         await poolKeyMenus(theme);

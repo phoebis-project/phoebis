@@ -136,6 +136,28 @@ const sessionSpec: ({
       lastRefreshMinutes: 121,
     },
   },
+  // A pin under the work pool's key on nightly, an account the pool held before, so the pool's figure counts it and
+  // no member's does.
+  {
+    keyId: 'notebook',
+    accountId: 'nightly',
+    model: 'claude-sonnet-5-5',
+    state: 'idle',
+    agents: 1,
+    companion: 'none',
+    fixed: true,
+    idleMinutes: 20,
+    sessionId: '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61',
+    figures: {
+      agents: [{ agentId: 'main', lastRequestMinutes: 20, nextProbeSeconds: 240 }],
+      burn: 0.04,
+      burnAtMinutes: 21,
+      cachedPrefixTokens: 9_000,
+      createdMinutes: 95,
+      lastInputTokens: 10_800,
+      lastRefreshMinutes: 21,
+    },
+  },
 ];
 
 /** How long the router lists a session after its last request, which the settings answer as well. */
@@ -329,12 +351,13 @@ const RECIPE_CAUSES: (RecipeCause | null)[] = [
   null,
   null,
   // One row for each session past the story's ids, so the modulo wraps none of them onto the first causes. The
-  // finished row's main is written over its own, and the row idle for two hours ran past the `all` pool's one-hour max
-  // idle as the 95-minute `laptop` row did.
+  // finished row's main is written over its own, the row idle for two hours ran past the `all` pool's one-hour max
+  // idle as the 95-minute `laptop` row did, and the pin on the work pool's former member waits for its next probe.
   null,
   null,
   null,
   'idle_limit',
+  null,
 ];
 
 // A held or paused subagent under a main agent that keeps probing, which is the
@@ -628,7 +651,8 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
 // another account where they run there. The router renews a pin on each request and each keepalive probe, and the
 // mod's release ends the keepalive record alone, so a released agent keeps its pin while its last request or probe is
 // inside its pool's affinity window, whether or not the ledger holds the request that wrote it. The pool view reads
-// each member's pins and sums them, so the pool's figure, its members' pins and the dashboard's sum read one count.
+// every pin under the pool's keys as its figure and each member's own on the member, so a pin on an account that left
+// the pool counts in the figure and the dashboard's sum alone.
 const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => {
   const lastUse = Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((at) => (at === null ? [] : [Date.parse(at)])));
   return NOW - lastUse <= (poolById.get(poolId)?.affinityTtlSeconds ?? 0) * 1_000;
@@ -647,6 +671,11 @@ for (const pin of SLOWED_PINS) {
 }
 /** The pins under a pool's keys on one member's account. */
 export const memberPins = (poolId: string, accountId: string): number => PINS.get(`${poolId}|${accountId}`)?.size ?? 0;
+/**
+ * Every pin under a pool's keys, one per key, session, agent and model as the route counts them, on a member's account
+ * or not. A pin on an account that left the pool counts here and in no member's figure.
+ */
+export const pinsUnderPool = (poolId: string): number => new Set([...PINS].flatMap(([member, pins]) => (member.startsWith(`${poolId}|`) ? [...pins] : []))).size;
 
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.

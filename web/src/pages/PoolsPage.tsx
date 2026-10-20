@@ -667,6 +667,8 @@ function PoolCard({
   const features = FEATURES.filter((f) => f.on(pool));
   const caption = `${STRATEGY_LABEL[pool.strategy]}${grouped ? `${pool.strategy === 'priority' ? ', with' : ','} subscription accounts first` : ''}`;
   const memberOf = (id: string) => pool.members.find((m) => m.accountId === id);
+  /** The pins the route counts past the members' sum: pins on an account that left the pool. */
+  const formerPins = Math.max(0, pool.activePins - pool.members.reduce((n, m) => n + m.activePins, 0));
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
   // The route counts the moves of the last hour by reason on the pool's member accounts, so every figure is a whole
@@ -882,7 +884,10 @@ function PoolCard({
         </div>
         <div>
           <dt>Active pins</dt>
-          <dd className="num">{pool.activePins}</dd>
+          <dd className="num">
+            {pool.activePins}
+            {formerPins > 0 && <span className="sub">{formerPins} on {formerPins === 1 ? 'a former member' : 'former members'}</span>}
+          </dd>
         </div>
         <div>
           <dt>Warnings</dt>

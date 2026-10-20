@@ -38,9 +38,11 @@ controls, the Load shedding switch against Migrate when spent, the Burn average 
 on the preset that unlocks the field, against the Window ceiling field's hint beside it in type, ink, line height,
 margin, left edge and top, and as wide as its field), the load groups (the overage grace field against the window
 ceiling field, the utilization bar's ceiling handle and the shedding preview line), the pool dialog's ceiling handle in
-the plain view (on the track at the field's value, centered on the track and taller than it), the pool card's serving
-table and its seven tiles, its attention rows ending with their age (the row's last cell, on the detail's line in the
-detail's ink and size, uncut and inside the card, at the pass's viewport and at 400 px), the serving table's columns
+the plain view (on the track at the field's value, centered on the track and taller than it), the Active pins tile's
+line under its figure (in the mock pass on the work card alone, "1 on a former member" inside its tile below the figure,
+in the labels' ink and the type of the serving table's sub line at a normal weight), the pool card's serving table and
+its seven tiles, its attention rows ending with their age (the row's last cell, on the detail's line in the detail's ink
+and size, uncut and inside the card, at the pass's viewport and at 400 px), the serving table's columns
 (Account the fill), the chevron of the pool dialog's Identity select (12 px square at a 1.5 stroke), the pool dialog's
 members table (Account the fill, each Priority and budget input at least its column's 96, 140 or 150 px less the cell's
 padding) and keys table (Key the fill), each read while its group shows, and in the mock pass's expert view its model
