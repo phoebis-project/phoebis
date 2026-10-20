@@ -231,8 +231,9 @@ export function PoolsPage() {
   const pools = useAsync(() => api.listPools(), [], reread);
   const accounts = useAsync(() => api.listAccounts(), [], reread);
   const keys = useAsync(() => api.listKeys(), [], reread);
-  // Feeds the cache TTL per-model override picker's options.
-  const catalog = useAsync(() => api.listCatalog(), [], reread);
+  // Feeds the cache TTL per-model override picker's options alone, so it is read once per visit rather than on every
+  // auto reload, and Refresh reads it again.
+  const catalog = useAsync(() => api.listCatalog(), []);
   const sessions = useAsync(() => api.listSessions(), [], reread);
   // The dialog's return rate, as the Sessions page reads it.
   const overview = useAsync(() => api.getKeepaliveOverview(), [], reread);

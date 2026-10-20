@@ -6046,6 +6046,41 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 }
 {
+  // The catalog feeds the dialog's TTL picker alone, so the page reads it once per visit and auto reload leaves it out.
+  // The case's own page runs on the frozen clock, and the running page's timers fall due far past these two periods.
+  const spy = countCalls('listCatalog');
+  const page = await mount('/pools', { now: CLOCK_ORIGIN });
+  tick(5_000);
+  await page.settle();
+  tick(5_000);
+  await page.settle();
+  const reads = spy.calls.length;
+  spy.restore();
+  page.unmount();
+  results.push({ name: '/pools reads the model catalog once across two auto reload periods', ok: reads === 1, missing: [`${reads} catalog reads`] });
+}
+{
+  // A failed catalog read leaves the picker with no model, and no period reads the catalog again. The spy is made
+  // before the one-shot failure, which puts the spy back as it fires, so a retry would be counted. The dialog stays
+  // closed through the period, since an open one pauses the reads and would hide a retry. A closed dialog keeps its
+  // groups mounted and the expert view is on here, so the picker is read in place.
+  const spy = countCalls('listCatalog');
+  failNextCall('listCatalog', '/admin/accounts', 'the registry is unavailable');
+  const page = await mount('/pools', { now: CLOCK_ORIGIN });
+  tick(5_000);
+  await page.settle();
+  const reads = spy.calls.length;
+  const picker = page.container.querySelector('[data-rule-set="plan"] select[aria-label^="Model to add"]');
+  const options = [...(picker?.querySelectorAll('option') ?? [])].map((o) => [o.value, o.textContent]);
+  spy.restore();
+  page.unmount();
+  results.push({
+    name: '/pools a failed catalog read leaves the TTL picker with no model and reads nothing at the next period',
+    ok: !!picker && reads === 0 && JSON.stringify(options) === JSON.stringify([['', 'Choose a model…']]),
+    missing: [picker ? JSON.stringify(options) : 'no picker', `${reads} catalog reads after the period`],
+  });
+}
+{
   // The rule editor holds a pattern the route would refuse out of the save, in the route's words and under the
   // index the route would name, and a pattern it takes saves into the pool.
   const story = (await api.listPools()).find((p) => p.id === 'all');
