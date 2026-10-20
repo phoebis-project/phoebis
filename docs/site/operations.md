@@ -134,8 +134,8 @@ one`. The 32-row bound leaves a dead end in two shapes: a registry without a can
 rows all sit past the 32nd of their kind refuses the right key at the start, and so does one whose readable rows sit
 only among the keepalive recipe bodies, which the proof never reads, beside credential or API-key rows that do not open.
 `phoebis recover-key` scans every sealed row, so it reads the right key as matching and refuses to discard, and it seals
-no canary: neither command leads out of either shape, so a registry in one needs a backup taken after its canary was
-sealed.
+no canary, so no command leads out of either shape with the rows kept: a registry in one needs a backup taken after its
+canary was sealed, or a recovery under a new key, which discards every sealed row.
 
 `init` refuses a key file that exists with `{path} already exists, and init never replaces a key, since every stored
 credential is sealed under it`, and refuses a data directory that already holds a registry, so a lost key is never

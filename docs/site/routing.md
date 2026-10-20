@@ -296,8 +296,8 @@ when it is empty, longer than 256 characters, ends in an unquoted backslash or h
 refusal names the entry and the reason: `model_rules[0]: pattern is empty`, `pattern is longer than 256 characters`,
 `pattern ends in an unquoted backslash`, `pattern holds three stars in a row`.
 
-The processed list of a chosen key, the accounts cooling for each model and the link to the routing log's model rejected
-and model permitted rows are on the Models view ([Models](console.md#models)).
+The processed list of a chosen key, the accounts cooling for each model and the link to the routing log's model
+rejected and model permitted rows are on the Models view ([Models](console.md#models)).
 
 ## Selection
 
@@ -925,8 +925,8 @@ handshake that stalls is retried once on a fresh connection and then answered `5
 upstream costs at most 20 seconds before the client hears.
 
 The Accounts view shows what an account is cooling under in a cooling-down block, one line per scope, the whole account
-or one model, with the reason, the deadline and a clear button, and the Models view lists the same rows grouped by model
-([Accounts](console.md#accounts), [Models](console.md#models)).
+or one model, with the reason, the deadline and a clear button, and the Models view lists the same rows grouped by
+model ([Accounts](console.md#accounts), [Models](console.md#models)).
 
 ### Retry in place
 
