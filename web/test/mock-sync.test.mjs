@@ -71,7 +71,6 @@ const SYNC = {
   key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'sync', notes: null, poolId: 'all' }) },
   key_models: { decode: (b) => d.decodeKeyModels(b), mock: (api) => api.getKeyModels('laptop') },
   keys: { decode: (b) => b.keys.map(d.decodeKey), mock: (api) => api.listKeys() },
-  models_state: { decode: (b) => d.decodeModelsState(b), mock: (api) => api.getModelsState() },
   pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing({ accountId: 'legacy' }) },
   pools: { decode: (b) => b.pools.map(d.decodePool), mock: (api) => api.listPools() },
   replay: { decode: (b) => d.decodeReplay(b), mock: (api) => api.replayParked() },

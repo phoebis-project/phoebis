@@ -27,8 +27,8 @@ pub(crate) struct AttentionItem {
     #[schema(example = "pool_exhausted")]
     pub kind: String,
     pub subject: AttentionSubject,
-    /// Null for a drift item whose refused request named no key, a router subject, a deleted pool, and a routing
-    /// condition whose account or pool the registry no longer holds.
+    /// Null for a drift item whose refused request named no key, a router subject, a deleted pool, a routing condition
+    /// whose account or pool the registry no longer holds, and an unweighted model.
     pub link: Option<AttentionLink>,
     /// The pools the item belongs to: an account's memberships, a pool's own id, the pool of a drift item's key.
     /// Empty for a router subject, a model, a deleted pool, and a routing condition whose account or pool the
@@ -87,7 +87,7 @@ pub(crate) struct AttentionSubject {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttentionLink {
-    /// `accounts`, `pools`, `keys` or `models`.
+    /// `accounts`, `keys` or `pools`.
     #[schema(example = "accounts")]
     pub page: String,
     /// Where the operator fixes it.

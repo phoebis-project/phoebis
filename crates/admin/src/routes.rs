@@ -94,7 +94,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(keys::revoke))
         .routes(routes!(keys::rotate))
         .routes(routes!(crate::ledger::replay_parked))
-        .routes(routes!(models::state))
         .routes(routes!(pairing_start))
         .routes(routes!(pairing_show, pairing_cancel))
         .routes(routes!(pairing_callback))

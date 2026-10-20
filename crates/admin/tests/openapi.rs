@@ -22,8 +22,8 @@ const ROUTES_RS: &str = include_str!("../src/routes.rs");
 /// The two catch-alls, the paths a plain `.route(` registers, which the introduction describes.
 const PLAIN_ROUTES: &[&str] = &["/admin", "/admin/{*rest}"];
 
-/// The eighteen tags in the order the document declares them, the API page's area order.
-const TAGS: [&str; 18] = [
+/// The seventeen tags in the order the document declares them, the API page's area order.
+const TAGS: [&str; 17] = [
     "Accounts",
     "Analytics",
     "Attention",
@@ -32,7 +32,6 @@ const TAGS: [&str; 18] = [
     "Keepalive",
     "Keys",
     "Ledger",
-    "Models",
     "Pairing",
     "Pools",
     "Pricing",
@@ -94,7 +93,6 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("key_revoke", &[404, 500, 503]),
     ("key_rotate", &[404, 409, 500, 503]),
     ("ledger_replay_parked", &[500, 503]),
-    ("models_state", &[500, 503]),
     ("pairing_start", &[400, 404, 409, 500]),
     ("pairing_show", &[404]),
     ("pairing_cancel", &[404, 409]),
@@ -154,7 +152,6 @@ const EXAMPLE_FILES: &[&str] = &[
     "key_models",
     "replay",
     "replay_held",
-    "models_state",
     "pairing_started",
     "oauth_session",
     "pools",
@@ -214,7 +211,6 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
     ("key_created", Some(("keys_create", 201))),
     ("key_models", Some(("key_models", 200))),
     ("keys", Some(("keys_list", 200))),
-    ("models_state", Some(("models_state", 200))),
     ("oauth_session", Some(("pairing_show", 200))),
     ("pairing_started", Some(("pairing_start", 201))),
     ("pool_traffic", Some(("pool_traffic", 200))),
@@ -584,13 +580,13 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        57,
-        "the admin listener's 57 paths"
+        56,
+        "the admin listener's 56 paths"
     );
     assert_eq!(
         operations(&document).len(),
-        70,
-        "the admin listener's 70 operations"
+        69,
+        "the admin listener's 69 operations"
     );
 }
 
@@ -754,8 +750,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        47,
-        "46 success answers and the replay's held answer"
+        46,
+        "45 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a
@@ -992,25 +988,23 @@ async fn every_examples_key_order_is_its_schemas_property_order() {
 }
 
 #[tokio::test]
-async fn a_model_rejection_and_a_model_permit_require_every_key_they_carry() {
+async fn the_document_answers_a_keys_models_and_no_cooldowns_grouped_by_model() {
     let (_app, _up, document) = document().await;
-    for name in ["Permit", "Rejection"] {
-        let schema = &document["components"]["schemas"][name];
-        let properties: BTreeSet<&str> = schema["properties"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let required: BTreeSet<&str> = schema["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| r.as_str().unwrap())
-            .collect();
-        assert_eq!(
-            required, properties,
-            "{name}: the route writes every key on every row, null or not"
+    assert!(
+        document["paths"].get("/admin/models/state").is_none(),
+        "no operation answers the cooldowns grouped by model"
+    );
+    let schemas = document["components"]["schemas"].as_object().unwrap();
+    for name in ["KeyModels", "ModelCooldown", "RuleEntry"] {
+        assert!(
+            schemas.contains_key(name),
+            "{name}: the key's processed rules carry it"
+        );
+    }
+    for name in ["ModelCooldowns", "ModelsState", "Permit", "Rejection"] {
+        assert!(
+            !schemas.contains_key(name),
+            "{name}: no answer of the document carries it"
         );
     }
 }

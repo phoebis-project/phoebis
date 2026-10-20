@@ -2232,10 +2232,7 @@ async fn a_plan_request_on_an_unweighted_model_holds_one_item_counting_each_land
                 id: "claude-opus-5".into(),
                 label: "claude-opus-5".into(),
             },
-            &Some(Link {
-                page: "models",
-                id: "claude-opus-5".into(),
-            }),
+            &None,
             true,
             &json!({
                 "model": "claude-opus-5",
@@ -2244,8 +2241,8 @@ async fn a_plan_request_on_an_unweighted_model_holds_one_item_counting_each_land
                 "weight_of": "claude-opus-5-5",
             })
         ),
-        "the item names the model tier and the model whose weight stands in, opens the Models page and belongs to \
-         no pool card"
+        "the item names the model tier and the model whose weight stands in, opens no page and belongs to no pool \
+         card"
     );
     let (status, text) = scrape(&rig, &attention).await;
     assert_eq!(status, 200);

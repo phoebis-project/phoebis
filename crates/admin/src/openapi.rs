@@ -38,7 +38,7 @@ Every error is `{"error": "<message>"}`. A `503` from a registry reload also car
 Each operation names its request (path segments, query parameters, or body fields with their bounds), its answer (the top-level keys, with an example captured from the route where one exists) and its refusals (status and message per refusal). The gate's own refusals above apply to every operation and are not repeated under each. Any other path under `/admin/` answers `404 not found`, behind the same gate: an anonymous caller sees the gate's `401` first, whatever the path, and a session that reaches the `404` learns only that nothing serves the path. The proxy listener's routes, `GET /v1/usage` among them, and the metrics listener are not part of this document.
 "#;
 
-/// The document's static half: the info block, the one relative server, the eighteen tags in the API page's area order
+/// The document's static half: the info block, the one relative server, the seventeen tags in the API page's area order
 /// (`docs/site/api-reference.md`), the bearer requirement on every operation, and the four shared responses. The paths
 /// join it in `router()`.
 #[derive(OpenApi)]
@@ -74,7 +74,6 @@ Each operation names its request (path segments, query parameters, or body field
         (name = "Keys", description = "The secret is answered on `POST /admin/keys` and `POST /admin/keys/{id}/rotate` \
             and nowhere else. A `key_json` answer never carries the digest either."),
         (name = "Ledger"),
-        (name = "Models"),
         (name = "Pairing", description = "Pairing is a stateful, multi-step flow: start a session, receive the upstream's \
             callback, confirm it into a committed credential. The documentation site's pairing page works the flow \
             through with `curl`."),
@@ -887,7 +886,6 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("key_models", "200"),
     fixture!("replay", "200"),
     fixture!("replay_held", "503"),
-    fixture!("models_state", "200"),
     fixture!("pairing_started", "201"),
     fixture!("oauth_session", "200"),
     fixture!("pools", "200"),

@@ -8203,10 +8203,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "id": "claude-opus-99",
             "label": "claude-opus-99"
           },
-          "link": {
-            "page": "models",
-            "id": "claude-opus-99"
-          },
+          "link": null,
           "pools": [],
           "since": 1791720940000,
           "detail": {
@@ -10223,53 +10220,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "estimated": true,
             "requests": 9
           }
-        }
-      ]
-    }
-  },
-  "models_state": {
-    "route": "GET /admin/models/state",
-    "body": {
-      "cooldowns": [
-        {
-          "model": "claude-haiku-4-5-20251001",
-          "rows": [
-            {
-              "account_id": "business",
-              "scope": "model:claude-haiku-4-5-20251001",
-              "reason": "model_rejected",
-              "until": 1791722800000,
-              "window": "model_rejection",
-              "set_at": 1791721000000
-            }
-          ]
-        }
-      ],
-      "rejections": [
-        {
-          "at": 1791717400300,
-          "account_id": "business",
-          "key_id": "desktop",
-          "session_id": "s1",
-          "model": "claude-haiku-4-5-20251001",
-          "wire_model": "claude-haiku-4-5",
-          "request_id": "r-failover",
-          "upstream_request_id": "req-rejected"
-        }
-      ],
-      "permits": [
-        {
-          "at": 1791717400350,
-          "account_id": "direct",
-          "key_id": "desktop",
-          "session_id": "s1",
-          "model": "claude-haiku-4-5-20251001",
-          "wire_model": "claude-haiku-4-5",
-          "request_id": "r-failover",
-          "upstream_request_id": "req-permitted",
-          "rejected_by": [
-            "business"
-          ]
         }
       ]
     }

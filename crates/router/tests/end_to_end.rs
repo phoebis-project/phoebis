@@ -4420,7 +4420,7 @@ async fn the_reference_page_and_its_document_are_served_by_the_merged_app() {
     assert_eq!(document.headers()["cache-control"], "no-store");
     let document: serde_json::Value = document.json().await.unwrap();
     assert_eq!(document["openapi"], "3.1.0");
-    assert_eq!(document["paths"].as_object().unwrap().len(), 57);
+    assert_eq!(document["paths"].as_object().unwrap().len(), 56);
     let page = anonymous
         .get(format!("http://127.0.0.1:{admin_port}/api-reference/"))
         .send()

@@ -795,7 +795,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         request_id: None,
     }));
     // The pool's model_rules excludes claude-haiku-*, and the account this cools is one of its members, so the
-    // key-models and models-state fixtures both carry it: the pool's rule with a live cooldown, and one group.
+    // key-models fixture reads the pool's deny entry with no cooldown while one its pattern matches is live.
     parts
         .router
         .report(phoebis_routing::Report::Cooldown {
@@ -1632,7 +1632,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ("keepalive_recipes", "/admin/keepalive/recipes"),
         ("key_models", "/admin/keys/desktop/models"),
         ("keys", "/admin/keys"),
-        ("models_state", "/admin/models/state"),
         ("pool_traffic", "/admin/pools/main/traffic?range=24h"),
         ("pools", "/admin/pools"),
         ("pricing", "/admin/pricing"),
