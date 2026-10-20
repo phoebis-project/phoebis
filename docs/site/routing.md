@@ -83,7 +83,7 @@ outside its bound gets:
 | `wind_down_minutes` | `30` | 0 to 10080, a week: `wind_down_minutes is at most 10080 (one week)`. See Subscription end |
 | `return_to_plan` | `always` | `always`, `when_cold` or `never`: `return_to_plan must be always, when_cold, or never`. See Moves |
 | `return_to_plan_dwell_seconds` | `900` | 0 to 86400: `return_to_plan_dwell_seconds is between 0 and 86400`. See Moves |
-| `keepalive` | `enabled` off when the pool is created over the API without the block, on in the console's create form | a policy object of four fields, on [The four fields](keepalive.md#the-four-fields) |
+| `keepalive` | `enabled` off, over the API without the block and in the console's create form | a policy object of four fields, on [The four fields](keepalive.md#the-four-fields) |
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default. See Cache TTL |
 | `cache_diagnostics` | `false` | `true` or `false`: `cache_diagnostics must be true or false` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false`. See below |
