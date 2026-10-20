@@ -13782,7 +13782,7 @@ m.unmount();
         what: 'round fired by the stretch',
       },
       {
-        expected: [['Pin', 'match'], ['Eligible', 'match'], ['Spent', 'off'], ['At cap', '0 out'], ['No fit', 'fell through'], ['Winding down', '0 out'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
+        expected: [['Pin', 'match'], ['Eligible', 'match'], ['Spent', 'off'], ['At cap', '0 out'], ['No fit', '1 out'], ['Winding down', '0 out'], ['content', 'none'], ['with main', 'none'], ['static', 'none'], ['Pick', 'chosen'], ['Reserve', 'booked']],
         id: 'req_b8c3e9d4-e61',
         seq: 2,
         terminus: ['chosen', 'Chosen', 'placed'],

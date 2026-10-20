@@ -42,6 +42,6 @@ export { leadOf } from '@/mock/lead';
 export { poolById } from '@/mock/pools';
 export { ALL_ROLLUPS, costSplitOf, requestById, rollups } from '@/mock/requests';
 export { GUARDRAIL_STORY_IDS, NIGHTLY_CAP_RAISED, STORY_IDS } from '@/mock/requests';
-export { partitionsOf, placementFactOf } from '@/mock/routingLog';
-export { PRIOR_BURN, rewriteOf } from '@/mock/routingLog';
+export { partitionsOf, placementFactOf, stretchTriggerOf } from '@/mock/routingLog';
+export { PRIOR_BURN, rewriteOf, runwayTiesOf } from '@/mock/routingLog';
 export { budgetsAt, obstacleOf } from '@/mock/routingLog';
