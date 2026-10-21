@@ -1812,10 +1812,11 @@ function storySpecs(): Spec[] {
     // The client's two classifier calls are placed on primary and book nothing there, as a fast request books nothing.
     at('req_4d9a1e6b-c20', 1, 1, t(12, 41, 8), 'placed', 'primary'),
     at('req_63a8d2f5-b17', 1, 1, t(12, 41, 10), 'placed', 'primary'),
-    // A conversation the Overflow workspace answered, cold there nine minutes on, returns to a plan with its
-    // 640k-token context. Primary fits but is full, and the rest fall short of the ceiling, so the gate answers the
-    // least bad set and Pace takes nightly, whose window the conversation spends within the hour.
-    at('req_4e8b1d36-f72', 1, 1, t(10, 52, 30), 'placed', 'overflow'),
+    // A conversation the Overflow workspace takes at 10:52:30, with primary full and secondary's window too far along
+    // for its rewrite, returns to a plan with its 640k-token context, cold there nine minutes on. Primary fits but is
+    // full, and the rest fall short of the ceiling, so the gate answers the least bad set and Pace takes nightly, whose
+    // window the conversation spends within the hour.
+    at('req_4e8b1d36-f72', 1, 1, t(10, 52, 30), 'placed', 'overflow', { inFlight: { primary: 16 } }),
     at(FORCED_MOVE_ID, 1, 1, t(11, 1, 50), 'moved', 'nightly', {
       from: 'overflow',
       inFlight: { primary: 16 },
@@ -1835,11 +1836,11 @@ function storySpecs(): Spec[] {
       holds: [{ accountId: 'nightly', attempt: 1, cohort: null, heldMs: 1_000, ranOut: false }],
       pin: live('continues_pin', 2_000),
     }),
-    // A new conversation lands on nightly with primary full, and nightly's spent window answers 429 40 s before it
-    // resets: the reselect finds the pin on a spent account whose reset falls inside the retry bound, so the spent
-    // rule holds the request there for the reset, and it renews on the fresh window, where the overage rule finds
-    // primary and secondary full.
-    at('req_9d4c1a73-e58', 1, 1, t(13, 10, 20), 'placed', 'nightly', { inFlight: { primary: 16 } }),
+    // A new conversation lands on nightly with primary and secondary full, as its renewal at 13:11 finds them, and
+    // nightly's spent window answers 429 40 s before it resets: the reselect finds the pin on a spent account whose
+    // reset falls inside the retry bound, so the spent rule holds the request there for the reset, and it renews on the
+    // fresh window, where the overage rule finds primary and secondary full.
+    at('req_9d4c1a73-e58', 1, 1, t(13, 10, 20), 'placed', 'nightly', { inFlight: { primary: 16, secondary: 16 } }),
     at('req_9d4c1a73-e58', 2, 2, t(13, 10, 21), 'held', 'nightly', {
       attempted: ['nightly'],
       hold: { cohort: null, place: 'reset', until: t(13, 11) },
@@ -1908,10 +1909,12 @@ function storySpecs(): Spec[] {
     // threshold at 0.73, and the sessions placed after it are the round's other four pins.
     at('req_b1e7c4a9-a69', 1, 1, t(13, 47, 24), 'placed', 'studio'),
     at('req_4f2a8d6e-b7a', 1, 1, t(13, 48), 'renewed', 'studio', { pin: live('continues_pin', 36_000) }),
-    at('req_6b3e8d1a-c73', 1, 1, t(13, 50, 30), 'placed', 'studio'),
-    at('req_2f9a6c4e-d84', 1, 1, t(13, 53, 10), 'placed', 'studio'),
-    at('req_c5d8e2b7-e95', 1, 1, t(13, 58, 40), 'placed', 'studio'),
-    at('req_7e4f1a9c-f16', 1, 1, t(13, 59, 5), 'placed', 'studio'),
+    // The annex stands at its cap through the afternoon's work, so the slowed studio, which a fresh session no longer
+    // fits, stays the engine's pick for the four sessions the stretch's round reads at 14:05.
+    at('req_6b3e8d1a-c73', 1, 1, t(13, 50, 30), 'placed', 'studio', { inFlight: { annex: 16 } }),
+    at('req_2f9a6c4e-d84', 1, 1, t(13, 53, 10), 'placed', 'studio', { inFlight: { annex: 16 } }),
+    at('req_c5d8e2b7-e95', 1, 1, t(13, 58, 40), 'placed', 'studio', { inFlight: { annex: 16 } }),
+    at('req_7e4f1a9c-f16', 1, 1, t(13, 59, 5), 'placed', 'studio', { inFlight: { annex: 16 } }),
     // The first turns after the placements: no pin has a cycle yet, so neither is held, and the first reads the stretch
     // past the threshold, which starts the safety wait.
     at('req_4a9c3e7b-a27', 1, 1, t(14, 2, 30), 'renewed', 'studio', { pin: live('continues_pin', 720_000) }),

@@ -283,8 +283,9 @@ export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * 
  * The story's own readings of a window where the walk back's even climb would not tell it, per account and window.
  * Nightly's 5-hour window, fresh at its 13:11 reset, climbs fast enough that a fresh session no longer fits there by
  * 14:00, so the hour's placements are Pace's to make between primary and secondary. Secondary's 5-hour window opens at
- * 09:55 with room for the two sessions placed just before 11:00, then runs hot, so it leads its pace by the pool's 0.9
- * margin through the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11.
+ * 09:55 and reads 70% from the 640k-token conversation's placement at 10:52:30, too far along for its rewrite but with
+ * room for the two sessions placed just before 11:00, then runs hot, so it leads its pace by the pool's 0.9 margin
+ * through the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11.
  */
 const STORY_READINGS: Record<string, Partial<Record<WindowId, { at: number; utilization: number }[]>>> = {
   nightly: {
@@ -297,6 +298,7 @@ const STORY_READINGS: Record<string, Partial<Record<WindowId, { at: number; util
   secondary: {
     '5h': [
       { at: clock(9, 55), utilization: 0 },
+      { at: clock(10, 52, 30), utilization: 0.7 },
       { at: clock(10, 59, 10), utilization: 0.7 },
       { at: clock(11, 0), utilization: 0.97 },
       { at: clock(11, 8, 30), utilization: 0.99 },
