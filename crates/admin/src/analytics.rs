@@ -1184,12 +1184,13 @@ pub(crate) async fn rewrites(
     .into_response()
 }
 
-/// One row per guardrail that matched a request in the range, ordered by id.
+/// The guardrail matches of the range.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailCounts {
     pub from: i64,
     pub to: i64,
+    /// One row per guardrail that matched a request in the range, ordered by id.
     pub guardrails: Vec<GuardrailCount>,
 }
 

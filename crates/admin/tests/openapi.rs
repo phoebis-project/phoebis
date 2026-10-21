@@ -1343,6 +1343,29 @@ async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_ac
 }
 
 #[tokio::test]
+async fn the_guardrail_counts_describe_the_range_on_the_body_and_one_row_per_guardrail_on_its_member(
+) {
+    let (_app, _up, document) = document().await;
+    let counts = &document["components"]["schemas"]["GuardrailCounts"];
+    let description = |schema: &Value| {
+        schema["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    assert_eq!(
+        (
+            description(counts).as_deref(),
+            description(&counts["properties"]["guardrails"]).as_deref()
+        ),
+        (
+            Some("The guardrail matches of the range."),
+            Some("One row per guardrail that matched a request in the range, ordered by id.")
+        ),
+        "{counts}"
+    );
+}
+
+#[tokio::test]
 async fn the_pool_policy_inputs_are_closed_as_their_parsers_refuse_an_unknown_field() {
     let (_app, _up, document) = document().await;
     for name in [

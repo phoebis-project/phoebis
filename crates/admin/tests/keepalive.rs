@@ -1303,6 +1303,223 @@ async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
     );
 }
 
+/// A main pin of `session` on `business` under the plain `claude-opus-5`, the model the router folds a `[1m]`
+/// spelling into, holding a last prompt so its row answers a window.
+fn spelling_pin(session: &str, key_generation: i64) -> phoebis_store::PinRow {
+    let now = common::NOW;
+    phoebis_store::PinRow {
+        key_id: "desktop".into(),
+        session_id: session.into(),
+        agent_id: "main".into(),
+        model: "claude-opus-5".into(),
+        account_id: "business".into(),
+        epoch: 1,
+        created_at: now - 10,
+        last_used_at: now - 5,
+        key_generation,
+        incarnation: 1,
+        burn: phoebis_store::PinBurn::default(),
+        burn_at: Some(now),
+        burn_banded: phoebis_store::PinBurn::default(),
+        burn_fast: phoebis_store::PinBurn::default(),
+        burn_unmetered: phoebis_store::PinBurn::default(),
+        last_input_tokens: 100_000,
+        last_classifier: false,
+        last_refresh_at: now - 5,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        shed_reason: None,
+        static_hash: None,
+        tail_hash: None,
+        lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+        entrypoint: String::new(),
+        marked_at: None,
+        marked_on: None,
+        marked_window: None,
+    }
+}
+
+/// The pool `main` over `business` behind key `desktop` with a main pin on each of `sessions`, written through one
+/// harness and served by a second one, since the router task loads its pins at spawn.
+async fn spelling_harness(sessions: &[&str]) -> common::Full {
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    let generation = common::generation(&seed.store, "desktop");
+    for session in sessions {
+        seed.store
+            .upsert_pin(&spelling_pin(session, generation))
+            .unwrap();
+    }
+    common::admin_parts_full_on(seed.store.clone()).await
+}
+
+/// A client request of `agent` on `session` naming `model`, classed as the client's `x-claude-code-request-class`
+/// header named it, `None` for a caller that sends no such header.
+fn classed_request(
+    id: &str,
+    session: &str,
+    agent: &str,
+    model: &str,
+    class: Option<&str>,
+    at: i64,
+    key_generation: i64,
+) -> phoebis_ledger::Record {
+    phoebis_ledger::Record::Request {
+        request: phoebis_ledger::RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            key_generation,
+            session_id: Some(session.into()),
+            agent_id: Some(agent.into()),
+            model: model.into(),
+            canonical_model: model.trim_end_matches("[1m]").into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            request_class: class.map(String::from),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    }
+}
+
+/// Each of `sessions`' rows' `context_window_tokens`, read once every row counts the requests its pair names.
+async fn windows(parts: &common::Full, cookie: &str, sessions: &[(&str, u64)]) -> Vec<Option<u64>> {
+    let listed = common::wait_json(&parts.app, "/admin/sessions", cookie, |v| {
+        sessions.iter().all(|(session, requests)| {
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["session_id"] == *session && r["requests"] == *requests)
+        })
+    })
+    .await;
+    sessions
+        .iter()
+        .map(|(session, _)| {
+            listed["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["session_id"] == *session)
+                .and_then(|r| r["context_window_tokens"].as_u64())
+        })
+        .collect()
+}
+
+/// An auxiliary request (a title, a summary, a classifier call) names a model of its own, which sizes nothing of the
+/// conversation, so the client's window follows the conversation's own spelling.
+#[tokio::test]
+async fn a_main_pins_line_reads_its_newest_conversation_spelling_under_a_newer_auxiliary_request() {
+    let parts = spelling_harness(&["s1"]).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let g = common::generation(&parts.store, "desktop");
+    let now = common::NOW;
+    for (id, model, class, at) in [
+        ("r1", "claude-opus-5[1m]", "main", now - 60_000),
+        ("r2", "claude-haiku-4-5", "auxiliary", now - 30_000),
+    ] {
+        parts
+            .ledger
+            .record(classed_request(id, "s1", "main", model, Some(class), at, g));
+    }
+    assert_eq!(
+        windows(&parts, &cookie, &[("s1", 2)]).await,
+        [Some(1_000_000)],
+        "main's conversation named the long-context twin, and its newer auxiliary request's model sizes nothing"
+    );
+}
+
+/// The read keeps one row per agent with no read per pin, so an agent whose requests in the window are all auxiliary
+/// falls back to the session's newest conversation request of any agent, and only a session that sent no
+/// conversation request keeps the pin's own model.
+#[tokio::test]
+async fn a_pin_whose_requests_are_all_auxiliary_reads_the_sessions_newest_conversation_spelling_else_its_own(
+) {
+    let parts = spelling_harness(&["s-borrowed", "s-auxiliary"]).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let g = common::generation(&parts.store, "desktop");
+    let now = common::NOW;
+    for (id, session, agent, model, class, at) in [
+        (
+            "r1",
+            "s-borrowed",
+            "worker-1",
+            "claude-opus-5[1m]",
+            "subagent",
+            now - 60_000,
+        ),
+        (
+            "r2",
+            "s-borrowed",
+            "main",
+            "claude-haiku-4-5",
+            "auxiliary",
+            now - 30_000,
+        ),
+        (
+            "r3",
+            "s-auxiliary",
+            "main",
+            "claude-opus-5[1m]",
+            "auxiliary",
+            now - 30_000,
+        ),
+    ] {
+        parts.ledger.record(classed_request(
+            id,
+            session,
+            agent,
+            model,
+            Some(class),
+            at,
+            g,
+        ));
+    }
+    assert_eq!(
+        windows(&parts, &cookie, &[("s-borrowed", 2), ("s-auxiliary", 1)]).await,
+        [Some(1_000_000), Some(200_000)],
+        "main sent auxiliary requests alone, so it reads the subagent's conversation spelling where the session holds \
+         one and the pin's plain model where it holds none"
+    );
+}
+
+/// A raw caller sends no `x-claude-code-request-class`, so its conversation requests carry no class and stay in the
+/// spelling read.
+#[tokio::test]
+async fn a_raw_callers_unclassed_session_reads_its_newest_requests_spelling_over_the_pins_own() {
+    let parts = spelling_harness(&["s-raw"]).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let g = common::generation(&parts.store, "desktop");
+    let now = common::NOW;
+    for (id, model, at) in [
+        ("r1", "claude-opus-5", now - 60_000),
+        ("r2", "claude-opus-5[1m]", now - 30_000),
+    ] {
+        parts
+            .ledger
+            .record(classed_request(id, "s-raw", "main", model, None, at, g));
+    }
+    assert_eq!(
+        windows(&parts, &cookie, &[("s-raw", 2)]).await,
+        [Some(1_000_000)],
+        "the newest unclassed request named the long-context twin, where the pin's own model would read 200,000"
+    );
+}
+
 /// A deleted key's session outlives the key in the engine until the engine's next tick ends it: the row must read
 /// as historical, with no companion, agents, or recipe, and the console must not be able to release it by naming
 /// it directly.

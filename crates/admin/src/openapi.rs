@@ -1116,19 +1116,39 @@ mod tests {
         });
     }
 
+    /// The members a source serializes. An all-optional mirror reads a missing key as unset, so a member the source
+    /// drops still round trips, and the count of a fully set source is what catches it.
+    fn members(source: &impl serde::Serialize) -> usize {
+        serde_json::to_value(source)
+            .unwrap()
+            .as_object()
+            .map_or(0, serde_json::Map::len)
+    }
+
     #[test]
     fn an_override_with_both_members_set_round_trips_through_its_mirror() {
-        round_trips_source::<_, OverrideView>(Override {
+        let source = Override {
             type_multiplier: Some(every_cell()),
             weight_by_window: Some(IndexMap::from([
                 ("five_hour".to_string(), 1.5),
                 ("seven_day".to_string(), 0.75),
             ])),
-        });
+        };
+        assert_eq!(
+            members(&source),
+            2,
+            "the two members of Override, each set here, are the two OverrideView declares"
+        );
+        round_trips_source::<_, OverrideView>(source);
     }
 
     #[test]
     fn a_type_override_with_every_cell_set_round_trips_through_its_mirror() {
+        assert_eq!(
+            members(&every_cell()),
+            5,
+            "the five cells of TypeOverride, each set here, are the five TypeOverrideView declares"
+        );
         round_trips_source::<_, TypeOverrideView>(every_cell());
     }
 

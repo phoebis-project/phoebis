@@ -3576,7 +3576,7 @@ fn activity(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// The model one agent of a session named on its newest client request, as the client spelled it.
+/// The model one agent of a session named on its newest conversation request, as the client spelled it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentModel {
     pub key_id: String,
@@ -3590,14 +3590,16 @@ pub struct AgentModel {
     pub model: String,
 }
 
-/// The newest client request's own model spelling per (key, key generation, session, agent) since `since`,
+/// The newest conversation request's own model spelling per (key, key generation, session, agent) since `since`,
 /// over the window and the requests `session_activity` reads, newest first, so a session's first row is its newest
-/// request.
+/// conversation request. A conversation request is every request whose class is not `auxiliary`, a raw caller's
+/// request with no class among them, since an auxiliary request names a model of its own.
 pub fn agent_models(conn: &Connection, since: i64) -> Result<Vec<AgentModel>, LedgerError> {
     let mut stmt = conn.prepare(&format!(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, agent_id, received_at, model \
          FROM requests \
-         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
+         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1 \
+         AND (request_class IS NULL OR request_class != 'auxiliary')), \
          ranked AS (SELECT recent.*, \
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp, agent_id ORDER BY received_at DESC, id DESC) \
          AS nth FROM recent WHERE grp IS NOT NULL) \

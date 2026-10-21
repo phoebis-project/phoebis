@@ -78,9 +78,11 @@ pub(crate) struct Session {
     /// The context of the row's pin, the main agent's where it holds one: its last turn's prompt in tokens, cache
     /// reads and writes included, 0 before its first turn.
     pub last_input_tokens: Option<u64>,
-    /// The pin's context window in tokens as the client sizes it: 1,000,000 where the newest request of the pin's agent
-    /// named a `[1m]` twin (the session's newest where that agent sent none), else 200,000. Null on a row with no pin,
-    /// on a historical row and where `last_input_tokens` is 0.
+    /// The pin's context window in tokens as the client sizes it: 1,000,000 where the newest conversation request of
+    /// the pin's agent named a `[1m]` twin (the session's newest conversation request where that agent sent none),
+    /// else 200,000. A conversation request is every request whose class is not `auxiliary`, since an auxiliary
+    /// request names a model of its own. Null on a row with no pin, on a historical row and where `last_input_tokens`
+    /// is 0.
     pub context_window_tokens: Option<u64>,
     /// `last_input_tokens` over `context_window_tokens`, rounded to three decimals, null where the window is.
     pub context_share: Option<f64>,
@@ -418,7 +420,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     }
     // The context figures, after the historical pass has settled `companion`: the row's own pin, and on a companion
     // row one line per pin of every other agent the companion carries a recipe for and has not released. The window
-    // reads each agent's newest spelling of its model, since the pin's model has the long-context suffix folded out.
+    // reads each agent's newest conversation spelling of its model, since the pin's model has the long-context suffix
+    // folded out and an auxiliary request names a model of its own.
     let spellings = match state
         .ledger
         .db()
@@ -566,7 +569,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
 }
 
 /// The client's own rule for a model's context window, as the routing crate states it: a million tokens where the
-/// newest request's spelling, `newest_model`, named the `[1m]` twin, else two hundred thousand.
+/// newest conversation request's spelling, `newest_model`, named the `[1m]` twin, else two hundred thousand.
 fn context_window_tokens(newest_model: &str) -> u64 {
     // Case-blind, as the relay folds the suffix out of the spelling.
     if newest_model
@@ -579,8 +582,9 @@ fn context_window_tokens(newest_model: &str) -> u64 {
     }
 }
 
-/// The spelling the pin's agent named on its newest request of the window, else the session's newest request's. A
-/// pin's own model has the suffix folded out, so a session with no request in the window reads the plain window.
+/// The spelling the pin's agent named on its newest conversation request of the window (a raw caller's unclassed
+/// request among them), else the spelling of the session's newest conversation request of any agent. A pin's own
+/// model has the suffix folded out, so a session with no conversation request in the window reads the plain window.
 fn newest_model<'a>(models: Option<&'a [phoebis_ledger::AgentModel]>, pin: &'a PinRow) -> &'a str {
     let models = models.unwrap_or_default();
     models

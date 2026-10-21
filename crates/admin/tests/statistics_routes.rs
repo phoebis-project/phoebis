@@ -5318,6 +5318,16 @@ async fn the_routing_log_reads_a_rewrite_hold_and_the_request_it_waited_for() {
         "the renewal names the wait it followed: {renewal}"
     );
     assert_eq!(renewal["outcome"]["hold"], serde_json::Value::Null);
+    assert_eq!(
+        renewal["outcome"]["cohort_hold"],
+        serde_json::json!({
+            "waited_on": [hold["account_id"]],
+            "cohort": hold["cohort"],
+            "held_ms": 1_000,
+            "waits": [{"reason": "rewrite", "held_ms": 1_000}],
+        }),
+        "the renewal sums the wait it followed on the account and in the cohort the hold named: {renewal}"
+    );
 }
 
 #[tokio::test]

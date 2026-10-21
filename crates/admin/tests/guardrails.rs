@@ -238,6 +238,31 @@ async fn a_guardrail_is_created_with_every_member_and_read_back_on_the_show_and_
 }
 
 #[tokio::test]
+async fn a_show_reads_the_guardrail_and_its_attachments_off_one_take_of_the_store() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let answer = created(
+        app,
+        &cookie,
+        "g1",
+        j!({"pools": ["main"], "keys": ["desktop"]}),
+    )
+    .await;
+    // The fewest takes over three shows, so a background task that takes the store during one of them cannot pass
+    // for a read the show made.
+    let mut fewest = u64::MAX;
+    for _ in 0..3 {
+        let before = parts.store.debug_lock_count();
+        assert_eq!(show(app, &cookie, "/admin/guardrails/g1").await, answer);
+        fewest = fewest.min(parts.store.debug_lock_count() - before);
+    }
+    assert_eq!(
+        fewest, 1,
+        "the row and its attachments come off the one registry load"
+    );
+}
+
+#[tokio::test]
 async fn a_create_with_the_required_members_alone_fills_the_defaults() {
     let (parts, cookie) = seeded().await;
     let response = post(

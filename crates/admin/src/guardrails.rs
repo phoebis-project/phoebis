@@ -979,14 +979,13 @@ impl Side {
     ),
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
-    let row = match state.store.guardrail(&id) {
-        Ok(Some(row)) => row,
-        Ok(None) => return failure(StatusCode::NOT_FOUND, "guardrail not found"),
+    let load = match state.store.load_registry() {
+        Ok(load) => load,
         Err(error) => return store_failure(error),
     };
-    match state.store.load_registry() {
-        Ok(load) => Json(guardrail_json(&row, &AttachmentIndex::from_load(&load))).into_response(),
-        Err(error) => store_failure(error),
+    match load.guardrails.iter().find(|row| row.id == id) {
+        Some(row) => Json(guardrail_json(row, &AttachmentIndex::from_load(&load))).into_response(),
+        None => failure(StatusCode::NOT_FOUND, "guardrail not found"),
     }
 }
 
