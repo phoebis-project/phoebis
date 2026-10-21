@@ -224,6 +224,10 @@
   box-shadow: var(--shadow-pop);
 }
 
+.unit-legend:focus {
+  outline: none;
+}
+
 /* Two classes, since the Settings row's `.setting-row p` comes later in pages.css at one class and an element. */
 .unit-legend .unit-legend__line {
   margin: 0;
@@ -239,7 +243,7 @@
   color: var(--ink);
 }
 
-/* The Settings row's select and the legend's button keep one line, with the row's copy taking the squeeze. */
+/* The Settings row's select and the legend's button keep one line. */
 .unit-setting {
   display: flex;
   flex: none;
@@ -2235,9 +2239,9 @@ textarea.input {
     position: static;
   }
 
-  /* The row centers the button, so half the row and half the button put the popover's top 4 px under it. */
+  /* The row wraps the select and the button onto its last line, so the popover hangs from the row's bottom. */
   .unit-setting .unit-legend {
-    top: calc(50% + 18px);
+    top: 100%;
     right: 0;
     left: 0;
     width: auto;

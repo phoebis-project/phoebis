@@ -51,8 +51,9 @@ changed under the tab ("This page could not load") from an error while drawing (
 own words and a Reload button.
 
 The "Unit" switch sets the unit the Dashboard, Pools, Keys, Requests and Analytics views price a request in, stored
-under `phoebis.unit` (`native` until you pick one). Its button "What the units mean" opens the legend, which closes on
-Escape or a click outside it, with one line per position in the switch's order:
+under `phoebis.unit` (`native` until you pick one). Its button "What the units mean" opens the legend, which takes the
+focus, closes on Escape or a click outside it, and hands the focus back to its button on Escape, with one line per
+position in the switch's order:
 
 - Native: "Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key,
   overage or fast-mode request in dollars."

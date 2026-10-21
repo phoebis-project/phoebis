@@ -20,6 +20,7 @@ export { RefreshControl } from '@/components/RefreshControl';
 export { ChartTooltip } from '@/components/charts/Tooltip';
 export { OptionList } from '@/components/ui/OptionList';
 export { Popover, PopoverHost } from '@/components/ui/Popover';
+export { UnitLegend } from '@/components/ui/UnitControls';
 export { Button, ConfirmDialog, CopyButton, Descriptions, Dialog, Menu, PageLoadFailed } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
 export { spanText } from '@/lib/format';

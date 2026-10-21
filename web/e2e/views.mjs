@@ -5532,7 +5532,9 @@ async function stickyStrip(theme, chipped = false) {
 /**
  * The Settings page's Unit row at 1280 and 400 px, the one way to the legend on a phone, where the top bar gives its
  * button up: the legend's button sits on the select's line to its right, its popover opens inside the viewport's width
- * with its two top corners and its middle uncovered and its lines in the legend's 12 px type, and Escape closes it.
+ * with its top at or below the button's bottom, its two top corners and its middle uncovered and its lines in the
+ * legend's 12 px type, and Escape closes it. At 400 px each of the Appearance card's Theme, Time format and Unit rows
+ * puts its control under its label.
  */
 async function settingsUnitLegend(theme) {
   const LEGEND = 'What the units mean';
@@ -5541,6 +5543,24 @@ async function settingsUnitLegend(theme) {
       const say = (what) => failures.push(`${theme} /settings: at ${width} px ${what}`);
       await page.setViewportSize({ height: 800, width });
       await settle();
+      if (width === 400) {
+        // Each row answers alone, since three rows that all keep their control beside the label would compare alike.
+        const rows = await page.evaluate(() => {
+          const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Appearance');
+          const round = (px) => Math.round(px * 10) / 10;
+          return [...(card?.querySelectorAll('.setting-row') ?? [])].map((row) => {
+            const [label, control] = [...row.children].map((el) => el.getBoundingClientRect());
+            return { controlTop: control ? round(control.top) : null, labelBottom: label ? round(label.bottom) : null, name: row.querySelector('b')?.textContent?.trim() ?? '' };
+          });
+        });
+        measurements.push(`${theme} /settings appearance rows at ${width} px ${JSON.stringify(rows)}`);
+        for (const name of ['Theme', 'Time format', 'Unit']) {
+          const row = rows.find((r) => r.name === name);
+          if (row === undefined || row.controlTop === null || row.labelBottom === null) say(`the Appearance card draws no ${name} row with a label and a control`);
+          // A pixel of slack, as `groupGeometry` allows a dialog field's label over its control.
+          else if (row.labelBottom > row.controlTop + 1) say(`the ${name} row's control (top ${row.controlTop}) is not under its label (bottom ${row.labelBottom})`);
+        }
+      }
       const box = (selector) =>
         page.evaluate((sel) => {
           const b = document.querySelector(sel)?.getBoundingClientRect();
@@ -5561,6 +5581,7 @@ async function settingsUnitLegend(theme) {
         const el = document.querySelector(`.settings [role="dialog"][aria-label="${legend}"]`);
         if (!el) return null;
         const b = el.getBoundingClientRect();
+        const opener = document.querySelector(`.settings button[aria-label="${legend}"]`)?.getBoundingClientRect();
         // A point another element paints over answers that element.
         const points = [
           [b.left + 4, b.top + 4],
@@ -5569,6 +5590,7 @@ async function settingsUnitLegend(theme) {
         ];
         return {
           box: { bottom: Math.round(b.bottom), left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top) },
+          buttonBottom: opener ? Math.round(opener.bottom) : null,
           covered: points.filter(([x, y]) => !el.contains(document.elementFromPoint(x, y))).map(([x, y]) => [Math.round(x), Math.round(y)]),
           sizes: [...new Set([...el.querySelectorAll('p')].map((line) => getComputedStyle(line).fontSize))],
           width: document.documentElement.clientWidth,
@@ -5578,6 +5600,7 @@ async function settingsUnitLegend(theme) {
       if (popover === null) say('the legend button opens no popover');
       else {
         if (popover.box.left < 0 || popover.box.right > popover.width || popover.box.top < 0) say(`the legend popover ${JSON.stringify(popover.box)} leaves the ${popover.width} px viewport`);
+        if (popover.buttonBottom !== null && popover.box.top + 1 < popover.buttonBottom) say(`the legend popover's top ${popover.box.top} stands above its button's bottom ${popover.buttonBottom}`);
         if (popover.covered.length > 0) say(`the legend popover is covered at ${JSON.stringify(popover.covered)}`);
         if (JSON.stringify(popover.sizes) !== '["12px"]') say(`the legend's lines draw at ${JSON.stringify(popover.sizes)}, not the legend's 12px`);
       }

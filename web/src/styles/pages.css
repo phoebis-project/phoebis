@@ -3356,6 +3356,13 @@
   font-size: 12.5px;
 }
 
+/* At a phone's width a label beside its control would read in a column too narrow, so the control wraps under it. */
+@media (max-width: 599px) {
+  .setting-row {
+    flex-wrap: wrap;
+  }
+}
+
 /* About's retention label is its longest, so in a narrow card a max-content column would take the values' room. The
    column wraps its labels at half the list instead. */
 .kv.settings__about {
