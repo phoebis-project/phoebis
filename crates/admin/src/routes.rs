@@ -1950,6 +1950,8 @@ pub(crate) struct AccountContext {
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The newest polled extra-usage row per account, the one that carries the amounts a later head row lacks.
     pub extra_polled: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    /// The newest extra-usage row per account that carries a share, which a later head naming the reset alone lacks.
+    pub extra_share: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The router's retry instant per `funding_required` account.
     pub funding_retries: BTreeMap<String, i64>,
     /// The router's windows per account, predicted at its clock, as the usage `GET` reads them.
@@ -2050,6 +2052,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
                 phoebis_ledger::latest_quota(c, now)?,
                 phoebis_ledger::latest_extra_usage(c, now)?,
                 phoebis_ledger::latest_extra_usage_polled(c, now)?,
+                phoebis_ledger::latest_extra_usage_share(c, now)?,
                 phoebis_ledger::request_totals(
                     c,
                     "account_id",
@@ -2071,7 +2074,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             ))
         })
         .await;
-    let (quota, extra, extra_polled, day, week, lifetime) = match ledger {
+    let (quota, extra, extra_polled, extra_share, day, week, lifetime) = match ledger {
         Ok(read) => read,
         Err(error) => {
             tracing::warn!(%error, "the account view could not read the ledger, so totals and windows are empty");
@@ -2088,6 +2091,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         day,
         extra,
         extra_polled,
+        extra_share,
         funding_retries: state
             .router
             .funding_retries()
@@ -2347,8 +2351,8 @@ pub(crate) struct ExtraUsage {
 pub(crate) struct Spend {
     /// Null while no polled row of the last day carries the amounts.
     pub amounts: Option<SpendAmounts>,
-    /// The share as a fraction from the newest row of any source, the row's stored `utilization`, null where no
-    /// row of the day carries one and once the reset that row's reading was taken under has passed, the amounts
+    /// The share as a fraction, the stored `utilization` of the newest row of any source that carries one, null where
+    /// no row of the day carries one and once the reset that row's reading was taken under has passed, the amounts
     /// drawn with no meter then.
     pub utilization: Option<f64>,
     /// Epoch milliseconds: the window's reset as the router reads it, the estimate where the router answers none.
@@ -2709,10 +2713,11 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         windows,
         slow_down: slow_down_view(ctx, &row.id),
         fast_lane,
-        // The amounts come from the newest polled row, since a head row carries none, and the rest from the newest
-        // row of any source.
+        // The amounts come from the newest polled row, since a head row carries none, the share from the newest row
+        // that carries one, and the rest from the newest row of any source.
         extra_usage: ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| {
             let polled = ctx.extra_polled.iter().find(|p| p.account_id == row.id);
+            let shared = ctx.extra_share.iter().find(|p| p.account_id == row.id);
             ExtraUsage {
                 currency: polled.and_then(|p| p.currency.clone()),
                 disabled_reason: e.disabled_reason.clone(),
@@ -2720,7 +2725,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 is_enabled: e.is_enabled,
                 monthly_limit: polled.and_then(|p| p.monthly_limit),
                 used_credits: polled.and_then(|p| p.used_credits),
-                utilization: e.utilization,
+                utilization: shared.and_then(|p| p.utilization),
                 observed_at: e.bucket * 1_000,
             }
         }),
@@ -2758,13 +2763,14 @@ pub(crate) fn account_window_id(key: &str) -> &str {
     }
 }
 
-/// A usage-based seat's spend window: the amounts from the newest polled row, the share and its instant from the
-/// newest row of any source, and the reset from the router's window. The share lapses where `now` reaches the reset
-/// the row's reading was taken under, the instant the router's hold lifts at, so the meter and the hold agree whether
-/// or not the router holds a reading of the seat.
+/// A usage-based seat's spend window: the amounts from the newest polled row, the share from the newest row that
+/// carries one, the instant from the newest row of any source, and the reset from the router's window. The share lapses
+/// where `now` reaches the reset its row's reading was taken under, the instant the router's hold lifts at, so the
+/// meter and the hold agree whether or not the router holds a reading of the seat.
 fn spend_view(ctx: &AccountContext, account_id: &str, now: i64) -> Spend {
     let polled = ctx.extra_polled.iter().find(|e| e.account_id == account_id);
     let newest = ctx.extra.iter().find(|e| e.account_id == account_id);
+    let shared = ctx.extra_share.iter().find(|e| e.account_id == account_id);
     let amounts = polled.and_then(|p| {
         let polled_at = p.bucket * 1_000;
         match p.spend_used_minor {
@@ -2786,7 +2792,7 @@ fn spend_view(ctx: &AccountContext, account_id: &str, now: i64) -> Spend {
             }),
         }
     });
-    let utilization = newest.and_then(|e| {
+    let utilization = shared.and_then(|e| {
         let reset = phoebis_routing::spend_reading_reset(e.bucket * 1_000, e.overage_reset);
         e.utilization.filter(|_| now < reset)
     });

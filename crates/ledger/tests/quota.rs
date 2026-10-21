@@ -2026,3 +2026,37 @@ async fn the_polled_read_answers_the_poll_row_of_a_bucket_a_head_row_shares_in_e
         );
     }
 }
+
+#[tokio::test]
+async fn the_share_read_answers_the_newest_row_that_carries_a_share_under_a_newer_head_naming_the_reset_alone(
+) {
+    let now = NOW + 900_000;
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
+    let head = extra_row(phoebis_ledger::bucket_of(NOW + 300_000), "head", 0.4);
+    let reset_only = phoebis_ledger::ExtraUsageSampleRecord {
+        utilization: None,
+        ..extra_row(phoebis_ledger::bucket_of(NOW + 600_000), "head", 0.0)
+    };
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    for row in [&poll, &head, &reset_only] {
+        db.insert_samples(&[], Some(row)).unwrap();
+    }
+    let (latest, share) = db
+        .read_blocking(move |c| {
+            Ok((
+                phoebis_ledger::latest_extra_usage(c, now)?,
+                phoebis_ledger::latest_extra_usage_share(c, now)?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        latest,
+        [reset_only],
+        "the reset-only head is the newest row"
+    );
+    assert_eq!(
+        share,
+        [head],
+        "the newest row that carries a share is the head before it, not the older poll"
+    );
+}

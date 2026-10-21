@@ -1,4 +1,5 @@
-//! The monthly spend-cap 429: an account-wide cooldown, reason `spend_cap`, until the first of next month.
+//! The monthly spend caps: the spend-cap 429, an account-wide cooldown with reason `spend_cap` until the first of next
+//! month, and a usage-based seat at its cap, which the router holds out and answers under the claim `spend`.
 mod common;
 
 use std::sync::atomic::Ordering;
@@ -6,6 +7,9 @@ use std::sync::atomic::Ordering;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use tower::ServiceExt;
+
+/// The usage-based seat's OAuth secret.
+const A: &str = "sk-ant-oat01-AAAA";
 
 fn spend_cap_429() -> Respond {
     Respond::Json {
@@ -69,5 +73,56 @@ async fn a_spend_cap_answer_excludes_the_account_and_the_exhaustion_claims_overa
         ),
         ("a", "account", phoebis_relay::SPEND_CAP_REASON, "overage")
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_pool_its_seats_spend_cap_exhausts_claims_the_spend_window_until_its_reset() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let now = h.clock.load(Ordering::SeqCst);
+    let reset = now + 3_600_000;
+    h.router
+        .report(phoebis_routing::Report::SpendHead {
+            account_id: "a".into(),
+            utilization: Some(1.0),
+            reset: Some(reset),
+            observed_at: now,
+            incarnation: 1,
+        })
+        .await;
+    h.router.spend_windows().await.unwrap();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    let header = |name: &str| {
+        resp.headers()
+            .get(name)
+            .map(|v| v.to_str().unwrap().to_string())
+    };
+    assert_eq!(
+        (
+            header("anthropic-ratelimit-unified-representative-claim"),
+            header("anthropic-ratelimit-unified-reset")
+        ),
+        (Some("spend".to_string()), Some((reset / 1_000).to_string())),
+        "the seat at its cap names its own window and the reset its share was read under"
+    );
+    assert!(up.requests().is_empty(), "the seat is asked nothing");
     up.shutdown().await;
 }

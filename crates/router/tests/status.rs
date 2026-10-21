@@ -555,7 +555,7 @@ fn spend_seat(id: &str, spend: serde_json::Value) -> serde_json::Value {
 fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_marked_while_estimated()
 {
     use serde_json::json;
-    let amounts = |used: i64, limit: Option<i64>| json!({"currency": "USD", "exponent": 2, "used_minor": used, "limit_minor": limit, "polled_at": OCT_31_NOON});
+    let amounts = |currency: &str, used: i64, limit: Option<i64>| json!({"currency": currency, "exponent": 2, "used_minor": used, "limit_minor": limit, "polled_at": OCT_31_NOON});
     let spend = |amounts: serde_json::Value, utilization: f64, resets_at: i64, source: &str| {
         json!({
             "amounts": amounts, "utilization": utilization, "resets_at": resets_at, "reset_source": source,
@@ -565,12 +565,17 @@ fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_mark
     let seats = [
         (
             "seat-e",
-            spend(amounts(102_500, Some(250_000)), 0.41, NOV_1, "estimated"),
+            spend(
+                amounts("USD", 102_500, Some(250_000)),
+                0.41,
+                NOV_1,
+                "estimated",
+            ),
         ),
         (
             "seat-h",
             spend(
-                amounts(102_500, Some(250_000)),
+                amounts("USD", 102_500, Some(250_000)),
                 0.41,
                 OCT_31_THREE,
                 "head",
@@ -582,7 +587,16 @@ fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_mark
         ),
         (
             "seat-o",
-            spend(amounts(5_000, None), 0.01, NOV_1, "estimated"),
+            spend(amounts("USD", 5_000, None), 0.01, NOV_1, "estimated"),
+        ),
+        (
+            "seat-x",
+            spend(
+                amounts("EUR", 102_500, Some(250_000)),
+                0.41,
+                NOV_1,
+                "estimated",
+            ),
         ),
     ];
     let mut accounts: Vec<serde_json::Value> = seats
@@ -608,95 +622,135 @@ fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_mark
         sessions: Ok(json!({"sessions": []})),
         system: Ok(json!({"ready": true})),
     };
+    // The day before the estimate's: a head's reset prints as a time of the clock's day, the estimate by its date.
+    let screen = render_at(&reads, OCT_31_NOON);
+    for (id, cells, why) in [
+        (
+            "seat-e",
+            ["spend 41%", "$1025 of $2500", "resets 11-01 est"],
+            "the amounts in whole dollars and the estimate by its date",
+        ),
+        (
+            "seat-h",
+            ["spend 41%", "$1025 of $2500", "resets 15:00"],
+            "a head's reset carries no mark",
+        ),
+        (
+            "seat-u",
+            ["spend 30%", "-", "resets 11-01 est"],
+            "a spend with no amounts prints a dash in their cell",
+        ),
+        (
+            "seat-o",
+            ["spend 1%", "$50", "resets 11-01 est"],
+            "a spend with no limit prints the spend alone",
+        ),
+        (
+            "seat-x",
+            ["spend 41%", "EUR 1025 of EUR 2500", "resets 11-01 est"],
+            "another currency prints its code",
+        ),
+        (
+            "plan",
+            ["5h 40%", "7d -", "resets 15:00"],
+            "a plan account's row prints as before",
+        ),
+    ] {
+        let expected: Vec<String> = [id, "ready", "eligible"]
+            .into_iter()
+            .chain(cells)
+            .map(String::from)
+            .collect();
+        assert_eq!(member_row(&screen, id), expected, "{why}: {screen}");
+    }
+}
+
+/// `reads` rendered at `at_ms` in UTC.
+fn render_at(reads: &status::Reads, at_ms: i64) -> String {
     let listeners = status::Listeners {
         admin: "http://127.0.0.1:8081".to_owned(),
         certificates: Vec::new(),
         metrics: None,
         proxy: None,
     };
-    // Five hours west of UTC the estimate's midnight on the first falls on the clock's own day, so every reset
-    // prints as a time of day.
-    let screen = status::render(
-        &reads,
+    status::render(
+        reads,
         &listeners,
         VERSION,
         "build",
-        jiff::Timestamp::from_millisecond(OCT_31_NOON).unwrap(),
-        &jiff::tz::TimeZone::fixed(jiff::tz::offset(-5)),
+        jiff::Timestamp::from_millisecond(at_ms).unwrap(),
+        &jiff::tz::TimeZone::UTC,
         false,
+    )
+}
+
+/// The cells of the pools block's line for the member labelled `label`, which the screen printed whole: the screen
+/// cuts a line past its width with an ellipsis, so a whole line has none.
+fn member_row(screen: &str, label: &str) -> Vec<String> {
+    let line = screen
+        .lines()
+        .find(|line| line.trim_start().starts_with(&format!("{label} ")))
+        .unwrap_or_else(|| panic!("no {label} row: {screen}"));
+    assert!(
+        !line.contains('\u{2026}') && line.chars().count() <= status::WIDTH,
+        "{label}'s row prints whole inside the width: {line}"
     );
-    let row = |id: &str| -> Vec<String> {
-        let line = screen
-            .lines()
-            .find(|line| line.trim_start().starts_with(&format!("{id} ")))
-            .unwrap_or_else(|| panic!("no {id} row: {screen}"));
-        line.split("  ")
-            .map(str::trim)
-            .filter(|cell| !cell.is_empty())
-            .map(String::from)
-            .collect()
+    line.split("  ")
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// One captured admin answer of the fixture set, unwrapped from its `{"route", "body"}` envelope.
+fn fixture(name: &str) -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../web/test/fixtures")
+        .join(format!("{name}.json"));
+    let wrapped: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    wrapped["body"].clone()
+}
+
+/// The fixture set's clock, 2026-10-11T12:16:40Z, the day its captured answers read.
+const FIXTURE_NOW: i64 = 1_791_721_000_000;
+
+#[test]
+fn the_fixtures_seat_row_prints_whole_inside_eighty_columns_on_its_own_day_and_the_day_before_the_estimate(
+) {
+    let reads = status::Reads {
+        accounts: Ok(fixture("accounts")),
+        attention: Ok(fixture("attention")),
+        health: None,
+        pools: Ok(fixture("pools")),
+        sessions: Ok(fixture("sessions")),
+        system: Ok(fixture("system")),
     };
+    let seat = fixture("accounts")["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|account| account["usage_based"] == true)
+        .cloned()
+        .expect("the fixture set seeds a usage-based seat");
     assert_eq!(
-        row("seat-e"),
-        [
-            "seat-e",
-            "ready",
-            "eligible",
-            "spend 41%",
-            "$1025.00 of $2500.00",
-            "resets 19:00 est"
-        ],
-        "{screen}"
+        seat["spend"]["reset_source"], "estimated",
+        "the seed's seat reads the estimate"
     );
-    assert_eq!(
-        row("seat-h"),
-        [
-            "seat-h",
-            "ready",
-            "eligible",
-            "spend 41%",
-            "$1025.00 of $2500.00",
-            "resets 10:00"
-        ],
-        "a head's reset carries no mark: {screen}"
-    );
-    assert_eq!(
-        row("seat-u"),
-        [
-            "seat-u",
-            "ready",
-            "eligible",
-            "spend 30%",
-            "-",
-            "resets 19:00 est"
-        ],
-        "a spend with no amounts prints a dash in their cell: {screen}"
-    );
-    assert_eq!(
-        row("seat-o"),
-        [
-            "seat-o",
-            "ready",
-            "eligible",
-            "spend 1%",
-            "$50.00",
-            "resets 19:00 est"
-        ],
-        "a spend with no limit prints the spend alone: {screen}"
-    );
-    assert_eq!(
-        row("plan"),
-        [
-            "plan",
-            "ready",
-            "eligible",
-            "5h 40%",
-            "7d -",
-            "resets 10:00"
-        ],
-        "a plan account's row prints as before: {screen}"
-    );
-    for line in screen.lines() {
-        assert!(line.chars().count() <= status::WIDTH, "{line}");
+    let label = seat["label"].as_str().unwrap();
+    for at in [FIXTURE_NOW, OCT_31_NOON] {
+        let screen = render_at(&reads, at);
+        assert_eq!(
+            member_row(&screen, label),
+            [
+                label,
+                "ready",
+                "eligible",
+                "spend 40%",
+                "$1025 of $2500",
+                "resets 11-01 est"
+            ],
+            "{screen}"
+        );
     }
 }

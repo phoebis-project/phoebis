@@ -1497,6 +1497,21 @@ async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_
         }),
         "after a restart the amounts and the newest row's share stand, the reset the estimate: {restarted}"
     );
+    assert_eq!(
+        again
+            .router
+            .spend_windows()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(id, window)| (id, window.reset_source))
+            .collect::<Vec<_>>(),
+        [(
+            "seat".to_string(),
+            phoebis_routing::SpendResetSource::Estimated
+        )],
+        "the estimate is the restarted router's own window, not the view's fallback"
+    );
 
     common::step(
         &parts,
@@ -1607,6 +1622,108 @@ async fn a_usage_based_accounts_spend_falls_back_to_the_polls_amounts_reads_no_l
             &serde_json::Value::Null
         ),
         "nor does the extra usage: {unpolled}"
+    );
+}
+
+/// A head row that names the overage reset alone, its share unread.
+fn reset_only_head_row(
+    account: &str,
+    at: i64,
+    reset: i64,
+) -> phoebis_ledger::ExtraUsageSampleRecord {
+    phoebis_ledger::ExtraUsageSampleRecord {
+        utilization: None,
+        ..head_row(account, at, None, 0.0, reset)
+    }
+}
+
+#[tokio::test]
+async fn a_head_row_that_names_the_reset_alone_hides_no_earlier_share_from_the_spend_window_or_the_extra_usage(
+) {
+    use common::{login, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for seat in ["capped", "headed"] {
+        insert_oauth(&parts, seat, true);
+    }
+    parts.router.reload().await.unwrap();
+    let reset = NOW + 3_600_000;
+    for row in [
+        polled_row("capped", NOW - 600_000, (300_000, 300_000), 1.0, None),
+        reset_only_head_row("capped", NOW - 60_000, reset),
+        polled_row("headed", NOW - 1_200_000, (300_000, 150_000), 0.5, None),
+        head_row("headed", NOW - 600_000, None, 0.9, reset),
+        reset_only_head_row("headed", NOW - 60_000, reset),
+    ] {
+        parts.db.insert_samples(&[], Some(&row)).unwrap();
+    }
+    for (seat, share, which) in [
+        ("capped", 1.0, "the poll's share at one"),
+        ("headed", 0.9, "the head's share, newer than the poll's"),
+    ] {
+        let account = account_of(&parts.app, &cookie, seat).await;
+        assert_eq!(
+            (
+                &account["spend"]["utilization"],
+                &account["extra_usage"]["utilization"],
+                &account["spend"]["observed_at"]
+            ),
+            (
+                &serde_json::json!(share),
+                &serde_json::json!(share),
+                &serde_json::json!(phoebis_ledger::bucket_of(NOW - 60_000) * 1_000)
+            ),
+            "{seat}: {which} stands under the newer reset-only head, which still dates the window: {account}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_usage_based_accounts_spend_reads_the_estimate_where_the_router_answers_no_window() {
+    use common::{login, month_end, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    insert_oauth(&parts, "seat", true);
+    parts.router.reload().await.unwrap();
+    let reset = NOW + 3_600_000;
+    parts
+        .db
+        .insert_samples(&[], Some(&head_row("seat", NOW - 60_000, None, 0.4, reset)))
+        .unwrap();
+    parts
+        .router
+        .report(phoebis_routing::Report::SpendHead {
+            account_id: "seat".into(),
+            utilization: Some(0.4),
+            reset: Some(reset),
+            observed_at: NOW - 60_000,
+            incarnation: 1,
+        })
+        .await;
+    parts.router.spend_windows().await.unwrap();
+    let reset_of = |account: &serde_json::Value| {
+        (
+            account["spend"]["resets_at"].clone(),
+            account["spend"]["reset_source"].clone(),
+        )
+    };
+    let held = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        reset_of(&held),
+        (serde_json::json!(reset), serde_json::json!("head")),
+        "the running router answers the head's reset: {held}"
+    );
+    parts.router.shutdown().await.unwrap();
+    let stopped = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        reset_of(&stopped),
+        (serde_json::json!(month_end()), serde_json::json!("estimated")),
+        "a stopped router answers no window, so the view reads the estimate over its own clock: {stopped}"
+    );
+    assert_eq!(
+        stopped["spend"]["utilization"],
+        serde_json::json!(0.4),
+        "the share is the ledger row's whatever the router answers"
     );
 }
 

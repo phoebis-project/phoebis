@@ -977,7 +977,9 @@ are the refusal table's ([Refusal codes](client.md#refusal-codes)).
 With every account in the pool rate limited, the answer is `429` `accounts_exhausted` with `retry-after`,
 `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` and
 `anthropic-ratelimit-unified-representative-claim` naming the window. A cooldown that came from a bare `Retry-After` is
-rendered as `five_hour`, because the client treats an unknown claim as no claim. With every account at its in-flight cap
+rendered as `five_hour`, because the client treats an unknown claim as no claim. A usage-based seat held out by its
+spend cap names the window `spend`, which the client arms no continue on, as suits a wait that can run to the month's
+end. With every account at its in-flight cap
 past the hold, the answer is `429` `accounts_at_cap` with a `Retry-After` of at most 19 seconds ([in-flight
 caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a pool whose
 accounts are all paused, the answer is `503` `accounts_unavailable` with no `retry-after`. A request whose key moved to

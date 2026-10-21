@@ -6013,6 +6013,43 @@ async fn the_captured_seats_poll_moves_the_spend_share_to_its_extra_usage_utiliz
 }
 
 #[tokio::test]
+async fn a_poll_at_one_after_a_lapsed_share_reads_the_credits_edge_from_no_block() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(credits_at(true, None, Some(100.0), OCT_10))
+        .await;
+    assert!(
+        matches!(
+            next_event(&mut events).await,
+            RouterEvent::FastCreditsChanged { .. }
+        ),
+        "the first poll at one blocks the fast lane"
+    );
+    // Past the first the October share has lapsed, so the selector reads no block before the next poll lands.
+    now.store(NOV_1 + HOUR, Ordering::SeqCst);
+    handle
+        .report(credits_at(true, None, Some(100.0), NOV_1 + HOUR))
+        .await;
+    match next_event(&mut events).await {
+        RouterEvent::FastCreditsChanged {
+            blocked_before,
+            blocked_after,
+            ..
+        } => assert_eq!(
+            (blocked_before, blocked_after.as_deref()),
+            (None, Some("org_spend_cap_reached")),
+            "the edge runs from the lapsed share the selector read to the new cap"
+        ),
+        other => panic!("one credits change, not {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn a_usage_based_seat_starts_out_of_overage_over_a_stored_in_use_row_and_records_none_from_a_head(
 ) {
     let store = seeded_oauth(&["a"]);

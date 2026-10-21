@@ -450,8 +450,8 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
 /// `5h NN%` and `7d NN%` (`-` with no sample), under `fable_column` `fable NN%` when the account has a Fable week and
 /// an empty cell when it has none, then `until HH:MM <reason>` under a cooldown (`until HH:MM <scope> <reason>` for a
 /// scope narrower than the account) or `resets HH:MM` for the nearest reset to come. A usage-based seat's row, whose
-/// `spend` is set, prints `spend NN%` and its amounts in the two windows' places, no Fable cell, and its spend window's
-/// reset, marked ` est` while it is the estimate.
+/// `spend` is set, prints `spend NN%` and its amounts in whole major units in the two windows' places, no Fable cell,
+/// and its spend window's reset, `resets HH:MM` for a head's and `resets MM-DD est` for the estimate.
 fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<String> {
     let windows = windows_of(account);
     let share = |utilization: Option<f64>| {
@@ -501,15 +501,13 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
             text(&cooldown["reason"])
         ));
     } else if spend.is_object() {
-        let estimated = if spend["reset_source"] == "estimated" {
-            " est"
+        // The estimate is always 00:00 UTC on the first, so its UTC date names it whole in the room an 80-column row
+        // leaves the cell. A head's reset is any instant and reads as the screen's clock prints one.
+        cells.push(if spend["reset_source"] == "estimated" {
+            format!("resets {} est", utc_date(&spend["resets_at"]))
         } else {
-            ""
-        };
-        cells.push(format!(
-            "resets {}{estimated}",
-            clock.time(&spend["resets_at"])
-        ));
+            format!("resets {}", clock.time(&spend["resets_at"]))
+        });
     } else if let Some(reset) = windows
         .values()
         .filter_map(|w| w["resets_at"].as_i64())
@@ -521,18 +519,31 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
     cells
 }
 
-/// A spend window's `amounts` in major units with two decimals: `$used of $limit`, `$used` alone where the body set no
-/// limit, `-` with no amounts.
+/// A spend window's `amounts` in whole major units: `$used of $limit`, `$used` alone where the body set no limit, `-`
+/// with no amounts, with `$` for `USD` and the currency's code and a space for any other (`EUR 1025 of EUR 2500`).
 fn spend_amounts(amounts: &Value) -> String {
     let Some(used) = amounts["used_minor"].as_i64() else {
         return "-".to_owned();
     };
     let scale = 10f64.powi(amounts["exponent"].as_i64().unwrap_or(2) as i32);
-    let major = |minor: i64| format!("${:.2}", minor as f64 / scale);
+    let currency = match text(&amounts["currency"]) {
+        "USD" => "$".to_owned(),
+        code => format!("{code} "),
+    };
+    let major = |minor: i64| format!("{currency}{}", (minor as f64 / scale).round() as i64);
     match amounts["limit_minor"].as_i64() {
         Some(limit) => format!("{} of {}", major(used), major(limit)),
         None => major(used),
     }
+}
+
+/// An epoch-millisecond instant's UTC date as `MM-DD`, `-` for a value that is none.
+fn utc_date(at: &Value) -> String {
+    at.as_i64()
+        .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+        .map_or("-".to_owned(), |at| {
+            at.to_zoned(TimeZone::UTC).strftime("%m-%d").to_string()
+        })
 }
 
 /// The account's windows under the three ids the screen prints, mapped as the console maps the wire's spellings,
