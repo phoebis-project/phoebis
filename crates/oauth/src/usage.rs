@@ -132,7 +132,7 @@ fn minor_units<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D:
 
 /// The body's `spend` object, the seat's spend against its cap in minor units, as the account view shows it. A
 /// `spend` object whose `used` lacks `amount_minor` or `currency`, or whose `exponent` is absent or past `u8`, reads
-/// as no `spend` object, so the extra-usage amounts build the reading and nothing fails.
+/// as no `spend` object: the fallback to the extra-usage amounts applies and nothing fails.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpendReading {
     pub used_minor: i64,
@@ -140,7 +140,7 @@ pub struct SpendReading {
     pub limit_minor: Option<i64>,
     pub currency: String,
     pub exponent: u8,
-    /// The body's `percent`, on the percent scale.
+    /// The body's `percent`, or `extra_usage.utilization` for a reading the amounts built, on the percent scale.
     pub percent: Option<f64>,
     /// True where the body's `spend` object gave the reading, false where the extra-usage amounts built it: the
     /// poll's row stores the `spend` columns from the object alone.

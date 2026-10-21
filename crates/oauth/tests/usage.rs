@@ -110,6 +110,31 @@ fn a_body_without_a_spend_object_builds_the_reading_from_the_extra_usage_amounts
 }
 
 #[test]
+fn a_spend_object_without_a_currency_or_a_whole_exponent_falls_back_to_the_extra_usage_amounts() {
+    let extra = r#""extra_usage":{"is_enabled":true,"monthly_limit":50000,"used_credits":12500,"utilization":25.0,"currency":"EUR","decimal_places":2}"#;
+    let fallback = Some(SpendReading {
+        used_minor: 12_500,
+        limit_minor: Some(50_000),
+        currency: "EUR".into(),
+        exponent: 2,
+        percent: Some(25.0),
+        from_spend: false,
+    });
+    for used in [
+        r#"{"amount_minor":4200,"exponent":2}"#,
+        r#"{"amount_minor":4200,"currency":"USD"}"#,
+        r#"{"amount_minor":4200,"currency":"USD","exponent":300}"#,
+    ] {
+        let body = format!(r#"{{"spend":{{"used":{used},"percent":8}},{extra}}}"#);
+        assert_eq!(
+            parse_usage(body.as_bytes()).unwrap().3,
+            fallback,
+            "a spend object whose used is {used} reads as no spend object"
+        );
+    }
+}
+
+#[test]
 fn extra_usage_amounts_with_a_fraction_part_round_to_the_nearest_minor_unit() {
     let body = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":2499.4,"used_credits":102500.6,"utilization":41.0,"currency":"USD"}}"#;
     let extra = parse_usage(body)
