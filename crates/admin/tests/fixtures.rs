@@ -762,6 +762,48 @@ async fn every_route_is_captured_and_holds_its_shape() {
             }),
         )
         .unwrap();
+    // The seat's poll with its body's `spend` object, then a head in a later bucket that moves the share and names the
+    // reset, so the account row draws its spend window from both.
+    for extra in [
+        ExtraUsageSampleRecord {
+            account_id: "usage-seat".into(),
+            bucket: phoebis_ledger::bucket_of(now - 600_000),
+            is_enabled: true,
+            in_use: None,
+            monthly_limit: Some(250_000),
+            used_credits: Some(102_500),
+            utilization: Some(0.41),
+            currency: Some("USD".into()),
+            disabled_reason: None,
+            overage_reset: None,
+            source: "poll".into(),
+            spend_limit_minor: Some(250_000),
+            spend_used_minor: Some(102_500),
+            spend_percent: Some(41.0),
+            spend_currency: Some("USD".into()),
+            spend_exponent: Some(2),
+        },
+        ExtraUsageSampleRecord {
+            account_id: "usage-seat".into(),
+            bucket,
+            is_enabled: true,
+            in_use: None,
+            monthly_limit: None,
+            used_credits: None,
+            utilization: Some(0.4),
+            currency: None,
+            disabled_reason: None,
+            overage_reset: Some(common::month_end()),
+            source: "head".into(),
+            spend_limit_minor: None,
+            spend_used_minor: None,
+            spend_percent: None,
+            spend_currency: None,
+            spend_exponent: None,
+        },
+    ] {
+        parts.db.insert_samples(&[], Some(&extra)).unwrap();
+    }
     let hour_ago = now - 3_600_000;
     parts.ledger.record(Record::Request {
         request: RequestRecord {

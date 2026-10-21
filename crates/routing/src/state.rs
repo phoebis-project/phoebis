@@ -126,16 +126,23 @@ pub struct CreditsState {
 }
 
 impl CreditsState {
-    /// The reason fast mode cannot draw credits here: the poll's own reason, `extra_usage_disabled` for a disabled
-    /// state without one, `org_spend_cap_reached` at a utilization of one or more; `None` while credits have room.
+    /// The reason fast mode cannot draw credits here, for a reading as it arrives: `blocked_with_share` over the
+    /// reading's own share.
     pub fn blocked(&self) -> Option<&str> {
+        self.blocked_with_share(self.utilization)
+    }
+
+    /// The reason fast mode cannot draw credits here with `share` standing for the reading's: the poll's own reason,
+    /// `extra_usage_disabled` for a disabled state without one, `org_spend_cap_reached` at a share of one or more, and
+    /// `None` while credits have room.
+    pub fn blocked_with_share(&self, share: Option<f64>) -> Option<&str> {
         if let Some(reason) = self.disabled_reason.as_deref().filter(|r| !r.is_empty()) {
             return Some(reason);
         }
         if !self.enabled {
             return Some("extra_usage_disabled");
         }
-        self.utilization
+        share
             .is_some_and(|u| u >= 1.0)
             .then_some("org_spend_cap_reached")
     }
@@ -158,6 +165,57 @@ pub fn spend_reset_estimate(now: i64) -> i64 {
         })
         .and_then(|first| first.to_zoned(utc).ok())
         .map_or(now, |midnight| midnight.timestamp().as_millisecond())
+}
+
+/// The reset a spend reading was taken under: the reset its head named where that is ahead of the reading's
+/// instant, else the estimate over that instant. The router and the account view both read a share's expiry
+/// through this, so the hold and the meter lapse at one instant.
+pub fn spend_reading_reset(observed_at: i64, head_reset: Option<i64>) -> i64 {
+    head_reset
+        .filter(|reset| *reset > observed_at)
+        .unwrap_or_else(|| spend_reset_estimate(observed_at))
+}
+
+/// Where a spend window's reset came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpendResetSource {
+    Estimated,
+    Head,
+}
+
+impl SpendResetSource {
+    /// The word the serialization writes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpendResetSource::Estimated => "estimated",
+            SpendResetSource::Head => "head",
+        }
+    }
+}
+
+/// A usage-based account's spend window as the selector and the views read it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpendWindow {
+    /// The share, the newest of the poll's and a head's: `None` until one arrived, and once the reset it was read
+    /// under has passed with no newer reading, as a spent plan window's reading lapses at its reset.
+    pub utilization: Option<f64>,
+    /// `poll` or `head` for a reading of this run, `None` for the persisted share a restart reads, whose row keeps
+    /// no source.
+    pub share_source: Option<&'static str>,
+    pub reset: i64,
+    pub reset_source: SpendResetSource,
+    /// The newest reading's instant, `None` until one arrived.
+    pub observed_at: Option<i64>,
+}
+
+/// The reading that set a usage-based account's share in this run, kept beside the credits state it set.
+#[derive(Clone, Copy, Debug)]
+struct SpendShare {
+    source: &'static str,
+    /// `spend_reading_reset` of the reading, where the share lapses.
+    reset: i64,
+    observed_at: i64,
 }
 
 pub const FIVE_HOUR: &str = "five_hour";
@@ -1242,6 +1300,9 @@ pub struct RoutingState {
     /// Each usage-based account's newest head reset with the head's observation, by account id. Memory only: the
     /// persisted credits row keeps the share, and a restart reads the estimate until the next head names a reset.
     spend_heads: HashMap<String, (i64, i64)>,
+    /// The source and the reset of each usage-based account's share as a poll or a head of this run set it, by
+    /// account id. Memory only, with no column: the share a restart loads takes the estimate over its own instant.
+    spend_shares: HashMap<String, SpendShare>,
 }
 
 impl RoutingState {
@@ -1343,6 +1404,7 @@ impl RoutingState {
             slow_down_edges: Vec::new(),
             slow_downs: HashMap::new(),
             spend_heads: HashMap::new(),
+            spend_shares: HashMap::new(),
         }
     }
 
@@ -1731,7 +1793,111 @@ impl RoutingState {
             },
         };
         self.credits.insert(account_id.to_string(), state);
+        self.spend_shares.insert(
+            account_id.to_string(),
+            SpendShare {
+                source: "head",
+                reset: spend_reading_reset(observed_at, reset),
+                observed_at,
+            },
+        );
         true
+    }
+
+    /// Marks the share a poll just set on a usage-based account: a poll names no reset, so the share lapses at the
+    /// estimate over the poll's instant.
+    pub(crate) fn record_poll_share(&mut self, account_id: &str, observed_at: i64) {
+        self.spend_shares.insert(
+            account_id.to_string(),
+            SpendShare {
+                source: "poll",
+                reset: spend_reading_reset(observed_at, None),
+                observed_at,
+            },
+        );
+    }
+
+    /// The share `state` carries at `now`, with the source of the reading that set it in this run. A reading of
+    /// this run lapses at the reset kept beside it, and the persisted share a restart loads at the estimate over its
+    /// own instant, since the head's reset lived in memory alone.
+    fn live_share(
+        &self,
+        account_id: &str,
+        state: &CreditsState,
+        now: i64,
+    ) -> (Option<f64>, Option<&'static str>) {
+        let share = self
+            .spend_shares
+            .get(account_id)
+            .filter(|share| share.observed_at == state.observed_at);
+        let reset = share.map_or_else(
+            || spend_reading_reset(state.observed_at, None),
+            |share| share.reset,
+        );
+        (
+            state.utilization.filter(|_| now < reset),
+            share.map(|share| share.source),
+        )
+    }
+
+    /// The spend window of a usage-based account at `now`: the head's reset while it is ahead of `now`, else
+    /// `spend_reset_estimate(now)` marked `Estimated`. The share reads `None` once `now` reaches the reset it was
+    /// read under (`spend_reading_reset` of its reading). `None` for an account the class does not hold.
+    pub fn spend_window(
+        &self,
+        snapshot: &RegistrySnapshot,
+        account_id: &str,
+        now: i64,
+    ) -> Option<SpendWindow> {
+        if !snapshot.usage_based(account_id) {
+            return None;
+        }
+        let head = self
+            .spend_head(account_id)
+            .filter(|(reset, _)| *reset > now);
+        let (reset, reset_source) = match head {
+            Some((reset, _)) => (reset, SpendResetSource::Head),
+            None => (spend_reset_estimate(now), SpendResetSource::Estimated),
+        };
+        let held = snapshot
+            .account(account_id)
+            .and_then(|account| self.credits_of(account_id, account.incarnation));
+        let (utilization, share_source) = held.map_or((None, None), |state| {
+            self.live_share(account_id, state, now)
+        });
+        // The newest of the share's reading and the head whose reset the window reads.
+        let observed_at = held
+            .map(|state| state.observed_at)
+            .into_iter()
+            .chain(head.map(|(_, at)| at))
+            .max();
+        Some(SpendWindow {
+            utilization,
+            share_source,
+            reset,
+            reset_source,
+            observed_at,
+        })
+    }
+
+    /// The fast lane's credits read of the holder `incarnation`: `CreditsState::blocked_with_share` over the share
+    /// `spend_window` reads for a usage-based account, so the cap blocks nothing past the reset its share was read
+    /// under while the poll's reason and the disabled flag still do, and over the stored share for every other
+    /// account.
+    pub fn credits_blocked(
+        &self,
+        snapshot: &RegistrySnapshot,
+        account_id: &str,
+        incarnation: u64,
+        now: i64,
+    ) -> Option<&str> {
+        let state = self.credits_of(account_id, incarnation)?;
+        let share = if snapshot.usage_based(account_id) {
+            self.live_share(account_id, state, now).0
+        } else {
+            state.utilization
+        };
+        state.blocked_with_share(share)
     }
 
     /// Drops the overage evidence of every account `snapshot` classes usage-based: a row stored before the class
@@ -2144,6 +2310,7 @@ impl RoutingState {
         self.charges.remove(account_id);
         self.credits.remove(account_id);
         self.spend_heads.remove(account_id);
+        self.spend_shares.remove(account_id);
     }
 
     /// Every account's latest reading, by id: one snapshot for a caller that evaluates thresholds over all of them.
@@ -3332,6 +3499,8 @@ impl RoutingState {
             .retain(|account_id, state| !gone(account_id, state.incarnation));
         self.samples.retain(|account_id, _| !absent(account_id));
         self.spend_heads.retain(|account_id, _| !absent(account_id));
+        self.spend_shares
+            .retain(|account_id, _| !absent(account_id));
         // A bucket names a canonical model, so without the cut every model an account was ever asked for would keep
         // its buckets for the account's life.
         let expired_before = now - BUCKET_TTL_MS;

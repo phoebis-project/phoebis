@@ -11,9 +11,9 @@ use phoebis_routing::{
     MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates,
     Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, Report, ResolveError,
     RouterConfig, RouterHandle, RoutingState, SelectAnswer, SelectRequest, SelectResult,
-    SharePricer, UtilizationSample, WindowReading, WindowSource, WriterStatus, COMMANDS,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WRITER_DEPTH,
+    SharePricer, SpendResetSource, SpendWindow, UtilizationSample, WindowReading, WindowSource,
+    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
@@ -5815,6 +5815,201 @@ async fn two_pending_spend_heads_of_one_account_fold_to_the_newer() {
     drop(park);
     let row = credits_row_reads(&store, 0.7).await;
     assert_eq!(row.observed_at, 3_000);
+}
+
+/// 2026-10-10T00:00:00Z, 2026-10-15T00:00:00Z, 2026-11-01T00:00:00Z and 2026-12-01T00:00:00Z in epoch milliseconds.
+const OCT_10: i64 = 1_791_590_400_000;
+const OCT_15: i64 = 1_792_022_400_000;
+const NOV_1: i64 = 1_793_491_200_000;
+const DEC_1: i64 = 1_796_083_200_000;
+
+/// The seat's one spend window as the handle answers it.
+async fn spend_window_of(handle: &RouterHandle) -> SpendWindow {
+    let windows = handle.spend_windows().await.unwrap();
+    assert_eq!(
+        windows
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["a"],
+        "the usage-based seat alone has a spend window: {windows:?}"
+    );
+    windows.into_iter().next().unwrap().1
+}
+
+#[tokio::test]
+async fn a_spend_windows_reset_is_the_heads_while_ahead_then_rolls_to_the_next_months_first_and_the_share_read_under_it_lapses(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: None,
+            share_source: None,
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: None,
+        },
+        "before any reading the window is the estimate with no share"
+    );
+    // A head that names the 15th, apart from the estimate's first of the month, replaces it.
+    handle.report(spend_head(0.6, OCT_15, OCT_10)).await;
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.6),
+            share_source: Some("head"),
+            reset: OCT_15,
+            reset_source: SpendResetSource::Head,
+            observed_at: Some(OCT_10),
+        },
+        "the head's share and its reset while that is ahead"
+    );
+    now.store(OCT_15 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: None,
+            share_source: Some("head"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_10),
+        },
+        "past the head's reset with no newer head the window rolls to the estimate and the share read under it \
+         lapses"
+    );
+    handle
+        .report(credits_at(true, None, Some(30.0), OCT_15 + HOUR))
+        .await;
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.3),
+            share_source: Some("poll"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_15 + HOUR),
+        },
+        "a newer reading keeps a share, read under the estimate"
+    );
+}
+
+/// What `handle` answers a plain request and a fast one at `at`.
+async fn standard_and_fast(handle: &RouterHandle, at: i64) -> (SelectResult, SelectResult) {
+    let fast = SelectRequest {
+        fast: true,
+        lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+        ..request(handle, None, at)
+    };
+    (
+        handle
+            .select(request(handle, None, at))
+            .await
+            .unwrap()
+            .result,
+        handle.select(fast).await.unwrap().result,
+    )
+}
+
+#[tokio::test]
+async fn a_share_at_one_persisted_in_october_lapses_after_a_restart_on_the_first_and_one_persisted_on_the_first_keeps_holding(
+) {
+    for (persisted_at, holds) in [(NOV_1 - HOUR, false), (NOV_1 + 1_000, true)] {
+        let store = seeded_oauth(&["a"]);
+        usage_based_seat(&store, "a");
+        let now = Arc::new(AtomicI64::new(persisted_at));
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        handle
+            .report(credits_at(true, None, Some(100.0), persisted_at))
+            .await;
+        credits_row_reads(&store, 1.0).await;
+        handle.shutdown().await.unwrap();
+        now.store(NOV_1 + 6 * HOUR, Ordering::SeqCst);
+        let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        let window = spend_window_of(&again).await;
+        let (standard, fast) = standard_and_fast(&again, NOV_1 + 6 * HOUR).await;
+        if holds {
+            assert_eq!(
+                (window.utilization, window.share_source),
+                (Some(1.0), None),
+                "the share persisted this month stands, with no source the row could keep"
+            );
+            assert_eq!(
+                (standard, fast),
+                (
+                    SelectResult::Exhausted(Exhaustion::Timed {
+                        deadline: DEC_1,
+                        window: "spend".into()
+                    }),
+                    SelectResult::Exhausted(Exhaustion::FastCredits {
+                        reason: "org_spend_cap_reached".into()
+                    })
+                ),
+                "it holds the seat out until the next month's first, the fast lane's credits read alike"
+            );
+        } else {
+            let answered = |result: &SelectResult| match result {
+                SelectResult::Selected(selection) => format!("selected {}", selection.account.id),
+                other => format!("{other:?}"),
+            };
+            assert_eq!(
+                (
+                    window.utilization,
+                    window.share_source,
+                    window.reset,
+                    answered(&standard),
+                    answered(&fast)
+                ),
+                (None, None, DEC_1, "selected a".into(), "selected a".into()),
+                "October's share lapsed at the first, read under the estimate over its own instant, so it holds \
+                 nothing, the fast lane's credits read included"
+            );
+        }
+    }
+}
+
+/// The usage body a usage-based Enterprise seat answered, as captured, its extra usage on the percent scale.
+const CAPTURED_SEAT_USAGE: &[u8] = include_bytes!("../../oauth/tests/fixtures/usage_based_seat.json");
+
+#[tokio::test]
+async fn the_captured_seats_poll_moves_the_spend_share_to_its_extra_usage_utilization_over_a_hundred(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let (windows, fable_window, extra_usage, spend, raw_keys) =
+        phoebis_oauth::parse_usage(CAPTURED_SEAT_USAGE).unwrap();
+    let snapshot = UsageSnapshot {
+        account_id: "a".into(),
+        identity_generation: 1,
+        fetched_at: OCT_10,
+        windows,
+        fable_window,
+        extra_usage,
+        raw_keys,
+        error: None,
+        spend,
+    };
+    handle
+        .report(Report::Credits {
+            account_id: "a".into(),
+            state: credits_from_usage(&snapshot, 1).expect("the capture carries extra usage"),
+            incarnation: 1,
+        })
+        .await;
+    let share = spend_window_of(&handle)
+        .await
+        .utilization
+        .expect("the poll set a share");
+    // The body's 41.0 percent, which its `spend.percent` carries as 41.
+    assert!(
+        (share - 0.41).abs() < 1e-9,
+        "the share is extra usage's utilization over a hundred, the one figure the view reads too: {share}"
+    );
 }
 
 #[tokio::test]

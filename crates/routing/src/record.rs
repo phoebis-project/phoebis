@@ -243,7 +243,9 @@ pub struct CandidateFacts {
     pub in_flight: u32,
     pub in_flight_cap: u32,
     /// By window name: the three plan windows for a subscription member (a usage-based seat holds none), the worst
-    /// bucket and the two fast buckets for an api_key one, each as `predicted` reads it at decision time.
+    /// bucket and the two fast buckets for an api_key one, each as `predicted` reads it at decision time, and
+    /// `spend` for a usage-based seat while its share is held: the share, the window's reset with its source, and no
+    /// lead, projection or demand.
     pub windows: BTreeMap<String, WindowFacts>,
     pub allowance_known: bool,
     /// Filled for every member under Pace, chosen or not, and `None` under another strategy.

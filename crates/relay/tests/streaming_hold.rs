@@ -458,6 +458,21 @@ async fn a_usage_based_seats_head_moves_its_spend_share_and_records_no_overage_e
         h.router.overages().await.unwrap().is_empty(),
         "the map `in_overage` reads holds nothing for the seat"
     );
+    assert_eq!(
+        h.router
+            .spend_windows()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(id, window)| (id, window.reset, window.reset_source))
+            .collect::<Vec<_>>(),
+        [(
+            "a".to_string(),
+            1_445_472_000_000,
+            phoebis_routing::SpendResetSource::Head
+        )],
+        "the head's overage reset is the seat's spend reset while it is ahead"
+    );
     up.shutdown().await;
 }
 

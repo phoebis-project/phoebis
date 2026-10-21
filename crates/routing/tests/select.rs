@@ -8,8 +8,8 @@ use phoebis_routing::{
     OverageEvidence, PinKeyFacts, PinRef, PinShed, Placement, RateTable, Rates, RefusalFacts,
     RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation, RoutingState,
     SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead, SlowDownState,
-    StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading,
+    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
     MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
@@ -12234,6 +12234,281 @@ fn the_spent_move_lands_a_pin_on_a_usage_based_seat_with_no_reading_as_on_an_api
         "the seat holds no plan window to read, so its allowance is known as an api_key sibling's is"
     );
     assert!(candidate(&d.record, "b").allowance_known);
+}
+
+/// 1970-02-01T00:00:00Z: the first of the month after the one `T` falls in, the spend window's estimated reset there.
+const SPEND_ESTIMATE: i64 = 2_678_400_000;
+
+/// The models of the two weeks a usage-based seat's spend funds alike: the shared week's and the Fable week's.
+const SPEND_MODELS: [&str; 2] = ["claude-sonnet-5", "claude-fable-5-1"];
+
+/// The usage-based seat `b` among `members`.
+fn spend_pool(members: Vec<(&'static str, u32)>) -> RegistrySnapshot {
+    snapshot_with_terms(
+        Pool {
+            members,
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    )
+}
+
+/// The main agent's pin of `session` on `model`.
+fn pinned_on(st: &RoutingState, session: &str, model: &str) -> PinRow {
+    st.pin(&PinKey {
+        model: model.into(),
+        ..pin_key(session)
+    })
+    .cloned()
+    .expect("the session holds a pin on the model")
+}
+
+#[test]
+fn a_usage_based_seat_at_a_share_of_one_is_held_out_on_the_window_spend_until_the_reset_for_every_model(
+) {
+    for model in SPEND_MODELS {
+        let lone = spend_pool(vec![("b", 0)]);
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_credits("b", credits(true, None, Some(1.0), T - 500));
+        let d = decide(
+            &mut st,
+            &lone,
+            &request(&lone, None, model, true, &[], T),
+            &mut rng(),
+        );
+        assert_eq!(
+            d.result,
+            SelectResult::Exhausted(Exhaustion::Timed {
+                deadline: SPEND_ESTIMATE,
+                window: "spend".into()
+            }),
+            "{model}: the pool's lone member answers an exhaustion dated at the spend window's reset"
+        );
+        let obstacle = candidate(&d.record, "b")
+            .obstacle
+            .as_ref()
+            .expect("the seat is out of the set");
+        assert_eq!(
+            (
+                obstacle.reason.as_deref(),
+                obstacle.window.as_deref(),
+                obstacle.until
+            ),
+            (Some("spent"), Some("spend"), Some(SPEND_ESTIMATE)),
+            "{model}: the obstacle is the spent window `spend` until its reset"
+        );
+        st.record_credits("b", credits(true, None, Some(0.99), T - 400));
+        assert_eq!(
+            picked(
+                &select(
+                    &mut st,
+                    &lone,
+                    &request(&lone, None, model, true, &[], T),
+                    &mut rng()
+                )
+                .0
+            ),
+            "b",
+            "{model}: a share just under one admits the seat"
+        );
+
+        let pair = spend_pool(vec![("b", 0), ("a", 1)]);
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_credits("b", credits(true, None, Some(0.5), T - 1_000));
+        let req = |now: i64| request(&pair, Some("s1"), model, true, &[], now);
+        assert_eq!(
+            picked(&select(&mut st, &pair, &req(T - 900), &mut rng()).0),
+            "b",
+            "{model}: the seat leads by its priority"
+        );
+        let pin = pinned_on(&st, "s1", model);
+        st.record_credits("b", credits(true, None, Some(1.0), T - 500));
+        assert!(
+            release_reasons(&st, &pair, &pin, &req(T)).contains(&"spent"),
+            "{model}: the seat's pin reads no allowance left"
+        );
+        assert_eq!(
+            picked(&select(&mut st, &pair, &req(T), &mut rng()).0),
+            "a",
+            "{model}: the live pin on the seat is not renewed"
+        );
+    }
+}
+
+#[test]
+fn a_usage_based_seats_spend_hold_lifts_once_the_clock_passes_its_reset_and_once_a_head_reads_the_share_under_one(
+) {
+    let reset = T + HOUR;
+    for model in SPEND_MODELS {
+        let s = spend_pool(vec![("b", 0)]);
+        let req = |now: i64| request(&s, None, model, true, &[], now);
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_spend_head("b", Some(1.0), Some(reset), T - 500, 1);
+        assert_eq!(
+            select(&mut st, &s, &req(T), &mut rng()).0,
+            SelectResult::Exhausted(Exhaustion::Timed {
+                deadline: reset,
+                window: "spend".into()
+            }),
+            "{model}: the head's reset dates the hold"
+        );
+        let d = decide(&mut st, &s, &req(reset + 1), &mut rng());
+        assert_eq!(
+            picked(&d.result),
+            "b",
+            "{model}: past the reset with no newer reading the share reads unknown and holds nothing"
+        );
+        assert!(
+            !candidate(&d.record, "b").windows.contains_key("spend"),
+            "{model}: a lapsed share draws no spend entry"
+        );
+
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_spend_head("b", Some(1.0), Some(reset), T - 500, 1);
+        st.record_spend_head("b", Some(0.5), Some(reset), T - 100, 1);
+        assert_eq!(
+            picked(&select(&mut st, &s, &req(T), &mut rng()).0),
+            "b",
+            "{model}: a head under one lifts the hold before the reset"
+        );
+    }
+}
+
+#[test]
+fn a_usage_based_seats_candidate_facts_carry_the_spend_entry_estimated_under_no_head_and_heads_after_one(
+) {
+    let s = spend_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(0.4), T - 500));
+    st.record_credits("a", credits(true, None, Some(0.4), T - 500));
+    let facts = |st: &mut RoutingState| {
+        let d = decide(
+            st,
+            &s,
+            &request(&s, None, "claude-sonnet-5", true, &[], T),
+            &mut rng(),
+        );
+        (
+            candidate(&d.record, "a").windows.get("spend").cloned(),
+            candidate(&d.record, "b").windows.get("spend").cloned(),
+        )
+    };
+    let (plan, seat) = facts(&mut st);
+    assert_eq!(plan, None, "a plan member's credits draw no spend entry");
+    assert_eq!(
+        seat,
+        Some(WindowFacts {
+            utilization: 0.4,
+            reset: Some(SPEND_ESTIMATE),
+            source: "estimated",
+            observed_at: T - 500,
+            age_ms: 500,
+            ahead: None,
+            projection: None,
+            horizon: None,
+            demand: None,
+            reserved: 0.0,
+        }),
+        "under no head the poll's share reads against the estimated reset"
+    );
+    st.record_spend_head("b", Some(0.6), Some(T + HOUR), T - 100, 1);
+    let (_, seat) = facts(&mut st);
+    assert_eq!(
+        seat,
+        Some(WindowFacts {
+            utilization: 0.6,
+            reset: Some(T + HOUR),
+            source: "head",
+            observed_at: T - 100,
+            age_ms: 100,
+            ahead: None,
+            projection: None,
+            horizon: None,
+            demand: None,
+            reserved: 0.0,
+        }),
+        "a head's share and reset name the head"
+    );
+}
+
+#[test]
+fn a_fast_request_on_a_usage_based_seat_at_its_cap_reads_the_credits_obstacle_until_the_reset_and_places_past_it(
+) {
+    let s = spend_pool(vec![("b", 0)]);
+    let at = |now: i64| fast(request(&s, Some("s1"), "claude-sonnet-5", true, &[], now));
+    let past = SPEND_ESTIMATE + 1;
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(1.0), T - 500));
+    let d = decide(&mut st, &s, &at(T), &mut rng());
+    assert_eq!(
+        d.result,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "org_spend_cap_reached".into()
+        }),
+        "before the share's reset the cap refuses the fast lane"
+    );
+    assert_eq!(
+        candidate(&d.record, "b").obstacle.as_ref().map(|o| o.name),
+        Some("credits")
+    );
+    let d = decide(&mut st, &s, &at(past), &mut rng());
+    assert_eq!(
+        picked(&d.result),
+        "b",
+        "past the reset with no new poll or head the share blocks nothing"
+    );
+    assert_eq!(
+        candidate(&d.record, "b")
+            .credits
+            .as_ref()
+            .map(|c| c.blocked.clone()),
+        Some(None),
+        "the candidate's credits read past the reset names no block"
+    );
+    let pin = pinned(&st, "s1");
+    assert!(
+        !release_reasons(&st, &s, &pin, &at(past)).contains(&FAST_CREDITS_REASON),
+        "and the pin reads no credits reason"
+    );
+    for (state, reason) in [
+        (
+            credits(false, None, Some(1.0), T - 500),
+            "extra_usage_disabled",
+        ),
+        (
+            credits(true, Some("member_limit"), Some(1.0), T - 500),
+            "member_limit",
+        ),
+    ] {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_credits("b", state);
+        assert_eq!(
+            select(&mut st, &s, &at(past), &mut rng()).0,
+            SelectResult::Exhausted(Exhaustion::FastCredits {
+                reason: reason.into()
+            }),
+            "{reason} blocks past the reset as before it"
+        );
+    }
+    let plan = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("a", credits(true, None, Some(1.0), T - 500));
+    assert_eq!(
+        select(
+            &mut st,
+            &plan,
+            &fast(request(&plan, None, "claude-sonnet-5", true, &[], past)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "org_spend_cap_reached".into()
+        }),
+        "a plan account's credits share reads as it was stored"
+    );
 }
 
 #[test]

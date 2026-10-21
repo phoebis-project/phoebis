@@ -53,7 +53,7 @@ pub fn samples_from_head(
         headers: headers.to_vec(),
     };
     match UnifiedHeaders::parse(&head) {
-        Some(unified) => samples_from_unified(account_id, &unified, &head, observed_at),
+        Some(unified) => samples_from_unified(account_id, &unified, &head, observed_at, false),
         None => (Vec::new(), None),
     }
 }
@@ -65,6 +65,7 @@ pub(crate) fn samples_from_unified(
     unified: &UnifiedHeaders,
     head: &ResponseHead,
     observed_at: i64,
+    usage_based: bool,
 ) -> (Vec<QuotaSampleRecord>, Option<ExtraUsageSampleRecord>) {
     let bucket = bucket_of(observed_at);
     let float = |name: &str| {
@@ -105,14 +106,22 @@ pub(crate) fn samples_from_unified(
             });
         }
     }
-    let extra = unified.overage_in_use.map(|in_use| ExtraUsageSampleRecord {
+    let overage_utilization = float("anthropic-ratelimit-unified-overage-utilization");
+    // A usage-based seat's overage family is its spend window, never an overage episode, so its row keeps the share
+    // and the reset with no in-use flag, written whenever the head moves either.
+    let in_use = if usage_based {
+        (overage_utilization.is_some() || unified.overage_reset.is_some()).then_some(None)
+    } else {
+        unified.overage_in_use.map(Some)
+    };
+    let extra = in_use.map(|in_use| ExtraUsageSampleRecord {
         account_id: account_id.into(),
         bucket,
         is_enabled: true,
-        in_use: Some(in_use),
+        in_use,
         monthly_limit: None,
         used_credits: None,
-        utilization: float("anthropic-ratelimit-unified-overage-utilization"),
+        utilization: overage_utilization,
         currency: None,
         disabled_reason: unified.overage_disabled_reason.clone(),
         overage_reset: unified.overage_reset,
@@ -130,7 +139,8 @@ pub fn samples_from_poll(
     snapshot: &UsageSnapshot,
 ) -> (Vec<QuotaSampleRecord>, Option<ExtraUsageSampleRecord>) {
     let bucket = bucket_of(snapshot.fetched_at);
-    // The endpoint reports percent; the headers report a fraction. One scale in the table.
+    // The endpoint reports percent and the headers a fraction, so the table holds one scale, the extra-usage row's
+    // share included.
     let row = |key: &str, utilization: Option<f64>, reset_at: Option<i64>| QuotaSampleRecord {
         account_id: snapshot.account_id.clone(),
         bucket,
@@ -151,6 +161,9 @@ pub fn samples_from_poll(
     if let Some(fable) = &snapshot.fable_window {
         quota.push(row(SEVEN_DAY_FABLE, fable.utilization, fable.resets_at));
     }
+    // The `spend` columns hold the body's object as it gave it, so a reading the extra-usage amounts built leaves
+    // them null and the view falls back to the amounts beside them.
+    let spend = snapshot.spend.as_ref().filter(|s| s.from_spend);
     let extra = snapshot
         .extra_usage
         .as_ref()
@@ -161,16 +174,16 @@ pub fn samples_from_poll(
             in_use: None,
             monthly_limit: e.monthly_limit,
             used_credits: e.used_credits,
-            utilization: e.utilization,
+            utilization: e.utilization.map(|u| u / 100.0),
             currency: e.currency.clone(),
             disabled_reason: e.disabled_reason.clone(),
             overage_reset: None,
             source: "poll".into(),
-            spend_limit_minor: None,
-            spend_used_minor: None,
-            spend_percent: None,
-            spend_currency: None,
-            spend_exponent: None,
+            spend_limit_minor: spend.and_then(|s| s.limit_minor),
+            spend_used_minor: spend.map(|s| s.used_minor),
+            spend_percent: spend.and_then(|s| s.percent),
+            spend_currency: spend.map(|s| s.currency.clone()),
+            spend_exponent: spend.map(|s| s.exponent),
         });
     (quota, extra)
 }
@@ -746,7 +759,13 @@ mod tests {
                 extra.currency.as_deref(),
                 extra.in_use
             ),
-            (Some(5_000), Some(1_234), Some(0.2468), Some("USD"), None)
+            (
+                Some(5_000),
+                Some(1_234),
+                Some(0.2468 / 100.0),
+                Some("USD"),
+                None
+            )
         );
     }
 }

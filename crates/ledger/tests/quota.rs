@@ -400,7 +400,7 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
             extra[0].used_credits,
             extra[0].utilization
         ),
-        ("poll", Some(5_000), Some(1_234), Some(0.2468)),
+        ("poll", Some(5_000), Some(1_234), Some(0.2468 / 100.0)),
         "extra-usage credits come from the poll only"
     );
     up.shutdown().await;
@@ -1756,4 +1756,273 @@ fn the_lead_over_pace_reads_the_steeper_pace_to_an_end_inside_the_window() {
         lead_over_pace("seven_day", 0.5, reset, None, at),
         "an end past the reset reads the reset's pace"
     );
+}
+
+/// A poll of `body` for the seat at `fetched_at`, as the usage service hands it to the sampler.
+fn seat_poll(body: &[u8], fetched_at: i64) -> phoebis_oauth::UsageSnapshot {
+    let (windows, fable_window, extra_usage, spend, raw_keys) =
+        phoebis_oauth::parse_usage(body).unwrap();
+    phoebis_oauth::UsageSnapshot {
+        account_id: "seat".into(),
+        identity_generation: 1,
+        fetched_at,
+        windows,
+        fable_window,
+        extra_usage,
+        raw_keys,
+        error: None,
+        spend,
+    }
+}
+
+#[tokio::test]
+async fn a_polls_extra_usage_row_stores_the_share_as_a_fraction_and_the_spend_objects_figures_alone(
+) {
+    // The amounts beside the object are a minor unit apart from it, so each column says which object it came from.
+    let with_object = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250001,"used_credits":102501.0,"utilization":41.0,"currency":"USD","decimal_places":2},"spend":{"used":{"amount_minor":102500,"currency":"USD","exponent":2},"limit":{"amount_minor":250000,"currency":"USD","exponent":2},"percent":41}}"#;
+    let amounts_alone = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":102500.0,"utilization":41.0,"currency":"USD","decimal_places":2}}"#;
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    for (body, at) in [(&with_object[..], NOW), (&amounts_alone[..], NOW + 300_000)] {
+        let (quota, extra) = phoebis_ledger::samples_from_poll(&seat_poll(body, at));
+        db.insert_samples(&quota, extra.as_ref()).unwrap();
+    }
+    let rows = db.extra_usage_samples("seat", 0, i64::MAX).await.unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.utilization,
+                r.monthly_limit,
+                r.used_credits,
+                r.spend_limit_minor,
+                r.spend_used_minor,
+                r.spend_percent,
+                r.spend_currency.as_deref(),
+                r.spend_exponent,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                Some(0.41),
+                Some(250_001),
+                Some(102_501),
+                Some(250_000),
+                Some(102_500),
+                Some(41.0),
+                Some("USD"),
+                Some(2)
+            ),
+            (
+                Some(0.41),
+                Some(250_000),
+                Some(102_500),
+                None,
+                None,
+                None,
+                None,
+                None
+            ),
+        ],
+        "the share reads as the head rows read it, and the spend columns carry the body's object or nothing"
+    );
+}
+
+/// The bus events of one request on `account` whose answer's head carries `headers`, the selection classing the
+/// account as `usage_based`.
+fn headed(
+    id: &str,
+    account: &str,
+    usage_based: bool,
+    headers: &[(&str, &str)],
+    at: i64,
+) -> Vec<phoebis_bus::Event> {
+    use phoebis_bus::{AccountSelected, AttemptOutcome, Event, Kind, Origin, RequestObserved};
+    vec![
+        Event::RequestObserved(RequestObserved {
+            request_id: id.into(),
+            origin: Origin::Client,
+            kind: Kind::Inference,
+            key_id: None,
+            key_generation: 0,
+            pool_id: None,
+            session_id: None,
+            agent_id: None,
+            parent_agent_id: None,
+            owner_id: None,
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            wire_model: "claude-sonnet-5".into(),
+            stream: false,
+            headers: vec![],
+            body: bytes::Bytes::new(),
+            body_capture_hours: 0,
+            shape: phoebis_bus::RequestShape::default(),
+            static_hash: None,
+            boundaries: Vec::new(),
+            client: phoebis_bus::ClientFacts::default(),
+            auto_mode: None,
+            fork: phoebis_bus::Fork::default(),
+            presented_retired: false,
+            rotation_at: None,
+            guardrail_id: None,
+            guardrails: Vec::new(),
+            received_at: at,
+        }),
+        Event::AccountSelected(AccountSelected {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: "oauth".into(),
+            usage_based,
+            pin_epoch: None,
+            started_at: at,
+            cache_ttl_ms: None,
+            selection: None,
+        }),
+        Event::ResponseHead(phoebis_bus::ResponseHead {
+            request_id: id.into(),
+            attempt: 1,
+            status: 200,
+            headers: headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            first_event: None,
+            outcome: AttemptOutcome::Succeeded,
+            cooldown: None,
+            written_at: at,
+            observed_at: at,
+        }),
+    ]
+}
+
+#[tokio::test]
+async fn a_usage_based_attempts_head_row_carries_the_share_and_the_reset_with_no_in_use_flag_and_a_plan_attempts_keeps_it(
+) {
+    let reset = "2592000";
+    let full = [
+        ("anthropic-ratelimit-unified-status", "allowed"),
+        ("anthropic-ratelimit-unified-overage-in-use", "true"),
+        ("anthropic-ratelimit-unified-overage-utilization", "0.4"),
+        ("anthropic-ratelimit-unified-overage-reset", reset),
+    ];
+    let reset_only = [
+        ("anthropic-ratelimit-unified-status", "allowed"),
+        ("anthropic-ratelimit-unified-overage-reset", reset),
+    ];
+    let mut assembler = phoebis_ledger::Assembler::new(Arc::new(|| NOW));
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    for events in [
+        headed("r-seat", "seat", true, &full, NOW),
+        headed("r-reset", "seat-reset", true, &reset_only, NOW),
+        headed("r-plan", "plan", false, &full, NOW),
+    ] {
+        for event in events {
+            for record in assembler.observe(event) {
+                if let phoebis_ledger::Record::Samples { quota, extra } = record {
+                    db.insert_samples(&quota, extra.as_ref()).unwrap();
+                }
+            }
+        }
+    }
+    let row = |account: &'static str| {
+        let db = db.clone();
+        async move {
+            db.extra_usage_samples(account, 0, i64::MAX)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.in_use, r.utilization, r.overage_reset, r.source))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        row("seat").await,
+        [(None, Some(0.4), Some(2_592_000_000), "head".to_string())],
+        "the seat's head is no overage, so its row carries the share and the reset with no in-use flag"
+    );
+    assert_eq!(
+        row("seat-reset").await,
+        [(None, None, Some(2_592_000_000), "head".to_string())],
+        "a seat's head that names the reset alone still writes the row"
+    );
+    assert_eq!(
+        row("plan").await,
+        [(
+            Some(true),
+            Some(0.4),
+            Some(2_592_000_000),
+            "head".to_string()
+        )],
+        "a plan attempt's head row keeps the head's flag"
+    );
+}
+
+/// An extra-usage row of account `a` in `bucket` from `source`, with the amounts on a poll row alone.
+fn extra_row(
+    bucket: i64,
+    source: &str,
+    utilization: f64,
+) -> phoebis_ledger::ExtraUsageSampleRecord {
+    let polled = source == "poll";
+    phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: "a".into(),
+        bucket,
+        is_enabled: true,
+        monthly_limit: polled.then_some(5_000),
+        used_credits: polled.then_some(1_234),
+        utilization: Some(utilization),
+        currency: polled.then(|| "USD".into()),
+        overage_reset: (!polled).then_some(bucket * 1_000 + 3_600_000),
+        source: source.into(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn the_polled_read_answers_the_poll_row_under_a_newer_head_row_while_the_latest_read_answers_the_head(
+) {
+    let now = NOW + 900_000;
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
+    let head = extra_row(phoebis_ledger::bucket_of(NOW + 600_000), "head", 0.4);
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    db.insert_samples(&[], Some(&poll)).unwrap();
+    db.insert_samples(&[], Some(&head)).unwrap();
+    let (latest, polled) = db
+        .read_blocking(move |c| {
+            Ok((
+                phoebis_ledger::latest_extra_usage(c, now)?,
+                phoebis_ledger::latest_extra_usage_polled(c, now)?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(latest, [head], "the newest row of any source is the head's");
+    assert_eq!(
+        polled,
+        [poll],
+        "the newest polled row still carries the amounts under the head's"
+    );
+}
+
+#[tokio::test]
+async fn the_polled_read_answers_the_poll_row_of_a_bucket_a_head_row_shares_in_either_order() {
+    let now = NOW + 600_000;
+    let bucket = phoebis_ledger::bucket_of(now);
+    let head = extra_row(bucket, "head", 0.4);
+    let poll = extra_row(bucket, "poll", 0.25);
+    for (first, second, order) in [
+        (&head, &poll, "the head first"),
+        (&poll, &head, "the poll first"),
+    ] {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        db.insert_samples(&[], Some(first)).unwrap();
+        db.insert_samples(&[], Some(second)).unwrap();
+        let polled = db
+            .read_blocking(move |c| phoebis_ledger::latest_extra_usage_polled(c, now))
+            .unwrap();
+        assert_eq!(
+            polled,
+            std::slice::from_ref(&poll),
+            "{order}: the bucket's poll row answers the polled read"
+        );
+    }
 }

@@ -1167,6 +1167,69 @@ async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_n
 }
 
 #[tokio::test]
+async fn the_account_declares_its_spend_window_with_the_resets_two_sources_and_its_nullable_amounts(
+) {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    assert!(
+        admits_null(&schemas["Account"]["properties"]["spend"]),
+        "an account the class does not hold answers null: {}",
+        schemas["Account"]
+    );
+    let members = |schema: &str| -> BTreeSet<String> {
+        schemas[schema]["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        members("Spend"),
+        BTreeSet::from(
+            [
+                "amounts",
+                "observed_at",
+                "reset_source",
+                "resets_at",
+                "utilization"
+            ]
+            .map(String::from)
+        )
+    );
+    assert_eq!(
+        members("SpendAmounts"),
+        BTreeSet::from(
+            [
+                "currency",
+                "exponent",
+                "limit_minor",
+                "polled_at",
+                "used_minor"
+            ]
+            .map(String::from)
+        )
+    );
+    let spend = &schemas["Spend"]["properties"];
+    assert!(
+        admits_null(&spend["amounts"])
+            && admits_null(&schemas["SpendAmounts"]["properties"]["limit_minor"]),
+        "no polled row answers no amounts, and a body with no limit no limit: {}",
+        schemas["Spend"]
+    );
+    let description = spend["reset_source"]["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert!(
+        description
+            .as_deref()
+            .is_some_and(|text| text.contains("`head`") && text.contains("`estimated`")),
+        "the reset's source names its two words: {}",
+        spend["reset_source"]
+    );
+}
+
+#[tokio::test]
 async fn the_attempt_declares_the_serving_accounts_usage_based_class() {
     let (_app, _up, document) = document().await;
     let attempt = &document["components"]["schemas"]["Attempt"];

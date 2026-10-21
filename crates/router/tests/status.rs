@@ -537,3 +537,166 @@ async fn a_listener_that_answers_something_else_is_named_as_answering() {
         assert_eq!(read.as_ref().err(), Some(&line), "{name}");
     }
 }
+
+/// 2026-10-31T12:00:00Z and 15:00:00Z and 2026-11-01T00:00:00Z in epoch milliseconds.
+const OCT_31_NOON: i64 = 1_793_448_000_000;
+const OCT_31_THREE: i64 = 1_793_458_800_000;
+const NOV_1: i64 = 1_793_491_200_000;
+
+/// A usage-based seat `id` of pool `main` whose account row carries `spend`.
+fn spend_seat(id: &str, spend: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "label": id, "enabled": true, "state": "ready", "windows": [], "cooldowns": [],
+        "pool": {"pool_id": "main", "priority": 1}, "usage_based": true, "spend": spend
+    })
+}
+
+#[test]
+fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_marked_while_estimated()
+{
+    use serde_json::json;
+    let amounts = |used: i64, limit: Option<i64>| json!({"currency": "USD", "exponent": 2, "used_minor": used, "limit_minor": limit, "polled_at": OCT_31_NOON});
+    let spend = |amounts: serde_json::Value, utilization: f64, resets_at: i64, source: &str| {
+        json!({
+            "amounts": amounts, "utilization": utilization, "resets_at": resets_at, "reset_source": source,
+            "observed_at": OCT_31_NOON
+        })
+    };
+    let seats = [
+        (
+            "seat-e",
+            spend(amounts(102_500, Some(250_000)), 0.41, NOV_1, "estimated"),
+        ),
+        (
+            "seat-h",
+            spend(
+                amounts(102_500, Some(250_000)),
+                0.41,
+                OCT_31_THREE,
+                "head",
+            ),
+        ),
+        (
+            "seat-u",
+            spend(serde_json::Value::Null, 0.3, NOV_1, "estimated"),
+        ),
+        (
+            "seat-o",
+            spend(amounts(5_000, None), 0.01, NOV_1, "estimated"),
+        ),
+    ];
+    let mut accounts: Vec<serde_json::Value> = seats
+        .iter()
+        .map(|(id, spend)| spend_seat(id, spend.clone()))
+        .collect();
+    accounts.push(json!({
+        "id": "plan", "label": "plan", "enabled": true, "state": "ready", "cooldowns": [],
+        "windows": [{"id": "five_hour", "utilization": 0.4, "resets_at": OCT_31_THREE, "observed_at": OCT_31_NOON}],
+        "pool": {"pool_id": "main", "priority": 0}, "usage_based": false, "spend": null
+    }));
+    let members: Vec<serde_json::Value> = accounts
+        .iter()
+        .map(|a| json!({"account_id": a["id"], "priority": a["pool"]["priority"], "eligible": "eligible"}))
+        .collect();
+    let reads = status::Reads {
+        accounts: Ok(json!({ "accounts": accounts })),
+        attention: Ok(json!({"items": []})),
+        health: None,
+        pools: Ok(json!({"pools": [{
+            "id": "main", "status": "ok", "members": members, "keys": [], "active_pins": 0, "requests_24h": 0
+        }]})),
+        sessions: Ok(json!({"sessions": []})),
+        system: Ok(json!({"ready": true})),
+    };
+    let listeners = status::Listeners {
+        admin: "http://127.0.0.1:8081".to_owned(),
+        certificates: Vec::new(),
+        metrics: None,
+        proxy: None,
+    };
+    // Five hours west of UTC the estimate's midnight on the first falls on the clock's own day, so every reset
+    // prints as a time of day.
+    let screen = status::render(
+        &reads,
+        &listeners,
+        VERSION,
+        "build",
+        jiff::Timestamp::from_millisecond(OCT_31_NOON).unwrap(),
+        &jiff::tz::TimeZone::fixed(jiff::tz::offset(-5)),
+        false,
+    );
+    let row = |id: &str| -> Vec<String> {
+        let line = screen
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("{id} ")))
+            .unwrap_or_else(|| panic!("no {id} row: {screen}"));
+        line.split("  ")
+            .map(str::trim)
+            .filter(|cell| !cell.is_empty())
+            .map(String::from)
+            .collect()
+    };
+    assert_eq!(
+        row("seat-e"),
+        [
+            "seat-e",
+            "ready",
+            "eligible",
+            "spend 41%",
+            "$1025.00 of $2500.00",
+            "resets 19:00 est"
+        ],
+        "{screen}"
+    );
+    assert_eq!(
+        row("seat-h"),
+        [
+            "seat-h",
+            "ready",
+            "eligible",
+            "spend 41%",
+            "$1025.00 of $2500.00",
+            "resets 10:00"
+        ],
+        "a head's reset carries no mark: {screen}"
+    );
+    assert_eq!(
+        row("seat-u"),
+        [
+            "seat-u",
+            "ready",
+            "eligible",
+            "spend 30%",
+            "-",
+            "resets 19:00 est"
+        ],
+        "a spend with no amounts prints a dash in their cell: {screen}"
+    );
+    assert_eq!(
+        row("seat-o"),
+        [
+            "seat-o",
+            "ready",
+            "eligible",
+            "spend 1%",
+            "$50.00",
+            "resets 19:00 est"
+        ],
+        "a spend with no limit prints the spend alone: {screen}"
+    );
+    assert_eq!(
+        row("plan"),
+        [
+            "plan",
+            "ready",
+            "eligible",
+            "5h 40%",
+            "7d -",
+            "resets 10:00"
+        ],
+        "a plan account's row prints as before: {screen}"
+    );
+    for line in screen.lines() {
+        assert!(line.chars().count() <= status::WIDTH, "{line}");
+    }
+}

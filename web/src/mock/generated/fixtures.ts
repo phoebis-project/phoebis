@@ -149,7 +149,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "rate_limited_in_a_row": 0
         }
       },
-      "usage_based": false
+      "usage_based": false,
+      "spend": null
     }
   },
   "account_catalog": {
@@ -432,7 +433,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "rate_limited_in_a_row": 0
             }
           },
-          "usage_based": false
+          "usage_based": false,
+          "spend": null
         },
         {
           "id": "direct",
@@ -464,7 +466,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "lifetime": 1
           },
           "usage": null,
-          "usage_based": false
+          "usage_based": false,
+          "spend": null
         },
         {
           "id": "usage-seat",
@@ -509,7 +512,16 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
-          "extra_usage": null,
+          "extra_usage": {
+            "currency": "USD",
+            "disabled_reason": null,
+            "in_use": null,
+            "is_enabled": true,
+            "monthly_limit": 250000,
+            "used_credits": 102500,
+            "utilization": 0.4,
+            "observed_at": 1791720900000
+          },
           "pool": {
             "pool_id": "main",
             "priority": 2
@@ -525,7 +537,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "held_until": null,
             "poll": null
           },
-          "usage_based": true
+          "usage_based": true,
+          "spend": {
+            "amounts": {
+              "currency": "USD",
+              "exponent": 2,
+              "limit_minor": 250000,
+              "used_minor": 102500,
+              "polled_at": 1791720300000
+            },
+            "utilization": 0.4,
+            "resets_at": 1793491200000,
+            "reset_source": "estimated",
+            "observed_at": 1791720900000
+          }
         }
       ]
     }

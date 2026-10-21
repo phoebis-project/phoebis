@@ -25,8 +25,8 @@ use phoebis_oauth::{
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
-    is_plan_window, AccountProjection, MemberSpend, OverageEvidence, ReloadError,
-    UtilizationSample, WindowReading, SEVEN_DAY_FABLE,
+    is_plan_window, AccountProjection, MemberSpend, OverageEvidence, ReloadError, SpendResetSource,
+    SpendWindow, UtilizationSample, WindowReading, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
@@ -1948,6 +1948,8 @@ pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
     pub day: BTreeMap<String, phoebis_ledger::Totals>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    /// The newest polled extra-usage row per account, the one that carries the amounts a later head row lacks.
+    pub extra_polled: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The router's retry instant per `funding_required` account.
     pub funding_retries: BTreeMap<String, i64>,
     /// The router's windows per account, predicted at its clock, as the usage `GET` reads them.
@@ -1961,6 +1963,8 @@ pub(crate) struct AccountContext {
     /// The router's samples per account as the poll or a head reported them, no charge added and no reset rolled:
     /// the readings an account's windows draw.
     pub reported: BTreeMap<String, UtilizationSample>,
+    /// The router's spend window per usage-based account, at its clock.
+    pub spend_windows: BTreeMap<String, SpendWindow>,
     pub week: BTreeMap<String, phoebis_ledger::Totals>,
 }
 
@@ -2045,6 +2049,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             Ok((
                 phoebis_ledger::latest_quota(c, now)?,
                 phoebis_ledger::latest_extra_usage(c, now)?,
+                phoebis_ledger::latest_extra_usage_polled(c, now)?,
                 phoebis_ledger::request_totals(
                     c,
                     "account_id",
@@ -2066,7 +2071,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             ))
         })
         .await;
-    let (quota, extra, day, week, lifetime) = match ledger {
+    let (quota, extra, extra_polled, day, week, lifetime) = match ledger {
         Ok(read) => read,
         Err(error) => {
             tracing::warn!(%error, "the account view could not read the ledger, so totals and windows are empty");
@@ -2082,6 +2087,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
         extra,
+        extra_polled,
         funding_retries: state
             .router
             .funding_retries()
@@ -2110,6 +2116,13 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         reported: state
             .router
             .reported_samples()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        spend_windows: state
+            .router
+            .spend_windows()
             .await
             .unwrap_or_default()
             .into_iter()
@@ -2176,6 +2189,8 @@ pub(crate) struct Account {
     /// `default_claude_zero` or the seat tier `enterprise_usage_based`), false on every other row, an `api_key`
     /// account included. Such an account never reads as in overage, so `overage` answers null.
     pub usage_based: bool,
+    /// The spend window of a usage-based account, null on every account the class does not hold.
+    pub spend: Option<Spend>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -2324,6 +2339,40 @@ pub(crate) struct ExtraUsage {
     pub used_credits: Option<i64>,
     pub utilization: Option<f64>,
     pub observed_at: i64,
+}
+
+/// A usage-based seat's spend window: the poll's amounts, the newest share and the window's reset.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Spend {
+    /// Null while no polled row of the last day carries the amounts.
+    pub amounts: Option<SpendAmounts>,
+    /// The share as a fraction from the newest row of any source, the row's stored `utilization`, null where no
+    /// row of the day carries one and once the reset that row's reading was taken under has passed, the amounts
+    /// drawn with no meter then.
+    pub utilization: Option<f64>,
+    /// Epoch milliseconds: the window's reset as the router reads it, the estimate where the router answers none.
+    pub resets_at: i64,
+    /// `head` for the newest head's reset while it is ahead of now, else `estimated` for 00:00 UTC on the first of
+    /// the next calendar month.
+    #[schema(example = "estimated")]
+    pub reset_source: String,
+    /// The newest row's instant, null without a row.
+    pub observed_at: Option<i64>,
+}
+
+/// The polled row's `spend` figures, or its `extra_usage` amounts where the body carried no `spend` object.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SpendAmounts {
+    pub currency: String,
+    /// The currency's minor-unit exponent.
+    pub exponent: u8,
+    /// Null where the body sets no limit: the spend alone, no bar.
+    pub limit_minor: Option<i64>,
+    pub used_minor: i64,
+    /// Epoch milliseconds: the polled row's instant.
+    pub polled_at: i64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -2522,7 +2571,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             let (projection, horizon, burn) = window_projection(ctx, &row.id, &key);
             let demand = window_demand(ctx, &row.id, &key);
             AccountWindow {
-                id: key,
+                id: account_window_id(&key).to_string(),
                 utilization: Some(reading.utilization),
                 resets_at: reading.reset,
                 observed_at: reading.observed_at,
@@ -2543,10 +2592,11 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                     .is_some_and(|s| is_plan_window(&q.window) && s.reading(&q.window).is_some())
             })
             .map(|q| {
-                let (projection, horizon, burn) = window_projection(ctx, &row.id, &q.window);
-                let demand = window_demand(ctx, &row.id, &q.window);
+                let id = account_window_id(&q.window);
+                let (projection, horizon, burn) = window_projection(ctx, &row.id, id);
+                let demand = window_demand(ctx, &row.id, id);
                 AccountWindow {
-                    id: q.window.clone(),
+                    id: id.to_string(),
                     utilization: q.utilization,
                     resets_at: q.reset_at,
                     observed_at: q.observed_at.unwrap_or(q.bucket * 1_000),
@@ -2560,6 +2610,17 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 }
             }),
     );
+    // The Fable week reaches the list under one id from up to three sources, so one row stands per id: the newest
+    // reading, the router's on a tie.
+    let mut one_per_id: Vec<AccountWindow> = Vec::with_capacity(windows.len());
+    for window in windows {
+        match one_per_id.iter_mut().find(|kept| kept.id == window.id) {
+            Some(kept) if kept.observed_at < window.observed_at => *kept = window,
+            Some(_) => {}
+            None => one_per_id.push(window),
+        }
+    }
+    let windows = one_per_id;
     let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
     // The router may hold an entry for a mark whose write landed nowhere, so the registry's state decides.
     let funding_retry_at = (row.state == AccountState::FundingRequired)
@@ -2648,20 +2709,21 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         windows,
         slow_down: slow_down_view(ctx, &row.id),
         fast_lane,
-        extra_usage: ctx
-            .extra
-            .iter()
-            .find(|e| e.account_id == row.id)
-            .map(|e| ExtraUsage {
-                currency: e.currency.clone(),
+        // The amounts come from the newest polled row, since a head row carries none, and the rest from the newest
+        // row of any source.
+        extra_usage: ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| {
+            let polled = ctx.extra_polled.iter().find(|p| p.account_id == row.id);
+            ExtraUsage {
+                currency: polled.and_then(|p| p.currency.clone()),
                 disabled_reason: e.disabled_reason.clone(),
                 in_use: e.in_use.filter(|_| !term.usage_based),
                 is_enabled: e.is_enabled,
-                monthly_limit: e.monthly_limit,
-                used_credits: e.used_credits,
+                monthly_limit: polled.and_then(|p| p.monthly_limit),
+                used_credits: polled.and_then(|p| p.used_credits),
                 utilization: e.utilization,
                 observed_at: e.bucket * 1_000,
-            }),
+            }
+        }),
         pool: ctx
             .members
             .iter()
@@ -2677,6 +2739,74 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         },
         usage,
         usage_based: term.usage_based,
+        spend: term.usage_based.then(|| spend_view(ctx, &row.id, now)),
+    }
+}
+
+/// The ledger's and the endpoint's spelling of the overage-included week a head reports as `7d_oi`.
+const OVERAGE_INCLUDED_WEEK: &str = "seven_day_overage_included";
+
+/// The one id the account view and the dashboard answer a window under: the Fable week as `seven_day_fable`, whether
+/// the router holds it under the endpoint's key or a head row stored the overage-included week. The head's
+/// overage-included week is read as the Fable week until a second model week arrives by head, since the upstream's
+/// name is generic.
+pub(crate) fn account_window_id(key: &str) -> &str {
+    if key == FABLE_WINDOW_KEY || key == OVERAGE_INCLUDED_WEEK {
+        SEVEN_DAY_FABLE
+    } else {
+        key
+    }
+}
+
+/// A usage-based seat's spend window: the amounts from the newest polled row, the share and its instant from the
+/// newest row of any source, and the reset from the router's window. The share lapses where `now` reaches the reset
+/// the row's reading was taken under, the instant the router's hold lifts at, so the meter and the hold agree whether
+/// or not the router holds a reading of the seat.
+fn spend_view(ctx: &AccountContext, account_id: &str, now: i64) -> Spend {
+    let polled = ctx.extra_polled.iter().find(|e| e.account_id == account_id);
+    let newest = ctx.extra.iter().find(|e| e.account_id == account_id);
+    let amounts = polled.and_then(|p| {
+        let polled_at = p.bucket * 1_000;
+        match p.spend_used_minor {
+            Some(used_minor) => Some(SpendAmounts {
+                currency: p.spend_currency.clone()?,
+                exponent: p.spend_exponent?,
+                limit_minor: p.spend_limit_minor,
+                used_minor,
+                polled_at,
+            }),
+            // A row the body's `spend` object did not fill stores no exponent, and the endpoint's currencies carry two
+            // decimals.
+            None => Some(SpendAmounts {
+                currency: p.currency.clone()?,
+                exponent: 2,
+                limit_minor: p.monthly_limit,
+                used_minor: p.used_credits?,
+                polled_at,
+            }),
+        }
+    });
+    let utilization = newest.and_then(|e| {
+        let reset = phoebis_routing::spend_reading_reset(e.bucket * 1_000, e.overage_reset);
+        e.utilization.filter(|_| now < reset)
+    });
+    // A router that answers no window for the seat, a stopped one or one whose snapshot predates the class, leaves the
+    // estimate.
+    let (resets_at, reset_source) = ctx.spend_windows.get(account_id).map_or_else(
+        || {
+            (
+                phoebis_routing::spend_reset_estimate(now),
+                SpendResetSource::Estimated,
+            )
+        },
+        |window| (window.reset, window.reset_source),
+    );
+    Spend {
+        amounts,
+        utilization,
+        resets_at,
+        reset_source: reset_source.as_str().to_string(),
+        observed_at: newest.map(|e| e.bucket * 1_000),
     }
 }
 

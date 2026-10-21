@@ -401,7 +401,10 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
                 .get(text(&member["account_id"]))
                 .is_some_and(|account| windows_of(account).contains_key("fable"))
         });
-        let mut rows: Vec<Vec<String>> = members
+        // A seat's spend cells are wider than the window cells they stand in for, so its row prints them after its
+        // eligibility word and outside the block's columns, which every other member's row keeps as it would without
+        // the seat.
+        let (mut rows, spend): (Vec<Vec<String>>, Vec<Option<String>>) = members
             .iter()
             .map(|member| {
                 let id = text(&member["account_id"]);
@@ -411,12 +414,14 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
                     account.map_or("-", state_word).to_owned(),
                     text(&member["eligible"]).to_owned(),
                 ];
-                if let Some(account) = account {
-                    row.extend(windows_cells(account, clock, fable));
+                let cells = account.map(|account| windows_cells(account, clock, fable));
+                if account.is_some_and(|account| account["spend"].is_object()) {
+                    return (row, cells.map(|cells| cells.join("  ")));
                 }
-                row
+                row.extend(cells.into_iter().flatten());
+                (row, None)
             })
-            .collect();
+            .unzip();
         // The reset or the cooldown keeps its width, so a long label is cut before the scope word that says the
         // member is held for one model or the fast lane alone.
         let widest_reset = rows
@@ -426,30 +431,48 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
             .max()
             .unwrap_or(0);
         fit_column(&mut rows, 0, 5 + usize::from(fable), 4, widest_reset);
-        for line in table("    ", rows) {
-            screen.push(line);
+        let eligible = widest(&rows, 2);
+        for (row, spend) in rows.iter_mut().zip(&spend) {
+            if spend.is_some() {
+                let pad = eligible.saturating_sub(columns(&row[2]));
+                row[2].push_str(&" ".repeat(pad));
+            }
+        }
+        for (line, spend) in table("    ", rows).into_iter().zip(spend) {
+            screen.push(match spend {
+                Some(cells) => format!("{line}  {cells}"),
+                None => line,
+            });
         }
     }
 }
 
 /// `5h NN%` and `7d NN%` (`-` with no sample), under `fable_column` `fable NN%` when the account has a Fable week and
 /// an empty cell when it has none, then `until HH:MM <reason>` under a cooldown (`until HH:MM <scope> <reason>` for a
-/// scope narrower than the account) or `resets HH:MM` for the nearest reset to come.
+/// scope narrower than the account) or `resets HH:MM` for the nearest reset to come. A usage-based seat's row, whose
+/// `spend` is set, prints `spend NN%` and its amounts in the two windows' places, no Fable cell, and its spend window's
+/// reset, marked ` est` while it is the estimate.
 fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<String> {
     let windows = windows_of(account);
-    let percent = |id: &str| {
-        windows
-            .get(id)
-            .and_then(|w| w["utilization"].as_f64())
-            .map_or("-".to_owned(), |u| {
-                format!("{}%", (u * 100.0).round() as i64)
-            })
+    let share = |utilization: Option<f64>| {
+        utilization.map_or("-".to_owned(), |u| {
+            format!("{}%", (u * 100.0).round() as i64)
+        })
     };
-    let mut cells = vec![
-        format!("5h {}", percent("5h")),
-        format!("7d {}", percent("7d")),
-    ];
-    if fable_column {
+    let percent = |id: &str| share(windows.get(id).and_then(|w| w["utilization"].as_f64()));
+    let spend = &account["spend"];
+    let mut cells = if spend.is_object() {
+        vec![
+            format!("spend {}", share(spend["utilization"].as_f64())),
+            spend_amounts(&spend["amounts"]),
+        ]
+    } else {
+        vec![
+            format!("5h {}", percent("5h")),
+            format!("7d {}", percent("7d")),
+        ]
+    };
+    if fable_column && !spend.is_object() {
         cells.push(if windows.contains_key("fable") {
             format!("fable {}", percent("fable"))
         } else {
@@ -477,6 +500,16 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
             clock.time(&cooldown["until"]),
             text(&cooldown["reason"])
         ));
+    } else if spend.is_object() {
+        let estimated = if spend["reset_source"] == "estimated" {
+            " est"
+        } else {
+            ""
+        };
+        cells.push(format!(
+            "resets {}{estimated}",
+            clock.time(&spend["resets_at"])
+        ));
     } else if let Some(reset) = windows
         .values()
         .filter_map(|w| w["resets_at"].as_i64())
@@ -486,6 +519,20 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
         cells.push(format!("resets {}", clock.time(&json!(reset))));
     }
     cells
+}
+
+/// A spend window's `amounts` in major units with two decimals: `$used of $limit`, `$used` alone where the body set no
+/// limit, `-` with no amounts.
+fn spend_amounts(amounts: &Value) -> String {
+    let Some(used) = amounts["used_minor"].as_i64() else {
+        return "-".to_owned();
+    };
+    let scale = 10f64.powi(amounts["exponent"].as_i64().unwrap_or(2) as i32);
+    let major = |minor: i64| format!("${:.2}", minor as f64 / scale);
+    match amounts["limit_minor"].as_i64() {
+        Some(limit) => format!("{} of {}", major(used), major(limit)),
+        None => major(used),
+    }
 }
 
 /// The account's windows under the three ids the screen prints, mapped as the console maps the wire's spellings,

@@ -31,9 +31,10 @@ use crate::select::{
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
     entrypoint_of, is_plan_window, mark_holds, plan_windows, shed_dwell_ms, slow_down_hold_ms,
-    AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence,
-    PinRef, PinUsage, RateTable, RoutingState, SharePricer, SlowDownEdge, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    spend_reset_estimate, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight,
+    MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
+    SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -253,7 +254,8 @@ pub enum RouterEvent {
         held_ms: i64,
         at: i64,
     },
-    /// `blocked()` answered differently before and after a credits reading landed.
+    /// The credits read answered differently before and after a credits reading landed: `blocked_before` as the
+    /// selector read the held state at the fold's clock, `blocked_after` the reading's own `blocked()`.
     FastCreditsChanged {
         account_id: String,
         before: Option<CreditsState>,
@@ -979,6 +981,9 @@ enum Command {
     ReportedSamples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
     },
+    SpendWindows {
+        reply: oneshot::Sender<Vec<(String, SpendWindow)>>,
+    },
     /// The funding marks a writer wake finished, sent ahead of the reload a landed one asks for.
     FundingWritten {
         rows: Vec<FundingWritten>,
@@ -1527,6 +1532,10 @@ impl RouterHandle {
     /// no charge added and no passed reset rolled, for a view that shows the reading itself.
     pub async fn reported_samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::ReportedSamples { reply }).await
+    }
+    /// Every usage-based account's spend window at the router's clock.
+    pub async fn spend_windows(&self) -> Result<Vec<(String, SpendWindow)>, RouterGone> {
+        self.ask(|reply| Command::SpendWindows { reply }).await
     }
     /// `rotated_at` is the key's rotation the caller authenticated under, so a touch that lands after a later
     /// rotation stamps nothing on the new grace. Waits for a slot as a report does; a stopped task takes none.
@@ -3437,6 +3446,24 @@ impl Task {
             Command::ReportedSamples { reply } => {
                 let _ = reply.send(self.state.samples());
             }
+            Command::SpendWindows { reply } => {
+                let now = (self.clock)();
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let mut windows: Vec<(String, SpendWindow)> = snapshot
+                    .accounts()
+                    .filter_map(|account| {
+                        self.state
+                            .spend_window(&snapshot, &account.id, now)
+                            .map(|window| (account.id.clone(), window))
+                    })
+                    .collect();
+                windows.sort_by(|a, b| a.0.cmp(&b.0));
+                let _ = reply.send(windows);
+            }
             Command::Touch {
                 key_id,
                 presented,
@@ -3647,17 +3674,26 @@ impl Task {
                 let observed_at = state.observed_at;
                 let room = state.blocked().is_none();
                 let row = RoutingState::credits_row(&account_id, &state);
-                // Read before the fold replaces it, and the holder's own: another holder's state is no edge.
+                // Read before the fold replaces it, and the holder's own: another holder's state is no edge. The edge's
+                // before is the state the selector read at this clock, a lapsed spend share included.
                 let before = self.state.credits_of(&account_id, incarnation).cloned();
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let blocked_before = self
+                    .state
+                    .credits_blocked(&snapshot, &account_id, incarnation, (self.clock)())
+                    .map(String::from);
                 let after = state.clone();
                 if !self.state.record_credits(&account_id, state) {
                     return;
                 }
+                if snapshot.usage_based(&account_id) {
+                    self.state.record_poll_share(&account_id, observed_at);
+                }
                 self.write(vec![StateWrite::UpsertCredits(row)]);
-                let blocked_before = before
-                    .as_ref()
-                    .and_then(CreditsState::blocked)
-                    .map(String::from);
                 let blocked_after = after.blocked().map(String::from);
                 if blocked_before != blocked_after {
                     self.emit(RouterEvent::FastCreditsChanged {
@@ -3762,13 +3798,31 @@ impl Task {
                 }
                 // A head on a usage-based seat is no overage episode, so the fold emits no event. The share persists as
                 // the poll's does, and the reset stays in memory.
-                if !self.state.record_spend_head(
+                let held = self.state.spend_head(&account_id);
+                let moved = self.state.record_spend_head(
                     &account_id,
                     utilization,
                     reset,
                     observed_at,
                     incarnation,
-                ) {
+                );
+                // Once per instant: every head of the month repeats the reset, and only a new one is news.
+                if let Some((head_reset, at)) = self
+                    .state
+                    .spend_head(&account_id)
+                    .filter(|(head_reset, _)| held.is_none_or(|(before, _)| before != *head_reset))
+                {
+                    let estimate = spend_reset_estimate(at);
+                    if head_reset != estimate {
+                        tracing::info!(
+                            account = %account_id,
+                            head_reset,
+                            estimate,
+                            "a head named a spend reset apart from the estimate"
+                        );
+                    }
+                }
+                if !moved {
                     return;
                 }
                 if let Some(state) = self.state.credits_of(&account_id, incarnation) {

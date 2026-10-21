@@ -3232,6 +3232,37 @@ pub fn latest_extra_usage(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The newest extra-usage row of the last day per account whose source is `poll`: the row that carries the amounts,
+/// which a later head row never hides.
+pub fn latest_extra_usage_polled(
+    conn: &Connection,
+    now: i64,
+) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
+    let since = now / 1_000 - 86_400;
+    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND source = 'poll' AND rowid = (SELECT rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 AND source = 'poll' ORDER BY bucket DESC LIMIT 1) ORDER BY account_id")?;
+    let rows = stmt.query_map(params![since], |r| {
+        Ok(ExtraUsageSampleRecord {
+            account_id: r.get(0)?,
+            bucket: r.get(1)?,
+            is_enabled: r.get(2)?,
+            in_use: r.get(3)?,
+            monthly_limit: r.get(4)?,
+            used_credits: r.get(5)?,
+            utilization: r.get(6)?,
+            currency: r.get(7)?,
+            disabled_reason: r.get(8)?,
+            overage_reset: r.get(9)?,
+            source: r.get(10)?,
+            spend_limit_minor: r.get(11)?,
+            spend_used_minor: r.get(12)?,
+            spend_percent: r.get(13)?,
+            spend_currency: r.get(14)?,
+            spend_exponent: r.get(15)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// One span of hours over which both lists' revisions are constant: the SQL bounds (seconds, half-open) and the
 /// instant the span prices at in milliseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

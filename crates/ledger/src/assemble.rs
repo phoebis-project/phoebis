@@ -274,6 +274,7 @@ impl Assembler {
                             &unified,
                             &wire,
                             head.observed_at,
+                            attempt.usage_based,
                         );
                         if !quota.is_empty() || extra.is_some() {
                             records.push(Record::Samples { quota, extra });
