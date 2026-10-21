@@ -808,20 +808,20 @@ impl Inner {
         }
     }
 
-    /// The Go `probeErrorLocked`, read from the answer the relay gave: a 429 after failover, or the exhaustion
-    /// 429 the relay answers when every account is cooled, is the quota pause; a pool at its in-flight cap
-    /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the
-    /// next real request would; a probe the selector refused on the pinned member's spend budget holds under
-    /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; a probe
-    /// the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no
-    /// idle tick; a probe the selector answered on its pinned member's standing holds under that standing:
-    /// `Paused` for the operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in
-    /// the console), a retry for a member this probe already tried, or for one whose budget the degraded ledger
-    /// leaves unknown, which the ledger's recovery clears without a real request; a pinned member a leg of the
-    /// probe marked for re-authentication pauses under the authentication reason; the untimed exhaustion 503, when
-    /// every account of the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from
-    /// upstream retries; any other 4xx is a shape the upstream refuses; a canceled, timed-out, or lost exchange
-    /// (status 0) is a transport error.
+    /// The Go `probeErrorLocked`, read from the answer the relay gave. A 429 after failover, or the exhaustion 429
+    /// the relay answers when every account is cooled, is the quota pause. A pool at its in-flight cap
+    /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the next
+    /// real request would. A probe the selector refused on the pinned member's spend budget holds under `budget`
+    /// without a pause, since only a raised budget or the period's end clears it, never a wait. A probe the router
+    /// refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no idle tick. A
+    /// probe the selector answered on its pinned member's standing holds under that standing: `Paused` for the
+    /// operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in the console), a
+    /// retry for a member this probe already tried, or for one whose budget the degraded ledger leaves unknown,
+    /// which the ledger's recovery clears without a real request. A pinned member a leg of the probe marked for
+    /// re-authentication pauses under the authentication reason. The untimed exhaustion 503, when every account of
+    /// the pool was unusable at selection, pauses under its own reason. A 5xx forwarded from upstream retries, any
+    /// other 4xx is a shape the upstream refuses, and a canceled, timed-out, or lost exchange (status 0) is a
+    /// transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,

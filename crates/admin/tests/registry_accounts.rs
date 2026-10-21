@@ -1470,7 +1470,7 @@ async fn a_canceled_account_stores_the_end_it_was_saved_with_and_answers_it_back
         (Some(true), Some(end)),
         "no profile on file, but the flag and the stored end round-trip regardless"
     );
-    // Cancelling off drops the stored end, per `set_canceled`'s own rule.
+    // Canceling off drops the stored end, per `set_canceled`'s own rule.
     let restored = json(
         patch(
             &parts.app,

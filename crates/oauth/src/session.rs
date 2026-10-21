@@ -25,7 +25,7 @@ pub struct PairingSession {
     pub redirect_uri: String,
     pub deadline: i64,
     pub status: PairingStatus,
-    /// When the status moved to `Confirmed`, `Canceled`, `Expired` or `Failed`; the sweep keeps an ended session
+    /// When the status moved to `Confirmed`, `Canceled`, `Expired` or `Failed`. The sweep keeps an ended session
     /// readable for one lifetime past it.
     pub ended_at: Option<i64>,
 }
@@ -165,7 +165,7 @@ impl PairingSessions {
             expire_if_stale(session, now);
         }
         let mut superseded = None;
-        // Cancelling inside the scan is safe only because this is the one insert and it leaves an account at
+        // Canceling inside the scan is safe only because this is the one insert and it leaves an account at
         // most one pairing in flight, so no refusal can follow a cancel made earlier in the same loop.
         for standing in sessions
             .values_mut()
@@ -338,7 +338,7 @@ impl PairingSessions {
             return Err(PairingError::AlreadyConsumed);
         }
         // A confirmation already holds this session and may be part way through installing the credential.
-        // Cancelling it here is what used to leave an account paired behind a canceled session.
+        // Canceling it here is what used to leave an account paired behind a canceled session.
         if matches!(session.status, PairingStatus::Confirming { .. }) {
             return Err(PairingError::AlreadyConsumed);
         }

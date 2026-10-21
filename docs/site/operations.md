@@ -400,7 +400,7 @@ until a reload lands and `certificate_expiring` from 30 days before a loaded lea
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
-rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 59 and the
+rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 60 and the
 ledger at schema 43. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
 {found} is newer than this build supports ({supported}), so restore the backup taken before the upgrade`, and the ledger
 with the same words after `the ledger's schema version`. `phoebis check-config` reads both versions read-only, taking no

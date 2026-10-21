@@ -497,7 +497,7 @@ fn a_commit_that_failed_ends_the_session_and_frees_the_account() {
 }
 
 #[test]
-fn cancelling_a_confirmed_session_keeps_it_confirmed() {
+fn canceling_a_confirmed_session_keeps_it_confirmed() {
     let s = PairingSessions::new();
     let redirect = "http://localhost:4567/callback";
     let confirmed = exchanged(&s, redirect);

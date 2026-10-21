@@ -1886,7 +1886,7 @@ async fn deleting_the_account_holding_an_in_flight_request_answers_account_cance
         [A],
         "an answer about a credential that is gone is nothing to fail over from"
     );
-    // The attempt's future owns the upstream connection, so cancelling it takes the socket with it.
+    // The attempt's future owns the upstream connection, so canceling it takes the socket with it.
     wait_for(Duration::from_secs(2), || {
         (up.open_connections() == 0).then_some(())
     })

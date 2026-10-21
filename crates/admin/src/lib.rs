@@ -294,7 +294,7 @@ impl PairingVault {
     }
 
     /// Drops every bundle held for an account and returns the pairing sessions to cancel, each with the
-    /// admin session that owns it. Cancelling is left to the caller so no pairing lock is ever taken
+    /// admin session that owns it. Canceling is left to the caller so no pairing lock is ever taken
     /// while this one is held.
     pub fn discard_for_account(&self, account_id: &str, now: i64) -> Vec<(String, String)> {
         let mut records = self.records.lock().expect(LOCK_POISONED);
