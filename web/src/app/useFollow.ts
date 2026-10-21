@@ -33,7 +33,8 @@ export function useFollow<R>(input: {
   const { address, compare, error, identity, intervalMs, list, paging, paused, read, setPaging, stale } = input;
   const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
-  // The tint marks what the last poll brought, and with auto reload off no poll follows to take it away.
+  // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
+  // and with auto reload off no poll follows to take it away.
   const [intervalSeen, setIntervalSeen] = useState(intervalMs);
   if (intervalSeen !== intervalMs) {
     setIntervalSeen(intervalMs);
@@ -71,7 +72,10 @@ export function useFollow<R>(input: {
     // An answer that lands once the poll has stopped would tint rows no later poll clears.
     const armed = { alive: true };
     const failures = streak.current;
-    const poll = () => {
+    // The rows the tab's return read brought. The interval keeps its phase, so its next tick can follow that read
+    // within milliseconds and bring nothing, and that tick's answer keeps their tint beside its own rows.
+    let kept: { for: string; rows: Set<string> } | null = null;
+    const poll = (returned = false) => {
       const { address: polled, compare: order, identity: identify, mark: landedAfter, read: reader, shown: start } = latest.current;
       // Every page of one poll reads from the same stamp and is handed the same instant, so a reader that bounds its
       // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
@@ -105,7 +109,10 @@ export function useFollow<R>(input: {
           // A gap an earlier poll left stays until a reload, and Next walks on from the newest one, which reaches the
           // older ones too.
           const next = polledPages.overrun === null ? current.overrun : { cursor: polledPages.overrun, to };
-          setFollowed({ for: polled, fresh: new Set(polledPages.rows.map(identify).filter((k) => !known.has(k))), landedThrough: polledPages.landedThrough ?? landedAfter, overrun: next, rows: merged(current.shown, polledPages.rows, identify, order), standIn: current.standIn });
+          const brought = new Set(polledPages.rows.map(identify).filter((k) => !known.has(k)));
+          const fresh = kept !== null && kept.for === polled ? new Set([...kept.rows, ...brought]) : brought;
+          kept = returned ? { for: polled, rows: brought } : null;
+          setFollowed({ for: polled, fresh, landedThrough: polledPages.landedThrough ?? landedAfter, overrun: next, rows: merged(current.shown, polledPages.rows, identify, order), standIn: current.standIn });
         },
         (err: unknown) => {
           if (!armed.alive) return;
@@ -118,11 +125,13 @@ export function useFollow<R>(input: {
     const id = clock.setInterval(() => {
       if (!document.hidden) poll();
     }, intervalMs);
-    // The tab's return and the end of a pause read at once only when the last answer is a full interval old.
-    const onVisible = () => {
-      if (!document.hidden && lastAnswered.current !== null && clock.now() - lastAnswered.current >= intervalMs) poll();
+    // The tab's return and the end of a pause read at once only when the last answer is a full interval old, and only
+    // the return's read keeps its tint through the tick after it.
+    const readDue = (returned: boolean) => {
+      if (!document.hidden && lastAnswered.current !== null && clock.now() - lastAnswered.current >= intervalMs) poll(returned);
     };
-    onVisible();
+    const onVisible = () => readDue(true);
+    readDue(false);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       armed.alive = false;

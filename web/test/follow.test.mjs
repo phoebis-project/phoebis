@@ -269,6 +269,38 @@ test('no read while the tab is hidden, and one at once on its return after a ful
   await settled();
 });
 
+test("the rows the tab's return brought keep the tint through the tick after it, and the poll after that takes it away", async () => {
+  const clock = frozen();
+  const r = route(60);
+  // The list shows rows 2 to 26, row 1 arrives before the first poll and row 0 while the tab is hidden, so each read
+  // brings one row.
+  const polls = [];
+  const read = async (cursor, to) => {
+    if (cursor === undefined) polls.push(to);
+    const page = await r.read(cursor);
+    return to > ORIGIN + 10_000 ? page : { ...page, rows: page.rows.filter((row) => row.id !== 'row_000') };
+  };
+  const f = follow({ list: { nextCursor: '27', rows: r.rows.slice(2, 27) }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual([...f.last().fresh], ['row_001'], 'the first poll tints the row it brought');
+  let hidden = true;
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+  act(() => clock.tick(9_990));
+  hidden = false;
+  visibility();
+  assert.deepEqual(polls, [ORIGIN + 5_000, ORIGIN + 14_990], 'back almost 10 seconds after the last answer reads at once');
+  await settled();
+  assert.deepEqual([...f.last().fresh], ['row_000'], "the return's read tints the row it brought");
+  act(() => clock.tick(10));
+  assert.equal(polls.at(-1), ORIGIN + 15_000, "the interval keeps its phase, so its tick follows the return's read");
+  await settled();
+  assert.deepEqual([...f.last().fresh], ['row_000'], "the tick that brings nothing keeps the tint the return's read brought");
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual([polls.at(-1), [...f.last().fresh]], [ORIGIN + 20_000, []], 'the poll after it takes the tint away');
+});
+
 test('an older page pauses the poll and keeps the followed rows, and the first page resumes it', async () => {
   const clock = frozen();
   const f = follow();

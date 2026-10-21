@@ -306,6 +306,38 @@ test("a removed chip hands focus to the next chip's body, the last one to Add fi
   assert.ok(again.container.querySelector('.chip-line') === null && document.activeElement === addRef.current, 'Clear all takes the line away and hands focus to Add filter');
 });
 
+/** The line of `SEVEN` after an Add filter button, its chips and address handed in as a history step hands them. */
+const lineAfterAdd = (addRef, props = {}) => h('div', null, h('button', { ref: addRef, type: 'button' }, 'Add filter'), lineOf({ addFilterRef: addRef, chips: SEVEN, ...props }));
+const bodyOf = (container, word) => [...container.querySelectorAll('.chip__body')].find((el) => el.textContent.startsWith(`${word}:`));
+/** What holds the focus, by its text, the document's body read as "body". */
+const focused = () => (document.activeElement === document.body ? 'body' : document.activeElement?.textContent);
+
+test('a chip body a click on the background left hands no focus to the fold chip when a later measure hides it', () => {
+  const addRef = { current: null };
+  const page = render(lineAfterAdd(addRef));
+  const status = bodyOf(page.container, 'status');
+  focus(status);
+  // A click on the page's background blurs the body with no related target.
+  act(() => status.blur());
+  lineWidth = 550;
+  page.render(lineAfterAdd(addRef));
+  assert.ok(status.parentElement.hidden, 'the narrower line hides the status chip');
+  assert.equal(focused(), 'body', 'the focus stays where the click left it');
+});
+
+test('a history step that folds the line over a focused chip body and removes another chip hands the focus to the fold chip that now holds it', () => {
+  lineWidth = 550;
+  const addRef = { current: null };
+  const page = render(lineAfterAdd(addRef));
+  click(page.container.querySelector('.chip--more'));
+  const status = bodyOf(page.container, 'status');
+  focus(status);
+  page.render(lineAfterAdd(addRef, { address: 'b', chips: SEVEN.filter((c) => c.field !== 'speed') }));
+  const more = page.container.querySelector('.chip--more');
+  assert.ok(status.parentElement.hidden, 'the line folds and hides the status chip');
+  assert.deepEqual([focused(), document.activeElement === more], ['+2 more', true], 'the fold chip takes the focus, not Add filter');
+});
+
 const DIMENSIONS = [
   { field: 'accounts', group: 'Routing', kind: 'list', label: 'Account', word: 'account' },
   { field: 'keys', group: 'Routing', kind: 'list', label: 'Key', mono: true, word: 'key' },

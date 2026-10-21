@@ -285,6 +285,13 @@ function KeyedProbe({ id, load, seen }) {
   return null;
 }
 
+/** A page that hands the hook its deps and its options on each render, so one render can change both. */
+function ArmingProbe({ id, load, options, seen }) {
+  const r = useAsync(() => load(id), [id], options);
+  seen.push(r);
+  return null;
+}
+
 test("a read for other deps never reports the old deps' failed route recovered, and a reload of the same deps does", async () => {
   const recovered = [];
   setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: (path) => recovered.push(path), onUnauthorized: () => undefined });
@@ -308,6 +315,33 @@ test("a read for other deps never reports the old deps' failed route recovered, 
   act(() => seen.at(-1).reload());
   await settled();
   assert.deepEqual([seen.at(-1).data, recovered], ['c', ['/admin/models/c']], 'Try again on the same deps reports its route recovered');
+});
+
+test('one render that changes the deps and arms the refresh reads once, the refresh yielding to the read for the new deps', async () => {
+  const clock = frozen();
+  const calls = [];
+  const load = (id) => {
+    calls.push(id);
+    return Promise.resolve(id);
+  };
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const seen = [];
+  act(() => root.render(h(ArmingProbe, { id: 'a', load, options: { paused: true, refreshMs: 30_000 }, seen })));
+  await settled();
+  act(() => clock.tick(30_000));
+  assert.deepEqual(calls, ['a'], 'the paused period reads nothing');
+  // A Custom Apply after a long pause: the new deps and the pause's end land in one render, a full period after the
+  // last answer.
+  act(() => root.render(h(ArmingProbe, { id: 'b', load, options: { refreshMs: 30_000 }, seen })));
+  assert.deepEqual(calls, ['a', 'b'], 'the read for the new deps is the one read');
+  await settled();
+  assert.equal(seen.at(-1).data, 'b');
+  act(() => clock.tick(30_000));
+  assert.deepEqual(calls, ['a', 'b', 'b'], 'the armed period reads at its first tick');
+  await settled();
 });
 
 const toast = (id, message, dwellMs, path = null) => ({ dwellMs, id, message, path });

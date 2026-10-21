@@ -20,8 +20,8 @@ type Side = 'from' | 'to';
  * Six pills in a 32 px group, 1h, 6h, 24h, 7d, 30d and Custom, the pressed one the address's preset or Custom while a
  * span stands, printing the span. A preset pill is named by the word it prints and carries its label on its title. The
  * group's title reads "Last 24 hours, ends {fmtAbsolute}" under a preset and "{from} to {to}" in fmtAbsolute under a
- * span. It draws `Segmented`'s markup itself, since the Custom pill anchors a popover and the primitive's buttons take
- * no ref.
+ * span, and the pressed pill, whose own title covers the group's, carries the same words. It draws `Segmented`'s markup
+ * itself, since the Custom pill anchors a popover and the primitive's buttons take no ref.
  */
 export function RangeControl({ now, onChange, value, window: shown }: RangeControlProps): JSX.Element {
   const boxId = useId();
@@ -33,6 +33,7 @@ export function RangeControl({ now, onChange, value, window: shown }: RangeContr
   const custom = value.preset === 'custom';
   const pair = `${fmtAbsolute(iso(shown.from))} to ${fmtAbsolute(iso(shown.to))}`;
   const label = RANGE_PRESETS.find((p) => p.name === value.preset)?.label ?? value.preset;
+  const ends = `${label}, ends ${fmtAbsolute(iso(shown.to))}`;
 
   // A field's minute drops the window's seconds and milliseconds, so an untouched field keeps the window's own instant.
   const bound = (side: Side) => (edit === null ? Number.NaN : edit[side] === toLocalInput(edit.base[side]) ? edit.base[side] : Date.parse(edit[side]));
@@ -60,9 +61,9 @@ export function RangeControl({ now, onChange, value, window: shown }: RangeContr
 
   return (
     <>
-      <div className="segmented" role="group" aria-label="Range" title={custom ? pair : `${label}, ends ${fmtAbsolute(iso(shown.to))}`}>
+      <div className="segmented" role="group" aria-label="Range" title={custom ? pair : ends}>
         {RANGE_PRESETS.map((p) => (
-          <button key={p.name} type="button" className={p.name === value.preset ? 'is-active' : ''} title={p.label} aria-pressed={p.name === value.preset} onClick={() => choose(p.name)}>
+          <button key={p.name} type="button" className={p.name === value.preset ? 'is-active' : ''} title={p.name === value.preset ? ends : p.label} aria-pressed={p.name === value.preset} onClick={() => choose(p.name)}>
             {p.name}
           </button>
         ))}

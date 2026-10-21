@@ -89,7 +89,8 @@ export function ChipLine({ addFilterRef, address, chips, editing = null, onClear
   }, [drawnLine]);
 
   // A chip that leaves with the focus on it (its x, the popover's Remove, Clear all) drops focus to the body, so the
-  // chip that stood after it takes the focus, its fold when it is folded, else Add filter.
+  // chip that stood after it takes the focus, its fold when it is folded, else Add filter. A focused body the fold
+  // hides hands the focus to the fold chip, whatever other chip the same commit removed.
   const before = useRef(chips);
   useLayoutEffect(() => {
     const was = before.current;
@@ -99,7 +100,7 @@ export function ChipLine({ addFilterRef, address, chips, editing = null, onClear
     // later if at all, so a focus left on that body counts as dropped too.
     const dropped = at === null || at === document.body || !at.isConnected || (at === focusedBody.current && at.closest('[hidden]') !== null);
     if (!dropped) return;
-    const gone = was.findIndex((c) => !chips.some((n) => idOf(n) === idOf(c)));
+    const gone = at !== null && at !== document.body && at.isConnected ? -1 : was.findIndex((c) => !chips.some((n) => idOf(n) === idOf(c)));
     const line = lineRef.current;
     if (gone < 0) {
       // A chip that stays but left the drawn set (a write from the expanded line resets the expansion) took the focus
@@ -130,8 +131,9 @@ export function ChipLine({ addFilterRef, address, chips, editing = null, onClear
         focusedBody.current = e.target instanceof HTMLElement && e.target.classList.contains('chip__body') ? e.target : null;
       }}
       onBlur={(e) => {
-        // A focus that moved on to another control is no longer the line's to hand off.
-        if (e.relatedTarget !== null) focusedBody.current = null;
+        // A focus that moved on to another control, or left a body still shown (a click on the page's background), is
+        // no longer the line's to hand off. The blur a browser fires as the fold hides the body keeps it.
+        if (e.relatedTarget !== null || (e.target.isConnected && e.target.closest('[hidden]') === null)) focusedBody.current = null;
       }}
     >
       {drawn.map((chip, i) => (

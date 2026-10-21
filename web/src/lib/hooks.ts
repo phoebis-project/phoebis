@@ -25,7 +25,8 @@ export interface AsyncOptions {
    * Re-run `load` every `refreshMs` while the document is visible and `paused` is false. A refresh keeps `data` drawn,
    * never turns `loading` on, replaces `data` on success and keeps it on failure with `error` set, and one still in
    * flight when `paused` turns true is dropped. When the pause ends, the period is set or the tab comes back, a refresh
-   * runs at once if the last answer is a full period old. A read that settles after a newer one has landed is dropped.
+   * runs at once if the last answer is a full period old, unless the same render changed the deps, whose read stands
+   * for it. A read that settles after a newer one has landed is dropped.
    */
   refreshMs?: number;
   paused?: boolean;
@@ -56,6 +57,12 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   // The load effect's run for the current deps: a refresh that lands after the deps changed or the page left is
   // dropped by it, as the load's own answer is.
   const run = useRef({ alive: false });
+  // Whether the load effect read in the commit being flushed. Every commit's layout pass clears it before the passive
+  // effects run, so a refresh armed in the same commit as a read for new deps knows that read already answers them.
+  const loadReadInCommit = useRef(false);
+  useLayoutEffect(() => {
+    loadReadInCommit.current = false;
+  });
   // Every read takes the next number, and one that settles after a higher number has landed is dropped, success and
   // failure alike, so an older answer never replaces a newer one; a slow read still lands while nothing newer has.
   const started = useRef(0);
@@ -104,6 +111,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     setLoading(true);
     started.current += 1;
     const seq = started.current;
+    loadReadInCommit.current = true;
     latest.current.load().then(
       (value) => {
         if (!current.alive || !lands(seq)) return;
@@ -150,11 +158,13 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     const id = clock.setInterval(() => {
       if (!document.hidden) refresh();
     }, refreshMs);
-    // A tab that comes back, and a pause that ends, read at once only when the last answer is a full period old.
+    // A tab that comes back, and a pause that ends, read at once only when the last answer is a full period old. The
+    // arm yields to a read the load effect started in the same commit, so one render that changes the deps and arms
+    // the refresh reads once.
     const onVisible = () => {
       if (!document.hidden && fetched.current !== null && clock.now() - Date.parse(fetched.current) >= refreshMs) refresh();
     };
-    onVisible();
+    if (!loadReadInCommit.current) onVisible();
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       armed.alive = false;

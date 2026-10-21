@@ -3,6 +3,8 @@ import { useMemo } from 'react';
 export function Sparkline({ values, width = 160, height = 36, color, fill = true }: { color: string; fill?: boolean; height?: number; values: number[]; width?: number }) {
   const path = useMemo(() => {
     if (values.length < 2) return { area: '', line: '' };
+    // The two floors at 1 stand together: the dot's keeps `last / max` finite on an all-zero series, and this one keeps
+    // a series under 1 (the Dashboard's cost spark in dollars per hour) from rescaling to its own peak.
     const max = Math.max(...values, 1);
     const min = 0;
     const stepX = width / (values.length - 1);
