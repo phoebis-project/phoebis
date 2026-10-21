@@ -6227,10 +6227,11 @@ async function bodyEnd(theme, say) {
 
 /**
  * "Open wide" on a captured body: the dialog is 1040 px wide at 1280 by 800 and at 1440 by 900 and takes the grouped
- * dialogs' height (800 px, or the viewport less 48), its text fills the body past the drawer's 260 px cap and scrolls
- * inside it while the body and the dialog do not, and Escape closes the dialog and leaves the drawer open. The text
- * draws as rows of `--body-row`, 18 px each, covering every row in view at both sizes and at most the rows in view
- * plus 20 above and 20 below, and scrolled to its end it draws the last line of the text Copy all hands the clipboard.
+ * dialogs' height (800 px, or the viewport less 48), its text fills the body under the find row past the drawer's
+ * 260 px cap and scrolls inside it while the body and the dialog do not, and Escape closes the dialog and leaves the
+ * drawer open, where the find measure then reads the same block. The text draws as rows of `--body-row`, 18 px each,
+ * covering every row in view at both sizes and at most the rows in view plus 20 above and 20 below, and scrolled to its
+ * end it draws the last line of the text Copy all hands the clipboard.
  * The key, string and event spans the wide view draws take their theme tokens' colors, and an event span its 600
  * weight. It runs after the drawer measure, so a drawer is open, and moves down the first page to the first row whose
  * drawer holds a captured body when that one holds none. In the mock pass it then narrows the list to the laptop key,
@@ -6273,6 +6274,9 @@ async function wideBodyDialog(theme) {
       const pre = body?.querySelector('.body-block__pre');
       if (!dialog || !body || !pre) return null;
       const s = getComputedStyle(body);
+      // The find row stands above the text, so the text box fills what the body leaves under the row and its gap.
+      const find = body.querySelector('.body-block__find');
+      const above = find ? find.getBoundingClientRect().height + parseFloat(getComputedStyle(find).marginTop) + parseFloat(s.rowGap) : 0;
       // The text is long when its lines outrun the box, read from the block of rows that holds every line at the row
       // height rather than from the scroll it causes, since only the rows in view are drawn.
       const token = parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'));
@@ -6282,7 +6286,7 @@ async function wideBodyDialog(theme) {
       const at = rows.map((r) => Math.round(parseFloat(r.style.top) / token));
       const lastShown = Math.min(lines, Math.ceil((pre.scrollTop + pre.clientHeight) / token)) - 1;
       return {
-        body: { client: body.clientHeight, inner: Math.round(body.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom)), scroll: body.scrollHeight },
+        body: { above: Math.round(above), client: body.clientHeight, inner: Math.round(body.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom) - above), scroll: body.scrollHeight },
         dialog: { client: dialog.clientHeight, height: Math.round(dialog.getBoundingClientRect().height), scroll: dialog.scrollHeight, width: Math.round(dialog.getBoundingClientRect().width) },
         pre: { client: pre.clientHeight, drawn: rows.length, lines, long: lines * token > pre.clientHeight, outer: pre.offsetHeight, row: rows[0]?.getBoundingClientRect().height ?? null, scroll: pre.scrollHeight, token, visible },
         span: {
@@ -6291,6 +6295,8 @@ async function wideBodyDialog(theme) {
         },
       };
     });
+  // The box at 1280 by 800, where the find measure opens the dialog again.
+  let findBox = null;
   for (const { height, width } of [
     { height: 800, width: 1280 },
     { height: 900, width: 1440 },
@@ -6304,6 +6310,7 @@ async function wideBodyDialog(theme) {
       say(`${where} is not drawn`);
       continue;
     }
+    if (width === 1280) findBox = got.pre;
     if (got.dialog.width !== 1040) say(`${where} is ${got.dialog.width}px wide, not 1040px`);
     const tall = Math.min(800, height - 48);
     if (got.dialog.height !== tall) say(`${where} is ${got.dialog.height}px tall, not ${tall}px`);
@@ -6336,6 +6343,7 @@ async function wideBodyDialog(theme) {
   if (after.dialog) say('Escape left the dialog open');
   if (!after.drawer) say('Escape closed the drawer with the dialog');
   if (after.focus !== 'the link') say(`Escape left the focus on ${after.focus}, not on the Open wide link it opened from`);
+  if (after.drawer && !after.dialog) await bodyFind(theme, findBox);
   const colorsHeld = () => {
     measurements.push(`${theme} /requests body token colors ${JSON.stringify(colors)}`);
     for (const [cls, read] of Object.entries(colors)) {
@@ -6414,6 +6422,142 @@ async function wideBodyDialog(theme) {
     for (const [cls, read] of Object.entries(await responseColors())) colors[cls] ??= read;
   }
   colorsHeld();
+}
+
+/**
+ * The find field from the drawer, on the Request block the wide measure opened and closed. The term is the trimmed text
+ * of the body's last line of more than three characters that sits, and first holds that text, past a third of the
+ * wide box (read at 1280 by 800), off the text Copy all hands a `writeText` stub, and a body with no such line records
+ * the skip. Typed into the drawer block's field, it draws the find row at the 400 px drawer with nothing scrolling it
+ * sideways, the field at least 8rem wide and the count and its three buttons on one line. Enter opens the wide dialog
+ * on the term's first hit: that row is the one drawn active, inside the rows in view, the box scrolled off its top, the
+ * mark's fill apart from the active row's tint and the focus in the dialog's field. Escape then clears the term with
+ * the dialog open, the next one closes the dialog, and the focus lands on the drawer's field.
+ */
+async function bodyFind(theme, box) {
+  const say = (what) => failures.push(`${theme} /requests body find: ${what}`);
+  if (box === null) {
+    measurements.push(`${theme} /requests body find skipped: the wide dialog drew no box at 1280 by 800`);
+    return;
+  }
+  const block = page.locator('.drawer .body-block').first();
+  const copy = block.locator('.body-block__head button', { hasText: 'Copy all' });
+  if ((await copy.count()) === 0) {
+    say('the Request block has no Copy all');
+    return;
+  }
+  await page.evaluate(() => {
+    window.__e2eWritten = [];
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (window.__e2eWritten.push(text), Promise.resolve()) } });
+  });
+  await copy.first().click();
+  await advance(CLOCK_STEP_MS);
+  const text = await page.evaluate(() => {
+    const written = window.__e2eWritten;
+    delete navigator.clipboard;
+    return written[0] ?? null;
+  });
+  const lines = text === null ? [] : text.split('\n');
+  if (text !== null && text !== '' && text.endsWith('\n')) lines.pop();
+  const lowered = lines.map((line) => line.toLowerCase());
+  const third = box.client / 3;
+  let term = null;
+  let first = -1;
+  for (let i = lines.length - 1; i >= 0 && i * box.token > third && term === null; i -= 1) {
+    const trimmed = lines[i].trim();
+    if (trimmed.length <= 3) continue;
+    const at = lowered.findIndex((line) => line.includes(trimmed.toLowerCase()));
+    if (at * box.token > third) {
+      term = trimmed;
+      first = at;
+    }
+  }
+  if (term === null) {
+    measurements.push(`${theme} /requests body find skipped: no line of the ${lines.length} first holds its text past a third of the ${box.client}px box`);
+    return;
+  }
+  // The drawer's row comes first: the dialog the block mounts later holds a second one.
+  const field = block.locator('.body-block__find input').first();
+  await field.fill(term);
+  await advance(CLOCK_STEP_MS);
+  const group = await page.evaluate(() => {
+    const row = document.querySelector('.drawer .body-block .body-block__find');
+    const field = row?.querySelector('input');
+    const actions = row?.querySelector('.body-block__find-actions');
+    if (!row || !field || !actions) return null;
+    const middles = [...actions.children].map((c) => {
+      const r = c.getBoundingClientRect();
+      return r.top + r.height / 2;
+    });
+    return {
+      actions: actions.children.length,
+      client: row.clientWidth,
+      drawer: Math.round(document.querySelector('.drawer')?.getBoundingClientRect().width ?? 0),
+      field: Math.round(field.getBoundingClientRect().width),
+      floor: 8 * parseFloat(getComputedStyle(document.documentElement).fontSize),
+      lines: new Set([field, actions].map((el) => Math.round(el.getBoundingClientRect().top))).size,
+      scroll: row.scrollWidth,
+      spread: Math.round((Math.max(...middles) - Math.min(...middles)) * 10) / 10,
+    };
+  });
+  if (group === null) say("the drawer's Request block draws no find row");
+  else {
+    if (group.scroll > group.client) say(`the find row needs ${group.scroll}px of its ${group.client}px`);
+    if (group.field < group.floor) say(`the find field is ${group.field}px wide, under 8rem (${group.floor}px)`);
+    if (group.actions !== 4) say(`the find row draws ${group.actions} parts after the field, not the count and three buttons`);
+    if (group.spread > 1) say(`the count and the buttons sit on more than one line (their middles ${group.spread}px apart)`);
+  }
+  await field.press('Enter');
+  try {
+    await page.waitForSelector('dialog[open].dialog--wide', { timeout: 5_000 });
+  } catch {
+    say("Enter in the drawer's field opened no dialog");
+    return;
+  }
+  await advance(CLOCK_STEP_MS);
+  const read = await page.evaluate(() => {
+    const dialog = document.querySelector('dialog[open].dialog--wide');
+    const pre = dialog?.querySelector('.body-block__pre');
+    if (!dialog || !pre) return null;
+    const token = parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'));
+    const actives = [...pre.querySelectorAll('.body-row--active')];
+    const row = actives[0];
+    const mark = row?.querySelector('mark.body-row__hit');
+    return {
+      active: row ? Math.round(parseFloat(row.style.top) / token) : null,
+      actives: actives.length,
+      count: dialog.querySelector('.body-block__find-actions > span')?.textContent ?? '',
+      focus: document.activeElement === dialog.querySelector('.body-block__find input'),
+      markFill: mark ? getComputedStyle(mark).backgroundColor : null,
+      rowFill: row ? getComputedStyle(row).backgroundColor : null,
+      scrollTop: pre.scrollTop,
+      shown: [Math.floor(pre.scrollTop / token), Math.ceil((pre.scrollTop + pre.clientHeight) / token) - 1],
+    };
+  });
+  await page.keyboard.press('Escape');
+  await settle();
+  const kept = await page.evaluate(() => ({ open: document.querySelector('dialog[open]') !== null, value: document.querySelector('dialog[open] .body-block__find input')?.value ?? null }));
+  await page.keyboard.press('Escape');
+  await settle();
+  const after = await page.evaluate(() => {
+    const field = document.querySelector('.drawer .body-block .body-block__find input');
+    return { dialog: document.querySelector('dialog[open]') !== null, drawer: document.querySelector('.drawer') !== null, focus: field !== null && document.activeElement === field, value: field?.value ?? null };
+  });
+  measurements.push(`${theme} /requests body find from the drawer ${JSON.stringify({ after, box: box.client, first, group, kept, read, term: term.slice(0, 40) })}`);
+  if (read === null) {
+    say('the dialog Enter opened draws no text box');
+    return;
+  }
+  if (read.actives !== 1 || read.active !== first) say(`Enter drew ${read.actives} active rows, the first at line ${read.active}, not the term's first hit at line ${first}`);
+  else if (read.active < read.shown[0] || read.active > read.shown[1]) say(`the active row ${read.active} lies outside the rows ${read.shown.join(' to ')} in view`);
+  if (!(read.scrollTop > 0)) say(`the box stands at scrollTop ${read.scrollTop} for a hit past a third of it`);
+  if (read.markFill === null || read.markFill === read.rowFill) say(`the mark's fill ${read.markFill} does not stand apart from the active row's ${read.rowFill}`);
+  if (!read.focus) say("Enter from the drawer left the focus outside the dialog's field");
+  if (!kept.open || kept.value !== '') say(`Escape with the term ${kept.open ? `left the field reading ${JSON.stringify(kept.value)}` : 'closed the dialog'}`);
+  if (after.dialog) say('Escape in the empty field left the dialog open');
+  if (!after.drawer) say('Escape in the empty field closed the drawer with the dialog');
+  if (!after.focus) say("the dialog's close left the focus off the drawer's field");
+  if (after.value !== '') say(`the drawer's field reads ${JSON.stringify(after.value)} after the clear`);
 }
 
 /**

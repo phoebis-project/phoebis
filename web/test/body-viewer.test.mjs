@@ -36,8 +36,27 @@ const render = (node) => {
   return container;
 };
 
+/** Renders `node` again on the root `render` made last, so the viewer keeps its box and the stubs on it. */
+const rerender = (node) => act(() => roots.at(-1).render(node));
+
 /** The drawn rows as their line numbers, read from each row's offset at 18 px a row, with the text each holds. */
 const drawn = (pre) => [...pre.querySelectorAll('.body-row')].map((row) => ({ at: parseFloat(row.style.top) / 18, text: row.textContent }));
+
+/**
+ * The geometry a browser gives the mounted `pre`, which jsdom lays out as nothing: `box.height` px tall, its scroll
+ * offset held in `box.top` and each scroll counted in `box.sets`.
+ */
+const stubBox = (pre, height) => {
+  const box = { height, sets: 0, top: 0 };
+  Object.defineProperty(pre, 'clientHeight', { configurable: true, get: () => box.height });
+  Object.defineProperty(pre, 'scrollTop', { configurable: true, get: () => box.top, set: (to) => { box.sets += 1; box.top = to; } });
+  return box;
+};
+/** The line numbers of the rows drawn active. */
+const activeAt = (pre) => [...pre.querySelectorAll('.body-row--active')].map((row) => parseFloat(row.style.top) / 18);
+/** Each mark as its row's line number and the text it holds. */
+const marksOf = (pre) => [...pre.querySelectorAll('mark.body-row__hit')].map((mark) => [parseFloat(mark.closest('.body-row')?.style.top) / 18, mark.textContent]);
+const THOUSAND = Array.from({ length: 1000 }, (_, i) => `line ${i}`);
 
 test('the viewer draws the rows in view and 20 rows above and below them, each at its own offset', () => {
   const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
@@ -81,4 +100,87 @@ test('the width floor copies the line of the most graphemes, so combining marks 
   const probe = container.querySelector('.body-rows > [aria-hidden="true"]');
   assert.ok(probe, 'the viewer holds its hidden copy');
   assert.equal(probe.textContent, ascii, 'the ASCII line is the wider one as drawn');
+});
+
+test('a find whose active hit lies outside the window scrolls its row into the upper third and draws it active', () => {
+  const container = render(h(BodyViewer, { highlight: false, lines: THOUSAND }));
+  const pre = container.querySelector('pre.body-block__pre');
+  const box = stubBox(pre, 180);
+  rerender(h(BodyViewer, { find: { active: 500, term: 'line 500' }, highlight: false, lines: THOUSAND }));
+  assert.equal(box.top, 500 * 18 - 180 / 3, "the row's offset less a third of the box");
+  assert.deepEqual(activeAt(pre), [500], 'the hit is the one row drawn active');
+  rerender(h(BodyViewer, { find: { active: 2, term: 'line 2' }, highlight: false, lines: THOUSAND }));
+  assert.equal(box.top, 0, 'a row within the top third scrolls to the top, not above it');
+  assert.deepEqual(activeAt(pre), [2]);
+});
+
+test('every occurrence of the term on a drawn row is marked, in any case and on the text as drawn', () => {
+  const lines = ['alpha beta Alpha', 'gamma', 'ALPHA', '\u0130stanbul istanbul'];
+  const container = render(h(BodyViewer, { find: { active: 0, term: 'alpha' }, highlight: false, lines }));
+  const pre = container.querySelector('pre.body-block__pre');
+  assert.deepEqual(marksOf(pre), [
+    [0, 'alpha'],
+    [0, 'Alpha'],
+    [2, 'ALPHA'],
+  ]);
+  assert.ok(
+    drawn(pre).every((r) => r.text === lines[r.at]),
+    'a marked row holds its line',
+  );
+  // The dotted capital lowers to two code units, so offsets read off a whole lowered line would land one unit late.
+  rerender(h(BodyViewer, { find: { active: 3, term: 'stan' }, highlight: false, lines }));
+  assert.deepEqual(marksOf(pre), [
+    [3, 'stan'],
+    [3, 'stan'],
+  ]);
+});
+
+test('a highlighted row is marked inside its tokens, so an occurrence across two tokens is marked in each', () => {
+  const lines = ['{"name": "value"}'];
+  const container = render(h(BodyViewer, { find: { active: 0, term: 'ME": "v' }, highlight: true, lines }));
+  const pre = container.querySelector('pre.body-block__pre');
+  const parts = [...pre.querySelectorAll('mark.body-row__hit')].map((mark) => [mark.parentElement?.className, mark.textContent]);
+  assert.deepEqual(parts, [
+    ['tok-key', 'me"'],
+    ['tok-punct', ':'],
+    ['body-row body-row--active', ' '],
+    ['tok-string', '"v'],
+  ]);
+  assert.equal(pre.querySelector('.body-row')?.textContent, lines[0], 'the row holds its line');
+});
+
+test('a term with no active hit scrolls nothing and draws no row active', () => {
+  const container = render(h(BodyViewer, { highlight: false, lines: THOUSAND }));
+  const pre = container.querySelector('pre.body-block__pre');
+  const box = stubBox(pre, 180);
+  rerender(h(BodyViewer, { find: { active: null, term: 'absent' }, highlight: false, lines: THOUSAND }));
+  assert.equal(box.sets, 0, 'no scroll');
+  assert.deepEqual(activeAt(pre), []);
+});
+
+test("a find set while the box has no height scrolls once the box's observer reports one", (t) => {
+  // The viewer observes its box and its hidden copy, so each callback is kept with the element it watches.
+  const observed = [];
+  globalThis.ResizeObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+    }
+    observe(el) {
+      observed.push({ callback: this.callback, el });
+    }
+    unobserve() {}
+    disconnect() {}
+  };
+  t.after(() => delete globalThis.ResizeObserver);
+  const container = render(h(BodyViewer, { highlight: false, lines: THOUSAND }));
+  const pre = container.querySelector('pre.body-block__pre');
+  const box = stubBox(pre, 0);
+  rerender(h(BodyViewer, { find: { active: 500, term: 'line 500' }, highlight: false, lines: THOUSAND }));
+  assert.equal(box.sets, 0, 'a box with no height takes no scroll the browser would clamp');
+  const report = observed.find((o) => o.el === pre)?.callback;
+  assert.ok(report !== undefined, 'the viewer observes its box');
+  box.height = 180;
+  act(() => report([]));
+  assert.equal(box.top, 500 * 18 - 180 / 3, "the box's first height applies the held scroll");
+  assert.deepEqual(activeAt(pre), [500], 'and the window read after it draws the hit');
 });

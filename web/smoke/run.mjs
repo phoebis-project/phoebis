@@ -10654,6 +10654,105 @@ await m.navigate(`/requests/${laptopRow.id}`);
         `the text holds ${expected.join('\n').length}`,
       ],
     });
+    // The find field walks the same body. "17" stands on 1,578 lines, the first line 18 inside the mount's window and
+    // the last line 19,918, so Enter from the drawer opens the dialog on a row the mount draws, and Shift+Enter wraps
+    // to a row only the scroll the step sets can draw. The box takes the browser's geometry once the dialog is open.
+    const findGroupOf = (root) => root?.querySelector('.body-block__find') ?? null;
+    const countOf = (group) => group?.querySelector('.body-block__find-actions > span')?.textContent ?? '';
+    const findButton = (group, name) => group?.querySelector(`button[aria-label="${name}"]`) ?? null;
+    const drawerGroup = findGroupOf(block);
+    const field = drawerGroup?.querySelector('input') ?? null;
+    const idle = {
+      clear: findButton(drawerGroup, 'Clear find') !== null,
+      count: countOf(drawerGroup),
+      label: field?.getAttribute('aria-label'),
+      placeholder: field?.getAttribute('placeholder'),
+      steps: ['Previous hit', 'Next hit'].map((name) => findButton(drawerGroup, name)?.disabled ?? null),
+      text: drawerGroup?.textContent ?? null,
+    };
+    setInput(field, 'zzz');
+    await m.settle(100);
+    const none = { count: countOf(drawerGroup), muted: drawerGroup?.querySelector('.body-block__find-actions > span')?.classList.contains('muted') === true, steps: ['Previous hit', 'Next hit'].map((name) => findButton(drawerGroup, name)?.disabled ?? null) };
+    field?.focus();
+    setInput(field, '17');
+    await m.settle(100);
+    const typed = countOf(drawerGroup);
+    pressKey('Enter', field);
+    await m.settle(100);
+    const found = m.container.querySelector('dialog[open]');
+    const foundPre = found?.querySelector('.body-block__pre');
+    const foundGroup = findGroupOf(found);
+    const foundField = foundGroup?.querySelector('input') ?? null;
+    /** The row drawn for `line`, whether it is active, and the text of each mark on it. */
+    const rowAt = (line) => {
+      const row = [...(foundPre?.querySelectorAll('.body-row') ?? [])].find((r) => parseFloat(r.style.top) / ROW_PX === line);
+      return { active: row?.classList.contains('body-row--active') === true, drawn: row !== undefined, marks: [...(row?.querySelectorAll('mark.body-row__hit') ?? [])].map((mark) => mark.textContent) };
+    };
+    const entered = { count: countOf(foundGroup), focus: foundField !== null && document.activeElement === foundField, row: rowAt(18), value: foundField?.value };
+    let foundTop = 0;
+    if (foundPre) {
+      Object.defineProperty(foundPre, 'clientHeight', { configurable: true, get: () => box });
+      Object.defineProperty(foundPre, 'scrollTop', { configurable: true, get: () => foundTop, set: (to) => { foundTop = to; } });
+    }
+    foundField?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', shiftKey: true }));
+    await m.settle(100);
+    const wrapped = { count: countOf(foundGroup), drawer: countOf(drawerGroup), row: rowAt(19_918), top: foundTop };
+    pressKey('Escape', foundField);
+    await m.settle(100);
+    const escaped = { count: countOf(foundGroup), open: m.container.querySelector('dialog[open]') !== null, value: foundField?.value };
+    await closeWide(m);
+    const returned = field !== null && document.activeElement === field;
+    setInput(field, '1999');
+    await m.settle(100);
+    const retyped = countOf(drawerGroup);
+    findButton(drawerGroup, 'Clear find')?.click();
+    await m.settle(100);
+    const cleared = { count: countOf(drawerGroup), value: field?.value };
+    pressKey('Escape', field);
+    await m.settle(100);
+    const drawerLeft = m.container.querySelector('.drawer') === null;
+    const marked = (read) => read.drawn && read.active && read.marks.length === 1 && read.marks[0] === '17';
+    results.push({
+      name: '/requests the find field counts the lines holding a term, opens wide on its first hit, wraps to the last and clears',
+      ok:
+        !idle.clear &&
+        idle.count === '' &&
+        idle.label === 'Find in the Request body' &&
+        idle.placeholder === 'Find' &&
+        idle.steps.every((disabled) => disabled === true) &&
+        idle.text === '' &&
+        none.count === 'No match' &&
+        none.muted &&
+        none.steps.every((disabled) => disabled === true) &&
+        typed === '1 of 1578' &&
+        entered.count === '1 of 1578' &&
+        entered.focus &&
+        entered.value === '17' &&
+        marked(entered.row) &&
+        wrapped.count === '1578 of 1578' &&
+        wrapped.drawer === '1578 of 1578' &&
+        marked(wrapped.row) &&
+        wrapped.top === 19_918 * ROW_PX - box / 3 &&
+        escaped.open &&
+        escaped.count === '' &&
+        escaped.value === '' &&
+        returned &&
+        retyped === '1 of 10' &&
+        cleared.count === '' &&
+        cleared.value === '' &&
+        drawerLeft,
+      missing: [
+        `idle: ${JSON.stringify(idle)}`,
+        `no match: ${JSON.stringify(none)}`,
+        `typed "17": ${typed}`,
+        `Enter: ${JSON.stringify(entered)}`,
+        `Shift+Enter: ${JSON.stringify(wrapped)}, scrollTop expected ${19_918 * ROW_PX - box / 3}`,
+        `Escape with the term: ${JSON.stringify(escaped)}`,
+        `the close's focus ${returned ? 'on' : 'off'} the drawer's field`,
+        `retyped "1999": ${retyped}, Clear find: ${JSON.stringify(cleared)}`,
+        `Escape in the empty field ${drawerLeft ? 'closed' : 'left open'} the drawer`,
+      ],
+    });
   }
 }
 {

@@ -136,7 +136,12 @@ drawer, which opens once the request list's shot is taken (its chips in the stat
 row's 20x equivalent chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by 900, the
 story's Fable request reading a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order), a reasons panel
 link landing on a list whose first row's drawer reads the reason (mock pass, on a load of its own once every view's shot
-is taken), the wide body view's width floor (mock pass, on a load of its own once every view's shot is taken: the page
+is taken), the find field of a captured body (after the wide dialog's Escape, the trimmed text of a line the copied body
+first holds past a third of the box typed into the Request block's field, the find row at the 400 px drawer inside its
+width with the field at least 8rem wide and the count and its buttons on one line, and Enter opening the wide dialog
+with that row the one drawn active inside the rows in view, the box scrolled off its top, the mark's fill apart from the
+row's tint and the focus in the dialog's field, in both passes and recorded as skipped where the body holds no such
+line), the wide body view's width floor (mock pass, on a load of its own once every view's shot is taken: the page
 an edge answered an upstream 502 with, indented with tabs, opened wide, its block of rows no narrower than its widest
 row's text, which runs wider than the scroll box), the routing log's decision card, which opens once the log's shot is
 taken (the strip and the candidate table inside the card at 1280 by 800 and 1440 by 900 with nothing scrolling sideways,

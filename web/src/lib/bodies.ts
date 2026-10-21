@@ -99,6 +99,46 @@ export function bodyLines(text: string): string[] {
   return lines;
 }
 
+const NOT_ASCII = /[\u0080-\uffff]/;
+
+/**
+ * The text lowered one code unit at a time, so an offset found in it is an offset in the text as drawn. A whole-string
+ * lowering moves every offset after a character whose lower case is longer (U+0130 lowers to two code units).
+ */
+function lowered(text: string): string {
+  if (!NOT_ASCII.test(text)) return text.toLowerCase();
+  let out = '';
+  for (let i = 0; i < text.length; i += 1) out += text[i].toLowerCase()[0];
+  return out;
+}
+
+/**
+ * The indexes of the lines that hold `term` as case-insensitive plain text, in order and one per line. An empty term
+ * has none.
+ */
+export function findHits(lines: readonly string[], term: string): number[] {
+  if (term === '') return [];
+  const needle = lowered(term);
+  const hits: number[] = [];
+  lines.forEach((line, i) => {
+    if (lowered(line).includes(needle)) hits.push(i);
+  });
+  return hits;
+}
+
+/**
+ * The offsets at which `term` starts in `line` as case-insensitive plain text, left to right and none overlapping the
+ * one before. An empty term has none.
+ */
+export function findOffsets(line: string, term: string): number[] {
+  if (term === '') return [];
+  const needle = lowered(term);
+  const text = lowered(line);
+  const starts: number[] = [];
+  for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length)) starts.push(at);
+  return starts;
+}
+
 export type TokenClass = 'tok-event' | 'tok-key' | 'tok-literal' | 'tok-number' | 'tok-punct' | 'tok-string';
 
 export interface Token {

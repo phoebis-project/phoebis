@@ -3224,6 +3224,30 @@
   white-space: nowrap;
 }
 
+/* A row of its own under the head, so the label stays the head's first child and a cut head keeps its own wrap. */
+.body-block__find {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* The field takes the width the row leaves, over .input's full width, and keeps room for a term. */
+.body-block__find .input {
+  flex: 1 1 10rem;
+  width: auto;
+  min-width: 8rem;
+}
+
+/* The count and the buttons keep one line as a group, which wraps under the field where the row runs short. */
+.body-block__find-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+}
+
 .body-block__pre,
 .snippet {
   max-height: 260px;
@@ -3256,6 +3280,16 @@
   height: var(--body-row);
   line-height: var(--body-row);
   white-space: pre;
+}
+
+/* Stronger than the active row's tint, so a hit reads on the active row in both themes. */
+.body-row__hit {
+  color: inherit;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.body-row--active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .snippet {

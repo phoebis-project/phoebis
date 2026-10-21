@@ -14,10 +14,10 @@ import { AttemptCount } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton } from '@/components/ui/primitives';
 import { addressWindow, RANGE_PRESETS, REQUESTS_CODEC, type RequestsAddress } from '@/lib/address';
 import { autoModeLabel } from '@/lib/autoMode';
-import { bodyLines, bodyText } from '@/lib/bodies';
+import { bodyLines, bodyText, findHits } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
@@ -856,29 +856,97 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
   // runs when the body is first opened wide or copied. The memo keeps it while the drawer shows this body.
   const textOf = useMemo(() => once(() => bodyText(value)), [value]);
   const linesOf = useMemo(() => once(() => bodyLines(textOf())), [textOf]);
+  // One state for the drawer's group and the dialog's. An empty term asks for no lines, so only a typed term indents.
+  const [find, setFind] = useState({ index: 0, term: '' });
+  const hits = useMemo(() => (find.term === '' ? [] : findHits(linesOf(), find.term)), [find.term, linesOf]);
+  const index = Math.min(find.index, hits.length - 1);
+  const active = hits.length === 0 ? null : hits[index];
   // The dialog leaves the tree while it is open, so the browser's close steps never hand the focus back to the control
-  // that opened it. The link takes it as the dialog goes.
+  // that opened it. The link takes it as the dialog goes, or the drawer's field where a step opened the dialog.
   const link = useRef<HTMLButtonElement>(null);
+  const drawerFind = useRef<HTMLDivElement>(null);
+  const dialogFind = useRef<HTMLDivElement>(null);
+  const fromField = useRef(false);
   const wasWide = useRef(false);
+  // A child's effects run before its parent's, so the dialog's showModal has run and its own focus is taken over here.
   useEffect(() => {
-    if (wide) wasWide.current = true;
-    else if (wasWide.current) {
+    if (wide) {
+      wasWide.current = true;
+      if (fromField.current) dialogFind.current?.querySelector('input')?.focus();
+    } else if (wasWide.current) {
       wasWide.current = false;
-      link.current?.focus();
+      (fromField.current ? drawerFind.current?.querySelector('input') : link.current)?.focus();
+      fromField.current = false;
     }
   }, [wide]);
+  // A step from the drawer opens the dialog on the active hit and leaves it there, so a fresh term opens on its first.
+  const step = (by: number, inDialog: boolean) => {
+    if (hits.length === 0) return;
+    if (!inDialog && !wide) {
+      fromField.current = true;
+      setWide(true);
+      return;
+    }
+    setFind((f) => ({ ...f, index: (Math.min(f.index, hits.length - 1) + by + hits.length) % hits.length }));
+  };
+  const findGroup = (at: typeof drawerFind, inDialog: boolean) => (
+    <div ref={at} className="body-block__find">
+      <Input
+        placeholder="Find"
+        aria-label={`Find in the ${label} body`}
+        value={find.term}
+        onChange={(e) => setFind({ index: 0, term: e.target.value })}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') step(e.shiftKey ? -1 : 1, inDialog);
+          else if (e.key === 'Escape' && find.term !== '') {
+            // The dialog's cancel is the key's default action and the drawer's Escape listens on the window, so the key
+            // that clears a term goes no further.
+            e.preventDefault();
+            e.stopPropagation();
+            setFind({ index: 0, term: '' });
+          }
+        }}
+      />
+      <span className="body-block__find-actions">
+        {find.term !== '' && <span className={hits.length === 0 ? 'muted' : undefined}>{hits.length === 0 ? 'No match' : `${index + 1} of ${hits.length}`}</span>}
+        <Button size="sm" variant="ghost" icon={<IconChevronLeft size={14} />} aria-label="Previous hit" disabled={hits.length === 0} onClick={() => step(-1, inDialog)} />
+        <Button size="sm" variant="ghost" icon={<IconChevronRight size={14} />} aria-label="Next hit" disabled={hits.length === 0} onClick={() => step(1, inDialog)} />
+        {find.term !== '' && (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<IconX size={14} />}
+            aria-label="Clear find"
+            onClick={() => {
+              setFind({ index: 0, term: '' });
+              at.current?.querySelector('input')?.focus();
+            }}
+          />
+        )}
+      </span>
+    </div>
+  );
   return (
     <div className="body-block">
       <div className="body-block__head">
         <span>{label}</span>
         {dropped !== undefined && <span className="muted">cut at 8 MiB, {fmtInt(dropped)} bytes dropped</span>}
         <span className="body-block__actions">
-          <button ref={link} type="button" className="link-btn" onClick={() => setWide(true)}>
+          <button
+            ref={link}
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              fromField.current = false;
+              setWide(true);
+            }}
+          >
             Open wide
           </button>
           <CopyButton text={textOf} label="Copy all" />
         </span>
       </div>
+      {findGroup(drawerFind, false)}
       {/* Mounted only while open, so a closed dialog draws no rows. */}
       {wide && (
         <Dialog
@@ -889,7 +957,8 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
           className="dialog--wide"
           footer={<CopyButton text={textOf} label="Copy all" />}
         >
-          <BodyViewer highlight lines={linesOf()} />
+          {findGroup(dialogFind, true)}
+          <BodyViewer find={{ active, term: find.term }} highlight lines={linesOf()} />
         </Dialog>
       )}
     </div>

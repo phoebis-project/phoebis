@@ -131,3 +131,19 @@ test('a line that opens a string colors to its own end', () => {
   const [line] = '"cut here\n  "next": 1'.split('\n');
   assert.deepEqual(d.highlightJson(line), [{ cls: 'tok-string', text: '"cut here' }]);
 });
+
+test('findHits answers the lines that hold the term in any case, in order', () => {
+  assert.deepEqual(d.findHits(['Alpha', 'beta', 'ALPHABET', 'gamma alpha'], 'alpha'), [0, 2, 3]);
+});
+
+test('findHits counts a line once however often the term occurs on it', () => {
+  assert.deepEqual(d.findHits(['zero', 'one one one', 'two', 'One'], 'one'), [1, 3]);
+});
+
+test('findHits matches a term with a space as plain text', () => {
+  assert.deepEqual(d.findHits(['  "role": "user",', '  "role":"user",', 'role user'], '"role": "user"'), [0]);
+});
+
+test('findHits answers no line for an empty term', () => {
+  assert.deepEqual(d.findHits(['', 'a'], ''), []);
+});
