@@ -424,8 +424,9 @@ pub(crate) struct Event {
     ///   with the largest of them and the cause, `ttl` or `incarnation`.
     /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `canceled` or
     ///   `trial`.
-    /// - `window_cleared`: a plan window read under 1.0 after a reading at 1.0 under the same reset, with the
-    ///   reading before and after and the unchanged reset, so the history no longer keeps the window spent.
+    /// - `window_cleared`: a plan window read under 1.0 after a reading at 1.0 or a predicted spent edge under the
+    ///   same reset, with the figure before, the reading's or the prediction's, the reading after and the unchanged
+    ///   reset, so the history no longer keeps the window spent.
     /// - `window_reset`: a plan window's reset passed, seen by a sample naming a later reset, or naming none once
     ///   read past it (`sample`), or by the clock (`clock`), once per reset.
     /// - `window_spent`: a plan window's reading reached 1.0 from under it, with the head's request when a head

@@ -1348,6 +1348,55 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
 }
 
 #[tokio::test]
+async fn a_window_cleared_after_the_spent_window_ends_the_condition_the_move_onto_that_account_held(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    routing_event(
+        &rig,
+        NOW - 50 * MINUTE,
+        "pin_migrated",
+        "business",
+        None,
+        json!({ "reason": "spent", "from_account": "direct", "fit": "fits" }),
+    );
+    routing_event(
+        &rig,
+        NOW - 10 * MINUTE,
+        "window_spent",
+        "business",
+        None,
+        json!({ "window": "five_hour", "source": "head" }),
+    );
+    routing_event(
+        &rig,
+        NOW - 5 * MINUTE,
+        "window_cleared",
+        "business",
+        None,
+        json!({ "window": "five_hour", "source": "head" }),
+    );
+    fold_at(&rig, NOW).await;
+    let conditions = read(&attention, NOW);
+    let cleared = find(&conditions, Kind::DestinationSpent, "business")
+        .cloned()
+        .expect("an OAuth account keeps its series while it holds nothing");
+    assert_eq!(
+        (cleared.holds, cleared.since, &cleared.detail),
+        (
+            false,
+            None,
+            &json!({ "fits": {}, "moves": 0, "setting": ["window_ceiling"], "windows": [] })
+        ),
+        "the clear ended the spent window's reach, so the move before it holds nothing"
+    );
+    assert!(
+        find(&conditions, Kind::WallReached, "business").is_some_and(|wall| wall.holds),
+        "the wall was still reached"
+    );
+}
+
+#[tokio::test]
 async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_with_the_projection_error(
 ) {
     let rig = rig().await;

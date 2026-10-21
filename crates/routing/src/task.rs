@@ -274,9 +274,10 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
-    /// A plan window read under 1.0 after a reading at 1.0 or above under the same reset: the readings before and
-    /// after and the unchanged reset, nothing of why, since a reset grant and an upstream correction read alike
-    /// and the router infers no cause.
+    /// A plan window read under 1.0 after a reading at 1.0 or above, or after a wall the prediction announced, under
+    /// the same reset: the figure before, the stored reading's or the prediction's, the reading after and the
+    /// unchanged reset, nothing of why, since a reset grant and an upstream correction read alike and the router
+    /// infers no cause.
     WindowCleared {
         account_id: String,
         window: String,
@@ -504,6 +505,8 @@ pub struct SelectAnswer {
     /// The selected account's in-flight ticket, taken where the selection read the count, for the request's
     /// first wire attempt on it; `None` for any other answer.
     pub ticket: Option<AccountTicket>,
+    /// The funding ordinal the claim answered for a `funding_required` account's attempt, `None` for any other.
+    pub funding_ordinal: Option<u64>,
 }
 
 /// Every report that names an account names its holder too: an id is reusable, and a report whose
@@ -521,9 +524,10 @@ pub enum Report {
         cause: StateCause,
         /// The upstream error's message where the verdict read one.
         detail: Option<String>,
-        /// When the attempt went out, on a funding retry's success alone. An attempt sent before the account's newest
-        /// funding mark says nothing about the balance that mark's refusal found, so its success clears nothing.
-        dispatched_at: Option<i64>,
+        /// The funding ordinal the attempt was dispatched under, on a funding retry's success alone. An attempt
+        /// dispatched under an older mark than the account's newest says nothing about the balance that mark's refusal
+        /// found, so its success clears nothing.
+        dispatched_ordinal: Option<u64>,
     },
     /// The ledger's standing: `degraded` from a failed batch until one lands and the spend is read again. A replacing
     /// reading.
@@ -820,7 +824,7 @@ impl Report {
                     state,
                     lifecycle_generation,
                     credential_generation,
-                    dispatched_at,
+                    dispatched_ordinal,
                     ..
                 },
                 Report::AccountState {
@@ -835,7 +839,7 @@ impl Report {
                 let stale_retry = generations == held_generations
                     && *held_state == AccountState::FundingRequired
                     && *state != AccountState::FundingRequired
-                    && dispatched_at.is_some();
+                    && dispatched_ordinal.is_some();
                 !stale_retry && generations >= held_generations
             }
             (Report::Credits { state, .. }, Report::Credits { state: held, .. }) => {
@@ -1990,12 +1994,12 @@ struct MovedState {
     detail: Option<String>,
 }
 
-/// A funding mark's write as the writer finished it, for the retry the loop stamped at `stamped_at`: the row's
-/// revision after it, `None` when the fences refused it.
+/// A funding mark's write as the writer finished it, for the retry entry `ordinal` names: the row's revision after
+/// it, `None` when the fences refused it.
 struct FundingWritten {
     account_id: String,
     incarnation: u64,
-    stamped_at: i64,
+    ordinal: u64,
     revision: Option<u64>,
 }
 
@@ -2025,7 +2029,7 @@ impl Marks {
             incarnation,
             cause,
             detail,
-            marked_at,
+            marked_ordinal,
             ..
         } = write
         else {
@@ -2035,9 +2039,9 @@ impl Marks {
             .then(|| FundingWritten {
                 account_id: account_id.clone(),
                 incarnation: *incarnation,
-                // An unstamped mark, a superseded verdict's, names no entry: the loop's clock reads epoch
-                // milliseconds, so no entry carries the stamp 0 and `funding_written` credits nothing for it.
-                stamped_at: marked_at.unwrap_or(0),
+                // An unstamped mark, a superseded verdict's, names no entry: an account's ordinals start at 1, so
+                // no entry carries the ordinal 0 and `funding_written` credits nothing for it.
+                ordinal: marked_ordinal.unwrap_or(0),
                 revision: answer.map(|(revision, _)| revision),
             })
             .into_iter()
@@ -2852,6 +2856,7 @@ impl Task {
             result: SelectResult::Refused(refusal),
             cancel: CancellationToken::new(),
             ticket: None,
+            funding_ordinal: None,
         });
     }
 
@@ -3189,7 +3194,7 @@ impl Task {
                         );
                     }
                 }
-                let (cancel, ticket) = match &result {
+                let (cancel, ticket, funding_ordinal) = match &result {
                     // Charged here, in the one place selections are serialized, so the count the next selection
                     // reads already holds this one: a ticket taken at the dial, awaits later, would let every
                     // selection answered in between read the same count and land over the cap. A token count
@@ -3202,26 +3207,32 @@ impl Task {
                         });
                         // The placed attempt's ticket is the funding retry's claim, so the one slot frees when that
                         // attempt ends, however long its head takes.
-                        if let (Some(ticket), AccountState::FundingRequired) =
-                            (&ticket, selection.account.state)
-                        {
-                            self.state.claim_funding_retry(
-                                &selection.account.id,
-                                selection.account.incarnation,
-                                ticket.id(),
-                                request.now,
-                            );
-                        }
-                        (self.token(&selection.account.id).child_token(), ticket)
+                        let funding_ordinal = match (&ticket, selection.account.state) {
+                            (Some(ticket), AccountState::FundingRequired) => {
+                                Some(self.state.claim_funding_retry(
+                                    &selection.account.id,
+                                    selection.account.incarnation,
+                                    ticket.id(),
+                                    request.now,
+                                ))
+                            }
+                            _ => None,
+                        };
+                        (
+                            self.token(&selection.account.id).child_token(),
+                            ticket,
+                            funding_ordinal,
+                        )
                     }
                     SelectResult::Exhausted(_)
                     | SelectResult::Held { .. }
-                    | SelectResult::Refused(_) => (CancellationToken::new(), None),
+                    | SelectResult::Refused(_) => (CancellationToken::new(), None, None),
                 };
                 let _ = reply.send(SelectAnswer {
                     result,
                     cancel,
                     ticket,
+                    funding_ordinal,
                 });
             }
             Command::Report(report, seq) => self.numbered_report(report, seq),
@@ -3233,7 +3244,7 @@ impl Task {
                     self.state.funding_written(
                         &row.account_id,
                         row.incarnation,
-                        row.stamped_at,
+                        row.ordinal,
                         row.revision,
                     );
                 }
@@ -4067,6 +4078,15 @@ impl Task {
                     })
                     .collect();
                 let now = (self.clock)();
+                // Read before the fold as the stored readings are, since a wall the prediction announced clears from
+                // the figure the prediction read over them.
+                let predicted: HashMap<String, f64> = stored
+                    .keys()
+                    .filter_map(|window| {
+                        let reading = self.state.predicted(&account_id, window, now)?;
+                        Some((window.clone(), reading.utilization))
+                    })
+                    .collect();
                 let sample = self.held_at_the_wall(&account_id, sample, &stored, now);
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
@@ -4088,6 +4108,7 @@ impl Task {
                             &account_id,
                             window,
                             stored.get(window).copied(),
+                            predicted.get(window).copied(),
                             reading,
                             source_request_id.as_deref(),
                             now,
@@ -4210,21 +4231,22 @@ impl Task {
                 credential_generation,
                 cause,
                 detail,
-                dispatched_at,
+                dispatched_ordinal,
             } => {
                 if state != AccountState::FundingRequired
-                    && dispatched_at
-                        .is_some_and(|at| self.state.funding_stamped_after(&account_id, at))
+                    && dispatched_ordinal.is_some_and(|ordinal| {
+                        self.state.funding_marked_since(&account_id, ordinal)
+                    })
                 {
                     tracing::debug!(
                         account = %account_id,
-                        "a funding retry's success predates the account's newest mark and clears nothing"
+                        "a funding retry's success went out under an older mark than the newest and clears nothing"
                     );
                     return;
                 }
                 // The store keeps no instant for a mark, so the retry is stamped here. A verdict about a holder the
                 // id no longer has moves no retry, as its write moves no state.
-                let mut marked_at = None;
+                let mut marked = None;
                 if !self.superseded(
                     &account_id,
                     incarnation,
@@ -4234,12 +4256,11 @@ impl Task {
                     if state == AccountState::FundingRequired {
                         let interval = i64::try_from(self.config.funding_retry.as_millis())
                             .unwrap_or(i64::MAX);
-                        marked_at = Some(self.state.funding_marked(
-                            &account_id,
-                            incarnation,
-                            (self.clock)(),
-                            interval,
-                        ));
+                        let now = (self.clock)();
+                        let ordinal =
+                            self.state
+                                .funding_marked(&account_id, incarnation, now, interval);
+                        marked = Some((now, ordinal));
                     } else {
                         self.state.funding_cleared(&account_id);
                     }
@@ -4258,7 +4279,8 @@ impl Task {
                     credential_generation,
                     cause,
                     detail,
-                    marked_at,
+                    marked_at: marked.map(|(at, _)| at),
+                    marked_ordinal: marked.map(|(_, ordinal)| ordinal),
                 }]);
             }
         }
@@ -4573,13 +4595,17 @@ impl Task {
 
     /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
     /// reset names, or no reset on a reading taken past it, then the window cleared, which a reading under 1.0 names
-    /// over one at 1.0 or above with no reset passed, or the window spent, which a reading at 1.0 or above names over
-    /// one under it, or over any one where it names the next reset after a passed one.
+    /// over one at 1.0 or above with no reset passed, or over a wall the prediction announced in the reading's cycle,
+    /// from `predicted`, the stored reading's prediction before this one replaced it, or the window spent, which a
+    /// reading at 1.0 or above names over one under it, or over any one where it names the next reset after a passed
+    /// one.
+    #[allow(clippy::too_many_arguments)]
     fn window_edges(
         &mut self,
         account_id: &str,
         window: &str,
         stored: Option<WindowReading>,
+        predicted: Option<f64>,
         reading: WindowReading,
         source_request_id: Option<&str>,
         now: i64,
@@ -4643,6 +4669,29 @@ impl Task {
                     utilization: reading.utilization,
                     // A reading that names no reset before the stored one passed stands under the stored reset.
                     reset: reading.reset.or(stored.reset),
+                    source: reading.source,
+                    source_request_id: source_request_id.map(String::from),
+                    at: now,
+                });
+            }
+        } else if reading.utilization < 1.0 {
+            // A wall the prediction announced over a stored reading under it clears as a stored reading's fall does,
+            // from the prediction's figure, once a reading of the announced cycle reads the window under its limit. The
+            // announcement a reading below the wall left standing past its reset is another cycle's and clears nothing.
+            let key = (account_id.to_string(), window.to_string());
+            let reset = reset_under(stored.as_ref(), &reading);
+            let announced = self
+                .spent_announced
+                .get(&key)
+                .is_some_and(|announced| same_cycle(*announced, reset, now, window));
+            if let Some(before) = predicted.filter(|_| announced) {
+                self.spent_announced.remove(&key);
+                self.emit(RouterEvent::WindowCleared {
+                    account_id: account_id.to_string(),
+                    window: window.to_string(),
+                    utilization_before: before,
+                    utilization: reading.utilization,
+                    reset,
                     source: reading.source,
                     source_request_id: source_request_id.map(String::from),
                     at: now,
@@ -5035,7 +5084,32 @@ impl Deferred {
     fn fold(&mut self, writes: Vec<StateWrite>) {
         for write in writes {
             match rows_of(write) {
-                Ok(rows) => self.open.extend(rows),
+                Ok(rows) => {
+                    for (key, mut write) in rows {
+                        // An account-state write that carries no stamp, a superseded verdict's, keeps the stamp of
+                        // the write it replaces, so the writer's acknowledgment still names the entry that write's
+                        // mark stamped and a load that reads the row past it drops that entry.
+                        if let StateWrite::AccountState {
+                            marked_at,
+                            marked_ordinal,
+                            ..
+                        } = &mut write
+                        {
+                            if marked_ordinal.is_none() {
+                                if let Some(StateWrite::AccountState {
+                                    marked_at: held_at,
+                                    marked_ordinal: held_ordinal,
+                                    ..
+                                }) = self.open.get(&key)
+                                {
+                                    *marked_at = *held_at;
+                                    *marked_ordinal = *held_ordinal;
+                                }
+                            }
+                        }
+                        self.open.insert(key, write);
+                    }
+                }
                 Err(rekey) => {
                     let rows = std::mem::take(&mut self.open);
                     self.closed.push((rows, *rekey));
@@ -5076,6 +5150,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             cause,
             detail,
             marked_at,
+            marked_ordinal,
         } => one(
             DeferredKey::AccountState {
                 account_id: account_id.clone(),
@@ -5092,6 +5167,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 cause,
                 detail,
                 marked_at,
+                marked_ordinal,
             },
         ),
         StateWrite::DeleteAffinity(keys) => Ok(keys

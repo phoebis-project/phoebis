@@ -581,7 +581,7 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `model_unweighted` | warning | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
 | `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind that ended in the last eight days with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no such window remains |
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
-| `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours |
+| `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours, or a `window_cleared` on the same window followed each such spent window |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
 | `slowed_long` | warning | the account | the slow-down spans of the last 24 hours sum at or under twice the pool's `slow_down_stretch_seconds`, at least an hour |
 
@@ -689,10 +689,11 @@ so the figure outlives the trailing day. The item opens the [routing log](consol
 windows since the condition began.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
-source followed on it within the hour. It is folded as `wall_reached` is. The subject is the destination account, and
-the item dates from the oldest such move. The detail counts the moves, gives their destination fits with a count each
-and names the spent windows and the setting `window_ceiling`. The item opens the routing log on the account's moves and
-spent windows since the condition began.
+source followed on it within the hour, until a `window_cleared` event on the same account and window follows that spent
+event. It is folded as `wall_reached` is. The subject is the destination account, and the item dates from the oldest
+such move. The detail counts the moves, gives their destination fits with a count each and names the spent windows and
+the setting `window_ceiling`. The item opens the routing log on the account's moves and spent windows since the
+condition began.
 
 **`shed_no_runway`** holds while a shedding round of the pool marked nothing for want of a destination with runway (the
 outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one round being enough. It is folded as

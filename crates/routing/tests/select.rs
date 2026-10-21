@@ -1716,14 +1716,14 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read
         RegistrySnapshot::from_load(load, [0; 32], 3_000, 2)
     };
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
+    let ordinal = st.funding_marked("a", 1, 2_000, 300_000);
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
     assert_eq!(
         st.funding_retries(),
         vec![("a".to_string(), 302_000)],
         "the writer has not acknowledged the mark, so the load may predate its write"
     );
-    st.funding_written("a", 1, stamp, Some(5));
+    st.funding_written("a", 1, ordinal, Some(5));
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 4));
     assert_eq!(
         st.funding_retries().len(),
@@ -1737,15 +1737,15 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read
         st.funding_retries().is_empty(),
         "the id names another holder, whose mark is its own"
     );
-    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
-    st.funding_written("a", 1, stamp, Some(5));
+    let ordinal = st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, ordinal, Some(5));
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 6));
     assert!(
         st.funding_retries().is_empty(),
         "the operator cleared the mark"
     );
-    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
-    st.funding_written("a", 1, stamp, None);
+    let ordinal = st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, ordinal, None);
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
     assert!(
         st.funding_retries().is_empty(),
@@ -17588,6 +17588,97 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
         "heavy's move costs nothing, so the pick plans it on b over light"
     );
     assert!(marked(&st, "heavy") && !marked(&st, "light") && !marked(&st, "small"));
+}
+
+/// Three warm pins on `a`, two of them last renewed by a classifier call with a prompt of 400 000 tokens: `current`,
+/// whose request the round runs on, burning twenty, `other` a tenth, and `plain`, whose last prompt of 10 000 tokens is
+/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection over the ceiling.
+fn classifier_renewed_round() -> RoutingState {
+    let mut st = rounding(vec![
+        PinRow {
+            last_input_tokens: 400_000,
+            last_classifier: true,
+            ..burning("current", "a", 20.0, true, T)
+        },
+        PinRow {
+            last_input_tokens: 400_000,
+            last_classifier: true,
+            ..burning("other", "a", 0.1, true, T)
+        },
+        PinRow {
+            last_input_tokens: 10_000,
+            ..burning("plain", "a", 0.4, true, T)
+        },
+    ]);
+    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st
+}
+
+/// The round `current`'s request of a 2 000 token body runs, a classifier call when `classifier` is set.
+fn classifier_renewed_round_on(classifier: bool) -> phoebis_routing::ShedRoundFacts {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = classifier_renewed_round();
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let req = SelectRequest {
+        body_tokens: 2_000,
+        classifier,
+        ..auxiliary(&s, "current", T)
+    };
+    decide(&mut st, &s, &req, &mut rng())
+        .shed_round
+        .expect("the round ran")
+        .facts
+}
+
+#[test]
+fn a_shed_rounds_order_ranks_a_pin_a_classifier_call_renewed_last_by_its_own_requests_body() {
+    // The order divides each warm pin's burn by the prompt a move would rewrite: the request's own body of 2 000
+    // tokens for `current`, nothing for `other`, which ranks as the cheapest, and `plain`'s own 10 000 tokens. Divided
+    // by the classifier prompt, `current` would lead and `other` trail.
+    let order = |round: &phoebis_routing::ShedRoundFacts| {
+        round
+            .pins
+            .iter()
+            .map(|p| p.session_id.clone())
+            .collect::<Vec<_>>()
+    };
+    let round = classifier_renewed_round_on(false);
+    assert_eq!(
+        order(&round),
+        ["other", "current", "plain"],
+        "ranked by the prompt each move rewrites: {round:?}"
+    );
+    // A classifier request rewrites nothing on its own pin either, so `current` divides its burn by nothing too.
+    let round = classifier_renewed_round_on(true);
+    assert_eq!(
+        order(&round),
+        ["current", "other", "plain"],
+        "a classifier request's own pin ranks by its burn alone: {round:?}"
+    );
+}
+
+#[test]
+fn a_shed_rounds_per_rewrite_figure_divides_a_pin_a_classifier_call_renewed_last_by_its_own_requests_body(
+) {
+    for (classifier, current) in [(false, 2_000.0), (true, 1.0)] {
+        let round = classifier_renewed_round_on(classifier);
+        let divisor = |session: &str| {
+            let p = round
+                .pins
+                .iter()
+                .find(|p| p.session_id == session)
+                .unwrap_or_else(|| panic!("the round read {session}: {round:?}"));
+            p.burn.unwrap() / p.per_rewrite.unwrap()
+        };
+        for (session, expected) in [("current", current), ("other", 1.0), ("plain", 10_000.0)] {
+            assert!(
+                close(divisor(session), expected),
+                "{session}'s burn per rewrite divides by {expected} on a request with classifier {classifier}: \
+                 {round:?}"
+            );
+        }
+    }
 }
 
 #[test]

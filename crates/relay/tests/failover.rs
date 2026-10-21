@@ -1283,7 +1283,7 @@ fn funding_mark(h: &Harness, id: &str) -> phoebis_routing::Report {
         credential_generation: snapshot.credential_generation(id).unwrap_or(1),
         cause: StateCause::FundingRefused,
         detail: None,
-        dispatched_at: None,
+        dispatched_ordinal: None,
     }
 }
 

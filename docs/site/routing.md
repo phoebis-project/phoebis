@@ -411,6 +411,11 @@ endpoint for each OAuth account and how it answered, and while an account backs 
 attempt comes. The `poll_backoff` condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges)
 holds once an account has backed off for thirty minutes.
 
+**Spent and cleared** A plan window read at 1.0 or above emits `window_spent` once per reset cycle, whether a head, a
+poll or the router's own prediction took it there. A window read under its limit again emits `window_cleared`, after a
+reading at the limit and after a predicted spent edge alike, and the clear ends the `destination_spent` condition the
+spent event built ([Conditions and gauges](statistics.md#conditions-and-gauges)).
+
 **The projection** Every move and placement reads where each plan window of a subscription account is headed: its
 prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier,
 the band's hours inside the horizon weighed as the band weighs them, times the time to the window's horizon. The 5-hour
@@ -551,7 +556,9 @@ next request, which renews the pin in place. The destination gate, the reservati
 and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
 
 The round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
-pin's last prompt size in tokens), a pin whose burn the cost model cannot price after every priced pin of its group,
+pin's last prompt size in tokens, or for a pin a classifier call renewed last the prompt its move would rewrite, as the
+pick prices it: the body of the request the round runs on for that request's own pin, and nothing for any other pin or
+for a classifier request's own pin), a pin whose burn the cost model cannot price after every priced pin of its group,
 each burn read from the pin's average decayed with `burn_average_seconds`, and as its demand under a round the stretch
 fired, so the round's pins add up to its excess. `warm_sessions` bounds the order: `never` stops after the cold pins,
 `when_needed` (the default) goes on to the warm ones, and `always` orders every pin by burn over rewrite cost, cold or
@@ -788,7 +795,8 @@ shorter, and the account then takes one request at a time: the attempt the selec
 that attempt ends, however long its head takes. A 2xx answer to a message request clears the mark, and its
 `account_state_changed` row reads the cause `funding_retry`. A held stream that committed on an error event clears no
 mark, whatever its head's status. Another credit-balance refusal marks the account again with a new retry instant, and a
-success from an attempt sent before that mark leaves it standing. A token count may reach the account under the same
+success from an attempt placed under an earlier mark leaves it standing, whatever the host's clock read between them,
+since the router numbers each account's marks and compares no times. A token count may reach the account under the same
 rule, but it holds no slot and clears nothing. The router keeps the retry instant in memory, so after a restart the
 first request tries a marked account at once. Clear funding, on the Accounts view or through the admin API, makes the
 account eligible at once ([Account states](pairing.md#account-states)).

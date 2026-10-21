@@ -338,10 +338,13 @@ pub enum StateWrite {
         credential_generation: u64,
         cause: StateCause,
         detail: Option<String>,
-        /// The instant the loop stamped the account's funding retry for this mark, `None` for a mark that is not
-        /// `FundingRequired` and for a superseded verdict's write, which its fences refuse, carried back on the
-        /// writer's acknowledgment so it credits that entry alone.
+        /// The loop's clock when it stamped the account's funding retry for this mark, which the view's retry instant
+        /// runs from, `None` for a mark that is not `FundingRequired` and for a superseded verdict's write, which its
+        /// fences refuse.
         marked_at: Option<i64>,
+        /// The ordinal of the entry the loop stamped for this mark, `None` where `marked_at` is, carried back on the
+        /// writer's acknowledgment so it credits that entry alone.
+        marked_ordinal: Option<u64>,
     },
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
@@ -1212,9 +1215,11 @@ fn rounds_of(load: &RoutingLoad) -> HashMap<(String, String), i64> {
         .collect()
 }
 
-/// A `funding_required` account's retry: the instant one request may try it again, the incarnation the mark landed
-/// on, and the account ticket of the attempt that holds the one slot. Memory only: a restart reads the mark with no
-/// entry, and the first request after it retries at once.
+/// A funding retry's entry: the wall-clock instant it was stamped at, which the view shows, and the ordinal that
+/// names it, which the acknowledgment matches, so a backward clock step neither stamps an entry ahead of now nor
+/// lets one mark's acknowledgment credit another. It holds the instant one request may try the `funding_required`
+/// account again, the incarnation the mark landed on, and the account ticket of the attempt that holds the one slot.
+/// Memory only: a restart reads the mark with no entry, and the first request after it retries at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FundingRetry {
     pub retry_at: i64,
@@ -1222,11 +1227,14 @@ pub struct FundingRetry {
     /// The in-flight id of the claiming attempt's `AccountTicket`. The claim lasts while the ticket is in the
     /// table, so a slow upstream head never frees it early.
     pub claimed_by: Option<u64>,
-    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A mark's stamp is
-    /// strictly later than the entry it replaces, so it is unique per account while the entry lives and names the
-    /// entry the mark's acknowledgment credits. A retry's success that went out before it says nothing of the
-    /// balance the mark found.
+    /// When the entry was made, on the loop's clock as it read then: the mark's landing, or the claim that found none
+    /// after a restart. The retry instant runs from it, and no rule compares it, since a clock stepped back can read it
+    /// behind an earlier entry's.
     pub stamped_at: i64,
+    /// The account's funding ordinal the entry took, one past the account's previous mark or claim whatever the clock
+    /// read: it names the entry the mark's acknowledgment credits, and a retry's success dispatched under a lower one
+    /// says nothing of the balance this entry's mark found.
+    pub ordinal: u64,
     /// The account row's revision once the writer acknowledged the mark's write, `None` until then. A load that read
     /// the row below it read the registry before the mark landed, so it drops nothing. A mark the fences refused and a
     /// claim, which writes nothing, read 0.
@@ -1249,6 +1257,11 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
+    /// Each account's last funding ordinal, which every mark and every claim that makes an entry takes one past. It
+    /// outlives the entries, so an entry made after another's clearing never takes an ordinal a success still in
+    /// flight was dispatched under. Memory only: a restart drops every in-flight leg with the router, so the count
+    /// starts again at 1.
+    funding_ordinals: HashMap<String, u64>,
     /// Each `funding_required` account's retry by account id. Memory only: the store keeps no instant for a mark,
     /// so a restart starts with none.
     funding_retries: HashMap<String, FundingRetry>,
@@ -1360,6 +1373,7 @@ impl RoutingState {
                     )
                 })
                 .collect(),
+            funding_ordinals: HashMap::new(),
             funding_retries: HashMap::new(),
             head_marks: HashMap::new(),
             in_flight: InFlight::default(),
@@ -1472,12 +1486,6 @@ impl RoutingState {
                 pace.deadline = None;
             }
         }
-    }
-
-    /// The pin's fast usage, typed tokens per second decayed from the pin's `burn_at` as `PinRow::burn` is, and
-    /// zero for a pin never renewed fast.
-    pub fn fast_burn(&self, key: &PinKey) -> PinBurn {
-        self.pin(key).map(|p| p.burn_fast).unwrap_or_default()
     }
 
     /// Sets the held pin's fast usage in the state alone, for a test that prices a round over fast usage. A renewal
@@ -1927,48 +1935,54 @@ impl RoutingState {
         v
     }
 
-    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, frees the slot, since the
-    /// attempt that held it ended in this mark, and answers the entry's stamp, `max(now, the account's previous
-    /// stamp + 1)`: two marks in one millisecond still name two entries, so the first one's acknowledgment cannot
-    /// credit the second.
+    /// The account's next funding ordinal, which the entry a mark or a claim makes takes.
+    fn next_funding_ordinal(&mut self, account_id: &str) -> u64 {
+        let ordinal = self
+            .funding_ordinals
+            .entry(account_id.to_string())
+            .or_default();
+        *ordinal += 1;
+        *ordinal
+    }
+
+    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, at `now` and under the
+    /// account's next ordinal, frees the slot, since the attempt that held it ended in this mark, and answers the
+    /// ordinal: two marks in one millisecond, or either side of a clock stepped back, still name two entries, so the
+    /// first one's acknowledgment cannot credit the second.
     pub fn funding_marked(
         &mut self,
         account_id: &str,
         incarnation: u64,
         now: i64,
         interval_ms: i64,
-    ) -> i64 {
-        let stamped_at = self
-            .funding_retries
-            .get(account_id)
-            .map_or(now, |previous| {
-                now.max(previous.stamped_at.saturating_add(1))
-            });
+    ) -> u64 {
+        let ordinal = self.next_funding_ordinal(account_id);
         self.funding_retries.insert(
             account_id.to_string(),
             FundingRetry {
                 retry_at: now.saturating_add(interval_ms),
                 incarnation,
                 claimed_by: None,
-                stamped_at,
+                stamped_at: now,
+                ordinal,
                 mark_revision: None,
             },
         );
-        stamped_at
+        ordinal
     }
 
-    /// The writer finished the mark's write for `account_id` under `incarnation`, the entry stamped at `stamped_at`:
-    /// landed at `revision`, or refused by its fences. A newer entry under the same incarnation stays unacknowledged.
+    /// The writer finished the mark's write for `account_id` under `incarnation`, the entry `ordinal` names: landed
+    /// at `revision`, or refused by its fences. A newer entry under the same incarnation stays unacknowledged.
     pub fn funding_written(
         &mut self,
         account_id: &str,
         incarnation: u64,
-        stamped_at: i64,
+        ordinal: u64,
         revision: Option<u64>,
     ) {
         if let Some(retry) = self.funding_retries.get_mut(account_id).filter(|retry| {
             retry.incarnation == incarnation
-                && retry.stamped_at == stamped_at
+                && retry.ordinal == ordinal
                 && retry.mark_revision.is_none()
         }) {
             retry.mark_revision = Some(revision.unwrap_or(0));
@@ -1979,11 +1993,12 @@ impl RoutingState {
         self.funding_retries.remove(account_id);
     }
 
-    /// Whether the account's entry was stamped after `at`, the instant an attempt went out.
-    pub fn funding_stamped_after(&self, account_id: &str, at: i64) -> bool {
+    /// Whether a mark newer than the one `ordinal` names stands on the account, the fence a retry's success reads,
+    /// whatever the clock read.
+    pub fn funding_marked_since(&self, account_id: &str, ordinal: u64) -> bool {
         self.funding_retries
             .get(account_id)
-            .is_some_and(|retry| retry.stamped_at > at)
+            .is_some_and(|retry| retry.ordinal > ordinal)
     }
 
     /// Whether a `funding_required` account may take a request at `now`: at once with no entry, as after a restart,
@@ -1998,18 +2013,23 @@ impl RoutingState {
                 .is_none_or(|id| !self.in_flight.holds(account_id, id))
     }
 
-    /// Hands the slot to the attempt the account ticket `ticket` counts. An account with no entry for
-    /// `incarnation`, as after a restart, gets one due at `now`, so the next request finds the slot taken.
+    /// Hands the slot to the attempt `ticket` counts and answers the ordinal of the entry it claimed, the mark the
+    /// attempt is dispatched under. An account with no entry for `incarnation`, as after a restart, gets one due at
+    /// `now` under the account's next ordinal, so the next request finds the slot taken.
     pub fn claim_funding_retry(
         &mut self,
         account_id: &str,
         incarnation: u64,
         ticket: u64,
         now: i64,
-    ) {
+    ) -> u64 {
         match self.funding_retries.get_mut(account_id) {
-            Some(retry) if retry.incarnation == incarnation => retry.claimed_by = Some(ticket),
+            Some(retry) if retry.incarnation == incarnation => {
+                retry.claimed_by = Some(ticket);
+                retry.ordinal
+            }
             _ => {
+                let ordinal = self.next_funding_ordinal(account_id);
                 self.funding_retries.insert(
                     account_id.to_string(),
                     FundingRetry {
@@ -2017,9 +2037,11 @@ impl RoutingState {
                         incarnation,
                         claimed_by: Some(ticket),
                         stamped_at: now,
+                        ordinal,
                         mark_revision: Some(0),
                     },
                 );
+                ordinal
             }
         }
     }
@@ -3813,17 +3835,22 @@ mod tests {
     }
 
     #[test]
-    fn two_funding_marks_in_one_millisecond_take_two_stamps_and_only_the_second_ones_acknowledgment_credits_it(
+    fn two_funding_marks_in_one_millisecond_take_one_instant_and_two_ordinals_and_only_the_second_ones_acknowledgment_credits_it(
     ) {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         let first = state.funding_marked("a", 1, 1_000, 300_000);
         let second = state.funding_marked("a", 1, 1_000, 300_000);
         assert_eq!(
             (first, second),
-            (1_000, 1_001),
-            "the second mark is stamped one past the first"
+            (1, 2),
+            "an account's ordinals start at 1 and each mark takes the next one"
         );
-        assert_eq!(state.funding_retries["a"].retry_at, 301_000);
+        let retry = state.funding_retries["a"];
+        assert_eq!(
+            (retry.stamped_at, retry.ordinal, retry.retry_at),
+            (1_000, second, 301_000),
+            "the second mark is stamped at the clock it read"
+        );
         state.funding_written("a", 1, first, None);
         assert_eq!(
             state.funding_retries["a"].mark_revision, None,
@@ -3831,6 +3858,50 @@ mod tests {
         );
         state.funding_written("a", 1, second, Some(5));
         assert_eq!(state.funding_retries["a"].mark_revision, Some(5));
+    }
+
+    #[test]
+    fn a_funding_mark_after_a_clock_stepped_back_is_stamped_at_that_clock_under_the_next_ordinal() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let first = state.funding_marked("a", 1, 10_000, 300_000);
+        let second = state.funding_marked("a", 1, 5_000, 300_000);
+        let retry = state.funding_retries["a"];
+        assert_eq!(
+            (retry.stamped_at, retry.ordinal, retry.retry_at),
+            (5_000, first + 1, 305_000),
+            "the second entry reads the stepped-back clock, never one ahead of it, under the first's ordinal plus one"
+        );
+        state.funding_written("a", 1, first, Some(4));
+        assert_eq!(
+            state.funding_retries["a"].mark_revision, None,
+            "the first write's acknowledgment names its own ordinal"
+        );
+        state.funding_written("a", 1, second, Some(5));
+        assert_eq!(state.funding_retries["a"].mark_revision, Some(5));
+    }
+
+    #[test]
+    fn an_accounts_funding_ordinals_outlive_a_cleared_retry_so_a_claim_after_the_clear_takes_the_next_one(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let marked = state.funding_marked("a", 1, 1_000, 300_000);
+        state.funding_cleared("a");
+        let claimed = state.claim_funding_retry("a", 1, 7, 2_000);
+        assert_eq!(
+            claimed,
+            marked + 1,
+            "the entry the claim makes takes the account's next ordinal"
+        );
+        assert!(
+            state.funding_marked_since("a", marked),
+            "a success dispatched under the cleared mark reads a newer entry standing"
+        );
+        assert!(!state.funding_marked_since("a", claimed));
+        assert_eq!(
+            state.claim_funding_retry("a", 1, 8, 3_000),
+            claimed,
+            "a claim on a standing entry answers that entry's ordinal"
+        );
     }
 
     #[test]

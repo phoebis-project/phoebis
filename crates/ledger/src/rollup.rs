@@ -1261,6 +1261,7 @@ struct Held {
 /// The five routing conditions, written whole into `routing_conditions`. Four read the trailing 24 hours of events:
 /// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway,
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
+/// with no `window_cleared` on that account and window after it,
 /// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
 /// account from its slow-down spans, summed across its pools, once their parts inside the day pass the bar:
 /// `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row, at least
@@ -1289,8 +1290,8 @@ pub fn fold_routing_conditions(
     let events: Vec<Row> = tx
         .prepare(
             "SELECT at, kind, account_id, pool_id, detail FROM events \
-             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent', 'router_started', \
-             'slow_down_ended', 'slow_down_started') AND at >= ?1 AND at <= ?2 \
+             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent', 'window_cleared', \
+             'router_started', 'slow_down_ended', 'slow_down_started') AND at >= ?1 AND at <= ?2 \
              ORDER BY at, rowid",
         )?
         .query_map(params![now - CONDITION_SPAN_MS, now], |r| {
@@ -1336,17 +1337,33 @@ pub fn fold_routing_conditions(
         );
     }
 
-    let spent: Vec<(&str, i64, &str, &serde_json::Value)> = events
+    let cleared: Vec<(usize, &str, &str)> = events
         .iter()
-        .filter(|e| e.kind == "window_spent")
-        .filter_map(|e| {
-            let account = e.account_id.as_deref()?;
+        .enumerate()
+        .filter(|(_, e)| e.kind == "window_cleared")
+        .filter_map(|(index, e)| {
             Some((
-                account,
-                e.at,
+                index,
+                e.account_id.as_deref()?,
                 e.detail["window"].as_str().unwrap_or("unknown"),
-                &e.detail,
             ))
+        })
+        .collect();
+    // Each spent window with whether a `window_cleared` on the same account and window came after it in the events'
+    // order. Every clear the query reads sits at or before `now`, so a spent window a clear followed reaches no move.
+    let spent: Vec<(&str, i64, &str, &serde_json::Value, bool)> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.kind == "window_spent")
+        .filter_map(|(index, e)| {
+            let account = e.account_id.as_deref()?;
+            let window = e.detail["window"].as_str().unwrap_or("unknown");
+            let ended = cleared
+                .iter()
+                .any(|(position, cleared_on, cleared_window)| {
+                    *position > index && *cleared_on == account && *cleared_window == window
+                });
+            Some((account, e.at, window, &e.detail, ended))
         })
         .collect();
     type Moves<'a> = (i64, u64, BTreeMap<&'a str, u64>, BTreeSet<&'a str>);
@@ -1357,10 +1374,10 @@ pub fn fold_routing_conditions(
         };
         let followed: Vec<&str> = spent
             .iter()
-            .filter(|(account, at, _, _)| {
-                *account == to && *at >= event.at && *at - event.at <= SPENT_AFTER_MOVE_MS
+            .filter(|(account, at, _, _, ended)| {
+                !ended && *account == to && *at >= event.at && *at - event.at <= SPENT_AFTER_MOVE_MS
             })
-            .map(|(_, _, window, _)| *window)
+            .map(|(_, _, window, _, _)| *window)
             .collect();
         if followed.is_empty() {
             continue;
@@ -1400,7 +1417,7 @@ pub fn fold_routing_conditions(
         (i64, &'a str, &'a serde_json::Value),
     );
     let mut walls: BTreeMap<&str, Walls> = BTreeMap::new();
-    for (account, at, window, detail) in &spent {
+    for (account, at, window, detail, _) in &spent {
         let entry =
             walls
                 .entry(account)

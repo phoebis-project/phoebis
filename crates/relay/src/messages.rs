@@ -2340,6 +2340,7 @@ impl Relay {
                     selections,
                     &answer.cancel,
                     answer.ticket,
+                    answer.funding_ordinal,
                     &mut attempt,
                     &mut key_permit,
                     &mut end_guard,
@@ -2491,6 +2492,7 @@ impl Relay {
         seq: u32,
         cancel: &CancellationToken,
         mut selected: Option<AccountTicket>,
+        funding_ordinal: Option<u64>,
         attempt: &mut u8,
         key_permit: &mut Option<KeyPermit>,
         end_guard: &mut Option<EndGuard>,
@@ -2905,6 +2907,7 @@ impl Relay {
                 fast: admitted.fast,
                 floor_held: &admitted.floor_held,
                 fresh_pin: selection.pin.is_some() && !selection.trace.renewed,
+                funding_ordinal,
                 head: &mut leg_head,
                 identity: admitted.identity,
                 injected: &injected,
@@ -3452,7 +3455,7 @@ impl Relay {
                             credential_generation: generations.2,
                             cause: StateCause::FundingRetry,
                             detail: None,
-                            dispatched_at: Some(written_at),
+                            dispatched_ordinal: ctx.funding_ordinal,
                         })
                         .await;
                 }
@@ -3930,7 +3933,7 @@ impl Relay {
                                 credential_generation: mark.credential_generation,
                                 cause: mark.cause,
                                 detail: None,
-                                dispatched_at: None,
+                                dispatched_ordinal: None,
                             })
                             .await;
                         return Err(NoCredential::Marked);
@@ -4880,6 +4883,9 @@ struct Responding<'a> {
     floor_held: &'a AtomicBool,
     /// Whether this selection created `pin` rather than renewing one that already served.
     fresh_pin: bool,
+    /// The funding ordinal the selection's claim answered, `None` off a `funding_required` account. Every pass of the
+    /// leg reports a retry's success under it, since each one went out under the mark the claim found.
+    funding_ordinal: Option<u64>,
     /// The leg's head report, which the pass that learns the leg's answer sends.
     head: &'a mut Option<HeadGuard>,
     identity: &'a RequestIdentity,
@@ -5396,7 +5402,7 @@ pub(crate) fn failover_reports(
             credential_generation: generations.2,
             cause,
             detail,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         });
     }
     reports

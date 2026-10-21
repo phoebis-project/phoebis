@@ -672,6 +672,19 @@ fn budget_unknown(
     state.accounting_degraded() && budgeted_member(snapshot, pool_id, account_id).is_some()
 }
 
+/// The prompt size a pin's burn is divided by and its move rewrites: the pin's own prompt where a conversation call
+/// renewed it last, the request's own body where a classifier call did or no call has renewed it with usage, zero for
+/// a classifier request.
+fn prompt_size(pin: &PinRow, request: &SelectRequest) -> u64 {
+    if pin.last_input_tokens > 0 && !pin.last_classifier {
+        pin.last_input_tokens
+    } else if request.classifier {
+        0
+    } else {
+        request.body_tokens
+    }
+}
+
 /// The rewrite a selection prices for the pin's next write: its last context, or the body's estimate for a fresh
 /// session, a pin never renewed with usage or a pin a classifier call renewed last, as one cache write at the lane's
 /// TTL (five minutes until a pin reports one). The gate's booking and the pick's figure price the same tokens through
@@ -689,10 +702,7 @@ pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> Pi
     // renewed last holds a classifier body as its context, which the plan windows never see either, so a move or a
     // round prices the request's own body there, zero for a classifier request.
     let (tokens, ttl_ms) = match pin {
-        Some(pin) if pin.last_input_tokens > 0 && !pin.last_classifier => {
-            (pin.last_input_tokens, pin.cache_ttl_ms)
-        }
-        Some(pin) => (body, pin.cache_ttl_ms),
+        Some(pin) => (prompt_size(pin, request), pin.cache_ttl_ms),
         None => (body, 300_000),
     };
     if ttl_ms >= 3_600_000 {
@@ -4738,6 +4748,18 @@ fn shed_round(
         })
         .collect();
     let share_of = |p: &PinRow| shares.get(&p.key()).copied().flatten();
+    // Each pin's rewrite cost read off its own request in the round, as `rewrite_write` reads it, so a pin a classifier
+    // call renewed last never ranks by a classifier body.
+    let prompts: HashMap<PinKey, u64> = pins
+        .iter()
+        .map(|(p, _)| {
+            (
+                p.key(),
+                prompt_size(p, &pin_request(request, p, is_current(p))),
+            )
+        })
+        .collect();
+    let prompt_of = |p: &PinRow| prompts.get(&p.key()).copied().unwrap_or_default().max(1) as f64;
     // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the record
     // lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at `now`, which counts
     // the fast and classifier usage the account pays for beside the row's copy.
@@ -4757,8 +4779,7 @@ fn shed_round(
             (None, None) => Ordering::Equal,
         };
     // A pin with no prompt size reported yet ranks as the cheapest rewrite.
-    let per_rewrite =
-        |(p, burn): &(PinRow, Option<f64>)| burn.map(|b| b / p.last_input_tokens.max(1) as f64);
+    let per_rewrite = |(p, burn): &(PinRow, Option<f64>)| burn.map(|b| b / prompt_of(p));
     let by_rewrite = |a: &(PinRow, Option<f64>), b: &(PinRow, Option<f64>)| {
         priced_first(&per_rewrite(a), &per_rewrite(b), |x, y| y.total_cmp(&x))
     };
@@ -4954,7 +4975,7 @@ fn shed_round(
             cold: is_cold(p),
             burn,
             last_input_tokens: p.last_input_tokens,
-            per_rewrite: burn.map(|b| b / p.last_input_tokens.max(1) as f64),
+            per_rewrite: burn.map(|b| b / prompt_of(p)),
             marked: mark.is_some() || mark_holds(p),
             rewrite: read.and_then(|read| read.rewrite),
             rewrite_window: read.and_then(|read| read.rewrite_window),
