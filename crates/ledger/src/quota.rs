@@ -501,8 +501,9 @@ impl QuotaPoll {
     }
 
     /// The profile row's refresh. A failure is logged, and a reauth mark its acquisition landed reaches the router as
-    /// `poll_account` reports one. A stored tier the profile changes asks the router to reload, since the snapshot's
-    /// tier prices the router's own use of the account's windows.
+    /// `poll_account` reports one. A stored tier or class the profile changes asks the router to reload, since the
+    /// snapshot's tier prices the router's own use of the account's windows and the class places the account among the
+    /// paid sources.
     pub async fn refresh_profile(
         store: &Store,
         usage: &UsageService,
@@ -530,7 +531,7 @@ impl QuotaPoll {
                     tracing::warn!(account = %account.id, %error, "the profile could not be stored");
                 } else if before != term() {
                     if let Err(error) = router.reload().await {
-                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier");
+                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier or class");
                     }
                 }
             }

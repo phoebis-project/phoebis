@@ -386,6 +386,82 @@ async fn overage_evidence_moves_forward_only() {
 }
 
 #[tokio::test]
+async fn a_usage_based_seats_head_moves_its_spend_share_and_records_no_overage_evidence() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![
+                ("Date".into(), "Wed, 21 Oct 2015 07:28:00 GMT".into()),
+                (
+                    "anthropic-ratelimit-unified-5h-status".into(),
+                    "allowed".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-overage-in-use".into(),
+                    "true".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-overage-utilization".into(),
+                    "0.4".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-overage-reset".into(),
+                    "1445472000".into(),
+                ),
+            ],
+            body: b"{}".to_vec(),
+        },
+    );
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(outcome(&resp).usage_based, "the leg reads the seat's class");
+    let credits = wait_for(Duration::from_secs(2), || {
+        h.store
+            .load_routing()
+            .unwrap()
+            .credits
+            .into_iter()
+            .find(|row| row.account_id == "a")
+    })
+    .await;
+    assert_eq!(
+        (credits.utilization, credits.observed_at, credits.enabled),
+        (Some(0.4), 1_445_412_480_000, true),
+        "the head's overage utilization is the seat's spend share, observed at the head's date"
+    );
+    assert_eq!(
+        h.router.overage("a").await.unwrap(),
+        None,
+        "the head's overage family records no evidence"
+    );
+    assert!(
+        h.router.overages().await.unwrap().is_empty(),
+        "the map `in_overage` reads holds nothing for the seat"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_with_the_client_bytes_unchanged(
 ) {
     let up = FakeUpstream::start(vec![]).await;

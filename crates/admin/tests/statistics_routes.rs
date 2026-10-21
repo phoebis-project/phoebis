@@ -367,6 +367,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             "pin_released",
             "pin_renewed",
             "sample",
+            "spend_head",
             "usage",
         ],
         "every kind of routing report, in name order"

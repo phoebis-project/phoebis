@@ -3579,11 +3579,7 @@ fn move_of<'a>(
         rec.step(
             RULES[2],
             "no",
-            vec![
-                kind_fact(current_kind),
-                Fact::bool("usage_based", snapshot.usage_based(&current.account_id)),
-                Fact::text("mode", mode.as_str()),
-            ],
+            vec![kind_fact(current_kind), Fact::text("mode", mode.as_str())],
         );
     } else {
         let (facts, returns) = match mode {

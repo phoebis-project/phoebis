@@ -166,26 +166,26 @@ setting and what the client does then are on [Auto mode behind the router](relay
 
 A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object carries
 `enabled` (default `false`), `inject_when_absent` (default `false`) and two rule sets, `plan` and `metered`: `plan`
-prices a subscription account on plan quota, `metered` an API-key account or a subscription account in overage. Each set
-carries `main` and `subagent` in `5m` or `1h` and `models`, a list of `{model, main, subagent}` overrides on canonical
-ids. `plan` defaults to one hour throughout and `metered` to five minutes throughout: a one-hour write costs a metered
-account 2x base input against 1.25x for five minutes, and a plan-funded account the same window share either way. With
-the policy on, every `cache_control` marker in the body is rewritten to the TTL the request's set and branch choose, the
-ones inside a tool result's own content included, the `extended-cache-ttl-2025-04-11` beta travels exactly when the body
-is one hour ([The betas](relay.md#the-betas)), and the `cch` hash is restamped when the client sent one. A restored
-placeholder `cch=00000` stays unsigned unless `proxy.sign_cch_placeholder` is on. A body whose marker the relay's cache
-TTL guard cannot reach (a key on the marker's path spelled with an escape) is refused `400` with the error code
-`body_shape`, so a TTL the policy could not enforce never travels unreported. On every other body the client's own
-`CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A body that carries no marker is left as it came unless
-`inject_when_absent` is on and the request's class is not auxiliary (the class header absent, or naming `compaction`,
-`main` or `subagent`), in which case the top-level `cache_control` member is added with the TTL, before `stream`. A
-token count is never edited by the policy: its markers travel as the client sent them and no beta follows it. The
-metered set applies while the write costs money: the serving account is in overage, or is an API-key account. Every
-request, a keepalive probe's replay included, reads `main` or `subagent` by its agent, and one without an agent id reads
-as the main conversation. The TTL is priced per attempt, so a request that fails over reads its destination's state.
-Mixed TTLs across a session's requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime
-and price alone. The price of each choice is on [Pricing](statistics.md#pricing). A usage-based seat reads the `metered`
-set as an API-key account does, since it pays for every write in dollars.
+prices a subscription account on plan quota, `metered` an API-key account, a usage-based seat or a subscription account
+in overage. Each set carries `main` and `subagent` in `5m` or `1h` and `models`, a list of `{model, main, subagent}`
+overrides on canonical ids. `plan` defaults to one hour throughout and `metered` to five minutes throughout: a one-hour
+write costs a metered account 2x base input against 1.25x for five minutes, and a plan-funded account the same window
+share either way. With the policy on, every `cache_control` marker in the body is rewritten to the TTL the request's set
+and branch choose, the ones inside a tool result's own content included, the `extended-cache-ttl-2025-04-11` beta
+travels exactly when the body is one hour ([The betas](relay.md#the-betas)), and the `cch` hash is restamped when the
+client sent one. A restored placeholder `cch=00000` stays unsigned unless `proxy.sign_cch_placeholder` is on. A body
+whose marker the relay's cache TTL guard cannot reach (a key on the marker's path spelled with an escape) is refused
+`400` with the error code `body_shape`, so a TTL the policy could not enforce never travels unreported. On every other
+body the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A body that carries no marker is
+left as it came unless `inject_when_absent` is on and the request's class is not auxiliary (the class header absent, or
+naming `compaction`, `main` or `subagent`), in which case the top-level `cache_control` member is added with the TTL,
+before `stream`. A token count is never edited by the policy: its markers travel as the client sent them and no beta
+follows it. The metered set applies while the write costs money: the serving account is in overage, is an API-key
+account or is a usage-based seat. Every request, a keepalive probe's replay included, reads `main` or `subagent` by its
+agent, and one without an agent id reads as the main conversation. The TTL is priced per attempt, so a request that
+fails over reads its destination's state. Mixed TTLs across a session's requests are fine: the cache is keyed on the
+prefix, and the TTL sets an entry's lifetime and price alone. The price of each choice is on
+[Pricing](statistics.md#pricing).
 
 ## Keys
 
@@ -1044,8 +1044,7 @@ A pool's `overage_policy` chooses what happens once an account starts billing ex
 
 A usage-based Enterprise seat ([Two kinds of account](pairing.md#two-kinds-of-account)) never reads as in overage,
 whatever its heads' overage headers say, so none of the three policies applies to it. It is no destination of the
-overage hand-back or of the return to plan, as an API-key account is not, and its spend cap holds it out until the spend
-window's reset.
+overage hand-back or of the return to plan, as an API-key account is not.
 
 Under `allow`, a subscription account whose five-hour window, seven-day window or model week is spent stays a candidate
 on the overage path for every model, since extra usage funds every model: the router sends the request, and a `429`

@@ -1226,6 +1226,83 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
     );
 }
 
+#[tokio::test]
+async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    seed.store
+        .set_profile(
+            "business",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    let now = common::NOW;
+    let input = |input: f64| phoebis_store::PinBurn {
+        input,
+        ..phoebis_store::PinBurn::default()
+    };
+    // The router task reads its pins once, at spawn, so the pin is written before the harness that serves the view.
+    seed.store
+        .upsert_pin(&phoebis_store::PinRow {
+            key_id: "desktop".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "claude-opus-5".into(),
+            account_id: "business".into(),
+            epoch: 1,
+            created_at: now - 10,
+            last_used_at: now - 5,
+            key_generation: common::generation(&seed.store, "desktop"),
+            incarnation: 1,
+            burn: input(100.0),
+            burn_at: Some(now),
+            burn_banded: input(145.0),
+            burn_fast: phoebis_store::PinBurn::default(),
+            burn_unmetered: phoebis_store::PinBurn::default(),
+            last_input_tokens: 1_000,
+            last_classifier: false,
+            last_refresh_at: now - 5,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            shed_reason: None,
+            static_hash: None,
+            tail_hash: None,
+            lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+            entrypoint: String::new(),
+            marked_at: None,
+            marked_on: None,
+            marked_window: None,
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1")
+        .unwrap_or_else(|| panic!("no row for s1: {sessions}"));
+    assert_eq!(
+        (&row["burn_unit"], &row["burn_equivalent"]),
+        (&serde_json::json!("usd"), &serde_json::Value::Null),
+        "the seat bills in dollars, as the selector reads it, with no window equivalent: {row}"
+    );
+}
+
 /// A deleted key's session outlives the key in the engine until the engine's next tick ends it: the row must read
 /// as historical, with no companion, agents, or recipe, and the console must not be able to release it by naming
 /// it directly.
