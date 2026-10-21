@@ -2884,7 +2884,9 @@ fn reported_status(session: &PairingSession) -> &'static str {
 fn oauth_detail(what: &str, error: OauthError) -> String {
     match error {
         OauthError::Malformed(detail) => format!("{what} response: {detail}"),
-        OauthError::Json(_) => format!("{what} response was not the JSON this endpoint returns"),
+        OauthError::Json(_) | OauthError::UsageJson(_) => {
+            format!("{what} response was not the JSON this endpoint returns")
+        }
     }
 }
 

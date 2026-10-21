@@ -184,7 +184,7 @@ pub fn parse_usage(
     ),
     OauthError,
 > {
-    let root: Value = serde_json::from_slice(body)?;
+    let root: Value = serde_json::from_slice(body).map_err(usage_json)?;
     let map = root
         .as_object()
         .ok_or_else(|| OauthError::Malformed("usage response is not an object".into()))?;
@@ -199,7 +199,7 @@ pub fn parse_usage(
 
     let extra_usage = match map.get("extra_usage") {
         Some(Value::Null) | None => None,
-        Some(value) => Some(serde_json::from_value(value.clone())?),
+        Some(value) => Some(serde_json::from_value(value.clone()).map_err(usage_json)?),
     };
     let spend = spend_reading(map.get("spend"), extra_usage.as_ref());
 
@@ -222,6 +222,10 @@ pub fn parse_usage(
     };
 
     Ok((windows, fable_window, extra_usage, spend, raw_keys))
+}
+
+fn usage_json(error: serde_json::Error) -> OauthError {
+    OauthError::UsageJson(error.to_string())
 }
 
 fn spend_reading(spend: Option<&Value>, extra: Option<&ExtraUsage>) -> Option<SpendReading> {
