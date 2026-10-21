@@ -886,6 +886,51 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(seen > 0, 'the story places by Pace');
   });
 
+  test(`every placed and moved story decision takes the member its candidates rank first: one the partitions kept, which a fitting rival does not pass, of the best tier kept and under Pace scoring at least each tier mate, at ${at}`, async () => {
+    const s = await story;
+    let seen = 0;
+    for (const r of await decisionsOf(s)) {
+      if (!s.lib.STORY_IDS.has(r.requestId) || !['placed', 'moved'].includes(r.outcome.kind)) continue;
+      const id = `${r.requestId}/${r.seq}`;
+      const winner = r.candidates.find((c) => c.accountId === r.outcome.accountId);
+      const kept = keptOf(s.lib, r);
+      assert.ok(kept.includes(winner), `${id}: ${winner.accountId} is no member the partitions kept`);
+      // A rung places past the strategy, yet its member still has to fit wherever a rival under its cap does.
+      if (r.outcome.kind === 'placed') {
+        const fitting = r.candidates.filter((c) => c !== winner && c.obstacle === null && c.inFlight < c.inFlightCap && c.fit === 'fits');
+        assert.ok(winner.fit === null || winner.fit === 'fits' || fitting.length === 0, `${id}: ${winner.accountId} reads ${winner.fit} where ${fitting.map((c) => c.accountId).join(', ')} fit`);
+      }
+      if (r.outcome.rung !== null) continue;
+      const rivals = kept.filter((c) => c !== winner && c.accountId !== r.outcome.fromAccountId);
+      assert.deepEqual(rivals.filter((c) => tierBefore(c.tier, winner.tier)).map((c) => `${c.accountId} ${c.tier.join('/')}`), [], `${id}: ${winner.accountId} sits in tier ${winner.tier.join('/')}`);
+      if (r.settings.strategy === 'pace') {
+        const above = rivals.filter((c) => sameTier(c, winner) && c.pace.score > winner.pace.score);
+        assert.deepEqual(above.map((c) => `${c.accountId} ${c.pace.score}`), [], `${id}: ${winner.accountId} scores ${winner.pace.score}`);
+      }
+      seen += 1;
+    }
+    assert.ok(seen > 10, `${seen} story placements and moves`);
+  });
+
+  test(`a story candidate reads its in-flight count at the cap only where the story's own pins put it there, at ${at}`, async () => {
+    const s = await story;
+    const pins = new Map(s.lib.STORY_PINS.map((p) => [`${p.requestId}/${p.seq}`, p]));
+    const unpinned = [];
+    let pinned = 0;
+    for (const r of await decisionsOf(s)) {
+      if (!s.lib.STORY_IDS.has(r.requestId)) continue;
+      const id = `${r.requestId}/${r.seq}`;
+      const pin = pins.get(id);
+      if (pin) assert.equal(pin.attempt, r.request.attempt, `${id}: the pins name attempt ${pin.attempt}`);
+      for (const c of r.candidates.filter((x) => x.inFlight >= x.inFlightCap)) {
+        if (pin?.inFlight[c.accountId] === c.inFlight) pinned += 1;
+        else unpinned.push(`${id} ${c.accountId} ${c.inFlight}/${c.inFlightCap}`);
+      }
+    }
+    assert.deepEqual(unpinned, [], "members at their cap with no pin of the story's");
+    assert.ok(pinned > 0, 'the story holds a member at its cap');
+  });
+
   test(`the two run-outs read the exhaustion their members' obstacles name, at ${at}`, async () => {
     const s = await story;
     // One run-out waits beside a member that refused the model and one beside a member whose credits the fast lane
@@ -1382,13 +1427,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(read('req_2c7d9f15-b63/1', ['no_fit']), ['match', [['no_fit', 1]]]);
     // Nothing is left to narrow, so the step reads none with every count 0 or off.
     assert.deepEqual(read('req_51d0e2b8-7a0/1', ['spent', 'at_cap', 'no_fit', 'winding_down']), ['none', [['spent', 'off'], ['at_cap', 0], ['no_fit', 0], ['winding_down', 0]]]);
-    // The story's four failovers by the rung of the ladder each reached: the long session's keeps primary, the one
-    // member the cap left, whose rewrite lands short of the horizon, the two on nightly read least bad, and the one
-    // from secondary keeps primary, whose runway outlasts nightly's.
+    // The story's four failovers by the rung of the ladder each reached: the long session's and the one from secondary
+    // keep primary, whose runway outlasts nightly's, and the two on nightly read least bad.
     assert.deepEqual(
       ['req_1d9c3e55-0b2/2', 'req_2e7c90a1-6d4/2', 'req_4b0e9d17-c31/2', 'req_b8c3e9d4-e61/2'].map((id) => read(id, ['no_fit', 'ladder'])),
       [
-        ['match', [['no_fit', 0], ['ladder', 'rewrite_only']]],
+        ['match', [['no_fit', 1], ['ladder', 'rewrite_only']]],
         ['match', [['no_fit', 0], ['ladder', 'least_bad']]],
         ['match', [['no_fit', 0], ['ladder', 'least_bad']]],
         ['match', [['no_fit', 1], ['ladder', 'rewrite_only']]],

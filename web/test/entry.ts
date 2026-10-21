@@ -45,3 +45,4 @@ export { GUARDRAIL_STORY_IDS, NIGHTLY_CAP_RAISED, STORY_IDS } from '@/mock/reque
 export { partitionsOf, placementFactOf, stretchTriggerOf } from '@/mock/routingLog';
 export { PRIOR_BURN, rewriteOf, runwayTiesOf } from '@/mock/routingLog';
 export { budgetsAt, obstacleOf } from '@/mock/routingLog';
+export { STORY_PINS } from '@/mock/routingLog';

@@ -123,8 +123,11 @@ const TRAFFIC_KINDS: { value: RequestKind; weight: number }[] = [
 ];
 const WARMED_KINDS: { value: RequestKind; weight: number }[] = [...TRAFFIC_KINDS, { value: 'probe', weight: 3 }];
 
-/** How far an earlier window's reading runs ahead of its pace at most: the story's one shedding round is at 11:00. */
-const EARLIER_LEAD = 0.8;
+/**
+ * How far an earlier window's reading runs ahead of its pace at most: the story's one shedding round is at 11:00, and
+ * nightly's window, ten minutes old when the morning's Fable session is placed there, keeps room for it.
+ */
+const EARLIER_LEAD = 0.56;
 
 /**
  * Walks a window back so a request seen hours ago reports the window that was
@@ -277,14 +280,24 @@ function sourceOf(attempts: Attempt[], keyId: string): DiagnosticsSource | null 
 export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * HOUR + (30 - m) * MINUTE - s * 1_000);
 
 /**
- * The story's own readings of a window where the walk back's even climb would not tell it, per account and window:
- * secondary's 5-hour window runs hot from its opening at 09:55, so it leads its pace by the pool's 0.9 margin through
- * the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11.
+ * The story's own readings of a window where the walk back's even climb would not tell it, per account and window.
+ * Nightly's 5-hour window, fresh at its 13:11 reset, climbs fast enough that a fresh session no longer fits there by
+ * 14:00, so the hour's placements are Pace's to make between primary and secondary. Secondary's 5-hour window opens at
+ * 09:55 with room for the two sessions placed just before 11:00, then runs hot, so it leads its pace by the pool's 0.9
+ * margin through the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11.
  */
 const STORY_READINGS: Record<string, Partial<Record<WindowId, { at: number; utilization: number }[]>>> = {
+  nightly: {
+    '5h': [
+      { at: clock(13, 11), utilization: 0 },
+      { at: clock(14, 2, 11), utilization: 0.68 },
+      { at: clock(14, 30), utilization: 0.97 },
+    ],
+  },
   secondary: {
     '5h': [
       { at: clock(9, 55), utilization: 0 },
+      { at: clock(10, 59, 10), utilization: 0.7 },
       { at: clock(11, 0), utilization: 0.97 },
       { at: clock(11, 8, 30), utilization: 0.99 },
       { at: clock(14, 2, 10), utilization: 0.99 },
@@ -1255,9 +1268,10 @@ function storyRequests(): RequestLog[] {
     // that resets at 10:29.
     { agentId: 'main', at: t(9, 11, 24), attempts: [{ accountId: 'studio', at: t(9, 11, 24), head5h: 0.7987, ms: 6_000, status: 200 }], id: 'req_5c7e2a9d-b14', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], usage: { cacheWrite1h: 33_000, input: 1_900, output: 820 } },
     { agentId: 'main', at: t(9, 12), attempts: [{ accountId: 'studio', at: t(9, 12), head5h: 0.8, ms: 5_800, status: 200 }], id: 'req_a3d8f1b6-c25', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], usage: { cacheRead: 34_900, cacheWrite1h: 1_600, input: 1_500, output: 640 } },
-    // The morning session: its second turn after the placement waits 36 s for the slow-down and then renews on its
-    // pin, and its turns after the reset read the account at full speed again.
-    { agentId: 'main', at: t(10, 11), attempts: [{ accountId: 'studio', at: t(10, 11), head5h: 0.9332, ms: 6_200, status: 200 }], id: 'req_3d7b9e2f-a41', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheWrite1h: 31_000, input: 1_800, output: 760 } },
+    // The morning session: its placement's head reads room for a fresh session to the 10:29 reset, so the engine
+    // keeps it on studio over the annex. Its second turn after the placement waits 36 s for the slow-down and then
+    // renews on its pin, and its turns after the reset read the account at full speed again.
+    { agentId: 'main', at: t(10, 11), attempts: [{ accountId: 'studio', at: t(10, 11), head5h: 0.905, ms: 6_200, status: 200 }], id: 'req_3d7b9e2f-a41', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheWrite1h: 31_000, input: 1_800, output: 760 } },
     { agentId: 'main', at: t(10, 11, 36), attempts: [{ accountId: 'studio', at: t(10, 11, 36), head5h: 0.9345, ms: 4_900, status: 200 }], id: 'req_2b9e4c7f-d36', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 32_800, cacheWrite1h: 700, input: 1_100, output: 520 } },
     {
       agentId: 'main',
@@ -1273,9 +1287,10 @@ function storyRequests(): RequestLog[] {
     },
     { agentId: 'main', at: t(10, 38, 20), attempts: [{ accountId: 'studio', at: t(10, 38, 20), head5h: 0.01, ms: 5_600, status: 200 }], id: 'req_f6a1d3e8-e47', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 37_200, cacheWrite1h: 1_300, input: 1_500, output: 710 } },
     { agentId: 'main', at: t(10, 40, 36), attempts: [{ accountId: 'studio', at: t(10, 40, 36), head5h: 0.02, ms: 5_000, status: 200 }], id: 'req_8d4b7f2c-f58', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: SLOWED_MORNING_SESSION_ID, usage: { cacheRead: 40_000, cacheWrite1h: 900, input: 1_200, output: 560 } },
-    // The open span: a session placed at 13:47:24 whose first turn after the placement reads the account and opens it,
-    // then the two the round marks, then the slowed one's main and subagent turns.
-    { agentId: 'main', at: t(13, 47, 24), attempts: [{ accountId: 'studio', at: t(13, 47, 24), head5h: 0.8257, ms: 6_900, status: 200 }], id: 'req_b1e7c4a9-a69', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheWrite1h: 48_600, input: 2_200, output: 930 } },
+    // The open span: a session placed at 13:47:24, whose head reads room for it to the 15:29 reset and whose first turn
+    // after the placement reads the account and opens the span, then the two the round marks, then the slowed one's
+    // main and subagent turns.
+    { agentId: 'main', at: t(13, 47, 24), attempts: [{ accountId: 'studio', at: t(13, 47, 24), head5h: 0.822, ms: 6_900, status: 200 }], id: 'req_b1e7c4a9-a69', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheWrite1h: 48_600, input: 2_200, output: 930 } },
     { agentId: 'main', at: t(13, 48), attempts: [{ accountId: 'studio', at: t(13, 48), head5h: 0.8267, ms: 5_200, status: 200 }], id: 'req_4f2a8d6e-b7a', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[1], usage: { cacheRead: 50_800, input: 1_200, output: 610 } },
     { agentId: 'main', at: t(13, 50, 30), attempts: [{ accountId: 'studio', at: t(13, 50, 30), head5h: 0.832, ms: 6_800, status: 200 }], id: 'req_6b3e8d1a-c73', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[0], usage: { cacheWrite1h: 36_000, input: 2_000, output: 820 } },
     { agentId: 'main', at: t(13, 53, 10), attempts: [{ accountId: 'studio', at: t(13, 53, 10), head5h: 0.8376, ms: 5_900, status: 200 }], id: 'req_2f9a6c4e-d84', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: MARKED_SESSION_IDS[1], usage: { cacheWrite1h: 28_000, input: 2_000, output: 640 } },

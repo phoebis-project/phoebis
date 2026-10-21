@@ -103,7 +103,7 @@ interface Spec {
   hold?: { cohort: string | null; place: 'cohort' | 'reset' | 'rewrite' | 'session_pin' | 'slow_down' | 'strategy_pick'; until?: number; waitsFor?: string };
   /** The holds the request waited through before this decision, each with the attempt that waited. */
   holds?: RecordRequest['holds'];
-  /** The slots the story fills where a hold reads every member at its cap. */
+  /** The slots the story fills by hand: every member at its cap under a hold, or a member it holds full. */
   inFlight?: Record<string, number>;
   kind: DecisionKind;
   /** The pin as step 1 found it, or why none was looked at. */
@@ -688,9 +688,10 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
       c.binding = read.binding;
       return read;
     });
-    // The story names where a move lands, so a rival the gate would answer ahead of it reads full, as the cap passes
-    // it over: a better order, or a longer runway where the order narrows to the longest.
-    const chosen = spec.kind === 'moved' ? reached.find((c) => c.accountId === spec.accountId) : undefined;
+    // A drawn move lands where its draw put it, so a rival the gate would answer ahead of it reads full, as the cap
+    // passes it over: a better order, or a longer runway where the order narrows to the longest. A story move lands
+    // where its histories send it.
+    const chosen = spec.kind === 'moved' && !spec.story ? reached.find((c) => c.accountId === spec.accountId) : undefined;
     if (chosen) {
       const order = (c: RecordCandidate) => (c.fit === 'fits' ? 0 : c.fit === 'rewrite_only' ? 1 : 2);
       const narrows = (c: RecordCandidate) => order(c) === 1;
@@ -935,13 +936,13 @@ function tierBefore(x: [number, number, number], y: [number, number, number]): b
 }
 
 /**
- * The story names the member each placement chose, drawn or written by hand, and the record reads the walk back's
- * windows, so the choice holds by the slots: where the member does not fit, every member that does is full, so the cap
- * passes it over before the no-fit partition, and where the strategy picks, every member of a better tier and under
- * Pace every tier mate scoring above the chosen member is full too. A token count takes no slot, so the request
- * generator places it on the engine's pick instead.
+ * A drawn placement or move takes the account its request drew, so its rivals read full where the engine would have
+ * picked them: where the member does not fit, every member that does, so the cap passes them over before the no-fit
+ * partition, and where the strategy picks, every member of a better tier and under Pace every tier mate scoring above
+ * the chosen member. A token count takes no slot, so the request generator places it on the engine's pick instead.
+ * The drawn picks read so until the request generator draws them in the engine's order.
  */
-function capTheRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed): void {
+function fillDrawnRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed): void {
   const winner = candidates.find((c) => c.accountId === spec.accountId);
   if (!winner || spec.request.kind === 'count_tokens') return;
   const top = pool.strategy === 'pace' ? winner.pace?.score : undefined;
@@ -1116,7 +1117,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const slowHold = spec.kind === 'held' && spec.hold?.place === 'slow_down';
   // So does a moved pin's wait for the head of the request that carried the move.
   const rewriteHold = spec.kind === 'held' && spec.hold?.place === 'rewrite';
-  if (spec.kind === 'placed' || spec.kind === 'moved') capTheRivals(spec, candidates, pool);
+  if (!spec.story && (spec.kind === 'placed' || spec.kind === 'moved')) fillDrawnRivals(spec, candidates, pool);
   if ((spec.kind === 'placed' || spec.kind === 'held' || spec.kind === 'exhausted') && !resetHold && !slowHold && !rewriteHold) readPlacementFits(spec, candidates, pool);
   const portable = r.client !== 'other';
   const pinKey = pinKeyOf(r);
@@ -1175,9 +1176,9 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
       for (const rule of RULES) walk.push(step(`move:${rule}`, 'not_run', [fact('reason', skip)]));
     } else {
       let move = moveOf(spec, candidates, pool, source, pin);
-      // With every destination at its cap no move is made and the pin renews in place, which is how a renewal reads
-      // where a rule's reason holds.
-      if (spec.kind === 'renewed' && move.fired !== null) {
+      // A drawn renewal stays where its draw put it, so where a rule's reason holds every destination reads at its cap,
+      // no move is made and the pin renews in place. A story renewal reads the slots the story fills.
+      if (spec.kind === 'renewed' && move.fired !== null && !spec.story) {
         for (const c of move.reached) c.inFlight = c.inFlightCap;
         move = moveOf(spec, candidates, pool, source, pin);
       }
@@ -1836,7 +1837,8 @@ function storySpecs(): Spec[] {
     }),
     // A new conversation lands on nightly with primary full, and nightly's spent window answers 429 40 s before it
     // resets: the reselect finds the pin on a spent account whose reset falls inside the retry bound, so the spent
-    // rule holds the request there for the reset, and it renews on the fresh window.
+    // rule holds the request there for the reset, and it renews on the fresh window, where the overage rule finds
+    // primary and secondary full.
     at('req_9d4c1a73-e58', 1, 1, t(13, 10, 20), 'placed', 'nightly', { inFlight: { primary: 16 } }),
     at('req_9d4c1a73-e58', 2, 2, t(13, 10, 21), 'held', 'nightly', {
       attempted: ['nightly'],
@@ -1844,7 +1846,7 @@ function storySpecs(): Spec[] {
       pin: live('continues_pin', 1_000),
       readings: { nightly: spentNightly(t(13, 10, 21)) },
     }),
-    at('req_9d4c1a73-e58', 3, 2, t(13, 11), 'renewed', 'nightly', { holds: [{ accountId: 'nightly', attempt: 2, cohort: null, heldMs: 39_000, ranOut: false }], pin: live('continues_pin', 40_000) }),
+    at('req_9d4c1a73-e58', 3, 2, t(13, 11), 'renewed', 'nightly', { holds: [{ accountId: 'nightly', attempt: 2, cohort: null, heldMs: 39_000, ranOut: false }], inFlight: { primary: 16, secondary: 16 }, pin: live('continues_pin', 40_000) }),
     // The Fable session's first turn places it on nightly, and its next turn's renewal runs nightly's Fable-week round,
     // before the overage begins at the first head after 11:30:12: from then on the pool's overage rule fires on the
     // account's pins ahead of the shed rule. The 5-hour window the story spends at 13:10:21 opened at 08:11, so it is
@@ -1854,7 +1856,7 @@ function storySpecs(): Spec[] {
     // the 5-hour burn stands beside the Fable week's.
     at('req_3e2b9d47-c18', 1, 1, t(8, 21, 40), 'placed', 'nightly'),
     at('req_3e7a5c19-f84', 1, 1, t(8, 30), 'renewed', 'nightly', {
-      burns: { nightly: { five_hour: 0.019, seven_day_fable: 0.03 } },
+      burns: { nightly: { five_hour: 0.03, seven_day_fable: 0.03 } },
       pin: live('continues_pin', 500_000),
       readings: nightlyAt(t(8, 30), 0.65),
       round: roundOfPins(FABLE_WEEK_PINS),
@@ -1869,7 +1871,7 @@ function storySpecs(): Spec[] {
     // A session placed on secondary before its spent edge. Its next turn finds the spent rule's one destination full,
     // so it renews on secondary, whose 429 on the spent 5-hour window fails it over to primary once a slot frees.
     at('req_d2a8f6c1-d50', 1, 1, t(14, 1, 45), 'placed', 'secondary'),
-    at('req_b8c3e9d4-e61', 1, 1, t(14, 7, 50), 'renewed', 'secondary', { pin: live('continues_pin', 365_000) }),
+    at('req_b8c3e9d4-e61', 1, 1, t(14, 7, 50), 'renewed', 'secondary', { inFlight: { primary: 16 }, pin: live('continues_pin', 365_000) }),
     at('req_b8c3e9d4-e61', 2, 2, t(14, 7, 51), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live() }),
     // Its next turn renews the pin the landing wrote on primary, whose row carries the source the failover left.
     at('req_e2c7a4f9-d13', 1, 1, t(14, 13, 5), 'renewed', 'primary', { pin: live('continues_pin', 314_000) }),
@@ -1949,7 +1951,8 @@ function traceOf(record: DecisionRecord, summary: DecisionSummary, held: CohortH
 
 /** Every decision of every request, built in time order so each pin's epoch and idle age read its last write. */
 function buildDecisions() {
-  const specs = [...storySpecs(), ...REQUESTS.filter((r) => !STORY_IDS.has(r.id)).flatMap(derivedSpecs)].sort((a, b) => a.at - b.at || a.request.id.localeCompare(b.request.id) || a.seq - b.seq);
+  const story = storySpecs();
+  const specs = [...story, ...REQUESTS.filter((r) => !STORY_IDS.has(r.id)).flatMap(derivedSpecs)].sort((a, b) => a.at - b.at || a.request.id.localeCompare(b.request.id) || a.seq - b.seq);
   const decisions = new Map<string, DecisionRecord>();
   const summaries: DecisionSummary[] = [];
   for (const spec of specs) {
@@ -1969,7 +1972,8 @@ function buildDecisions() {
       if (dispatched && record) a.selection = traceOf(record, dispatched, record.outcome.cohortHold);
     }
   }
-  return { decisions, summaries: summaries.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)) };
+  const pins = story.flatMap((s) => (s.inFlight ? [{ attempt: s.attempt, inFlight: s.inFlight, requestId: s.request.id, seq: s.seq }] : []));
+  return { decisions, pins, summaries: summaries.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)) };
 }
 
 const built = buildDecisions();
@@ -1978,6 +1982,11 @@ const built = buildDecisions();
 export const DECISIONS: Map<string, DecisionRecord> = built.decisions;
 /** One summary per record, the routing log's decision rows, newest first. */
 export const SUMMARIES: DecisionSummary[] = built.summaries;
+/**
+ * The in-flight counts the story writes by hand, per decision, which alone put a story member at its cap. The seq
+ * tells a hold from the placement after it on the same attempt.
+ */
+export const STORY_PINS: { attempt: number; inFlight: Record<string, number>; requestId: string; seq: number }[] = built.pins;
 
 type EventSeed = Omit<RoutingEvent, 'agentId' | 'actor' | 'id' | 'keyId' | 'model' | 'poolId' | 'requestId' | 'sessionId' | 'type'> & Partial<Pick<RoutingEvent, 'actor' | 'agentId' | 'keyId' | 'model' | 'poolId' | 'requestId' | 'sessionId'>>;
 

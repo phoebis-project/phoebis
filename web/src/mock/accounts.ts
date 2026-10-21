@@ -102,7 +102,9 @@ export const ACCOUNTS: Account[] = ([
     routingEnabled: true,
     // Cancelled, with the end the operator saved before the trial's own, so the pace reads the saved one.
     cancelled: true,
-    windows: [win('5h', 1, 25 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
+    // The 7-day reading crosses 80% between the story's 14:01:45 and 14:03 placements, so Pace takes secondary over
+    // primary for the hour's sessions before the crossing and primary over it after.
+    windows: [win('5h', 1, 25 * MINUTE), win('7d', 0.808, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
     fableWindow: null,
     extraUsage: null,
     fastLane: null,

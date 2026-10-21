@@ -1450,7 +1450,7 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
     const chip = [...m.container.querySelectorAll('.qcard__windows .qchip')].find((c) => c.textContent?.trim() === label);
     return [...(chip?.classList ?? [])].find((n) => n.startsWith('qchip--')) ?? 'missing';
   };
-  results.push({ name: '/quota tone breaks at 50% and 20% remaining', ok: toneOf('7d59% left') === 'qchip--good' && toneOf('5h38% left') === 'qchip--warn' && toneOf('7d12% left') === 'qchip--low', missing: [toneOf('7d59% left'), toneOf('5h38% left'), toneOf('7d12% left')] });
+  results.push({ name: '/quota tone breaks at 50% and 20% remaining', ok: toneOf('7d59% left') === 'qchip--good' && toneOf('5h38% left') === 'qchip--warn' && toneOf('7d19% left') === 'qchip--low', missing: [toneOf('7d59% left'), toneOf('5h38% left'), toneOf('7d19% left')] });
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
   const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
