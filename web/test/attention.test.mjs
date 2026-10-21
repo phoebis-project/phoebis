@@ -257,6 +257,24 @@ test('a meter drift item words its off windows and opens the Burn tab on the acc
   assert.equal(attentionLogLine(drift, NOW), null, 'the item opens no routing log');
 });
 
+test("a meter drift badge's title dates each window's end and reads the windows' other values as the route sends them", () => {
+  const since = '2026-09-18T10:41:00.000Z';
+  const end = Date.parse(since);
+  const windows = [
+    { observed_rise: 0.3, predicted_share: 0.15, ratio: 2.0, requests: 40, window: 'five_hour', window_end: end },
+    { observed_rise: 0.26, predicted_share: 0.2, ratio: 1.3, requests: 120, window: 'seven_day', window_end: end + 3_600_000 },
+  ];
+  const drift = item('meter_drift', { detail: { effective: '2026-09-01', source: 'shipped', windows }, link: { id: 'acct-a', page: 'accounts' }, pools: ['main'], since, subject: { id: 'acct-a', label: 'acct-a', type: 'account' } });
+  // The ends read in the viewer's zone, so the case reads them through the console's own format.
+  const date = (ms) => JSON.stringify(fmtAbsolute(new Date(ms).toISOString()));
+  assert.deepEqual(attentionTitle(drift, NOW).split('\n'), [
+    'effective: 2026-09-01',
+    'source: shipped',
+    `windows: [{"observed_rise":0.3,"predicted_share":0.15,"ratio":2,"requests":40,"window":"five_hour","window_end":${date(end)}},{"observed_rise":0.26,"predicted_share":0.2,"ratio":1.3,"requests":120,"window":"seven_day","window_end":${date(end + 3_600_000)}}]`,
+    'started 1h 19m ago',
+  ]);
+});
+
 test('the pool exhausted title names the day of a condition that began more than a day ago', () => {
   const since = '2026-09-16T10:41:00.000Z';
   const exhausted = item('pool_exhausted', { detail: { pool: 'jobs' }, link: { id: 'jobs', page: 'pools' }, since });

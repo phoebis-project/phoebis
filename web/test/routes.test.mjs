@@ -51,10 +51,9 @@ const missing = () => Promise.reject(new TypeError('Failed to fetch dynamically 
  * The console's routes in their shape: a page loaded through React's `lazy` over the chunk reload, inside its
  * Suspense, on a child route that carries the error element, under a parent that draws its outlet. The parent stands
  * in for the shell, which needs the session and the settings providers. The smoke run holds that the console's own
- * lazy routes carry the element.
+ * lazy routes carry the element. A case that throws something else passes its own page.
  */
-async function load(env) {
-  const Page = lazy(reloadOnChunkFailure(missing, env));
+async function load(env, Page = lazy(reloadOnChunkFailure(missing, env))) {
   const router = createMemoryRouter(
     [
       {
@@ -90,4 +89,36 @@ test('a page chunk that fails again after the reload draws its error inside the 
   navigations.splice(0);
   act(() => failed?.querySelector('button')?.click());
   assert.deepEqual(navigations, ['Not implemented: navigation (except hash changes)'], 'Reload asks the tab to reload');
+});
+
+const outlet = (container) => {
+  const shell = container.querySelector('[data-shell]');
+  const failed = shell?.querySelector('.empty--error[role="alert"]');
+  return [shell?.querySelector('nav')?.textContent ?? null, failed?.querySelector('.empty__title')?.textContent ?? null, failed?.querySelector('.empty__body')?.textContent ?? null, failed?.querySelector('button')?.textContent ?? null];
+};
+
+test('a page that throws while drawing reads as an error of its own inside the shell, with the same Reload button', async () => {
+  const { env } = tab();
+  const Broken = () => {
+    throw new Error('boom');
+  };
+  const drawn = await load(env, Broken);
+  assert.deepEqual(
+    outlet(drawn),
+    ['Pools', 'This page hit an error', 'Something went wrong while drawing this page. Reload to try again, and if it comes back, note what you opened last.', 'Reload'],
+    'a render error names no bundle that changed under the tab',
+  );
+  assert.equal(env.reloads, 0, 'a render error reloads nothing on its own');
+  navigations.splice(0);
+  act(() => drawn.querySelector('[data-shell] .empty--error button')?.click());
+  assert.deepEqual(navigations, ['Not implemented: navigation (except hash changes)'], 'Reload asks the tab to reload');
+});
+
+test("a page chunk that fails with WebKit's import error reads as a failed chunk too", async () => {
+  const { env } = tab();
+  const webkit = () => Promise.reject(new TypeError('Importing a module script failed.'));
+  await load(env, lazy(reloadOnChunkFailure(webkit, env)));
+  const second = await load(env, lazy(reloadOnChunkFailure(webkit, env)));
+  assert.deepEqual(outlet(second), ['Pools', 'This page could not load', "The console's files changed under this tab, and a reload did not fetch the current ones. Reload to try again.", 'Reload']);
+  assert.equal(env.reloads, 1, 'the first failure reloads the tab once and the second throws to the element');
 });

@@ -1,6 +1,6 @@
 import { createContext, forwardRef, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useRouteError } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { clock } from '@/lib/clock';
@@ -208,14 +208,28 @@ export function ErrorState({ title = 'Could not load', body, action }: { action?
 }
 
 /**
+ * A chunk the browser could not fetch. Chromium and Firefox throw a `TypeError` that names the dynamically imported
+ * module, while WebKit's reads "Importing a module script failed." without those words, so both are matched.
+ */
+const failedChunk = (error: unknown): boolean =>
+  error instanceof TypeError &&
+  (error.message.includes('dynamically imported module') || error.message.includes('Importing a module script failed'));
+
+/**
  * The error element of the routes whose page loads as its own chunk. It sits with the primitives rather than beside the
- * routes, since `App.tsx` builds its router as it loads, which an import of the element from there would run.
+ * routes, since `App.tsx` builds its router as it loads, which an import of the element from there would run. A failed
+ * chunk reads apart from an error while drawing, since only the former means the bundle changed under the tab.
  */
 export function PageLoadFailed(): JSX.Element {
+  const chunk = failedChunk(useRouteError());
   return (
     <ErrorState
-      title="This page could not load"
-      body="The console's files changed under this tab, and a reload did not fetch the current ones. Reload to try again."
+      title={chunk ? 'This page could not load' : 'This page hit an error'}
+      body={
+        chunk
+          ? "The console's files changed under this tab, and a reload did not fetch the current ones. Reload to try again."
+          : 'Something went wrong while drawing this page. Reload to try again, and if it comes back, note what you opened last.'
+      }
       action={<Button onClick={() => window.location.reload()}>Reload</Button>}
     />
   );

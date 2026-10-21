@@ -616,7 +616,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   // The model's item counts the story's own Sonnet 4.6 plan requests and names its tier's latest weighted model, so
   // its members are read off the mock's answer rather than written here.
   const unweighted = (await api.getAttention()).find((i) => i.kind === 'model_unweighted');
-  // The meter drift's windows carry their ends in the route's milliseconds, so its members are read off the answer too.
+  // The meter drift's windows are read off the answer too, each end the route sends in milliseconds read as a date.
   const drift = (await api.getAttention()).find((i) => i.kind === 'meter_drift');
   const want = [
     ['Pool exhausted: jobs', 'badge--critical', '/routing-log', ['key: ci', 'pool: jobs']],
@@ -634,7 +634,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       : []),
     // Nightly's meter drift ranks after the model's item and before the routing conditions, reads its off window and
     // opens Analytics on the account.
-    ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/analytics', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows)}`]],
+    ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/analytics', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows.map((w) => ({ ...w, window_end: fmtAbsolute(new Date(w.window_end).toISOString()) })))}`]],
     // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log.
     // Nightly's wall has no 5-hour round before it, so it names no projection.
     ['nightly: 1 wall reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]']],

@@ -46,6 +46,10 @@ it up.` beside a "Reload" button, and it stays until the page reloads. The time 
 Appearance card also sets, and nothing in the shell changes a router setting. On a narrow window a menu button opens the
 sidebar over the view.
 
+The Accounts, Analytics and Pools views load their code on first open. A view that fails to draw tells a bundle that
+changed under the tab ("This page could not load") from an error while drawing ("This page hit an error"), each with its
+own words and a Reload button.
+
 The "Unit" switch sets the unit the Dashboard, Pools, Keys, Requests and Analytics views price a request in, stored
 under `phoebis.unit` (`native` until you pick one). Its button "What the units mean" opens the legend, which closes on
 Escape or a click outside it, with one line per position in the switch's order:

@@ -285,7 +285,12 @@ export function attentionTitle(item: AttentionItem, now: number): string {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, v]) => {
       const at = /_(at|since)$|^expires$/.test(name) ? instant(v) : null;
-      return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v) : String(v)}`;
+      // A window's end inside an object member is an instant too, dated in place so the object keeps its key order.
+      const dated = (key: string, x: unknown): unknown => {
+        const end = key === 'window_end' ? instant(x) : null;
+        return end ? fmtAbsolute(end) : x;
+      };
+      return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v, dated) : String(v)}`;
     });
   const kind = item.kind === 'unknown' ? [`kind: ${item.rawKind}`] : [];
   const sentence = item.pools.length === 0 ? [attentionDetail(item, now)] : [];
