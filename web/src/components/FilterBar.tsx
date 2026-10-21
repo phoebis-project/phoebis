@@ -7,7 +7,7 @@ import type { Option, Preset } from '@/components/ui/OptionList';
 import { PopoverHost } from '@/components/ui/Popover';
 import { SearchInput } from '@/components/ui/primitives';
 import type { RangeValue } from '@/lib/address';
-import { chipsOf, type Dimension, emptyValue } from '@/lib/filterBar';
+import { chipsOf, type Dimension, emptyValue, withoutValue } from '@/lib/filterBar';
 import { useCommittedText } from '@/lib/hooks';
 
 export interface FilterBarProps<F extends { range?: RangeValue; search?: string }> {
@@ -71,9 +71,9 @@ function Bar<F extends { range?: RangeValue; search?: string }>({ address, child
   }, [anyOpen]);
 
   const chips = dimensions === undefined ? [] : chipsOf(dimensions, filters, options);
-  const remove = (field: string) => {
+  const remove = (field: string, value?: string) => {
     const dimension = dimensions?.find((d) => d.field === field);
-    if (dimension !== undefined) patch({ [field]: emptyValue(dimension) });
+    if (dimension !== undefined) patch({ [field]: withoutValue(dimension, filters, value) });
   };
   const clearAll = () => patch(Object.fromEntries((dimensions ?? []).map((d) => [d.field, emptyValue(d)])));
 

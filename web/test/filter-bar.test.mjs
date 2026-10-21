@@ -37,6 +37,26 @@ test('a choice chip prints its option label, a flag its word alone with no value
   assert.deepEqual([d.hasValue(status, 'all'), d.hasValue(status, 'disabled'), d.hasValue(kind, ''), d.hasValue(held, false), d.hasValue(list(), [])], [false, true, false, false, false]);
 });
 
+test("the Keys Pool filter draws a chip per id in the address's order, each carrying its id, while every other pool filter draws one chip", () => {
+  const options = { pools: [{ label: 'Batch jobs', value: 'jobs' }], status: [{ label: 'Disabled', value: 'disabled' }] };
+  assert.deepEqual(d.chipsOf(d.KEYS_DIMENSIONS, { pools: ['jobs', 'nope'], search: '', status: 'disabled' }, options), [
+    { field: 'pools', label: 'pool', mono: true, text: 'pool: Batch jobs', title: 'Batch jobs', value: 'jobs', values: 'Batch jobs' },
+    { field: 'pools', label: 'pool', mono: true, text: 'pool: nope', title: 'nope', value: 'nope', values: 'nope' },
+    { field: 'status', label: 'status', mono: false, text: 'status: Disabled', title: 'Disabled', values: 'Disabled' },
+  ]);
+  assert.deepEqual(d.chipsOf(d.KEYS_DIMENSIONS, { pools: ['jobs', 'jobs'], search: '', status: 'all' }, options).map((c) => c.text), ['pool: Batch jobs'], 'an id the address repeats draws one chip');
+  assert.deepEqual(d.chipsOf(d.REQUESTS_DIMENSIONS, { pools: ['jobs', 'nope'] }, options), [{ field: 'pools', label: 'pool', mono: true, text: 'pool: Batch jobs, nope', title: 'Batch jobs, nope', values: 'Batch jobs, nope' }]);
+});
+
+test("a per-value chip's x drops its own value, the last one emptying the list, and any other chip's x writes the dimension's empty value", () => {
+  const pool = d.KEYS_DIMENSIONS.find((x) => x.field === 'pools');
+  const status = d.KEYS_DIMENSIONS.find((x) => x.field === 'status');
+  assert.deepEqual(d.withoutValue(pool, { pools: ['jobs', 'nope'] }, 'nope'), ['jobs']);
+  assert.deepEqual(d.withoutValue(pool, { pools: ['jobs'] }, 'jobs'), []);
+  assert.deepEqual(d.withoutValue(pool, { pools: ['jobs', 'nope'] }), [], 'a remove with no value clears the list');
+  assert.equal(d.withoutValue(status, { status: 'disabled' }), 'all');
+});
+
 test('the status chip prints the codes alone, with the labels in its title', () => {
   const options = { statuses: [{ label: '429 Rate limited', value: '429' }, { label: '500 Server error', value: '500' }] };
   const [chip] = d.chipsOf(d.REQUESTS_DIMENSIONS, { statuses: ['429', '500'] }, options);

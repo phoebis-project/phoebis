@@ -6,6 +6,8 @@ import { type Chip, foldChips } from '@/lib/filterBar';
 const MOST = 5;
 
 const childrenOf = (line: HTMLElement, className: string) => [...line.children].filter((el): el is HTMLElement => el instanceof HTMLElement && el.classList.contains(className));
+/** The chips of a per-value dimension share their field, so the line keys and follows a chip by its field and value. */
+const idOf = (chip: Chip) => `${chip.field}:${chip.value ?? ''}`;
 
 export interface ChipLineProps {
   /** The "Add filter" button, which takes focus once no chip is left to take it. */
@@ -17,7 +19,8 @@ export interface ChipLineProps {
   editing?: string | null;
   onClearAll: () => void;
   onOpen: (field: string, anchor: HTMLElement) => void;
-  onRemove: (field: string) => void;
+  /** A chip's x, with the chip's own value where its dimension draws a chip per value. */
+  onRemove: (field: string, value?: string) => void;
 }
 
 /**
@@ -96,7 +99,7 @@ export function ChipLine({ addFilterRef, address, chips, editing = null, onClear
     // later if at all, so a focus left on that body counts as dropped too.
     const dropped = at === null || at === document.body || !at.isConnected || (at === focusedBody.current && at.closest('[hidden]') !== null);
     if (!dropped) return;
-    const gone = was.findIndex((c) => !chips.some((n) => n.field === c.field));
+    const gone = was.findIndex((c) => !chips.some((n) => idOf(n) === idOf(c)));
     const line = lineRef.current;
     if (gone < 0) {
       // A chip that stays but left the drawn set (a write from the expanded line resets the expansion) took the focus
@@ -107,8 +110,8 @@ export function ChipLine({ addFilterRef, address, chips, editing = null, onClear
       ((line === null ? undefined : childrenOf(line, 'chip--more')[0]) ?? addFilterRef.current)?.focus({ preventScroll: true });
       return;
     }
-    const next = was.slice(gone + 1).find((c) => chips.some((n) => n.field === c.field));
-    const index = next === undefined ? -1 : chips.findIndex((c) => c.field === next.field);
+    const next = was.slice(gone + 1).find((c) => chips.some((n) => idOf(n) === idOf(c)));
+    const index = next === undefined ? -1 : chips.findIndex((c) => idOf(c) === idOf(next));
     if (index < 0 || line === null) {
       addFilterRef.current?.focus({ preventScroll: true });
       return;
@@ -132,7 +135,7 @@ export function ChipLine({ addFilterRef, address, chips, editing = null, onClear
       }}
     >
       {drawn.map((chip, i) => (
-        <FilterChip key={chip.field} chip={chip} editing={editing === chip.field} hidden={!expanded && i >= shown.length} onOpen={(anchor) => onOpen(chip.field, anchor)} onRemove={() => onRemove(chip.field)} />
+        <FilterChip key={idOf(chip)} chip={chip} editing={editing === chip.field} hidden={!expanded && i >= shown.length} onOpen={(anchor) => onOpen(chip.field, anchor)} onRemove={() => onRemove(chip.field, chip.value)} />
       ))}
       {(expanded || folded.length > 0) && (
         <button key="fold" type="button" className="chip chip--more" title={expanded ? undefined : title} aria-expanded={expanded} onClick={() => setExpandedFor(expanded ? null : address)}>

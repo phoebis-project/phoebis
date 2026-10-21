@@ -42,12 +42,14 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched.';
 /** The note under the Status badge. The fill column cuts it, so its title opens with the whole of it. */
 const retiredNote = (sessions: number) => `${sessions} ${sessions === 1 ? 'session' : 'sessions'} still on the previous secret`;
-const STATUS_OPTIONS = [
-  { label: 'Active', value: 'active' },
-  { label: 'Disabled', value: 'disabled' },
-  { label: 'Expired', value: 'expired' },
-  { label: 'Revoked', value: 'revoked' },
-];
+const STATUS_OPTIONS = {
+  status: [
+    { label: 'Active', value: 'active' },
+    { label: 'Disabled', value: 'disabled' },
+    { label: 'Expired', value: 'expired' },
+    { label: 'Revoked', value: 'revoked' },
+  ],
+};
 
 /** A sum over both fundings, as a key's lifetime and week and a pool's day carry it. */
 export interface FundedSum {
@@ -175,17 +177,17 @@ export function KeysPage() {
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
-  // The pool filter is the address: the Pool chip reads `?pools=<id>,<id>` and writes it back, so a reload keeps the
-  // filter and the pool card's key count link lands on it. Until the pools are read the address filters as written, so
-  // the rows match it during the read and after a failed one, and the Pool list holds an option for each id, which the
-  // chip prints. An id no pool carries leaves the filter once the pools have loaded, and the address with it when no
-  // listed id is left. While a dialog query is still in the address, its own effect goes first.
+  // The pool filter is the address: the Pool chips read `?pools=<id>,<id>`, one per id, and write it back, so a reload
+  // keeps the filter and the pool card's key count link lands on it. Until the pools are read the address filters as
+  // written, so the rows match it during the read and after a failed one, and the Pool list holds an option for each id,
+  // which its chip prints. Once the pools have loaded, an id no pool carries leaves the address, so no chip stands for
+  // an id the rows no longer filter by. While a dialog query is still in the address, its own effect goes first.
   const poolIds = useMemo(() => filters.pools.filter((id) => pools.data === null || poolById.has(id)), [filters.pools, poolById, pools.data]);
   const poolOptions = useMemo(() => [...poolList.map((p) => ({ label: p.name, value: p.id })), ...filters.pools.filter((id) => !poolById.has(id)).map((id) => ({ label: id, value: id }))], [filters.pools, poolById, poolList]);
   useEffect(() => {
-    if (filters.pools.length === 0 || !pools.data || poolIds.length > 0) return;
+    if (!pools.data || poolIds.length === filters.pools.length) return;
     if (new URLSearchParams(location.search).has('edit')) return;
-    replaceFromEffect({ pools: [] });
+    replaceFromEffect({ pools: poolIds });
   }, [filters.pools, location.search, poolIds, pools.data, replaceFromEffect]);
   const rows = useMemo(
     () =>
@@ -267,7 +269,7 @@ export function KeysPage() {
         disabled={notLoadedReason('pools', 'pool', pools)}
         filters={filters}
         onOpenChange={setBarOpen}
-        options={{ pools: poolOptions, status: STATUS_OPTIONS }}
+        options={{ ...STATUS_OPTIONS, pools: poolOptions }}
         placeholder="Search keys"
         refresh={{
           intervalMs,

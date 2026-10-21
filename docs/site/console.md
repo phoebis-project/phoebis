@@ -492,8 +492,9 @@ age](keepalive.md#the-return-rate-by-idle-age).
 
 The view opens on its bar: "Search keys", Add filter with the Pool and Status filters, "Create key", and at the right
 edge the split Refresh button and the count of the keys the table lists, `{n} keys`. Status offers All statuses, Active,
-Disabled, Expired or Revoked, and Pool takes any number of pools as one chip, such as "pool: jobs, all". The search and
-the filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts
+Disabled, Expired or Revoked. Pool takes any number of pools, each as a chip of its own, such as "pool: jobs" and "pool:
+all", and a pool the address names that the router does not list keeps its chip until the pools load. The search and the
+filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts
 at 5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost
 follow, and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's
 figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the

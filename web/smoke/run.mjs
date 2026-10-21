@@ -7960,6 +7960,43 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     missing: [`expected ${inPool('jobs')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingChip), `loaded ${poolCells(k).join(',')}`, chipRead(k, 'pool'), JSON.stringify(loadedOptions), k.location().search],
   });
   k.unmount();
+  // A hand-typed list draws a chip per id, the unlisted one reading itself until the pools land. It then leaves the
+  // address and takes its chip with it, while the listed id keeps the filter.
+  const poolChips = (page) => [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim() ?? '');
+  const heldTyped = deferNextCall('listPools');
+  k = await mount('/keys?pools=jobs,nope');
+  const typedChips = poolChips(k);
+  const typedSearch = k.location().search;
+  heldTyped.release();
+  heldTyped.restore();
+  await k.settle(300);
+  results.push({
+    name: '/keys?pools=jobs,nope draws a Pool chip per id while the pools load, and the unlisted id leaves the address with its chip once they land',
+    ok:
+      narrows('jobs') &&
+      heldTyped.calls.length > 0 &&
+      JSON.stringify(typedChips) === JSON.stringify(['pool: jobs', 'pool: nope']) &&
+      typedSearch === '?pools=jobs,nope' &&
+      JSON.stringify(poolChips(k)) === JSON.stringify([`pool: ${jobsName}`]) &&
+      k.location().search === '?pools=jobs' &&
+      poolCells(k).length === inPool('jobs') &&
+      poolCells(k).every((c) => c === 'jobs'),
+    missing: [`held ${heldTyped.calls.length}`, `loading ${JSON.stringify(typedChips)}`, typedSearch, `loaded ${JSON.stringify(poolChips(k))}`, k.location().search, `expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k)],
+  });
+  k.unmount();
+  // A chip's x drops its own id alone, so the other pool keeps the filter and its chip takes the focus.
+  k = await mount('/keys?pools=jobs,all');
+  const jobsX = [...k.container.querySelectorAll('.chip--filter')].find((c) => c.textContent?.trim() === 'pool: jobs')?.querySelector('.chip__remove');
+  jobsX?.focus();
+  jobsX?.click();
+  await k.settle(700);
+  const focusedChip = document.activeElement?.closest('.chip--filter')?.textContent?.trim() ?? 'no chip focused';
+  results.push({
+    name: "/keys a Pool chip's x drops its own pool alone, and the focus moves to the other pool's chip",
+    ok: narrows('all') && jobsX !== undefined && JSON.stringify(poolChips(k)) === JSON.stringify(['pool: all']) && focusedChip === 'pool: all' && k.location().search === '?pools=all' && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all'),
+    missing: [`x ${jobsX === undefined ? 'absent' : 'clicked'}`, JSON.stringify(poolChips(k)), focusedChip, k.location().search, `expected ${inPool('all')} of ${stored.length}`, ...poolCells(k)],
+  });
+  k.unmount();
   failNextCall('listPools', '/admin/pools', 'the pool store is unavailable');
   k = await mount('/keys?pools=jobs');
   const failed = poolCells(k);
@@ -19806,7 +19843,7 @@ const CARD_VIEWS = [
   });
 }
 {
-  const name = '/keys two pools in the address draw one chip and filter to both';
+  const name = '/keys two pools in the address draw a chip each and filter to both';
   const stored = await api.listKeys();
   const both = stored.filter((k) => k.poolId === 'jobs' || k.poolId === 'all');
   const page = await mount('/keys?pools=jobs,all', { now: CLOCK_ORIGIN });
@@ -19815,7 +19852,7 @@ const CARD_VIEWS = [
   page.unmount();
   results.push({
     name,
-    ok: both.length > 0 && both.length < stored.length && JSON.stringify(chips) === JSON.stringify(['pool: jobs, all']) && cells.length === both.length && cells.includes('jobs') && cells.includes('all') && cells.every((c) => c === 'jobs' || c === 'all'),
+    ok: both.length > 0 && both.length < stored.length && JSON.stringify(chips) === JSON.stringify(['pool: jobs', 'pool: all']) && cells.length === both.length && cells.includes('jobs') && cells.includes('all') && cells.every((c) => c === 'jobs' || c === 'all'),
     missing: [JSON.stringify(chips), `${cells.length} rows of ${both.length} in jobs or all, ${stored.length} listed`, ...new Set(cells)],
   });
 }

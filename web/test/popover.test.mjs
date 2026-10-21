@@ -11,7 +11,7 @@ globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
 const { act, AddFilter, Button, ChipLine, createElement: h, createRoot, FilterChip, PATTERN_GRAMMAR, Popover, PopoverHost, useState } = await import('./dist/ui.js');
-const { chipsOf, emptyValue, KEYS_DIMENSIONS, REQUESTS_DIMENSIONS } = await import('./dist/api.js');
+const { chipsOf, KEYS_DIMENSIONS, REQUESTS_DIMENSIONS, withoutValue } = await import('./dist/api.js');
 
 // jsdom lays nothing out, so the boxes the placement reads are stood in: a 1280 by 800 window, an anchor's box from
 // its `data-rect` (left, top, width, height), and the popover's own size wherever its style puts it. A chip line is
@@ -349,7 +349,7 @@ function bar(initial, { dimensions = DIMENSIONS, disabled, options = OPTIONS, pr
         chips,
         onClearAll() {},
         onOpen: (field, anchor) => setEdit({ anchor, field }),
-        onRemove: (field) => update({ [field]: emptyValue(dimensions.find((x) => x.field === field)) }),
+        onRemove: (field, value) => update({ [field]: withoutValue(dimensions.find((x) => x.field === field), filters, value) }),
       }),
     );
   }
@@ -458,6 +458,21 @@ test("a chip's click opens step two anchored at the chip, and Remove clears the 
   assert.deepEqual([b.writes.at(-1), b.chipBody('account'), box() !== null, box().contains(document.activeElement)], [{ accounts: [] }, undefined, true, true], 'emptying the list from its chip keeps the box open with the focus in it');
   press('Escape');
   assert.ok(box() === null && document.activeElement === b.button(), 'the box hangs from Add filter once its chip has left');
+});
+
+test("a per-value list draws a chip per value, either chip opens the one step, and a chip's x drops its value alone and hands focus to the chip after it", () => {
+  const options = { pools: [{ label: 'jobs', value: 'jobs' }, { label: 'all', value: 'all' }] };
+  const b = bar({ pools: ['jobs', 'all'] }, { dimensions: KEYS_DIMENSIONS, options });
+  const bodies = () => [...b.container.querySelectorAll('.chip__body')];
+  assert.deepEqual(bodies().map((el) => el.textContent), ['pool: jobs', 'pool: all']);
+  click(bodies()[1]);
+  assert.equal(box()?.querySelector('.popover__title')?.textContent, 'Pool', 'the second chip opens the Pool step');
+  press('Escape');
+  const x = b.container.querySelector('[aria-label="Remove pool filter"]');
+  focus(x);
+  click(x);
+  assert.deepEqual([b.writes.at(-1), bodies().map((el) => el.textContent)], [{ pools: ['all'] }, ['pool: all']]);
+  assert.ok(document.activeElement === bodies()[0], "focus moves to the remaining chip's body");
 });
 
 const XY = [

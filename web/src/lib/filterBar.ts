@@ -22,6 +22,8 @@ export interface Dimension {
   label: string;
   /** The chip's values and the option rows in the mono face. */
   mono?: boolean;
+  /** A list that draws a chip per value, each chip's x dropping its own value, where a list draws one chip for all. */
+  perValue?: true;
   /** A list that opens on its search field however few its options, where a list draws one past twelve alone. */
   searchable?: true;
   /** The chip's text, title and values for a value, in place of chipText's forms. The chip draws `values` as given, whatever `text` reads. */
@@ -44,6 +46,8 @@ export interface Chip {
   mono: boolean;
   text: string;
   title: string;
+  /** The one value a `perValue` dimension's chip stands for. */
+  value?: string;
   values: string | null;
 }
 
@@ -88,6 +92,12 @@ export function emptyValue(dimension: Dimension): unknown {
   }
 }
 
+/** The value a chip's x writes: a per-value chip's list without its own value, any other chip's empty value. */
+export function withoutValue(dimension: Dimension, filters: Record<string, unknown>, value?: string): unknown {
+  const current = filters[dimension.field];
+  return value === undefined || !Array.isArray(current) ? emptyValue(dimension) : current.filter((v) => v !== value);
+}
+
 /** A list as up to three option labels then "+N" with every label in the title, a pattern as itself, an id as its first eight characters and an ellipsis with the whole id in the title, a choice as its option's label, a flag as the word alone with no colon. */
 export function chipText(dimension: Dimension, value: unknown, options: Option[] = []): ChipText {
   const { word } = dimension;
@@ -111,15 +121,19 @@ export function chipText(dimension: Dimension, value: unknown, options: Option[]
   }
 }
 
-/** The view's chips in the dimension list's order, one per dimension that has a value. */
+/** The view's chips in the dimension list's order, one per dimension with a value or per value of a `perValue` list. */
 export function chipsOf(dimensions: Dimension[], filters: Record<string, unknown>, options: Record<string, Option[]>): Chip[] {
   return dimensions
     .filter((d) => hasValue(d, filters[d.field]))
-    .map((d) => {
-      const value = filters[d.field];
+    .flatMap((d) => {
       const known = options[d.field] ?? [];
-      const { text, title, values } = d.text ? d.text(value, known) : chipText(d, value, known);
-      return { field: d.field, label: d.word, mono: d.mono ?? false, text, title, values };
+      const chipOf = (value: unknown): Chip => {
+        const { text, title, values } = d.text ? d.text(value, known) : chipText(d, value, known);
+        return { field: d.field, label: d.word, mono: d.mono ?? false, text, title, values };
+      };
+      // A hand-typed address can repeat an id, and the chip line tells chips apart by their value.
+      if (d.perValue) return [...new Set(filters[d.field] as string[])].map((value) => ({ ...chipOf([value]), value }));
+      return [chipOf(filters[d.field])];
     });
 }
 
@@ -215,9 +229,12 @@ export const ANALYTICS_DIMENSIONS: Dimension[] = [
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];
 
-/** Keys. The status choice's none is `all`, the codec's default. */
+/**
+ * Keys. The pool list draws a chip per id, so a hand-typed id the router does not list stands and leaves apart from the
+ * listed ones. The status choice's none is `all`, the codec's default.
+ */
 export const KEYS_DIMENSIONS: Dimension[] = [
-  { ...POOL, group: 'Keys' },
+  { ...POOL, group: 'Keys', perValue: true },
   { anyLabel: 'All statuses', defaultValue: 'all', field: 'status', group: 'Keys', kind: 'choice', label: 'Status', word: 'status' },
 ];
 
