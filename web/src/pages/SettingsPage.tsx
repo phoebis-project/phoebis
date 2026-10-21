@@ -25,7 +25,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
   {
     term: '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
-    body: 'Makes Claude Code send its first-party request shape to the router: the billing hash, the cache diagnostics beta, and the first-party betas. Without it the router relays the reduced shape as is. It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
+    body: 'Makes Claude Code send its first-party request shape to the router: the billing hash, the cache diagnostics beta, and the first-party betas. Without it the client sends its reduced shape and the router restores the fields before relaying it. It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
   },
   {
     term: 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',

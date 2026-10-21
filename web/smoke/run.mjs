@@ -22817,6 +22817,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'Marks the session a consumer subscription, which no organization policy governs',
     'The client documents it nowhere, and a future build may drop it.',
     'Makes Claude Code send its first-party request shape to the router',
+    'Without it the client sends its reduced shape and the router restores the fields before relaying it.',
     'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
     'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',
     "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
@@ -22824,6 +22825,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'Worth setting for Fable 5.1 sessions in a pool with cache warming on',
     'Leave it unset without warming.',
   ]);
+  const relayedAsIs = m.text().includes('the router relays the reduced shape as is');
+  results.push({ name: '/settings no definition says the router relays the reduced shape as is', ok: !relayedAsIs, missing: [relayedAsIs ? 'still there' : ''] });
 }
 {
   const dark = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Dark');
