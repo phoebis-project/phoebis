@@ -290,6 +290,11 @@ pub async fn relay_with_limits(
     up: &FakeUpstream,
     limits: Limits,
 ) -> axum::Router {
+    one_account_harness(kind, up, limits).await.app
+}
+
+/// The one-account relay `relay_with_limits` answers, with its whole harness, for a case that reads the relay's counts.
+pub async fn one_account_harness(kind: AccountKind, up: &FakeUpstream, limits: Limits) -> Harness {
     let secret = match kind {
         AccountKind::Oauth => "sk-ant-oat01-PLACEHOLDER",
         AccountKind::ApiKey => "sk-ant-api03-PLACEHOLDER",
@@ -308,7 +313,6 @@ pub async fn relay_with_limits(
         limits,
     )
     .await
-    .app
 }
 
 pub async fn harness(up: &FakeUpstream, accounts: &[TestAccount], pool: PoolSpec) -> Harness {

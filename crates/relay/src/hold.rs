@@ -204,7 +204,11 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(5)).await;
         });
         let mut reader = BodyReader::new(rx, Default::default(), Framing::UntilClose);
-        hold(&mut reader, inspect, timeout).await.unwrap()
+        let held = hold(&mut reader, inspect, timeout).await.unwrap();
+        // Drained past the verdict, so a chunk the writer sends after the commit meets an open pipe rather than a
+        // dropped reader, whose broken pipe would panic the writer.
+        tokio::spawn(async move { while let Ok(Some(_)) = reader.next_chunk().await {} });
+        held
     }
 
     fn plain(chunks: &[&str]) -> Vec<Vec<u8>> {

@@ -196,12 +196,32 @@ const REPEATED_SYSTEM: &str =
 /// The item's own message: what is missing, and the environment line that sends it.
 fn contract_message(item: &str) -> &'static str {
     match item {
-        "session_header" => "the request carries no x-claude-code-session-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them",
-        "class_header" => "the request carries no x-claude-code-request-class header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1",
-        "attribution_line" => "the request carries no attribution line at system[0] the router requires of a Claude Code client. Leave CLAUDE_CODE_ATTRIBUTION_HEADER unset",
-        "metadata_user_id" => "the request body has no metadata.user_id the router requires of a Claude Code client. Send the body as Claude Code sends it",
-        "agent_id_header" => "the request names a subagent class and carries no x-claude-code-agent-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them",
-        "compaction_header" => "the request names the compaction class and carries no x-claude-code-compaction header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1",
+        "session_header" => {
+            "the request carries no x-claude-code-session-id header the router requires of a \
+             Claude Code client. Send the requests as Claude Code sends them"
+        }
+        "class_header" => {
+            "the request carries no x-claude-code-request-class header the router requires of a \
+             Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1"
+        }
+        "attribution_line" => {
+            "the request carries no attribution line at system[0] the router requires of a \
+             Claude Code client. Leave CLAUDE_CODE_ATTRIBUTION_HEADER unset"
+        }
+        "metadata_user_id" => {
+            "the request body has no metadata.user_id the router requires of a \
+             Claude Code client. Send the body as Claude Code sends it"
+        }
+        "agent_id_header" => {
+            "the request names a subagent class and carries no \
+             x-claude-code-agent-id header the router requires of a Claude Code client. \
+             Send the requests as Claude Code sends them"
+        }
+        "compaction_header" => {
+            "the request names the compaction class and carries no \
+             x-claude-code-compaction header the router requires of a Claude Code client. \
+             Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1"
+        }
         _ => unreachable!(
             "contract_gap only ever names session_header, class_header, attribution_line, metadata_user_id, agent_id_header or compaction_header"
         ),
@@ -588,6 +608,50 @@ mod tests {
                 "{item}: {}",
                 failure.message
             );
+        }
+    }
+
+    /// The client page quotes each message whole, so a word or a space the table's wrapped lines drop answers a text
+    /// the page does not show.
+    #[test]
+    fn every_contract_message_reads_as_the_client_page_quotes_it() {
+        use crate::identity::{
+            ITEM_AGENT_ID_HEADER, ITEM_ATTRIBUTION_LINE, ITEM_CLASS_HEADER, ITEM_COMPACTION_HEADER,
+            ITEM_METADATA_USER_ID, ITEM_SESSION_HEADER,
+        };
+        for (item, quoted) in [
+            (
+                ITEM_SESSION_HEADER,
+                "the request carries no x-claude-code-session-id header the router requires of a Claude Code \
+                 client. Send the requests as Claude Code sends them",
+            ),
+            (
+                ITEM_CLASS_HEADER,
+                "the request carries no x-claude-code-request-class header the router requires of a Claude Code \
+                 client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1",
+            ),
+            (
+                ITEM_ATTRIBUTION_LINE,
+                "the request carries no attribution line at system[0] the router requires of a Claude Code \
+                 client. Leave CLAUDE_CODE_ATTRIBUTION_HEADER unset",
+            ),
+            (
+                ITEM_METADATA_USER_ID,
+                "the request body has no metadata.user_id the router requires of a Claude Code client. Send the \
+                 body as Claude Code sends it",
+            ),
+            (
+                ITEM_AGENT_ID_HEADER,
+                "the request names a subagent class and carries no x-claude-code-agent-id header the router \
+                 requires of a Claude Code client. Send the requests as Claude Code sends them",
+            ),
+            (
+                ITEM_COMPACTION_HEADER,
+                "the request names the compaction class and carries no x-claude-code-compaction header the \
+                 router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1",
+            ),
+        ] {
+            assert_eq!(contract_message(item), quoted, "{item}");
         }
     }
 

@@ -258,6 +258,9 @@ pub struct Relay {
     bus: Option<Bus>,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
+    /// The connections the pool opened for this relay's checkouts, as against the idle ones it reused.
+    #[cfg(feature = "debug-hooks")]
+    connections_opened: std::sync::atomic::AtomicUsize,
     /// The decoders built for the hold's and the bus copy's reads of a response.
     #[cfg(feature = "debug-hooks")]
     pub(crate) decoders_built: Arc<std::sync::atomic::AtomicU64>,
@@ -346,6 +349,8 @@ impl Relay {
             catalog,
             clock,
             #[cfg(feature = "debug-hooks")]
+            connections_opened: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(feature = "debug-hooks")]
             decoders_built: Arc::default(),
             drift: DriftGuard,
             heads: Arc::new(Mutex::new(HashMap::new())),
@@ -377,6 +382,19 @@ impl Relay {
     #[cfg(feature = "debug-hooks")]
     pub fn heads_pending(&self) -> usize {
         self.heads.lock().expect(HEADS_POISONED).len()
+    }
+
+    /// The connections the relay opened fresh (a checkout the pool did not reuse), for a test that counts them
+    /// without reading the fake upstream's accepts.
+    #[cfg(feature = "debug-hooks")]
+    pub fn connections_opened(&self) -> usize {
+        self.connections_opened.load(Ordering::Relaxed)
+    }
+
+    /// Counts a checkout the pool answered with a connection it opened, which the test hooks alone read.
+    pub(crate) fn note_opened(&self) {
+        #[cfg(feature = "debug-hooks")]
+        self.connections_opened.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A decoder for the relay's own read of a response body: the hold's inspection copy or the bus copy.
@@ -4188,7 +4206,8 @@ impl Relay {
             item = %item,
             user_agent = %user_agent(headers),
             key = %key.id,
-            "a Claude Code client sent a request without the {item} the router requires. Read the client page for the environment block",
+            "a Claude Code client sent a request without the {item} the router requires. \
+             Read the client page for the environment block",
         );
         self.router.record_refusal(
             RefusedRequest {
@@ -4624,6 +4643,7 @@ impl Relay {
                 decode_failed: false,
                 passthrough,
                 parser,
+                skipped: (0, 0),
                 held,
                 on_error,
                 // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.

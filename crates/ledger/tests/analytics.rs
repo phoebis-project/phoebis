@@ -3953,6 +3953,119 @@ fn a_classifier_rows_burn_bucket_reads_zero_shares_and_equivalents_beside_a_plai
     );
 }
 
+/// A classifier call's plan row reads a zero equivalent through the totals and zero shares and equivalents through its
+/// session's series, while a plain row of the same counts on another account reads its figures there. The row's own
+/// price is the one reader that names why its shares read zero.
+#[test]
+fn a_classifier_row_reads_zero_in_the_totals_and_session_series_and_its_price_names_the_reason() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let tables = share_tables();
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-classifier",
+            classifier: Some("client"),
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plain",
+            account: "b",
+            ..ShareRow::default()
+        },
+    );
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let totals = db
+        .read_blocking(|c| request_totals(c, "account_id", hour, hour + 3_600, &PRICES, &tables))
+        .unwrap();
+    let (marked, plain) = (&totals["a"].equivalent, &totals["b"].equivalent);
+    assert!(
+        marked.five_hour == 0.0
+            && marked.seven_day == 0.0
+            && !marked.unpriced.five_hour
+            && !marked.unpriced.seven_day,
+        "the classifier row's equivalent in the totals: {marked:?}"
+    );
+    assert!(
+        plain.five_hour > 0.0 && plain.seven_day > 0.0,
+        "the plain row's equivalent in the totals: {plain:?}"
+    );
+    // A read naming one account answers the session's shares from that account's attempts alone.
+    let figures = |account: &str| {
+        let filter = SeriesFilter {
+            from: hour * 1_000,
+            to: (hour + 3_600) * 1_000,
+            bucket_seconds: 3_600,
+            accounts: vec![account.into()],
+            ..SeriesFilter::default()
+        };
+        let sessions = db
+            .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &PRICES, &filter))
+            .unwrap();
+        let (_, points) = sessions
+            .iter()
+            .find(|(id, _)| id == "s")
+            .unwrap_or_else(|| panic!("the session is answered: {sessions:?}"));
+        let point = point_at(points, hour);
+        [
+            point.five_hour_share,
+            point.seven_day_share,
+            point.five_hour_equivalent,
+            point.seven_day_equivalent,
+        ]
+    };
+    assert_eq!(
+        figures("a"),
+        [Some(0.0); 4],
+        "the classifier row's shares and equivalents in the session series"
+    );
+    let plain = figures("b");
+    assert!(
+        plain.iter().all(|figure| figure.is_some_and(|f| f > 0.0)),
+        "the plain row's shares and equivalents in the session series: {plain:?}"
+    );
+    let rows = all_rows(&db);
+    let priced = |account: &str| {
+        let row = rows
+            .iter()
+            .find(|row| row.account_id == account)
+            .unwrap_or_else(|| panic!("the row of {account} is stored: {rows:?}"));
+        let key = phoebis_ledger::RowKey {
+            model: &row.canonical_model,
+            speed: Speed::of(Some(row.speed.as_str())),
+            band: phoebis_ledger::Band::of_rollup(&row.band),
+            funding: phoebis_ledger::Funding::of_rollup(&row.funding),
+            kind: &row.kind,
+            tier: Some(&row.tier),
+            entrypoint: phoebis_ledger::entrypoint_of_client(&row.client),
+            classifier: row.classifier == "client",
+            at: row.hour * 1_000,
+            band_at: None,
+        };
+        phoebis_ledger::price_row(&PRICES, &tables, &key, row.usage())
+    };
+    let marked = priced("a");
+    assert_eq!(
+        marked.share_reason,
+        Some(phoebis_ledger::SHARE_REASON_CLIENT_CLASSIFIER),
+        "the classifier row's price names its reason: {marked:?}"
+    );
+    assert!(
+        marked
+            .shares
+            .as_ref()
+            .is_some_and(|shares| shares.values().all(|share| *share == Some(0.0))),
+        "the classifier row's price shares nothing: {marked:?}"
+    );
+    let plain = priced("b");
+    assert_eq!(
+        plain.share_reason, None,
+        "the plain row's price names no reason: {plain:?}"
+    );
+}
+
 /// The burn prices each row by its funding: a subscription row in the share of its own windows where the read names
 /// its one account, an api_key row in dollars, and every plan row in the 20x equivalent under every scope, so the
 /// equivalents of two accounts add into one figure while their shares do not.

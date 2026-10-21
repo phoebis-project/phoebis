@@ -438,9 +438,16 @@ async fn keep_alive_reuses_the_upstream_connection() {
         },
     }])
     .await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    // The relay's own count, since the fake's accepts would count a connect another process on the host opened.
+    let h = common::one_account_harness(
+        phoebis_store::AccountKind::Oauth,
+        &up,
+        common::default_limits(),
+    )
+    .await;
     for _ in 0..3 {
-        let resp = app
+        let resp = h
+            .app
             .clone()
             .oneshot(common::stream_request("phoebis-testkey"))
             .await
@@ -450,7 +457,7 @@ async fn keep_alive_reuses_the_upstream_connection() {
         resp.into_body().collect().await.unwrap();
     }
     assert_eq!(
-        up.connections(),
+        h.relay.connections_opened(),
         1,
         "three requests, one upstream connection"
     );
@@ -534,8 +541,15 @@ async fn a_dead_pooled_connection_is_discarded_rather_than_handed_out() {
         },
     }])
     .await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-    let first = app
+    // The relay's own count, since the fake's accepts would count a connect another process on the host opened.
+    let h = common::one_account_harness(
+        phoebis_store::AccountKind::Oauth,
+        &up,
+        common::default_limits(),
+    )
+    .await;
+    let first = h
+        .app
         .clone()
         .oneshot(common::stream_request("phoebis-testkey"))
         .await
@@ -544,12 +558,14 @@ async fn a_dead_pooled_connection_is_discarded_rather_than_handed_out() {
     // A connection returns to the pool only once its body has been read to the end.
     first.into_body().collect().await.unwrap();
     assert_eq!(
-        up.connections(),
+        h.relay.connections_opened(),
         1,
         "the first request opened one connection"
     );
     up.close_idle_and_wait().await;
-    let second = app
+    let second = h
+        .app
+        .clone()
         .oneshot(common::stream_request("phoebis-testkey"))
         .await
         .unwrap();
@@ -565,7 +581,7 @@ async fn a_dead_pooled_connection_is_discarded_rather_than_handed_out() {
         "the dead pooled connection carried nothing, so the upstream saw the second request once"
     );
     assert_eq!(
-        up.connections(),
+        h.relay.connections_opened(),
         2,
         "the pool opened a connection rather than handing out the dead one"
     );
@@ -1612,6 +1628,59 @@ async fn a_stream_whose_oversized_event_is_skipped_keeps_its_later_events() {
         "the stop's phase is on the bus"
     );
     up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_skip_the_bus_copy_counted_before_its_decoder_failed_still_reaches_the_completion() {
+    // The client takes the coding as sent, so only the bus copy decodes: its parser skips the event past the bound,
+    // and a final block of the reserved type 3 then fails the copy's decoder, which drops the parser. The letters do
+    // not compress, so the stream spans many wire chunks, and the event after the skipped one keeps the broken block
+    // out of the chunk that ends the skipped event.
+    let mut state: u32 = 0x9e37_79b9;
+    let mut letters = |len: usize| -> String {
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                char::from(b'a' + (state % 26) as u8)
+            })
+            .collect()
+    };
+    let events = [
+        message_start_event(),
+        text_delta_event(&letters(phoebis_relay::INSPECT_BUFFER + 64 * 1024)),
+        text_delta_event(&letters(256 * 1024)),
+    ];
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, rendered(&events).as_bytes()).unwrap();
+    // A sync flush, so every event above inflates before the broken block that follows.
+    std::io::Write::flush(&mut encoder).unwrap();
+    let mut wire = encoder.get_ref().clone();
+    wire.push(0xff);
+    let (coding, body, complete) = one_coded_stream(
+        Respond::Chunked {
+            status: 200,
+            headers: vec![
+                ("Content-Type".into(), "text/event-stream".into()),
+                ("Content-Encoding".into(), "gzip".into()),
+            ],
+            body: wire.clone(),
+        },
+        common::stream_request(common::KEY),
+    )
+    .await;
+    assert_eq!(coding.as_deref(), Some("gzip"));
+    // Compared without `assert_eq!`, whose failure would print both bodies.
+    assert!(
+        body.as_ref() == wire.as_slice(),
+        "the client reads the bytes as sent"
+    );
+    assert_eq!(
+        (complete.outcome, complete.skipped_events),
+        (phoebis_bus::Outcome::Succeeded, 1),
+        "the client's answer stands, and the completion names the event the dropped parser skipped"
+    );
 }
 
 fn gzipped_stream(events: &[SseEvent]) -> Respond {

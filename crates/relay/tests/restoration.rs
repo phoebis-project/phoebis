@@ -1331,6 +1331,24 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
         other.await.unwrap().into_body().collect().await.unwrap();
     }
     h.relay.flush_memory().await;
+    // The prompt id came with the session's first request, so a bare entry the hook built without its restore and the
+    // flush saved over the record carries none.
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        "s-1",
+        "main",
+    );
+    let saved = h
+        .store
+        .load(&key)
+        .unwrap()
+        .expect("the session's record is saved");
+    let saved: serde_json::Value = serde_json::from_str(&saved.payload).unwrap();
+    assert_eq!(
+        saved["prompt_id"], PROMPT_ID,
+        "the hook read the saved record back rather than replacing it with a bare entry"
+    );
     h.app
         .clone()
         .oneshot(tool_loop_request("s-1"))

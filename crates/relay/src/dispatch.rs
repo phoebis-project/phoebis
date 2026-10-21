@@ -76,16 +76,19 @@ pub(crate) async fn attempt(
     let sending = AtomicBool::new(false);
     let once = async {
         let checkout = async {
-            if fresh {
-                checkout_fresh(&relay.pool, key, host, addr).await
+            let (conn, reused) = if fresh {
+                (checkout_fresh(&relay.pool, key, host, addr).await?, false)
             } else {
                 relay
                     .pool
                     .checkout(key.clone(), host, addr)
                     .await
-                    .map(|(conn, _)| conn)
-                    .map_err(unsent)
+                    .map_err(unsent)?
+            };
+            if !reused {
+                relay.note_opened();
             }
+            Ok::<_, AttemptFailure>(conn)
         };
         // The connect and the handshake have their own bound: a stalled handshake would otherwise wait out the
         // whole head timeout, ten minutes, before the one retry on a fresh connection.

@@ -134,6 +134,9 @@ pub(crate) struct Publish {
     /// past its bound and keeps parsing, so an oversized event costs a bounded buffer and its own phase while the
     /// events after it still reach the completion. A held stream's is the hold's own, already past the held events.
     pub parser: Option<SseParser>,
+    /// The parser's skipped count and largest size, kept at its drop on a decode failure, so the warn line at the end
+    /// and the completion still name the events that parser skipped.
+    pub skipped: (u32, usize),
     /// The held bytes' text and events when the hold handed its decoder and parser over, taken by the prefix.
     pub held: Option<HeldText>,
     /// Fired once, on the first `error` event after the commit; `None` for a stream nothing watches.
@@ -420,7 +423,9 @@ impl Publish {
                 Err(_) => {
                     self.decode_failed = true;
                     self.decoder = None;
-                    self.parser = None;
+                    if let Some(parser) = self.parser.take() {
+                        self.skipped = parser.skipped();
+                    }
                     self.json = None;
                     return;
                 }
@@ -549,7 +554,10 @@ impl Publish {
                 self.emit(Bytes::new(), Some(phase));
             }
         }
-        let (skipped, largest) = self.parser.as_ref().map_or((0, 0), SseParser::skipped);
+        let (skipped, largest) = self
+            .parser
+            .as_ref()
+            .map_or(self.skipped, SseParser::skipped);
         if skipped > 0 {
             tracing::warn!(
                 request_id = %self.trace.request_id,
