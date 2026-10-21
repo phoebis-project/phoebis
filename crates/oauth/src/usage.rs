@@ -108,11 +108,43 @@ pub struct UsageWindow {
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct ExtraUsage {
     pub is_enabled: bool,
+    /// Minor units. The endpoint writes the two amounts with a fraction part at times (`102500.0`), a rounding
+    /// artifact of the figure the body's `spend` object carries as an integer, so the parse rounds each to the
+    /// nearest minor unit for the readers that store an integer.
+    #[serde(default, deserialize_with = "minor_units")]
     pub monthly_limit: Option<i64>,
+    #[serde(default, deserialize_with = "minor_units")]
     pub used_credits: Option<i64>,
     pub utilization: Option<f64>,
     pub currency: Option<String>,
+    /// The currency's minor-unit exponent, null where the body carries none.
+    #[serde(default)]
+    pub decimal_places: Option<u8>,
     pub disabled_reason: Option<String>,
+}
+
+/// A number with an optional fraction part, rounded to the nearest minor unit. `null` and an absent member read
+/// as `None`.
+fn minor_units<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+    let value: Option<f64> = serde::Deserialize::deserialize(d)?;
+    Ok(value.map(|amount| amount.round() as i64))
+}
+
+/// The body's `spend` object, the seat's spend against its cap in minor units, as the account view shows it. A
+/// `spend` object whose `used` lacks `amount_minor` or `currency`, or whose `exponent` is absent or past `u8`, reads
+/// as no `spend` object, so the extra-usage amounts build the reading and nothing fails.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpendReading {
+    pub used_minor: i64,
+    /// Null where the body sets no limit: the spend alone, no bar.
+    pub limit_minor: Option<i64>,
+    pub currency: String,
+    pub exponent: u8,
+    /// The body's `percent`, on the percent scale.
+    pub percent: Option<f64>,
+    /// True where the body's `spend` object gave the reading, false where the extra-usage amounts built it: the
+    /// poll's row stores the `spend` columns from the object alone.
+    pub from_spend: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -125,6 +157,7 @@ pub struct UsageSnapshot {
     pub extra_usage: Option<ExtraUsage>,
     pub raw_keys: Vec<String>,
     pub error: Option<String>,
+    pub spend: Option<SpendReading>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -136,7 +169,8 @@ pub enum UsageError {
 /// Reads every top-level object with a `utilization` member as a window, keeping its key. `extra_usage`
 /// carries a `utilization` of its own but describes purchased credit rather than a quota window, so it is
 /// parsed separately. The Fable weekly window comes from `limits[]` when present; a top-level key is read
-/// only as a fallback for the wire shapes captured before that field existed.
+/// only as a fallback for the wire shapes captured before that field existed. The spend reading comes from
+/// the body's `spend` object where present, else it is built from the extra-usage amounts.
 #[allow(clippy::type_complexity)]
 pub fn parse_usage(
     body: &[u8],
@@ -145,6 +179,7 @@ pub fn parse_usage(
         Vec<UsageWindow>,
         Option<UsageWindow>,
         Option<ExtraUsage>,
+        Option<SpendReading>,
         Vec<String>,
     ),
     OauthError,
@@ -166,6 +201,7 @@ pub fn parse_usage(
         Some(Value::Null) | None => None,
         Some(value) => Some(serde_json::from_value(value.clone())?),
     };
+    let spend = spend_reading(map.get("spend"), extra_usage.as_ref());
 
     let fable_window = match map.get("limits") {
         Some(limits) => {
@@ -185,7 +221,39 @@ pub fn parse_usage(
         }
     };
 
-    Ok((windows, fable_window, extra_usage, raw_keys))
+    Ok((windows, fable_window, extra_usage, spend, raw_keys))
+}
+
+fn spend_reading(spend: Option<&Value>, extra: Option<&ExtraUsage>) -> Option<SpendReading> {
+    let from_object = spend.and_then(|spend| {
+        let used = spend.get("used")?;
+        Some(SpendReading {
+            used_minor: used.get("amount_minor").and_then(Value::as_i64)?,
+            limit_minor: spend
+                .get("limit")
+                .and_then(|limit| limit.get("amount_minor"))
+                .and_then(Value::as_i64),
+            currency: used.get("currency").and_then(Value::as_str)?.to_string(),
+            exponent: used
+                .get("exponent")
+                .and_then(Value::as_u64)
+                .and_then(|exponent| u8::try_from(exponent).ok())?,
+            percent: spend.get("percent").and_then(Value::as_f64),
+            from_spend: true,
+        })
+    });
+    from_object.or_else(|| {
+        let extra = extra?;
+        Some(SpendReading {
+            used_minor: extra.used_credits?,
+            limit_minor: extra.monthly_limit,
+            currency: extra.currency.clone()?,
+            exponent: extra.decimal_places?,
+            // The endpoint gives `utilization` on the percent scale, as the `spend` object gives `percent`.
+            percent: extra.utilization,
+            from_spend: false,
+        })
+    })
 }
 
 fn window_from_value(key: &str, value: &Value) -> Option<UsageWindow> {
@@ -227,6 +295,7 @@ struct ParsedUsage {
     windows: Vec<UsageWindow>,
     fable_window: Option<UsageWindow>,
     extra_usage: Option<ExtraUsage>,
+    spend: Option<SpendReading>,
     raw_keys: Vec<String>,
 }
 
@@ -268,6 +337,7 @@ fn empty_snapshot(
         extra_usage: None,
         raw_keys: Vec::new(),
         error: Some(error),
+        spend: None,
     }
 }
 
@@ -689,12 +759,13 @@ impl Inner {
                 head.status
             )));
         }
-        let (windows, fable_window, extra_usage, raw_keys) =
+        let (windows, fable_window, extra_usage, spend, raw_keys) =
             parse_usage(&body).map_err(|error| FetchFailure::Message(format!("parse: {error}")))?;
         Ok(ParsedUsage {
             windows,
             fable_window,
             extra_usage,
+            spend,
             raw_keys,
         })
     }
@@ -772,6 +843,7 @@ impl Inner {
                     extra_usage: parsed.extra_usage,
                     raw_keys: parsed.raw_keys,
                     error: None,
+                    spend: parsed.spend,
                 };
                 let edge = cache.get(account_id).and_then(|entry| {
                     entry.backoff_since.map(|since| BackoffEdge::Ended {

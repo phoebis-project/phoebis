@@ -2768,6 +2768,7 @@ fn compose_usage(
         extra_usage: latest.as_ref().and_then(|s| s.extra_usage.clone()),
         raw_keys: latest.map(|s| s.raw_keys).unwrap_or_default(),
         error: None,
+        spend: None,
     })
 }
 

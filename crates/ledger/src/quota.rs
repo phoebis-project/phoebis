@@ -698,10 +698,12 @@ mod tests {
                 used_credits: Some(1_234),
                 utilization: Some(0.2468),
                 currency: Some("USD".into()),
+                decimal_places: None,
                 disabled_reason: None,
             }),
             raw_keys: vec![],
             error: None,
+            spend: None,
         };
         let (quota, extra) = samples_from_poll(&snapshot);
         assert_eq!(

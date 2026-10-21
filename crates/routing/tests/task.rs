@@ -1929,10 +1929,12 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
             used_credits: None,
             utilization: None,
             currency: None,
+            decimal_places: None,
             disabled_reason: None,
         }),
         raw_keys: vec![],
         error: None,
+        spend: None,
     };
     let (sample, overage) = sample_from_usage(&snapshot(100.0, 40.0, true), 1);
     assert_eq!(
@@ -5112,10 +5114,12 @@ fn credits_at(
             used_credits: None,
             utilization,
             currency: None,
+            decimal_places: None,
             disabled_reason: reason.map(String::from),
         }),
         raw_keys: vec![],
         error: None,
+        spend: None,
     };
     Report::Credits {
         account_id: "a".into(),

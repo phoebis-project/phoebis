@@ -18,7 +18,7 @@ const USAGE_BETA: &str = "oauth-2025-04-20";
 pub enum OauthError {
     #[error("malformed control response: {0}")]
     Malformed(String),
-    #[error("control response is not valid JSON")]
+    #[error("control response is not valid JSON: {0}")]
     Json(#[from] serde_json::Error),
 }
 
