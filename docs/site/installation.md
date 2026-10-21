@@ -437,7 +437,7 @@ storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite
 upstream:
-  # Both unset by default: an extra trust anchor for a lab upstream, and one address every host resolves to.
+  # Both unset by default: extra trust anchors for a lab upstream, and one address every host resolves to.
   # extra_ca_pem: ./lab-ca.pem
   # resolve_override: 127.0.0.1:8443
 usage:

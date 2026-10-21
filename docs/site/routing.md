@@ -573,9 +573,9 @@ windows, since the 5-hour window refills. The pin the pick marked carries the no
 event, every pin the pick read carries the runway the gate read for it and its rewrite in the pick's unit, and a pick
 that finds no covering pin with a destination leaves the walk to the order. A pin whose burn carries the removed burn
 past the target stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no
-priced pin had a destination, `last_pin` when the account had one pin on the window, `standing` when every pin walked
-was a pending move, `off_window` when it walked no pin and a pin it left out was off the window that fired, and
-`unpriced` when no burn was priced. Either way the round is recorded, so the dwell holds.
+priced pin had a destination, `off_window` when it walked no pin and a pin it left out was off the window that fired,
+`unpriced` when no burn was priced, `last_pin` when the account had one pin on the window, and `standing` when every pin
+walked was a pending move. Either way the round is recorded, so the dwell holds.
 
 A marked session moves at its next request, the request that ran the round included, since the mark check follows the
 round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
