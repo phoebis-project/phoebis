@@ -1468,6 +1468,8 @@
   white-space: nowrap;
 }
 
+/* The flex box blockifies its one `span.catalog__id`, so the id's `overflow: hidden` and `text-overflow: ellipsis`
+   apply, and `min-width: 0` on both lets it shrink in the fill cell. */
 .catalog__model {
   display: flex;
   align-items: center;
@@ -1762,7 +1764,8 @@
   min-width: max-content;
 }
 
-/* The grid's selects keep the dialog's type, which the table's smaller size would shrink below the selects around it. */
+/* The grid's selects keep the dialog's type, which the table's smaller size would shrink below the selects
+   around it. */
 .ttl-grid {
   font-size: inherit;
 }
@@ -2237,7 +2240,7 @@
   padding-right: 12px;
 }
 
-/* The chevron takes its width from the Time column, so the two together keep the time's 170 px. */
+/* The chevron is its own 24 px column beside the Time column's 146 px (`.routing-log__time`), 170 px together. */
 .routing-log__table .routing-log__chevron {
   width: 24px;
   padding-right: 0;
@@ -4475,7 +4478,8 @@
   gap: 12px;
 }
 
-/* Inside a half-width panel three tiles do not clear the page-wide 170px floor, and auto-fit leaves the third one stranded on its own row. */
+/* Inside a half-width panel three tiles do not clear the page-wide 170px floor, and auto-fit leaves the third one
+   stranded on its own row. */
 .tiles-row--panel {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }

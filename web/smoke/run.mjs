@@ -163,7 +163,9 @@ const declarationsOf = (selector) => {
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
 const buttonIn = (dlg, label) => [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === label);
-/** A multi-select's own options: the Select all row heads every list, so a count, a list or a first pick reads past it. */
+/**
+ * A multi-select's own options: the Select all row heads every list, so a count, a list or a first pick reads past it.
+ */
 const CHOICE = '.mselect__option:not(.mselect__option--all)';
 /** The outside path of a modal dialog: a click whose target is the dialog element itself is a click on the backdrop. */
 const clickOutside = (dlg) => dlg?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
@@ -329,8 +331,8 @@ const closeBoxes = async (page) => {
   await page.settle(100);
 };
 /**
- * Opens Add filter and steps into the row reading `label`, the way a reader picks a dimension: the box, or null where no
- * row reads the label. A flag's row writes at once and closes the box.
+ * Opens Add filter and steps into the row reading `label`, the way a reader picks a dimension: the box, or null where
+ * no row reads the label. A flag's row writes at once and closes the box.
  */
 const addFilter = async (page, label) => {
   await closeBoxes(page);
@@ -343,7 +345,9 @@ const addFilter = async (page, label) => {
 };
 /** The open values step's option rows, a list's past its Select all row or a choice's radios. */
 const boxOptions = () => [...(filterBox()?.querySelectorAll(`${CHOICE}, [role="radio"]`) ?? [])];
-/** Clicks `option` in `label`'s values through Add filter, answering whether both stood, once the read it starts lands. */
+/**
+ * Clicks `option` in `label`'s values through Add filter, answering whether both stood, once the read it starts lands.
+ */
 const pick = async (page, label, option) => {
   const box = await addFilter(page, label);
   const row = boxOptions().find((o) => o.textContent?.trim() === option);
@@ -351,7 +355,9 @@ const pick = async (page, label, option) => {
   await page.settle(700);
   return box !== null && row !== undefined;
 };
-/** Writes a pattern or an id through Add filter's field with Enter, as a reader applies it: false where no field stands. */
+/**
+ * Writes a pattern or an id through Add filter's field with Enter, as a reader applies it: false where no field stands.
+ */
 const applyText = async (page, label, text) => {
   const input = (await addFilter(page, label))?.querySelector('input');
   if (!input) return false;
@@ -374,7 +380,9 @@ const removeChip = async (page, word) => {
 const columnsButton = (page) => page.container.querySelector('button[aria-label="Columns"]');
 const columnsGrid = () => document.querySelector('.popover .cols-popover');
 const intervalPart = (page) => page.container.querySelector('.refresh-control__part');
-/** The interval the split button's part reads, from its own span, since the part also holds the widest word as a sizer. */
+/**
+ * The interval the split button's part reads, from its own span, since the part also holds the widest word as a sizer.
+ */
 const intervalWord = (page) => intervalPart(page)?.querySelector('.refresh-control__shown')?.textContent?.trim() ?? null;
 const chooseInterval = async (page, word) => {
   intervalPart(page)?.click();
@@ -382,7 +390,10 @@ const chooseInterval = async (page, word) => {
   [...document.querySelectorAll('.popover[role="menu"] [role="menuitemradio"]')].find((b) => b.textContent?.trim() === word)?.click();
   await page.settle(100);
 };
-/** The Analytics bar's Group by select and its "Groups (N)" button, which stands beside it while the page groups by user agent. */
+/**
+ * The Analytics bar's Group by select and its "Groups (N)" button, which stands beside it while the page groups by user
+ * agent.
+ */
 const groupBySelect = (page) => page.container.querySelector('.filter-bar select[aria-label="Group by"]');
 const groupsButton = (page) => [...page.container.querySelectorAll('.filter-bar__row button')].find((b) => /^Groups \(\d+\)$/.test(b.textContent?.trim() ?? ''));
 const groupsBox = () => document.querySelector('.popover textarea[aria-label="User agent groups"]')?.closest('.popover') ?? null;
@@ -1496,8 +1507,8 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   // `readsAgain` mounts, and every check reads at that one instant, so the spans the story's windows leave read the
   // same however late the run reaches the block. The mock anchors its story as it loads, a moment after the origin, so
   // the phrase comes from the shared words and the mock's own windows rather than a literal span. The story's figures
-  // are the burns its windows carry: nightly's 5-hour window runs out before its reset, primary's reaches its reset with
-  // a share left, and primary's 7-day window reads its five hours.
+  // are the burns its windows carry: nightly's 5-hour window runs out before its reset, primary's reaches its reset
+  // with a share left, and primary's 7-day window reads its five hours.
   const at = CLOCK_ORIGIN;
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
@@ -2520,7 +2531,9 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     input.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
   };
-  /** The id line under the Label field, drawn while the id follows the label. Null once customize revealed the input. */
+  /**
+   * The id line under the Label field, drawn while the id follows the label. Null once customize revealed the input.
+   */
   const idLine = (dlg) => [...(dlg?.querySelectorAll('p.field__hint') ?? [])].find((p) => p.textContent?.trim().startsWith('Id:')) ?? null;
   const idRead = (dlg) => idLine(dlg)?.querySelector('.mono')?.textContent ?? null;
   const primary = (dlg) => buttonIn(dlg, 'Start pairing') ?? buttonIn(dlg, 'Add API key') ?? null;
@@ -2657,8 +2670,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     ok: submitted && confirmed && openDialogs(m).length === 0 && names().includes('Fresh desk') && m.location().pathname === '/accounts/fresh-desk' && (m.container.querySelector('.account-row.is-active')?.textContent ?? '').includes('Fresh desk') && toast.includes('Paired operator+new@example.com'),
     missing: [`Confirm enabled ${submitted}, the row selected ${confirmed}`, `${openDialogs(m).length} open`, names().join(', '), m.location().pathname, m.container.querySelector('.account-row.is-active')?.textContent?.slice(0, 40) ?? 'no active row', toast || 'no toast'],
   });
-  // The story as it was: the row leaves the mock (tolerating a confirm that wrote none, which the check above read), and
-  // the page returns to primary for the checks that follow.
+  // The story as it was: the row leaves the mock (tolerating a confirm that wrote none, which the check above read),
+  // and the page returns to primary for the checks that follow.
   await api.deleteAccount('fresh-desk').catch((e) => {
     if (e?.status !== 404) throw e;
   });
@@ -3971,8 +3984,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
   // The shedding badge draws on every card, reading the pool's ceiling with its switch on, so all reads its 75 % and
   // jobs and work the store's 95 %. The slow-down badge draws on work alone, the one pool with the switch on, and reads
-  // its threshold of 30 minutes. all carries the story's one pool guardrail, whose badge leads the strip, since the rail
-  // draws Guardrails before every other group a badge opens.
+  // its threshold of 30 minutes. all carries the story's one pool guardrail, whose badge leads the strip, since the
+  // rail draws Guardrails before every other group a badge opens.
   const shedding = (id, ceiling) => [`sheds above ${ceiling} %`, `/pools?edit=${id}&group=shedding`, 'Opens the pool dialog on Load shedding'];
   results.push({
     name: "/pools the strip badges the features a pool has on, and the shedding's state, and opens the dialog on their groups",
@@ -4804,9 +4817,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 }
 {
   // The card reads the router's figures in whole hours, floored, right after the keepalive chip, and a pool that keeps
-  // no caches warm draws no line. With its plan member alone on the hour `work` reads one figure each, while `all` mixes
-  // plan members with the API-key `overflow` on five minutes and reads both ends. The story's `work` holds the API-key
-  // annex too, so the checks of one figure read it with its plan member alone.
+  // no caches warm draws no line. With its plan member alone on the hour `work` reads one figure each, while `all`
+  // mixes plan members with the API-key `overflow` on five minutes and reads both ends. The story's `work` holds the
+  // API-key annex too, so the checks of one figure read it with its plan member alone.
   const storyWork = (await api.listPools()).find((p) => p.id === 'work');
   const memberOf = (x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority });
   await api.updatePool('work', { ...poolInput(storyWork), members: storyWork.members.filter((x) => x.kind === 'oauth').map(memberOf) });
@@ -5011,7 +5024,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const legacyPriority = legacy?.querySelector('input[aria-label="Priority for legacy"]');
     results.push({ name: '/pools a non-member row renders its Priority input disabled', ok: legacy?.querySelector('input[type="checkbox"]')?.checked === false && legacyPriority?.disabled === true, missing: [legacyPriority ? String(legacyPriority.disabled) : 'no Priority input for legacy'] });
 
-    // Each switch gates its number, which is drawn whatever the switch reads, and warming off gates the Keepalive group whole.
+    // Each switch gates its number, which is drawn whatever the switch reads, and warming off gates the Keepalive group
+    // whole.
     const sw = (label) => dlg?.querySelector(`button[role="switch"][aria-label="${label}"]`);
     const num = (label) => dlg?.querySelector(`input[aria-label="${label}"]`);
     const switched = [
@@ -9610,8 +9624,8 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     });
   }
   {
-    // The story holds one request for the slow-down on studio, one for the reset and one for the rewrite in flight, each
-    // with its one wait.
+    // The story holds one request for the slow-down on studio, one for the reset and one for the rewrite in flight,
+    // each with its one wait.
     const onlyWait = (reason) => requests.find((r) => r.held?.waits.length === 1 && r.held.waits[0].reason === reason);
     const read = [];
     for (const [reason, words] of [
@@ -11682,9 +11696,9 @@ m.unmount();
   }
   {
     // The ledger writes a request when it finishes, so one that ran long lands below rows the list already shows. The
-    // story's late request, among the rows a page of 50 shows, lands a few seconds after the mock loaded, after this page
-    // read its list at the origin: the first poll lands nothing, and the poll after its landing sets it in its place
-    // under the fresh tint, every poll reading from the stamp the one before answered.
+    // story's late request, among the rows a page of 50 shows, lands a few seconds after the mock loaded, after this
+    // page read its list at the origin: the first poll lands nothing, and the poll after its landing sets it in its
+    // place under the fresh tint, every poll reading from the stamp the one before answered.
     const rows = 50;
     const page = await mount(`/requests?rows=${rows}`, { now: CLOCK_ORIGIN });
     const listed = requestRows(page).map(idOf);
@@ -11704,7 +11718,8 @@ m.unmount();
     tick(5_000);
     await page.settle();
     const first = { drawn: requestRows(page).map(idOf), tinted: page.container.querySelectorAll('.requests__table tbody tr.is-new').length };
-    // The landing's instant is the mock's load plus a few seconds, so the clock steps on a poll at a time until it lands.
+    // The landing's instant is the mock's load plus a few seconds, so the clock steps on a poll at a time until it
+    // lands.
     let drawn = first.drawn;
     let ticks = 1;
     for (; ticks < 8 && late !== null && !drawn.includes(late); ticks += 1) {
@@ -11765,8 +11780,8 @@ m.unmount();
   }
   {
     // The drawer pauses the poll and its close resumes it on the same address and interval, so a streak that toasted
-    // before the drawer opened runs on quiet after it closes. The drawer stays open past the notice's 6-second dwell, so
-    // a toast after the close is a second one for the same streak.
+    // before the drawer opened runs on quiet after it closes. The drawer stays open past the notice's 6-second dwell,
+    // so a toast after the close is a second one for the same streak.
     const page = await mount('/requests', { now: CLOCK_ORIGIN });
     const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
     await chooseInterval(page, '5 s');
@@ -12249,8 +12264,8 @@ m.unmount();
   held.unmount();
 }
 
-// The bar on Requests: its slots, its chips in each form, the fold, the Add filter popover's two steps, a chip's values,
-// the drawer's widenings, the subject chips on the route and the count.
+// The bar on Requests: its slots, its chips in each form, the fold, the Add filter popover's two steps, a chip's
+// values, the drawer's widenings, the subject chips on the route and the count.
 {
   const HOUR = 3_600_000;
   const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
@@ -12303,7 +12318,8 @@ m.unmount();
   }
   {
     // Six forms on one address: a list of four over three labels and +1, a flag, a list of two codes, a pattern in the
-    // mono face, a choice and an id cut to eight. The line folds the sixth, so it is expanded before every chip is read.
+    // mono face, a choice and an id cut to eight. The line folds the sixth, so it is expanded before every chip is
+    // read.
     const accounts = (await api.listAccounts()).slice(0, 4);
     const id = 'req_f8085653-422';
     const address = new URLSearchParams({ accounts: accounts.map((a) => a.id).join(','), client: 'claude-code*', held: '1', kind: 'inference', request: id, statuses: '429,500' });
@@ -12350,8 +12366,8 @@ m.unmount();
   }
   {
     // Step one is the Filter by field over the four groups. A list applies each click with the box open and Back
-    // returns to step one, a pattern and an id apply on Enter or Apply and close, a choice applies and closes on a click
-    // from its any row, and a flag writes at once. Escape, a click outside and focus leaving each close the box.
+    // returns to step one, a pattern and an id apply on Enter or Apply and close, a choice applies and closes on a
+    // click from its any row, and a flag writes at once. Escape, a click outside and focus leaving each close the box.
     const page = await mount('/requests', { now: CLOCK_ORIGIN });
     addFilterButton(page)?.click();
     await page.settle(100);
@@ -13488,7 +13504,9 @@ m.unmount();
     const all = el.textContent ?? '';
     return label ? `${label} ${all.slice(label.length)}` : all;
   };
-  /** The strip's stations in its order, the line's then the track's: the word, the badge, the second line and the state. */
+  /**
+   * The strip's stations in its order, the line's then the track's: the word, the badge, the second line and the state.
+   */
   const stationsOf = (card) =>
     [...(card?.querySelectorAll('.decision-strip .strip-station') ?? [])].map((b) => ({
       button: b,
@@ -13626,7 +13644,10 @@ m.unmount();
     if (s.step.startsWith('rung:')) return 'rung';
     return s.known ? 'list' : 'chips';
   };
-  /** The head a strip button's popover reads: the step's whole word, Move, a partition's own word, an account, a way out. */
+  /**
+   * The head a strip button's popover reads: the step's whole word, Move, a partition's own word, an account, a way
+   * out.
+   */
   const headOf = (model, button) => {
     if (button.classList.contains('strip-candidate')) {
       const leaf = model.leaves[Number(button.dataset.leaf)];
@@ -15287,8 +15308,8 @@ m.unmount();
 // read on the Burn tab read the window alone, so a read of either is a moved end.
 {
   const at14 = Date.UTC(2026, 8, 16, 14);
-  // 12:00 to the end of the window the popover opens on, the mount's instant, which Apply keeps: an hour bucket at 14:00
-  // holds the end.
+  // 12:00 to the end of the window the popover opens on, the mount's instant, which Apply keeps: an hour bucket at
+  // 14:00 holds the end.
   const customRange = async (page) => {
     await openCustom(page);
     typeRangeField('From', '2026-09-16T12:00');
@@ -16390,8 +16411,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         missing: [JSON.stringify(unpricedBoth), JSON.stringify(unpricedPlan)],
       });
       // Beside a priced plan group, one the route priced nothing on the window, and flags so, would leave the priced
-      // group's figure standing as the whole, so the pair reads the dash too, its probes' as well. Groups that ran probes
-      // lead the pair, and the billed read keeps the pair's own groups, so the Probe cost tile's plan probes are the pair's.
+      // group's figure standing as the whole, so the pair reads the dash too, its probes' as well. Groups that ran
+      // probes lead the pair, and the billed read keeps the pair's own groups, so the Probe cost tile's plan probes are
+      // the pair's.
       const pricedPlan = (g) => g.planRequests > 0 && g.planOutputTokens > 0 && g.costEquivalent.seven_day !== undefined;
       let keyPair = [];
       api.getAnalyticsBreakdown = async (q) => {
@@ -16475,9 +16497,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // The mock's unpriced switch adds one plan request on a model the cost model lists in no tier, which prices no
-      // window, to the desktop key's story hour: the range's whole flags both windows, so the Cost tile and the meta read
-      // the dash titled why, and the Cost by chart, whose desktop stack leaves that bucket a gap, notes the one group
-      // under its subtitle. Without the switch the card carries no note.
+      // window, to the desktop key's story hour: the range's whole flags both windows, so the Cost tile and the meta
+      // read the dash titled why, and the Cost by chart, whose desktop stack leaves that bucket a gap, notes the one
+      // group under its subtitle. Without the switch the card carries no note.
       localStorage.removeItem('phoebis.unit');
       const SUBTITLE = '20x 7-day equivalent per bucket, stacked, the subscription requests';
       const costRead = (page) => {
@@ -16517,8 +16539,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // The probe tiles mark the plan side's estimate on the probe estimate alone: a range whose request rows priced
-      // through the fallback beside probes that did not reads the Probe cost tile's plan figure bare, and one whose plan
-      // probes did reads it with the tilde under the estimate's title.
+      // through the fallback beside probes that did not reads the Probe cost tile's plan figure bare, and one whose
+      // plan probes did reads it with the tilde under the estimate's title.
       localStorage.removeItem('phoebis.unit');
       const breakdownOf = api.getAnalyticsBreakdown;
       const probeRead = async (probeEstimated) => {
@@ -16879,7 +16901,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
-      // The same day with every row weighted, its probe rows among them, so nothing the two sections draw is an estimate.
+      // The same day with every row weighted, its probe rows among them, so nothing the two sections draw is an
+      // estimate.
       const breakdownOf = api.getAnalyticsBreakdown;
       const seriesOf = api.getAnalyticsSeries;
       api.getAnalyticsBreakdown = async (q) => (await breakdownOf.call(api, q)).map((g) => ({ ...g, estimated: false, probeEstimated: false }));
@@ -17335,8 +17358,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   {
     // Under the moves the card draws the slow-down's held time: a legend line naming the chart with the range's sum and
-    // the requests behind it on its hover, a bar for each bucket that held a request, and a bar's hover its requests and
-    // their time, read against the answer the page drew. jsdom lays nothing out, so the chart containers read a
+    // the requests behind it on its hover, a bar for each bucket that held a request, and a bar's hover its requests
+    // and their time, read against the answer the page drew. jsdom lays nothing out, so the chart containers read a
     // browser's size here, and the hover walks the chart a bucket at a time.
     const { getAnalyticsRewrites } = api;
     let answer = null;
@@ -18965,7 +18988,8 @@ m.unmount();
     registry.restore();
     ended.unmount();
 
-    // An open Groups popover is a menu under the bar: the registry and the boundary wait for it, and run once it closes.
+    // An open Groups popover is a menu under the bar: the registry and the boundary wait for it, and run once it
+    // closes.
     const grouped = await mount('/analytics?by=user_agent', { now: CLOCK_ORIGIN });
     await groupsField(grouped);
     const pausedPart = part(grouped);
@@ -19091,8 +19115,8 @@ m.unmount();
     const name = "/analytics a custom range under auto reload reads the Cache warming tab's billed and by-pool reads and the Cache tab's funded by-model read again at every tick, beside the page's breakdown";
     const FROM = isoAt(CLOCK_ORIGIN - 2 * 3_600_000);
     const TO = isoAt(CLOCK_ORIGIN);
-    // Each read by the query it sends: the page's breakdown on the key grouping with no funding and no probes, the billed
-    // probes on the key grouping, the billed probes by pool, and the dollar side by model.
+    // Each read by the query it sends: the page's breakdown on the key grouping with no funding and no probes, the
+    // billed probes on the key grouping, the billed probes by pool, and the dollar side by model.
     const kindsOf = (spy) => {
       const counts = { billed: 0, model: 0, pool: 0, whole: 0 };
       for (const [q] of spy.calls) {
@@ -19417,8 +19441,9 @@ m.unmount();
     const at = page.location();
     const params = new URLSearchParams(at.search);
     return {
-      // The live keys' options list bare ids and an earlier holder's lifetime takes an option of its own, so a live key's
-      // own lifetime is a value no option carries: its chip prints it as the address writes it, and the x still clears it.
+      // The live keys' options list bare ids and an earlier holder's lifetime takes an option of its own, so a live
+      // key's own lifetime is a value no option carries: its chip prints it as the address writes it, and the x still
+      // clears it.
       keyChip: chipRead(page, 'key'),
       keyChipClears: chipOf(page, 'key')?.querySelector('.chip__remove[aria-label="Remove key filter"]') != null,
       keys: params.get('keys'),
@@ -19889,8 +19914,8 @@ const CARD_VIEWS = [
   const usage = (a) => Math.max(0, ...a.windows.map((w) => w.utilization));
   const matching = (await api.listAccounts()).filter((a) => a.status === 'cooldown' && [a.label, a.email ?? '', a.plan ?? ''].some((t) => t.toLowerCase().includes('operator')));
   const wanted = [...matching].sort((a, b) => usage(b) - usage(a)).map((a) => a.id);
-  // Under this sort the list's first row is not the router's first match, so the landing tells the redirect's rule apart
-  // from landing on the top row.
+  // Under this sort the list's first row is not the router's first match, so the landing tells the redirect's rule
+  // apart from landing on the top row.
   const landing = matching[0]?.id;
   const other = wanted.find((id) => id !== landing);
   const read = (page) => ({
@@ -20173,12 +20198,12 @@ const CARD_VIEWS = [
     page.unmount();
     return got;
   };
-  // The story's 27 rows at its instant: the two finished sessions (the one the mod released whole and the one it ended),
-  // twelve rows a companion reports or went silent on, the registration-only row among them, and thirteen no companion
-  // reports: the laptop row the ledger never saw, with no last use, and by their last use the pinless fork 16 minutes
-  // back, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook rows 25 to 42, the ci content row
-  // 109, the ci rows 118 and 240, the row idle for two hours 120 and the earlier holder 20 hours back. The one hour
-  // keeps 20 and hides 7.
+  // The story's 27 rows at its instant: the two finished sessions (the one the mod released whole and the one it
+  // ended), twelve rows a companion reports or went silent on, the registration-only row among them, and thirteen no
+  // companion reports: the laptop row the ledger never saw, with no last use, and by their last use the pinless fork 16
+  // minutes back, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook rows 25 to 42, the ci
+  // content row 109, the ci rows 118 and 240, the row idle for two hours 120 and the earlier holder 20 hours back. The
+  // one hour keeps 20 and hides 7.
   const bare = await read('');
   const AWAY = '7 sessions hidden by the filters';
   const drawnOf = (got) => got.drawn.map((id) => listed.find((s) => idOfRow(s) === id)).filter(Boolean);
@@ -20208,8 +20233,8 @@ const CARD_VIEWS = [
   }
   {
     // The age hides a row no companion reports past its preset and never a companion row, inside the expiry: fifteen
-    // minutes keeps the twelve companion rows and the laptop row with no last use, six hours all but the earlier holder,
-    // and no limit every row that is not finished.
+    // minutes keeps the twelve companion rows and the laptop row with no last use, six hours all but the earlier
+    // holder, and no limit every row that is not finished.
     const ages = {};
     for (const query of ['?age=15m', '?age=6h', '?age=none']) ages[query] = await read(query);
     const minutes = ages['?age=15m'];
@@ -22577,8 +22602,8 @@ m.unmount();
       });
     }
     // An estimate takes its donor's base weight, which can sit above the donor's own 5-hour override. A donor whose
-    // base outweighs every model's 5-hour weight lends it to an unweighted model of its tier, and every bar stays inside
-    // its track.
+    // base outweighs every model's 5-hour weight lends it to an unweighted model of its tier, and every bar stays
+    // inside its track.
     {
       const top = Math.max(...Object.keys(tested.modelWeight).map((model) => weightOf(tested, model, 'five_hour') ?? 0));
       const donor = 'claude-opus-98';
@@ -23367,7 +23392,10 @@ m.unmount();
    * the Model list the routing log searches labels each option with the id the address carries.
    */
   const codesOf = (label, list) => (label === 'Status' ? list.map((c) => c.split(' ')[0]) : list);
-  /** The words a picker's chip shows with `checked` on: its word, three of its values and "+N" with every label in its title, a status by its code alone. */
+  /**
+   * The words a picker's chip shows with `checked` on: its word, three of its values and "+N" with every label in its
+   * title, a status by its code alone.
+   */
   const summary = (label, checked) => {
     const values = codesOf(label, checked);
     return { title: checked.join(', '), trigger: `${label.toLowerCase()}: ${values.slice(0, 3).join(', ')}${values.length > 3 ? ` +${values.length - 3}` : ''}` };

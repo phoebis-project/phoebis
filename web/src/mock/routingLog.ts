@@ -443,7 +443,9 @@ function slowFactsOf(source: RecordCandidate | undefined, pool: PoolSeed, at: nu
   ];
 }
 
-/** The account's slow-down read standing at `at`: none on a pool with the switch off or for an account it never slowed. */
+/**
+ * The account's slow-down read standing at `at`: none on a pool with the switch off or for an account it never slowed.
+ */
 const slowReadAt = (accountId: string, pool: PoolSeed, at: number): SlowRead | null =>
   pool.slowDown ? (SLOW_READS.filter((x) => x.accountId === accountId && x.poolId === pool.id && x.from <= at).pop()?.read ?? null) : null;
 
@@ -696,8 +698,8 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     }
     const open = (c: RecordCandidate) => c.inFlight < c.inFlightCap;
     // Each order keeps the set's order for the strategy to pick from. The fitting set goes on whole, the shed rule's
-    // too, since the strategy ranks it and the runway only breaks its tie. The rewrite-only order narrows to the longest
-    // runway, ties kept.
+    // too, since the strategy ranks it and the runway only breaks its tie. The rewrite-only order narrows to the
+    // longest runway, ties kept.
     const fits = reached.filter((c) => c.fit === 'fits' && open(c));
     const rewriteOnly = longestOf(reached.filter((c) => c.fit === 'rewrite_only' && open(c)));
     const left = reached.filter((c) => c.fit !== 'ending');
@@ -1109,7 +1111,8 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const candidates = spec.kind === 'refused' ? [] : candidatesOf(spec, pool);
   // A hold for a spent window's reset ends the walk at the spent rule, so it reads no placement's partitions.
   const resetHold = spec.kind === 'held' && spec.hold?.place === 'reset';
-  // A slow-down hold waits on the pin the move rules left in place, before its renewal, so it reads no placement either.
+  // A slow-down hold waits on the pin the move rules left in place, before its renewal, so it reads no placement
+  // either.
   const slowHold = spec.kind === 'held' && spec.hold?.place === 'slow_down';
   // So does a moved pin's wait for the head of the request that carried the move.
   const rewriteHold = spec.kind === 'held' && spec.hold?.place === 'rewrite';
@@ -1485,7 +1488,8 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
       if (heldWait) return { by: by('hold', heldWait.reason), fact: [summaryFact('held', heldWait.heldMs, 'ms')] };
       if (r.kind === 'probe') return { by: by('none', ''), fact: [summaryFact('epoch', record.pin?.epoch ?? 0, 'count')] };
       if (record.pin?.warmth === 'cold') return { by: by('none', ''), fact: [summaryFact('cause', record.pin.warmthCause ?? '', 'text')] };
-      // The first window, in the trigger's order, whose projection at its horizon reaches the ceiling names its reading.
+      // The first window, in the trigger's order, whose projection at its horizon reaches the ceiling names its
+      // reading.
       const m = record.candidates.find((c) => c.accountId === spec.accountId);
       const hottest = m === undefined ? undefined : drawnWindows(r.canonicalModel).find((w) => (m.windows[w]?.projection ?? -1) >= pool.windowCeiling);
       if (m !== undefined && hottest !== undefined) return { by: by('none', ''), fact: [summaryFact(hottest, m.windows[hottest].utilization, 'percent')] };
@@ -1514,7 +1518,8 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
         const factor = record.outcome.hold.factor;
         return { by: by('hold', 'slow_down'), fact: [summaryFact('until', Date.parse(record.outcome.hold.until), 'time'), ...(factor === null ? [] : [{ entity: null, key: 'factor', unit: null, value: factor }])] };
       }
-      // A wait for a reset names its end, since no slot and no pick explain it, and so does a wait for a rewrite in flight.
+      // A wait for a reset names its end, since no slot and no pick explain it, and so does a wait for a rewrite in
+      // flight.
       if (spec.hold?.place === 'reset' && spec.hold.until !== undefined) return { by: by('hold', 'reset'), fact: [summaryFact('until', spec.hold.until, 'time')] };
       if (spec.hold?.place === 'rewrite' && spec.hold.until !== undefined) return { by: by('hold', 'rewrite'), fact: [summaryFact('until', spec.hold.until, 'time')] };
       return { by: by('hold', spec.hold?.place ?? 'strategy_pick'), fact: inFlight() };
@@ -2071,7 +2076,8 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
   const moved = slowed && source?.horizon ? Date.parse(source.horizon) - threshold : null;
   const horizon = moved ?? (source?.horizon ? Date.parse(source.horizon) : null);
   const projection = moved !== null && source ? round3(source.utilization + (source.demand ?? 0) * ((moved - at) / HOUR)) : (source?.projection ?? null);
-  // A planned move books its rewrite and its burn on the destination for the rest of the walk, as the router's plan does.
+  // A planned move books its rewrite and its burn on the destination for the rest of the walk, as the router's plan
+  // does.
   const planned = new Map<string, RecordCandidate>();
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
   // A mark's destination as its own move would read it: a free eligible sibling holding allowance that the pin fits

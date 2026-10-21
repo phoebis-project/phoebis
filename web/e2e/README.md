@@ -167,8 +167,9 @@ holds both), the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900
 height closed and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px
 under the lead, Cost reference one line at the head's top right), the stripes on every view with a table (the first four
 data rows plain, `--stripe`, plain, `--stripe`, a `table--plain` table plain, `--stripe` a tone of its own apart from no
-fill, the surface, `--surface-2` and `--accent-soft`, an expanded Sessions row's detail and the Routing log's open row
-and panel on their parent's tone, a striped Requests row on `--surface-2` under the pointer and on `--accent-soft` once
+fill, the surface, `--surface-2` and `--accent-soft`, an expanded Sessions row's detail and the Routing log's open panel
+on their parent's tone, the open row itself on `--surface-3`, a striped Requests row on `--surface-2` under the pointer
+and on `--accent-soft` once
 selected on every cell, and the pool dialog's form tables plain), the scroll lock behind a modal dialog (in the mock
 pass, on the Pools page in a browser that shows scrollbars: a wheel over the page moves it, a wheel over the open
 dialog's backdrop leaves the page's scroll and its content box where they stood, and the close returns the page to the

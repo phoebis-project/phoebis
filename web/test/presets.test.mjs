@@ -338,8 +338,8 @@ test('a held member whose 5-hour projection reads under the ceiling is not named
 });
 
 test('a held 5-hour window is not the closest reading, however near the ceiling it projects', () => {
-  // young's 5-hour window reads 85 %, the highest in the pool, but it opened ten minutes ago, so its projection rests on
-  // the burn the last window left behind, the reading the hold distrusts. No round reads it, so the closest is the
+  // young's 5-hour window reads 85 %, the highest in the pool, but it opened ten minutes ago, so its projection rests
+  // on the burn the last window left behind, the reading the hold distrusts. No round reads it, so the closest is the
   // nearest window a round would read: low's 5-hour window at 60 %.
   const young = fresh('young', 0.85, 0.4, 4 * HOUR + 50 * MINUTE);
   const low = oauth('low', 0.6, 0.3);
@@ -380,8 +380,9 @@ test('the round marks cold pins first, then warm ones by burn over the prompt th
 });
 
 test("the round decays each pin's served burn from the instant it was served to the preview's own, and never marks an unpriced pin", () => {
-  // Served half an hour, one burn average, before the preview's instant, cold-a's 3 points an hour read 3/e there, under
-  // cold-b's 1.2, so cold-b leads the order and alone reaches the cap's half of their 2.3. The unpriced pin stays.
+  // Served half an hour, one burn average, before the preview's instant, cold-a's 3 points an hour read 3/e there,
+  // under cold-b's 1.2, so cold-b leads the order and alone reaches the cap's half of their 2.3. The unpriced pin
+  // stays.
   const aged = [pin('hot', 'cold-a', 0.03, false, { burnAt: at(NOW - 30 * MINUTE) }), pin('hot', 'cold-b', 0.012, false), pin('hot', 'cold-c', null, false)];
   const preview = d.shedPreview(pool([hot, cool]), [hot, cool], aged, NOW);
   assert.deepEqual([preview.sessions, preview.covered.toFixed(4)], [1, '0.0120']);

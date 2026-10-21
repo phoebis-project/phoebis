@@ -104,8 +104,8 @@ const windowsOf = (model: string | null): ShedWindow[] => (drawsFable(model) ? T
 
 /**
  * Whether an API-key account has room for a moved session: its worst live bucket under 1.0, since a bucket refills
- * within its minute. Its live buckets are its `rpm:`, `itpm:` and `otpm:` ones whose reset is ahead, or which carry none
- * and were read within the minute, as the router's `worst_bucket` reads them.
+ * within its minute. Its live buckets are its `rpm:`, `itpm:` and `otpm:` ones whose reset is ahead, or which carry
+ * none and were read within the minute, as the router's `worst_bucket` reads them.
  */
 const bucketRoom = (a: Account, now: number) =>
   Math.max(0, ...a.windows.filter((w) => /^(rpm|itpm|otpm):/.test(w.id) && (w.resetsAt === null ? now - Date.parse(w.observedAt) < 60_000 : Date.parse(w.resetsAt) > now)).map((w) => w.utilization)) < 1;

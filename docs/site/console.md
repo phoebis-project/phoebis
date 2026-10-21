@@ -244,11 +244,12 @@ or while its save runs, and while it is off the page reads the list every 2 s af
 wait, until the account's first reading lands or 30 s pass. The six labels, with the state each stands for, are Cooling
 down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready
 (`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan by its tier ("Max 20x",
-"Max 5x", "Pro" or "Team", none on an API-key row), the status badge with the speed chip beside it on a slowed account,
-the email, `pool {id}` or "no pool", "Overage" while requests bill as extra usage and "extra usage on" while it is
-enabled and unused. The pane reads "The router holds no account yet" with "Add account" before the first account, "No
-accounts match" with "Clear the search or the status filter." under a filter, and "No account to show" until a row is
-selected. What the states mean and how an account moves between them is on [Pairing an account](pairing.md).
+"Max 5x", "Pro", "Team" and the other tiers the provider reports, none on an API-key row), the status badge with the
+speed chip beside it on a slowed account, the email, `pool {id}` or "no pool", "Overage" while requests bill as extra
+usage and "extra usage on" while it is enabled and unused. The pane reads "The router holds no account yet" with "Add
+account" before the first account, "No accounts match" with "Clear the search or the status filter." under a filter, and
+"No account to show" until a row is selected. What the states mean and how an account moves between them is on [Pairing
+an account](pairing.md).
 
 The detail opens on the account's label with "Edit label", its email and its badges: the status, `quarantined` while
 the last refresh's outcome is uncertain, `cooldown ends {ago}`, "Overage active" and "Routing paused", with `Overage

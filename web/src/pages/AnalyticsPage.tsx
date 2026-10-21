@@ -1207,9 +1207,9 @@ const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>): CostFigure[] =>
  * The saving's two sides under native, told apart by their kept-warm credits, the plan side's the whole read's less the
  * billed read's: the plan credits' 20x 7-day saving off the whole read and the billed credits' dollars off `billed`.
  * `net` reads each side's saving less its probes' cost, so a side stands there on a credit or a probe that reached the
- * upstream, and a side whose probes kept nothing warm nets their cost under zero. A held or skipped probe costs nothing,
- * so it leaves its side's saving whole. `undefined` leaves a side out, null reads a dash where the plan rows priced
- * nothing on the window, and a group with nothing on either side reads its zero in each unit.
+ * upstream, and a side whose probes kept nothing warm nets their cost under zero. A held or skipped probe costs
+ * nothing, so it leaves its side's saving whole. `undefined` leaves a side out, null reads a dash where the plan rows
+ * priced nothing on the window, and a group with nothing on either side reads its zero in each unit.
  */
 function savingSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'gross' | 'net'): ReturnType<typeof probeSidesOf> {
   const credits = (g: AnalyticsGroup | null | undefined) => (g?.keptWarm ? keptWarmTokens(g.keptWarm) : 0);
@@ -1293,9 +1293,9 @@ function savingTileOf(unit: UnitPosition, namedAccount: string | null, group: An
 }
 
 /**
- * The Net saving tile, savingTileOf's shape over the saving less the probe cost per side, `critical` while the figure is
- * under zero. Under native that is the plan side's figure, the widget's subject, and the billed dollars beside it never
- * tone the tile.
+ * The Net saving tile, savingTileOf's shape over the saving less the probe cost per side, `critical` while the figure
+ * is under zero. Under native that is the plan side's figure, the widget's subject, and the billed dollars beside it
+ * never tone the tile.
  */
 function netTileOf(unit: UnitPosition, namedAccount: string | null, group: AnalyticsGroup | null, totals: AnalyticsGroup, billed: AnalyticsGroup | null, loading: boolean, session: boolean): { critical: boolean; note: string; title?: string; value: ReactNode | null } {
   const less = (subset: string) => `less the probe cost, ${subset}`;
@@ -1519,7 +1519,9 @@ function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReaso
   return ink.series[7];
 }
 
-/** What every count of the reasons panel links under: the window and the page's filters, without a count or a reason. */
+/**
+ * What every count of the reasons panel links under: the window and the page's filters, without a count or a reason.
+ */
 type ReasonLink = Omit<RequestsLinkInput, 'count' | 'group' | 'reason'>;
 
 /** A count of the reasons panel: a link to the requests it counts, else the figure with why it stays plain. */
@@ -1640,7 +1642,9 @@ function WastedProbes({ account, billed, group, probes, unit }: { account: { gro
   );
 }
 
-/** A side pair in one line, the plan side's equivalent and the billed side's dollars, as the native tooltip reads it. */
+/**
+ * A side pair in one line, the plan side's equivalent and the billed side's dollars, as the native tooltip reads it.
+ */
 const sidesText = (s: ReturnType<typeof probeSidesOf>): string => [...(s.equivalent === undefined ? [] : [equivalentOrDash('seven_day', s.equivalent, s.estimated)]), ...(s.billed === undefined ? [] : [`${fmtUsd(s.billed)} billed`])].join(', ');
 /** A bucket's 7-day figure from a window map, zero where the bucket holds none, so its bar draws no height. */
 const sevenDayOf = <T,>(map: Record<string, T>, read: (v: T) => number): number => (own(map, 'seven_day') ? read(map.seven_day) : 0);
@@ -2123,8 +2127,9 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
               ]),
             )}
           />
-          {/* The lines leave a null bucket unconnected, so a bucket with no share reads as a gap rather than a slope, and
-              a priced bucket with a gap or the range's edge on both sides draws as a dot, as the Burn plan lines do. */}
+          {/* The lines leave a null bucket unconnected, so a bucket with no share reads as a gap rather than a slope,
+              and a priced bucket with a gap or the range's edge on both sides draws as a dot, as the Burn plan lines
+              do. */}
           {lines.accounts.map((a) => (
             <Line key={`${a}:7d`} type="monotone" dataKey={`${a}:7d`} stroke={groupSlot(a)} strokeWidth={2} dot={isolatedDot(lines.data.map((r) => r[`${a}:7d`]), groupSlot(a))} isAnimationActive={false} />
           ))}

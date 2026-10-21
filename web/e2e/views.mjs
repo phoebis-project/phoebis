@@ -2002,13 +2002,13 @@ async function chevronWeight(label, svg, size, stroke) {
 
 /**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
- * viewport, then the frame and the rail's strips at 720 px. The plain rail holds thirteen groups under the five parents,
- * the five expert-only groups left out, and the expert rail all eighteen. Every group on the rail is chosen and read
- * while it shows: its height against the body's window, every cell against the two columns, every label beside its
- * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled while
- * its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select, nothing
- * pushed apart or past the frame, the window ceiling across the grid in the plain view and beside the burn average in
- * the expert view, and the mono Name input as tall as the Status select beside it. The strips draw their
+ * viewport, then the frame and the rail's strips at 720 px. The plain rail holds thirteen groups under the five
+ * parents, the five expert-only groups left out, and the expert rail all eighteen. Every group on the rail is chosen
+ * and read while it shows: its height against the body's window, every cell against the two columns, every label beside
+ * its switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled
+ * while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select,
+ * nothing pushed apart or past the frame, the window ceiling across the grid in the plain view and beside the burn
+ * average in the expert view, and the mono Name input as tall as the Status select beside it. The strips draw their
  * groups without the column rail's indent and hairline, a parent there answers the pointer, and a refusal dot follows
  * its entry's words by 6 px on their line.
  */
@@ -4013,10 +4013,10 @@ const UNPRICED_SWITCH = 'phoebis.mockUnpriced';
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
 
 /**
- * The Estimated cost, 24h tile under the mock's unpriced switch, whose day holds a plan request priced on no window: the
- * subscription line reads a dash under the unpriced title, in the size, weight and ink of the billed figure beside it,
- * and in the weight and ink of the Tokens, 24h tile's figure, whose lone figure takes the larger size a pair line gives
- * up. The page loads again without the switch, so the shot and the measures after it read the story whole.
+ * The Estimated cost, 24h tile under the mock's unpriced switch, whose day holds a plan request priced on no window:
+ * the subscription line reads a dash under the unpriced title, in the size, weight and ink of the billed figure beside
+ * it, and in the weight and ink of the Tokens, 24h tile's figure, whose lone figure takes the larger size a pair line
+ * gives up. The page loads again without the switch, so the shot and the measures after it read the story whole.
  */
 async function dashboardUnpricedTile(theme) {
   const say = (what) => failures.push(`${theme} /: ${what}`);
@@ -4137,8 +4137,8 @@ const UNIT_POSITIONS = ['native', 'all', 'usd', 'share', 'equivalent'];
  * and Kept warm on one row at one top, the two saving tiles in the Probe cost tile's box and value type, and the Saved
  * by probes chart in the box and title type of the Kept-warm requests card beside it, the tiles' figures and the
  * chart's legend recorded per position. Each position loads the page as a view loads, on its `?unit=` address, which
- * writes the console-wide setting, so the measure ends on a load of `?unit=native`: the measures after it and the view's
- * shot read a fresh browser's position, on Traffic.
+ * writes the console-wide setting, so the measure ends on a load of `?unit=native`: the measures after it and the
+ * view's shot read a fresh browser's position, on Traffic.
  */
 async function savingTiles(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -4194,8 +4194,8 @@ async function savingTiles(theme) {
  * The Cost tab under the mock's unpriced switch, whose range holds a plan request priced on no window: the Cost tile's
  * subscription line reads a dash under the unpriced title in the type and ink of the Cost per request tile's first
  * figure beside it, on that tile's top, and the Cost by card's note reads on a line of its own under the subtitle's
- * text, at its left edge, in the subtitle's type and ink. The page loads again without the switch, so the measures after
- * it and the view's shot read the story whole.
+ * text, at its left edge, in the subtitle's type and ink. The page loads again without the switch, so the measures
+ * after it and the view's shot read the story whole.
  */
 async function costUnpricedNote(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -4536,9 +4536,9 @@ function timeCellsOf(selector) {
 }
 
 /**
- * The Time cells' read for a measurements line: the count, each dated cell's text, width, content box, lines, height and
- * its row's tallest other cell, the widest cell's figures, and the texts of the cells that break over two lines, run
- * past their content box by more than half a pixel or stand more than a pixel taller than their row's other cells.
+ * The Time cells' read for a measurements line: the count, each dated cell's text, width, content box, lines, height
+ * and its row's tallest other cell, the widest cell's figures, and the texts of the cells that break over two lines,
+ * run past their content box by more than half a pixel or stand more than a pixel taller than their row's other cells.
  */
 function timeFit(cells) {
   const list = cells ?? [];
@@ -4940,7 +4940,9 @@ async function loadRequests(search = '') {
   await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
 }
 
-/** The filter chips' address both chip measures load: values the mock's story holds, though a chip draws without rows. */
+/**
+ * The filter chips' address both chip measures load: values the mock's story holds, though a chip draws without rows.
+ */
 const CHIPPED = '?turn_origins=human&efforts=high&request_classes=main&speeds=fast&cache_miss_reasons=messages_changed';
 
 /** A chip's box, type and border, the words the chip measures compare. */
@@ -4997,8 +4999,8 @@ const BAR_CHIPS = {
 };
 /** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
 const ROW_BOUND = {
-  // The row measured 730 px with its range and Group by select, past the Routing log's 700, so the bound is that measure
-  // plus margin.
+  // The row measured 730 px with its range and Group by select, past the Routing log's 700, so the bound is that
+  // measure plus margin.
   '/analytics': 760,
   '/routing-log': 700,
 };
@@ -7219,9 +7221,9 @@ async function decisionCard(theme) {
   await slot('');
   await popoverBounds(theme, "the shed move's Move station", async (card) => card.locator('.strip-station[data-station="move"]'));
   // The Fit table draws the story's widest table, nine columns: the projection, the rewrite and the reserved share on
-  // the 5-hour and the 7-day window, then the runway, the window that binds and the verdict, whose heads wrap to fit the
-  // box. It holds a row per candidate the gate read, primary, nightly and overflow, so its second row stripes. The pick
-  // ranks primary alone, the one destination the shed rule kept.
+  // the 5-hour and the 7-day window, then the runway, the window that binds and the verdict, whose heads wrap to fit
+  // the box. It holds a row per candidate the gate read, primary, nightly and overflow, so its second row stripes. The
+  // pick ranks primary alone, the one destination the shed rule kept.
   await popoverBounds(theme, "the shed move's Fit table", async (card) => card.locator('.strip-station[data-station="fit"]'), { striped: true, table: true, viewports: [POPOVER_VIEWPORTS[0], POPOVER_VIEWPORTS[2]] });
   await popoverBounds(theme, "the shed move's Pick station", async (card) => card.locator('.strip-station[data-station="pick"]'), { table: true, viewports: [POPOVER_VIEWPORTS[0]] });
   // The fresh placement at 14:09:41 opens on its request's page too, so the hour the page shows cannot hide it.
@@ -7728,8 +7730,8 @@ async function keysPoolSelect(theme) {
 
 /**
  * The Sessions head under the bar at 1280 by 800, where the disclosure wraps, and at 1440 by 900, where it does not:
- * closed, the head starts under the bar's bottom and stays under 60 px, and the disclosure ends the lead's paragraph, at
- * most two lines, on the sentence's last line where both fit and flush left on the next line where they do not.
+ * closed, the head starts under the bar's bottom and stays under 60 px, and the disclosure ends the lead's paragraph,
+ * at most two lines, on the sentence's last line where both fit and flush left on the next line where they do not.
  * Opened, the paragraph lands 6 px under the lead and above the tiles. Cost reference stays one line at the head's top
  * right in both states. The heights, the bar's bottom against the head's top and Cost reference's place are recorded
  * per viewport, and the head is left closed at the pass's viewport for the shot.
@@ -7994,9 +7996,10 @@ async function sessionDetailStripes(theme, tones) {
 /**
  * The open row the view opened before its shot and its panel read --surface-3, and an even log row opened with three
  * candidates or more, one of them chosen, keeps its own stripes in its panel's candidate table: an unchosen even row on
- * --stripe, an unchosen odd one with no fill of its own and the chosen one on --accent-soft, while the row and its panel
- * read --surface-3. The row is the first even log row (counted among the log's own rows) whose decision lists such a
- * table, and it shuts again before the shot. A router's seed may list no such decision, so there the read stands down.
+ * --stripe, an unchosen odd one with no fill of its own and the chosen one on --accent-soft, while the row and its
+ * panel read --surface-3. The row is the first even log row (counted among the log's own rows) whose decision lists
+ * such a table, and it shuts again before the shot. A router's seed may list no such decision, so there the read stands
+ * down.
  */
 async function routingLogStripes(theme, tones) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -8110,15 +8113,15 @@ async function requestRowStripes(theme, tones) {
   const selectedOff = offTone(selected.backgrounds === undefined ? null : selected, tones.accentSoft);
   if (selectedOff.length > 0) say(`the selected second row reads ${selectedOff.join(', ')}, not --accent-soft (${tones.accentSoft}) over its stripe`);
   failures.push(...compare(selected, striped, ['border', 'padding'], `${theme} /requests: the selected second row against itself striped`));
-  if (left.path !== '/requests' || left.selected !== 0) say(`Escape left ${left.path} with ${left.selected} selected rows, not the bare log`);
+  if (left.path !== '/requests' || left.selected !== 0) say(`Escape left ${left.path} with ${left.selected} selected rows, not the log with no row selected`);
   await atRest();
 }
 
 /**
- * The pool dialog's form tables (the TTL grid, the rules, the members and the keys) opt out of the stripes, so every row
- * reads plain. The dialog shows one group at a time and keeps the rest in the page, so each table drawn for the first
- * pool is read whatever its group. The rules table is drawn only for a pool with model overrides, so the read names the
- * tables it found.
+ * The pool dialog's form tables (the TTL grid, the rules, the members and the keys) opt out of the stripes, so every
+ * row reads plain. The dialog shows one group at a time and keeps the rest in the page, so each table drawn for the
+ * first pool is read whatever its group. The rules table is drawn only for a pool with model overrides, so the read
+ * names the tables it found.
  */
 async function poolFormTables(theme) {
   const say = (what) => failures.push(`${theme} /pools dialog: ${what}`);
@@ -8378,9 +8381,9 @@ async function burnShot(theme) {
 }
 
 /**
- * The Sessions table's default columns, the Context column among them, fit its card at the pass's 1280 by 800: the table
- * needs no more than its wrap's width, so nothing scrolls sideways and the companion and the cache warming state stay in
- * view. A slowed session's speed chip stands on the account's line inside its Account cell, which the mock pass
+ * The Sessions table's default columns, the Context column among them, fit its card at the pass's 1280 by 800: the
+ * table needs no more than its wrap's width, so nothing scrolls sideways and the companion and the cache warming state
+ * stay in view. A slowed session's speed chip stands on the account's line inside its Account cell, which the mock pass
  * requires on studio's sessions.
  */
 async function sessionsTableFits(theme) {
