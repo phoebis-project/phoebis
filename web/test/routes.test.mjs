@@ -102,7 +102,7 @@ test('a page that throws while drawing reads as an error of its own inside the s
   const Broken = () => {
     throw new Error('boom');
   };
-  const drawn = await load(env, Broken);
+  const drawn = await load(env, lazy(reloadOnChunkFailure(() => Promise.resolve({ default: Broken }), env)));
   assert.deepEqual(
     outlet(drawn),
     ['Pools', 'This page hit an error', 'Something went wrong while drawing this page. Reload to try again, and if it comes back, note what you opened last.', 'Reload'],
