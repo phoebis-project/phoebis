@@ -278,6 +278,7 @@ pub struct Relay {
     /// The API keys legs dispatch with, by account id, so a leg reads no registry while its row's lineage
     /// and the snapshot's generation hold.
     secrets: Mutex<HashMap<String, SecretEntry>>,
+    shutdown_mark: Option<ShutdownMark>,
     /// `proxy.sign_cch_placeholder`: whether a restored `cch=00000` is signed rather than sent as the placeholder.
     sign_cch_placeholder: bool,
     store: Arc<Store>,
@@ -310,6 +311,19 @@ pub struct Accounting {
 /// dependency on the ledger crate. The argument is true for the reading that decides a `ledger_behind` answer, which
 /// the ledger counts, and false for one taken at a refusal of another kind.
 pub type AccountingSource = Arc<dyn Fn(bool) -> Accounting + Send + Sync>;
+
+/// Set by the router before it aborts the proxy listener, and by the listener before it cuts what is still open at its
+/// own drain deadline, so an end either cut causes is booked as the router's own cut rather than the caller's leaving.
+/// Memory, read on the end's path alone.
+pub type ShutdownMark = Arc<AtomicBool>;
+
+/// `router_shutdown` while the mark is set, else `client_gone`.
+pub(crate) fn cut_code(mark: Option<&ShutdownMark>) -> &'static str {
+    match mark {
+        Some(mark) if mark.load(Ordering::SeqCst) => "router_shutdown",
+        _ => "client_gone",
+    }
+}
 
 impl Relay {
     #[allow(clippy::too_many_arguments)]
@@ -345,6 +359,7 @@ impl Relay {
             resolver,
             router,
             secrets: Mutex::new(HashMap::new()),
+            shutdown_mark: None,
             sign_cch_placeholder: false,
             store,
         }
@@ -375,6 +390,14 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
+            ..self
+        }
+    }
+
+    /// Attaches the shutdown mark. Without one every closed channel reads as the caller's leaving.
+    pub fn with_shutdown_mark(self, mark: ShutdownMark) -> Relay {
+        Relay {
+            shutdown_mark: Some(mark),
             ..self
         }
     }
@@ -516,6 +539,8 @@ pub(crate) struct Trace {
     /// The handler's armed guard. The handler's own trace holds the slot, and the stream body's copy is detached
     /// after the hand-off emptied it, so the handler future's drop is the guard's drop.
     completion: Arc<Mutex<Option<CompletionGuard>>>,
+    /// The relay's shutdown mark, which the stream body and the guard read when they book the end.
+    pub shutdown_mark: Option<ShutdownMark>,
 }
 
 impl Trace {
@@ -785,10 +810,10 @@ impl Trace {
 
 /// Armed once the request's first fact opened the assembler's entry, disarmed by `Trace::complete` once its
 /// awaited publish returns or by the hand-off to the stream body, which completes on its own path. A drop while
-/// armed is a client that left before the completion landed: hyper dropped the handler future, or the keepalive
-/// dropped a probe's exchange at its deadline or its cancel, so the completion is published from here, with what
-/// the handler knew (the attempt it was on and the account of the leg in flight), and the entry lands rather than
-/// aging out as a `ledger_gap`.
+/// armed is a client that left, or the router's shutdown that cut it, before the completion landed: hyper dropped
+/// the handler future, or the keepalive dropped a probe's exchange at its deadline or its cancel, so the completion
+/// is published from here, with what the handler knew (the attempt it was on and the account of the leg in flight),
+/// and the entry lands rather than aging out as a `ledger_gap`.
 struct CompletionGuard {
     /// `Trace::detached`: the guard sits in the trace's slot, so a clone holding that slot would keep itself alive.
     trace: Trace,
@@ -832,7 +857,7 @@ impl Drop for CompletionGuard {
             response: ResponseFacts::default(),
             ttfb_ms: None,
             ttfc_ms: None,
-            error_code: Some("client_gone".into()),
+            error_code: Some(cut_code(self.trace.shutdown_mark.as_ref()).into()),
             client_drift: None,
             client_contract: None,
             client_version: None,
@@ -1174,6 +1199,7 @@ impl Relay {
             clock: self.clock.clone(),
             bodies: self.bodies.clone(),
             completion: Arc::new(Mutex::new(None)),
+            shutdown_mark: self.shutdown_mark.clone(),
         };
         let (parts, body) = request.into_parts();
         let original = parts.extensions.get::<OriginalHead>();

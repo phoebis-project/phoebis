@@ -1343,6 +1343,66 @@ async fn a_client_that_leaves_before_the_head_lands_a_client_gone_completion() {
 }
 
 #[tokio::test]
+async fn a_request_cut_before_its_head_lands_client_gone_until_the_mark_is_set_and_router_shutdown_after(
+) {
+    let up = FakeUpstream::start(messages(Respond::Gated(Box::new(json_200())))).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let mark = phoebis_relay::ShutdownMark::default();
+    let h = harness_with_shutdown_mark(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        default_limits(),
+        mark.clone(),
+    )
+    .await;
+    // Attached and unset, as the mark is while the router serves, so a caller that leaves keeps its own code.
+    let app = h.app.clone();
+    let left =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s0")).await.unwrap() });
+    wait_for(Duration::from_secs(5), || (posts(&up) == 1).then_some(())).await;
+    let left_id = observed_id(&mut sub).await;
+    left.abort();
+    assert!(left.await.unwrap_err().is_cancelled());
+    let left_complete = completion_of(&mut sub, &left_id).await;
+    assert_eq!(
+        left_complete.error_code.as_deref(),
+        Some("client_gone"),
+        "the caller left while the mark was unset"
+    );
+    let app = h.app.clone();
+    let request =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
+    let request_id = observed_id(&mut sub).await;
+    mark.store(true, Ordering::SeqCst);
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    let complete = completion_of(&mut sub, &request_id).await;
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.status,
+            complete.attempt,
+            complete.account_id.as_deref()
+        ),
+        (
+            phoebis_bus::Outcome::Canceled,
+            Some("router_shutdown"),
+            0,
+            1,
+            Some("a")
+        ),
+        "the router's own cut completes the attempt it was on under its own code"
+    );
+    stays_for(HELD_FOR, || no_completion_queued(&mut sub, &request_id)).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_request_served_to_its_end_publishes_one_completion_and_no_client_gone_after_it() {
     let up = FakeUpstream::start(messages(json_200())).await;
     let bus = Bus::new();

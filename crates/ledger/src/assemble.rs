@@ -525,12 +525,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         last.cleared_input_tokens = response.cleared_input_tokens;
         last.refusal_category = response.refusal_category.clone();
         last.refusal_recommended_model = response.refusal_recommended_model.clone();
-        // No transport failed a headless attempt that the account's removal or the client's leaving cut short, so
-        // it files as canceled over its row's `transport_error` default.
+        // No transport failed a headless attempt that the account's removal, the client's leaving or the router's
+        // shutdown cut short, so it files as canceled over its row's `transport_error` default.
         if last.upstream_status.is_none()
             && matches!(
                 complete.error_code.as_deref(),
-                Some("account_canceled" | "client_gone")
+                Some("account_canceled" | "client_gone" | "router_shutdown")
             )
         {
             last.outcome = "canceled".into();

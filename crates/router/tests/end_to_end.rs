@@ -645,22 +645,35 @@ async fn every_new_upstream_connection_logs_its_host_and_its_dial_and_handshake_
 /// removes it once the admin answers, as `probe_soon_on` and `probe_soon_off` do for the keepalive's timing.
 const SHUTDOWN_BUDGET_SECONDS: &str = "PHOEBIS_DEBUG_SHUTDOWN_BUDGET_SECONDS";
 
-/// The figure is removed when this drops, a panic's unwinding included, so a case that fails before its admin answers
-/// leaves no short budget to a binary another case starts later.
+/// The figure is removed when the last holder drops, a panic's unwinding included, so a case that fails before its
+/// admin answers leaves no short budget to a binary another case starts later.
 struct ShortShutdownBudget;
+
+/// The cases holding the figure. Two may overlap, so the figure is removed only once the last of them has started.
+static SHORT_BUDGET_HOLDERS: Mutex<usize> = Mutex::new(0);
 
 impl ShortShutdownBudget {
     fn set(seconds: &str) -> ShortShutdownBudget {
+        let mut holders = SHORT_BUDGET_HOLDERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var(SHUTDOWN_BUDGET_SECONDS, seconds);
+        *holders += 1;
         ShortShutdownBudget
     }
 }
 
 impl Drop for ShortShutdownBudget {
     fn drop(&mut self) {
-        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::remove_var(SHUTDOWN_BUDGET_SECONDS);
+        let mut holders = SHORT_BUDGET_HOLDERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *holders -= 1;
+        if *holders == 0 {
+            let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::env::remove_var(SHUTDOWN_BUDGET_SECONDS);
+        }
     }
 }
 
@@ -797,6 +810,177 @@ async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes
             "{flushed}: {text}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_shutdown_past_the_drain_window_books_the_cut_stream_and_the_headless_request_as_router_shutdown(
+) {
+    const STREAMED: &str = "sk-ant-api03-CUTSTREAM";
+    const HEADLESS: &str = "sk-ant-api03-CUTHEADLESS";
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+        },
+    }])
+    .await;
+    // The head and `message_start` commit the first account's stream, and the gate holds the rest past the stop. The
+    // second account's answer waits at the gate before its head, so its request has none when the window closes.
+    up.add_credential_rule(
+        STREAMED,
+        "/v1/messages",
+        Respond::SseGated {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                fake_upstream::SseEvent {
+                    event: "message_start".into(),
+                    data: r#"{"type":"message_start","message":{"id":"msg_cut","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":5,"output_tokens":1}}}"#.into(),
+                },
+                fake_upstream::SseEvent {
+                    event: "message_stop".into(),
+                    data: r#"{"type":"message_stop"}"#.into(),
+                },
+            ],
+        },
+    );
+    up.add_credential_rule(
+        HEADLESS,
+        "/v1/messages",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_headless","type":"message","usage":{"input_tokens":5,"output_tokens":1}}"#
+                .to_vec(),
+        })),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    // Three seconds, so the router's own cut ends the window long before the proxy listener's 30 s deadline.
+    let short_budget = ShortShutdownBudget::set("3");
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    drop(short_budget);
+    let mut secrets = Vec::new();
+    for (account, secret, pool, key) in [
+        ("streamed", STREAMED, "main", "desktop"),
+        ("headless", HEADLESS, "second", "laptop"),
+    ] {
+        assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": account, "kind": "api_key", "label": account, "secret": secret })).send().await.unwrap().status(), 201);
+        assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": pool, "label": pool, "strategy": "priority", "members": [{ "account_id": account, "priority": 0 }] })).send().await.unwrap().status(), 201);
+        let created: serde_json::Value = client
+            .post(admin("/keys"))
+            .json(&serde_json::json!({ "id": key, "label": key, "pool_id": pool }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        secrets.push(created["secret"].as_str().unwrap().to_string());
+    }
+    let held = fixture_request(&client, proxy_port, &secrets[0], "e2e-cut-stream")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(held.status(), 200, "the stream committed before the stop");
+    let headless =
+        tokio::spawn(fixture_request(&client, proxy_port, &secrets[1], "e2e-cut-headless").send());
+    let give_up = std::time::Instant::now() + SETTLE;
+    while !up
+        .requests()
+        .iter()
+        .any(|r| r.line.starts_with("POST /v1/messages") && r.credential() == Some(HEADLESS))
+    {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the second request never reached its account"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let _ = stop_tx.send(());
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(15), server).await;
+    assert!(ended.is_ok(), "the stop ran past 15 s");
+    ended.unwrap().unwrap().unwrap();
+    drop(held);
+    let _ = headless.await;
+    // The cut's completions are published after the abort and the ledger's phase got no time, so its tasks land the
+    // two rows on this runtime after `run` returned.
+    let ledger = phoebis_ledger::LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+    let mut rows = Vec::new();
+    for _ in 0..100 {
+        let (listed, _) = ledger
+            .read_blocking(|c| {
+                phoebis_ledger::list_requests(
+                    c,
+                    &phoebis_ledger::RequestFilter::default(),
+                    &phoebis_ledger::LiveKeys::default(),
+                    None,
+                    10,
+                )
+            })
+            .unwrap();
+        rows = listed;
+        if rows.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let mut booked: Vec<_> = rows
+        .iter()
+        .map(|(r, _)| (r.key_id.clone(), r.outcome.clone(), r.error_code.clone()))
+        .collect();
+    booked.sort();
+    assert_eq!(
+        booked,
+        [
+            (
+                Some("desktop".to_string()),
+                "canceled".to_string(),
+                Some("router_shutdown".to_string())
+            ),
+            (
+                Some("laptop".to_string()),
+                "canceled".to_string(),
+                Some("router_shutdown".to_string())
+            ),
+        ],
+        "the cut stream and the headless request both carry the router's own cut"
+    );
+    up.release();
+    up.shutdown().await;
 }
 
 #[tokio::test]

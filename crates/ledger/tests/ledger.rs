@@ -1602,6 +1602,50 @@ async fn a_client_gone_completion_lands_the_attempts_it_reached_and_no_gap() {
     up.shutdown().await;
 }
 
+/// A request the router's own shutdown ended before its head files as a client's leaving does: canceled with the
+/// attempts it reached, the attempt that never had a head canceled too since no transport failed it.
+#[tokio::test]
+async fn a_router_shutdown_completion_files_its_headless_attempt_as_canceled() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    h.bus.publish(observed_event("headless"));
+    h.bus.publish(selected_event("headless", 1, "a", NOW));
+    let BusEvent::RequestComplete(mut complete) = complete_event("headless") else {
+        unreachable!()
+    };
+    complete.attempt = 1;
+    complete.account_id = Some("a".into());
+    complete.outcome = BusOutcome::Canceled;
+    complete.status = 0;
+    complete.error_code = Some("router_shutdown".into());
+    h.bus.publish(BusEvent::RequestComplete(complete));
+    let (row, attempts) = ledgered(&h, "headless").await;
+    assert_eq!(
+        (
+            row.status,
+            row.outcome.as_str(),
+            row.error_code.as_deref(),
+            row.attempts
+        ),
+        (None, "canceled", Some("router_shutdown"), 1),
+        "the router answered nothing, so the row's status is null"
+    );
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|a| (
+                a.attempt,
+                a.account_id.as_str(),
+                a.upstream_status,
+                a.outcome.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [(1, "a", None, "canceled")],
+        "the router cut the attempt before its head, and no transport failed it"
+    );
+    up.shutdown().await;
+}
+
 /// A completion whose body ended short after the head writes one `stream_interrupted` row at its finish: the serving
 /// attempt's account and upstream request id, the request's key, session and resolved model, and the cut's code,
 /// words, bytes and attempt. A clean completion writes none, and a request with no session finds its own row among

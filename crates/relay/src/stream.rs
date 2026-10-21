@@ -23,7 +23,7 @@ use tokio_util::task::TaskTracker;
 use crate::catalog::CatalogService;
 use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
-use crate::messages::{Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
+use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
 use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
 use crate::sse::{SseEvent, SseParser};
 
@@ -599,7 +599,10 @@ impl Publish {
             (BodyEnd::Complete, None) => None,
             (BodyEnd::Complete, Some(error)) => Some((Outcome::Failed, Some(error))),
             (BodyEnd::Canceled, _) => Some((Outcome::Canceled, Some("account_canceled".into()))),
-            (BodyEnd::ClientGone, _) => Some((Outcome::Canceled, Some("client_gone".into()))),
+            (BodyEnd::ClientGone, _) => Some((
+                Outcome::Canceled,
+                Some(cut_code(self.trace.shutdown_mark.as_ref()).into()),
+            )),
             (BodyEnd::Failed { .. }, Some(error)) => Some((Outcome::Failed, Some(error))),
             (BodyEnd::Failed { cut, .. }, None) if committed => {
                 Some((Outcome::Incomplete, Some(cut.code().into())))
