@@ -694,10 +694,10 @@ pages a line reads "More rows arrived than auto reload could fetch. Reload to re
 last row the poll fetched. A filter change keeps the interval. The poll waits while the tab is hidden, while the drawer
 is open, on an older page until you go back to the first, and while a menu or popover under the bar is open, with the
 interval kept and the cause named in the dropdown's title. When the wait ends a full interval or more after its last
-answer, it reads at once. When the tab comes back, the rows the last read brought keep the tint through the read after
-it. A custom range whose end lay more than a minute in the past when the page took it has nothing new to read, so the
-dropdown reads Off and stays disabled, while a link whose range ends at the moment it was made reads on, each read
-refreshing the rows inside it.
+answer, it reads at once. When the tab comes back to a read at once, the rows that read brought keep the tint through
+the read after it. A custom range whose end lay more than a minute in the past when the page took it has nothing new to
+read, so the dropdown reads Off and stays disabled, while a link whose range ends at the moment it was made reads on,
+each read refreshing the rows inside it.
 
 Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
