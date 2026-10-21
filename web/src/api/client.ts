@@ -257,7 +257,7 @@ export interface Api {
   listRequests(query?: RequestQuery): Promise<RequestPage>;
   listRoutingLog(query?: RoutingLogQuery): Promise<RoutingLogPage>;
   listSessions(): Promise<Session[]>;
-  login(secret: string): Promise<SessionInfo>;
+  login(secret: string, stayLoggedIn?: boolean): Promise<SessionInfo>;
   logout(): Promise<void>;
   pauseAccount(accountId: string): Promise<void>;
   refreshUsage(accountId: string): Promise<void>;

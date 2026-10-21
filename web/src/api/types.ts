@@ -1981,6 +1981,8 @@ export interface Settings {
 }
 
 export interface SessionInfo {
+  /** Whether the session is the 30-day kind a checked login asked for. No view draws it. */
+  persistent: boolean;
   sessionId: string;
 }
 

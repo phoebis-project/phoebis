@@ -21,9 +21,11 @@ account the router lists among the rows the list shows, or the router's first ac
 ## The shell
 
 The login screen asks for the admin secret in one field, "Admin secret", with the button "Log in", which reads
-"Logging in…" while the router answers. A wrong secret reads `That secret does not match.`, a login the throttle
-refused `Too many failed logins, so try again in a minute.` (the throttle's figures are on
-[Installation](installation.md#admin)), and no answer `The router did not answer.`. When the router accepted the
+"Logging in…" while the router answers. Under the field, the checkbox "Stay logged in", off by default, keeps this
+browser logged in for 30 days, renewed on every visit. A secret rotation ends a kept login earlier, and so does "Log
+out" on a kept login, which ends every kept login. No view lists the open logins. A wrong secret reads `That secret does
+not match.`, a login the throttle refused `Too many failed logins, so try again in a minute.` (the throttle's figures
+are on [Installation](installation.md#admin)), and no answer `The router did not answer.`. When the router accepted the
 secret and the browser kept no session cookie, the screen says so: `The router accepted the secret, but the browser
 kept no session cookie. The usual causes: a proxy that rewrites the path or drops Set-Cookie, cookies blocked for this
 site, or a Secure cookie served over plain HTTP.` While the router answers the session read with neither a session nor

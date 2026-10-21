@@ -210,7 +210,7 @@ const MODEL_SCOPE_PREFIX = 'model:';
  * signed in.
  */
 const SEEDED_SESSION_KEY = 'phoebis.mockSession';
-const MOCK_SESSION: SessionInfo = { sessionId: 'mock-admin' };
+const MOCK_SESSION: SessionInfo = { persistent: false, sessionId: 'mock-admin' };
 const seededSession = (): boolean => {
   try {
     return localStorage.getItem(SEEDED_SESSION_KEY) !== null;
@@ -1141,9 +1141,9 @@ export class MockApi implements Api {
     return latency(emptyStore() ? [] : this.sessions);
   }
 
-  login(secret: string): Promise<SessionInfo> {
+  login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
     if (secret !== 'admin') return Promise.reject(new ApiError(401, 'that secret does not match', null));
-    this.session = MOCK_SESSION;
+    this.session = { ...MOCK_SESSION, persistent: stayLoggedIn };
     seedSession(true);
     return latency(this.session, 200);
   }

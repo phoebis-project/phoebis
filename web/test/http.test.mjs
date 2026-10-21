@@ -294,7 +294,12 @@ test('getSession answers null on 401 without running the hook', async () => {
   assert.equal(await new HttpApi().getSession(), null);
   assert.equal(unauthorized, 0);
   stub(() => answer(200, { session_id: 's' }));
-  assert.deepEqual(await new HttpApi().getSession(), { sessionId: 's' });
+  assert.deepEqual(await new HttpApi().getSession(), { persistent: false, sessionId: 's' }, 'a body without the member reads as a session that is not kept');
+});
+
+test('getSession reads a kept session off the persistent member', async () => {
+  stub(() => answer(200, { persistent: true, session_id: 's' }));
+  assert.deepEqual(await new HttpApi().getSession(), { persistent: true, sessionId: 's' });
 });
 
 test('the session probe raises the status it got and 0 for no answer', async () => {
@@ -308,6 +313,15 @@ test('a login the router accepted with no cookie kept raises SessionNotKept', as
   const calls = stub((_url, init) => (init.method === 'POST' ? answer(204) : answer(401, { error: 'no admin session' })));
   await assert.rejects(new HttpApi().login('secret'), (e) => e instanceof SessionNotKept && !(e instanceof ApiError));
   assert.deepEqual(calls.map((c) => c.init.method ?? 'GET'), ['POST', 'GET'], 'the session read follows the accepted login');
+});
+
+test('a login sends the Stay logged in choice as stay_logged_in, false where the caller passed none', async () => {
+  const kept = stub((_url, init) => (init.method === 'POST' ? answer(204) : answer(200, { persistent: true, session_id: 's' })));
+  await new HttpApi().login('s', true);
+  assert.deepEqual(JSON.parse(kept[0].init.body), { secret: 's', stay_logged_in: true });
+  const plain = stub((_url, init) => (init.method === 'POST' ? answer(204) : answer(200, { persistent: false, session_id: 's' })));
+  await new HttpApi().login('s');
+  assert.deepEqual(JSON.parse(plain[0].init.body), { secret: 's', stay_logged_in: false });
 });
 
 test('a failed call names its route on the error, whether the router answered or not', async () => {

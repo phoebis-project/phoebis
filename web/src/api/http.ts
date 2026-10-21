@@ -218,8 +218,8 @@ export class HttpApi implements Api {
     }
     if (response.status === 401) return null;
     if (!response.ok) throw new ApiError(response.status, `GET /admin/session answered ${response.status}`, null);
-    const r = (await response.json()) as { session_id: string };
-    return { sessionId: r.session_id };
+    const r = (await response.json()) as { persistent?: boolean; session_id: string };
+    return { persistent: r.persistent === true, sessionId: r.session_id };
   };
   getSettings = async () => d.decodeSettings(await call('GET', '/admin/settings'));
   listAccountRollups = async (from: string, to: string) => d.decodeAccountRollups(await call('GET', `/admin/analytics/accounts?range=${range(from, to)}`));
@@ -244,8 +244,8 @@ export class HttpApi implements Api {
   listRoutingLog = async (q: RoutingLogQuery = {}) =>
     d.decodeRoutingLogPage(await call('GET', `/admin/routing-log${qs({ accounts: q.accountIds, cursor: q.cursor, from: q.from, keys: q.keyIds, kinds: q.kinds, limit: q.limit, models: q.models, pools: q.poolIds, request: q.request, session: q.session, to: q.to })}`));
   listSessions = async () => (await call<{ sessions: unknown[] }>('GET', '/admin/sessions')).sessions.map(d.decodeSession);
-  login = async (secret: string): Promise<SessionInfo> => {
-    await call<void>('POST', '/admin/session', { secret });
+  login = async (secret: string, stayLoggedIn?: boolean): Promise<SessionInfo> => {
+    await call<void>('POST', '/admin/session', { secret, stay_logged_in: stayLoggedIn === true });
     const me = await this.getSession();
     if (!me) throw new SessionNotKept();
     return me;

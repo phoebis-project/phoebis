@@ -506,12 +506,31 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const markCells = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-cell)"]').length;
   const markBody = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-body)"]').length;
   results.push({ name: 'the login view carries the mark, 26 cells and 5 body squares on the theme tokens, and the couplet', ok: markCells === 26 && markBody === 5 && login.text().includes('Place every request. Keep every session.'), missing: [`cells ${markCells}`, `body ${markBody}`] });
+  const stay = login.container.querySelector('.login__card input[type="checkbox"]');
+  const stayField = stay?.closest('.field') ?? null;
+  // Read off the label that wraps the box, so a click on the words ticks it.
+  const stayLabel = stay?.closest('label')?.querySelector('.field__label')?.textContent ?? '';
+  const stayHint = stayField?.querySelector('.field__hint')?.textContent ?? '';
+  const underSecret = login.container.querySelector('input[type="password"]')?.closest('.field')?.nextElementSibling === stayField;
+  results.push({
+    name: 'the login screen draws "Stay logged in" unchecked under the secret field, with its hint',
+    ok: stay !== null && !stay.checked && stayLabel === 'Stay logged in' && underSecret && stayHint === 'Keeps this browser logged in for 30 days, renewed on every visit. A secret rotation ends it earlier.',
+    missing: [stay ? (stay.checked ? 'checked' : 'unchecked') : 'no checkbox', stayLabel || 'no label', underSecret ? 'under the secret field' : 'not under the secret field', stayHint || 'no hint'],
+  });
+  const unchecked = countCalls('login');
   const input = login.container.querySelector('input[type="password"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(input, 'admin');
   input.dispatchEvent(new window.Event('input', { bubbles: true }));
   [...login.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
   await login.settle(500);
+  unchecked.restore();
+  const plainSession = await api.getSession();
+  results.push({
+    name: 'a login with "Stay logged in" unchecked sends it false and the mock answers a session that is not kept',
+    ok: JSON.stringify(unchecked.calls) === JSON.stringify([['admin', false]]) && plainSession?.persistent === false,
+    missing: [JSON.stringify(unchecked.calls), JSON.stringify(plainSession)],
+  });
   // The bar must exist, or a renamed class would pass the count by matching nothing.
   const topbarRight = login.container.querySelector('.topbar__right');
   const topbarBadges = login.container.querySelectorAll('.topbar__right .badge').length;
@@ -519,6 +538,23 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   [...login.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
   await login.settle(400);
   results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin secret'), missing: [] });
+  const checked = countCalls('login');
+  login.container.querySelector('.login__card input[type="checkbox"]')?.click();
+  const again = login.container.querySelector('input[type="password"]');
+  setter.call(again, 'admin');
+  again.dispatchEvent(new window.Event('input', { bubbles: true }));
+  [...login.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
+  await login.settle(500);
+  checked.restore();
+  const keptSession = await api.getSession();
+  results.push({
+    name: 'a login with "Stay logged in" checked sends it true and the mock answers a kept session',
+    ok: JSON.stringify(checked.calls) === JSON.stringify([['admin', true]]) && keptSession?.persistent === true,
+    missing: [JSON.stringify(checked.calls), JSON.stringify(keptSession)],
+  });
+  // Signed out again, so the blocks below find the mock's session as the block found it.
+  [...login.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
+  await login.settle(400);
   login.unmount();
   localStorage.setItem('phoebis.mockSession', 'admin');
 }

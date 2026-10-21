@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, type SessionInfo } from '@/api';
 import { ApiError, SessionNotKept, setHooks } from '@/api/http';
-import { Button, Input } from '@/components/ui/primitives';
+import { Button, Field, Input } from '@/components/ui/primitives';
 import { Mark } from '@/components/ui/Mark';
 
 export interface SessionState {
@@ -151,13 +151,14 @@ function Brand() {
 /** `outage` is the status of a session read the router did not answer as 2xx or 401, 0 when no answer came at all. */
 export function LoginScreen({ notice, onLoggedIn, onRetry, outage }: { notice: string | null; onLoggedIn: (s: SessionInfo) => void; onRetry: () => void; outage: number | null }) {
   const [secret, setSecret] = useState('');
+  const [stay, setStay] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      onLoggedIn(await api.login(secret));
+      onLoggedIn(await api.login(secret, stay));
     } catch (e) {
       setError(
         e instanceof SessionNotKept
@@ -190,6 +191,9 @@ export function LoginScreen({ notice, onLoggedIn, onRetry, outage }: { notice: s
           <span className="field__label">Admin secret</span>
           <Input type="password" autoComplete="current-password" autoFocus value={secret} onChange={(e) => setSecret(e.target.value)} />
         </label>
+        <Field label="Stay logged in" beside hint="Keeps this browser logged in for 30 days, renewed on every visit. A secret rotation ends it earlier.">
+          <input type="checkbox" checked={stay} onChange={(e) => setStay(e.target.checked)} />
+        </Field>
         {notice && (
           <p className="secondary" role="status">
             {notice}
