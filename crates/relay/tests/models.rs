@@ -66,6 +66,12 @@ fn error_code(resp: &axum::http::Response<axum::body::Body>) -> String {
         .to_string()
 }
 
+fn should_retry(resp: &axum::http::Response<axum::body::Body>) -> Option<&str> {
+    resp.headers()
+        .get("x-should-retry")
+        .map(|value| value.to_str().unwrap())
+}
+
 #[tokio::test]
 async fn the_listing_answers_the_callers_key_with_each_list_level_applied() {
     let up = FakeUpstream::start(vec![]).await;
@@ -354,6 +360,7 @@ async fn a_missing_or_wrong_key_is_refused_as_messages_refuses_it() {
     let resp = h.app.clone().oneshot(no_key).await.unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     assert_eq!(error_code(&resp), "auth_missing");
+    assert_eq!(should_retry(&resp), Some("false"));
 
     h.store.revoke_api_key("desktop", NOW, "test").unwrap();
     h.router.reload().await.unwrap();
@@ -365,6 +372,7 @@ async fn a_missing_or_wrong_key_is_refused_as_messages_refuses_it() {
         .unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     assert_eq!(error_code(&resp), "auth_unknown");
+    assert_eq!(should_retry(&resp), Some("false"));
 }
 
 #[tokio::test]
@@ -381,4 +389,5 @@ async fn a_bad_limit_with_no_key_answers_the_authentication_refusal_first() {
     let resp = h.app.clone().oneshot(no_key).await.unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     assert_eq!(error_code(&resp), "auth_missing");
+    assert_eq!(should_retry(&resp), Some("false"));
 }

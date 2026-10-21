@@ -26,8 +26,8 @@ pub(crate) struct Failure {
     pub message: Cow<'static, str>,
     /// The `Retry-After` the answer carries, in seconds.
     pub retry_after: Option<u64>,
-    /// Writes `x-should-retry: false`, so a client that retries its 4xx answers does not resend what a guardrail
-    /// or the contract refused.
+    /// Writes `x-should-retry: false`, so a client that retries its 4xx answers resends neither a refused
+    /// credential nor what a guardrail or the contract refused.
     pub no_retry: bool,
 }
 
@@ -156,7 +156,7 @@ pub(crate) fn accounts_at_cap(retry_after_seconds: u64) -> Failure {
 }
 
 /// A rejected caller credential is always a `401`: telling the caller which of the four ways it failed would
-/// help an attacker enumerate, and the downstream client acts on the status alone.
+/// help an attacker enumerate. The answer also tells the client not to resend the request.
 pub(crate) fn auth_failure(error: &AuthError) -> Failure {
     let (code, message) = match error {
         AuthError::Ambiguous => ("auth_ambiguous", "present exactly one key"),
@@ -170,7 +170,9 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
         code,
         message: Cow::Borrowed(message),
         retry_after: None,
-        no_retry: false,
+        // None of the four heals between resends, and the client's query loop stops at the first refusal it is
+        // told not to resend.
+        no_retry: true,
     }
 }
 
@@ -400,7 +402,9 @@ pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
         code: "auth_unknown",
         message: Cow::Borrowed("the presented key is not valid"),
         retry_after: None,
-        no_retry: false,
+        // No registry refusal heals between resends, and the client's query loop stops at the first refusal it is
+        // told not to resend.
+        no_retry: true,
     }
 }
 
@@ -686,8 +690,9 @@ mod tests {
         }
     }
 
-    /// A client that retries its 4xx answers would send a blocked request or one the contract refused again
-    /// unchanged, and no other refusal asks the client to stop, so the header rides those two answers alone.
+    /// A client that retries its 4xx answers would send a blocked request, one the contract refused or a refused
+    /// credential again unchanged, and no other refusal asks the client to stop, so the header rides those answers
+    /// alone.
     #[test]
     fn no_retry_writes_the_header_and_no_other_arm_does() {
         let errors = [
@@ -729,13 +734,8 @@ mod tests {
             UPSTREAM_UNDECODABLE,
             UPSTREAM_UNREACHABLE,
             accounts_at_cap(5),
-            auth_failure(&AuthError::Ambiguous),
-            auth_failure(&AuthError::Malformed),
-            auth_failure(&AuthError::Missing),
-            auth_failure(&AuthError::Unknown),
             body_budget_exhausted(),
             key_body_reads(),
-            key_refusal(&KeyRefusal::Unknown),
             ledger_behind(),
         ]
         .into_iter()
@@ -764,6 +764,26 @@ mod tests {
         .response("r-1");
         assert_eq!(contract.headers()[SHOULD_RETRY_HEADER], "false");
         assert_eq!(contract.headers()[ERROR_CODE_HEADER], "client_contract");
+        for credential in [
+            auth_failure(&AuthError::Ambiguous),
+            auth_failure(&AuthError::Malformed),
+            auth_failure(&AuthError::Missing),
+            auth_failure(&AuthError::Unknown),
+            key_refusal(&KeyRefusal::Unknown),
+        ] {
+            assert!(credential.no_retry, "{}", credential.code);
+            let refused = credential.response("r-1");
+            assert_eq!(
+                refused
+                    .headers()
+                    .get(SHOULD_RETRY_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+                Some("false"),
+                "{}",
+                credential.code
+            );
+            assert_eq!(refused.headers()[ERROR_CODE_HEADER], credential.code);
+        }
     }
 
     /// The routing log's exhausted row records the routing crate's status as its `answer`, so the builder the

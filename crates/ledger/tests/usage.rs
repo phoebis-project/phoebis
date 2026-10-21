@@ -425,13 +425,19 @@ async fn the_usage_route_answers_the_callers_own_key_and_refuses_the_rest() {
     assert_eq!(status, 401);
     assert_eq!(body["error"]["type"], "authentication_error");
     assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+    assert_eq!(header(&headers, "x-should-retry"), Some("false"));
 
-    assert_eq!(get(&app, Some("phoebis-nobody")).await.0, 401);
+    let (status, headers, _) = get(&app, Some("phoebis-nobody")).await;
+    assert_eq!(
+        (status, header(&headers, "x-should-retry")),
+        (401, Some("false"))
+    );
 
     // A scheme the relay does not accept is refused in the same shape a missing header is, and says as
     // little.
     let (status, headers, body) = get_with_header(&app, "authorization", "Basic x").await;
     assert_eq!(status, 401);
+    assert_eq!(header(&headers, "x-should-retry"), Some("false"));
     assert_eq!(body["error"]["type"], "authentication_error");
     assert_eq!(
         header(&headers, "x-phoebis-error-code"),
@@ -661,9 +667,10 @@ async fn a_deleted_keys_usage_stays_with_it() {
     h.store.delete_api_key("desktop", "test").unwrap();
     h.router.reload().await.unwrap();
 
+    let (status, headers, _) = get(&app, Some(KEY)).await;
     assert_eq!(
-        get(&app, Some(KEY)).await.0,
-        401,
+        (status, header(&headers, "x-should-retry")),
+        (401, Some("false")),
         "the key is gone from the snapshot the route authenticates against"
     );
 
