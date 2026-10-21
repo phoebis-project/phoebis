@@ -77,7 +77,10 @@ export function hasValue(dimension: Dimension, value: unknown): boolean {
   }
 }
 
-/** The value that removes the dimension's chip, which a chip's x, Remove and Clear all write. */
+/**
+ * The value that removes the dimension's chip, which Remove and Clear all write, as does a chip's x where the dimension
+ * has no `perValue`. A per-value chip's x writes `withoutValue` instead.
+ */
 export function emptyValue(dimension: Dimension): unknown {
   switch (dimension.kind) {
     case 'choice':

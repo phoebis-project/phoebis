@@ -179,9 +179,9 @@ export function KeysPage() {
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
   // The pool filter is the address: the Pool chips read `?pools=<id>,<id>`, one per id, and write it back, so a reload
   // keeps the filter and the pool card's key count link lands on it. Until the pools are read the address filters as
-  // written, so the rows match it during the read and after a failed one, and the Pool list holds an option for each id,
-  // which its chip prints. Once the pools have loaded, an id no pool carries leaves the address, so no chip stands for
-  // an id the rows no longer filter by. While a dialog query is still in the address, its own effect goes first.
+  // written, so the rows match it during the read and after a failed one, and the Pool list holds an option for each
+  // id, which its chip prints. Once the pools have loaded, an id no pool carries leaves the address, so no chip stands
+  // for an id the rows no longer filter by. While a dialog query is still in the address, its own effect goes first.
   const poolIds = useMemo(() => filters.pools.filter((id) => pools.data === null || poolById.has(id)), [filters.pools, poolById, pools.data]);
   const poolOptions = useMemo(() => [...poolList.map((p) => ({ label: p.name, value: p.id })), ...filters.pools.filter((id) => !poolById.has(id)).map((id) => ({ label: id, value: id }))], [filters.pools, poolById, poolList]);
   useEffect(() => {
