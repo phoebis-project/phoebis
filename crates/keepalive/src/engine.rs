@@ -1398,8 +1398,8 @@ impl Engine {
     /// The pool's ceilings resolved over its fundings, its main TTLs and its models, and `None` for a pool with no
     /// member.
     /// `accounts` are the pool's members' accounts: an OAuth member brings the plan's factors, an API-key
-    /// member the dollar rows. The router's catalog names the dated id each undated dollar row resolves to, and a
-    /// router that cannot answer leaves every row judged under its own id.
+    /// member the dollar rows, and a usage-based seat the dollar rows too. The router's catalog names the dated id each
+    /// undated dollar row resolves to, and a router that cannot answer leaves every row judged under its own id.
     pub async fn resolve_pool_ceilings(
         &self,
         pool: &PoolRow,

@@ -32,7 +32,8 @@ use crate::AdminState;
 const ACTOR: &str = "admin";
 const STALE_EDIT: &str = "the pool changed while it was being edited, so reload and try again";
 
-/// One member. On a subscription member a budget bounds its metered spend, overage and fast answers.
+/// One member. On a subscription member a budget bounds its metered spend, overage and fast answers, and on a
+/// usage-based seat its answers billed under `usage_based`.
 #[derive(serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MemberInput {

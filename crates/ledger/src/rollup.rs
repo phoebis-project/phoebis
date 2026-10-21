@@ -190,10 +190,11 @@ pub struct RollupRow {
     /// attempt's, else `fast` when the request asked for it, else `STANDARD_SPEED`. A dimension, so it sits in the key.
     pub speed: String,
     /// Who paid for the row's attempts, `funding_of`'s answer as a key word: `billed` for an api_key account's answer
-    /// whatever its speed or overage flag; else `fast` when it was served fast, whose answer draws usage credits in
-    /// dollars whatever the overage flag; else `overage` when the head's unified headers said overage was in use;
-    /// else `plan`. Written with the row, so a reader needs no registry to tell billed spend from plan spend, and a
-    /// deleted or recreated account moves none of its rows. A dimension, so it sits in the key.
+    /// whatever its speed or overage flag, else `usage_based` for a usage-based seat's answer whatever its speed or
+    /// overage flag, else `fast` for a plan account's answer served fast, which draws usage credits in dollars
+    /// whatever the overage flag, else `overage` when the head's unified headers said overage was in use, else `plan`.
+    /// Written with the row, so a reader needs no registry to tell billed spend from plan spend, and a deleted or
+    /// recreated account moves none of its rows. A dimension, so it sits in the key.
     pub funding: String,
     /// The cells the row's attempts priced at (`STANDARD_BAND` or `LONG_BAND`), read against the threshold in
     /// force at the request's instant. A dimension, so it sits in the key.

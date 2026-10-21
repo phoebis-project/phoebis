@@ -181,7 +181,7 @@
       {
         "id": "usage-seat",
         "kind": "oauth",
-        "label": "Usage seat",
+        "label": "Seat",
         "enabled": true,
         "cancelled": false,
         "state": "ready",

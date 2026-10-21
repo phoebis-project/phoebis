@@ -1090,10 +1090,11 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
     );
 }
 
-/// A probe the idle limit left pending on a usage-based seat comes back from a restart with the class its answer
-/// carried, and a payload written before the class rode the record reads none, so its probe settles as it did.
+/// A usage-based seat's observation, its unanswered probe and the probe the idle limit left pending come back from a
+/// restart with the class their facts carried, and a payload written before the class rode the records reads false
+/// on each, so its probes settle as they did.
 #[tokio::test]
-async fn a_restart_restores_a_pending_probe_with_its_class_and_a_payload_from_before_reads_none() {
+async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_before_reads_false() {
     const OAUTH: &str = "sk-ant-oat01-OOOO";
     let mut r = rig(RigSpec {
         accounts: vec![oauth("o", OAUTH, 0)],
@@ -1106,10 +1107,63 @@ async fn a_restart_restores_a_pending_probe_with_its_class_and_a_payload_from_be
         ..on_disk()
     })
     .await;
+    // The record's kind and class at `pointer` in a saved agent's payload.
+    let class_at = |payload: &str, pointer: &str| {
+        let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
+        let record = payload.pointer(pointer).cloned().unwrap_or_default();
+        (
+            record["kind"].as_str().map(String::from),
+            record["usage_based"].as_bool(),
+        )
+    };
+    // A payload from before the class: the member leaves each record it rides on.
+    let from_before = |rows: &[KeepaliveAgentRow], pointers: &[&str]| {
+        let mut rows = rows.to_vec();
+        let mut payload: serde_json::Value = serde_json::from_str(&rows[0].payload).unwrap();
+        for pointer in pointers {
+            payload
+                .pointer_mut(pointer)
+                .and_then(serde_json::Value::as_object_mut)
+                .unwrap()
+                .remove("usage_based");
+        }
+        rows[0].payload = payload.to_string();
+        rows
+    };
+    let seat = (Some("oauth".to_string()), Some(true));
+    let read_false = (Some("oauth".to_string()), Some(false));
     r.observe("main").await;
     r.up.push_credential_rule(OAUTH, "/v1/messages", probe_answer(2_000, 0));
     r.advance(270_000);
     r.step().await;
+    let (open_sessions, open_agents) = r.engine.persist_rows();
+    assert_eq!(
+        (
+            class_at(&open_agents[0].payload, "/current"),
+            class_at(&open_agents[0].payload, "/unanswered/0")
+        ),
+        (seat.clone(), seat.clone()),
+        "the save writes the class the selection and the probe's answer carried"
+    );
+    r.engine.flush_persisted().await;
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions: open_sessions,
+            agents: from_before(&open_agents, &["/current", "/unanswered/0"]),
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let older = r.restart().await;
+    older.load_persisted().await;
+    let loaded = older.persist_rows().1;
+    assert_eq!(
+        (
+            class_at(&loaded[0].payload, "/current"),
+            class_at(&loaded[0].payload, "/unanswered/0")
+        ),
+        (read_false.clone(), read_false.clone()),
+        "an observation and an unanswered probe from before the class load and read false"
+    );
     r.advance(270_000);
     r.step().await;
     assert_eq!(
@@ -1118,17 +1172,10 @@ async fn a_restart_restores_a_pending_probe_with_its_class_and_a_payload_from_be
         "the idle limit left the probe pending"
     );
     let (sessions, agents) = r.engine.persist_rows();
-    let class_of = |payload: &str| {
-        let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
-        (
-            payload["kept"][0]["kind"].as_str().map(String::from),
-            payload["kept"][0]["usage_based"].as_bool(),
-        )
-    };
     assert_eq!(
-        class_of(&agents[0].payload),
-        (Some("oauth".to_string()), Some(true)),
-        "the save writes the class the probe's answer carried"
+        class_at(&agents[0].payload, "/kept/0"),
+        seat,
+        "the pending probe keeps the class its answer carried"
     );
     r.engine.flush_persisted().await;
     let second = r.restart().await;
@@ -1138,26 +1185,19 @@ async fn a_restart_restores_a_pending_probe_with_its_class_and_a_payload_from_be
         agents,
         "the agent with its pending probe reads back as it stood"
     );
-    let mut before = agents.clone();
-    let mut payload: serde_json::Value = serde_json::from_str(&before[0].payload).unwrap();
-    payload["kept"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("usage_based");
-    before[0].payload = payload.to_string();
     r.h.store
         .save_keepalive(&KeepaliveBatch {
             sessions,
-            agents: before,
+            agents: from_before(&agents, &["/kept/0"]),
             ..KeepaliveBatch::default()
         })
         .unwrap();
     let third = r.restart().await;
     third.load_persisted().await;
     assert_eq!(
-        class_of(&third.persist_rows().1[0].payload),
-        (Some("oauth".to_string()), Some(false)),
-        "a payload from before the class loads and reads none"
+        class_at(&third.persist_rows().1[0].payload, "/kept/0"),
+        read_false,
+        "a pending probe from before the class loads and reads false"
     );
 }
 

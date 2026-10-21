@@ -1338,13 +1338,7 @@
             "service_tier": null,
             "client_drift": null,
             "cooldown_set": null,
-            "windows": [
-              {
-                "id": "five_hour",
-                "utilization": 0.4,
-                "resets_at": 1791720997600
-              }
-            ],
+            "windows": [],
             "overage_in_use": null,
             "usage_based": true,
             "estimated_usd": 0.00355,

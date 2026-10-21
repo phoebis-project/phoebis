@@ -472,7 +472,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "id": "usage-seat",
           "kind": "oauth",
-          "label": "Usage seat",
+          "label": "Seat",
           "enabled": true,
           "cancelled": false,
           "state": "ready",
@@ -664,39 +664,6 @@ export const FIXTURES: Record<string, Fixture> = {
             },
             {
               "hour": 1791720000000,
-              "utilization_5h_max": 0.4,
-              "utilization_7d_max": null,
-              "utilization_7d_oi_max": null,
-              "overage_seconds": 0,
-              "cooldown_seconds": 0,
-              "pins_created": 0,
-              "pins_migrated_in": 0,
-              "pins_migrated_out": 0,
-              "windows": {
-                "five_hour": null,
-                "seven_day": null,
-                "seven_day_fable": null
-              }
-            }
-          ]
-        },
-        {
-          "account_id": "usage-seat",
-          "peak": {
-            "five_hour": 0.4,
-            "seven_day": null,
-            "seven_day_overage_included": null
-          },
-          "overage_seconds": 0,
-          "cooldown_seconds": 0,
-          "pins": {
-            "created": 0,
-            "migrated_in": 0,
-            "migrated_out": 0
-          },
-          "hours": [
-            {
-              "hour": 1791716400000,
               "utilization_5h_max": 0.4,
               "utilization_7d_max": null,
               "utilization_7d_oi_max": null,
@@ -14948,13 +14915,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
-              "windows": [
-                {
-                  "id": "five_hour",
-                  "utilization": 0.4,
-                  "resets_at": 1791720997600
-                }
-              ],
+              "windows": [],
               "overage_in_use": null,
               "usage_based": true,
               "estimated_usd": 0.00355,
