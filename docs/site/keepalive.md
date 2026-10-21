@@ -119,10 +119,12 @@ and it goes to the probe whose entry that request read, a probe that rewrote the
 covered the entry taking it over a later one that did not cover it. An auxiliary or a foreign request may still read a
 warm cache, but it never resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no
 evidence about the cache, so a retry inside the probe's entry earns the credit the failed turn could not, its gap
-measured from the last turn that answered. Probes on one model, speed and account form a chain while each later probe
-reads the whole entry back, since that read extends the entry, and a probe that reads nothing or only part of the prefix
-starts a chain of its own. A request on that model, speed and account that reads the cache inside the chain's last
-entry answers every probe of the chain, and one that arrives past that entry settles them all `expired`.
+measured from the last turn that answered. A turn whose completion the engine missed, whether the next request's arrival
+or a bus gap ends it, counts as a turn that answered at its start. Probes on one model, speed and account form a chain
+while each later probe reads the whole entry back, since that read extends the entry, and a probe that reads nothing or
+only part of the prefix starts a chain of its own. A request on that model, speed and account that reads the cache
+inside the chain's last entry answers every probe of the chain, and one that arrives past that entry settles them all
+`expired`.
 
 A request a guardrail blocks is a refused request to the engine. A blocked `main` or `subagent` request, or one with no
 class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does. A blocked `compaction`

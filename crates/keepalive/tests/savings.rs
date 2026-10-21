@@ -2130,6 +2130,41 @@ async fn a_probe_pending_past_its_recipes_end_follows_a_resolution_to_the_next_r
     assert!(row(&r, &second).await.kept_warm);
 }
 
+/// A request that names the dated id itself carries no resolution of its own for a probe kept under the spelling, so
+/// the arrival dates the names the agent holds through the catalog's acknowledged resolution: the probe pending past
+/// its recipe's end follows the twin spelling to the dated id, and the request reads the entry it kept as its own
+/// lineage.
+#[tokio::test]
+async fn a_probe_under_a_twin_spelling_of_the_dated_id_a_request_names_is_dated_at_its_arrival_and_keeps_the_credit(
+) {
+    let dated = "claude-sonnet-4-5-20250929";
+    let mut r = ended_by_the_idle_limit().await;
+    let listing = relay_common::catalog_rules().remove(0);
+    r.h.catalog_up
+        .push_credential_rule(A, &listing.path_prefix, listing.respond);
+    let a = r.h.store.account("a").unwrap().unwrap();
+    r.h.catalog.refresh(&a).await;
+    assert_eq!(
+        r.h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some(dated)
+    );
+    r.advance(10_000);
+    let second = r
+        .observe_with("main", &BODY.replace("claude-sonnet-4-5", dated))
+        .await;
+    assert_eq!(r.status("main").canonical_model, dated);
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the probe's spelling was dated, so the request under the dated id answered it and was credited"
+    );
+    assert!(row(&r, &second).await.kept_warm);
+}
+
 /// A compaction's observation on `main` under the wire spelling `claude-sonnet-4-5`, named `canonical` as the relay
 /// resolved it.
 fn compaction_named(r: &Rig, id: &str, canonical: &str) -> phoebis_bus::Event {
@@ -2591,6 +2626,61 @@ async fn a_request_whose_replay_answers_a_401_is_credited_as_a_plain_success() {
         Some(arrived),
         "the replayed request answered from its arrival"
     );
+}
+
+/// A turn whose completion the engine never saw counts as the turn that answered at its start, whether the next
+/// request's arrival or a bus gap that may have lost the completion ends it: a request at 0 s, a turn at 200 s that
+/// reads the cache and arms the schedule from its first event, a probe at 470 s while that turn is open, and a request
+/// at 490 s that reads the entry. Measured from the turn at 200 s, the gap stays inside that turn's own five-minute
+/// entry, so the probe kept nothing the request needed and earns no credit. A failed completion the engine observed
+/// moves nothing: the gap runs from the request at 0 s, and the probe earns the credit.
+#[tokio::test]
+async fn a_turn_whose_completion_the_engine_missed_starts_the_next_kept_warm_gap_and_a_failed_one_does_not(
+) {
+    for (ending, credited) in [("missed", 0), ("bus gap", 0), ("failed", 1)] {
+        let mut r = rig(RigSpec {
+            accounts: vec![api_key("a", A, 0)],
+            ..RigSpec::default()
+        })
+        .await;
+        let first_at = r.now();
+        open_request(&r, "first", 0, 2_000);
+        r.engine.observe(completed(&r, "first", 0));
+        r.advance_attended(200_000);
+        let second_at = r.now();
+        open_request(&r, "second", 2_000, 0);
+        r.advance_attended(270_000);
+        r.step().await;
+        assert_eq!(
+            (r.status("main").probes, r.status("main").unanswered),
+            (1, 1),
+            "{ending}: the probe landed while the second turn was open"
+        );
+        match ending {
+            "bus gap" => r.engine.bus_gap(1, 0),
+            "failed" => r.engine.observe(failed(&r, "second", Some(40))),
+            _ => {}
+        }
+        r.advance_attended(20_000);
+        open_request(&r, "third", 2_000, 0);
+        let (_, agents) = r.engine.persist_rows();
+        let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+        assert_eq!(
+            payload["last_answered_at"].as_i64(),
+            Some(if credited == 0 { second_at } else { first_at }),
+            "{ending}: the turn the third request's gap runs from"
+        );
+        r.engine.observe(completed(&r, "third", 2_000));
+        let rows = final_rollups(&r).await;
+        assert_eq!(
+            (
+                inference_rows(&rows).kept_warm_requests,
+                probe_rows(&rows).wasted_probe_reasons
+            ),
+            (credited, BTreeMap::new()),
+            "{ending}: the warm return answered the probe either way"
+        );
+    }
 }
 
 /// Every rollup row the rig wrote, read once the ledger has landed everything the test sent it.

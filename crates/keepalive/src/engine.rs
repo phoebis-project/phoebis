@@ -739,6 +739,24 @@ impl Agent {
         moved
     }
 
+    /// The names `follow_resolutions` reads, which an arrival looks up in the catalog's acknowledged resolution.
+    pub(crate) fn held_models(&self) -> BTreeSet<String> {
+        let mut models = BTreeSet::from([self.canonical_model.clone()]);
+        models.extend(
+            self.current
+                .as_ref()
+                .and_then(|o| o.prior.as_ref())
+                .map(|prior| prior.model.clone()),
+        );
+        if let Some(compaction) = &self.compaction {
+            models.insert(compaction.canonical_model.clone());
+            models.extend(compaction.prior.as_ref().map(|prior| prior.model.clone()));
+        }
+        models.extend(self.kept.iter().map(|kept| kept.canonical_model.clone()));
+        models.extend(self.unanswered.iter().map(|probe| probe.model.clone()));
+        models
+    }
+
     /// When the next probe is due: the entry's expiry less the timing's lead and this schedule's share of the
     /// jitter, or the outstanding backoff, whichever is later. `None` while nothing is armed.
     pub(crate) fn due_at(&self) -> Option<i64> {
@@ -2276,7 +2294,10 @@ impl Engine {
         // the arms: an observation sweeps the lapsed sessions, and the settlements that sweep leaves have to
         // reach the ledger stamped with this event rather than with whatever call drains next.
         match event {
-            BusEvent::RequestObserved(observed) => self.on_observed(observed),
+            BusEvent::RequestObserved(observed) => {
+                let catalog = self.parts.relay.catalog();
+                self.on_observed(observed, |spelling| catalog.lookup(spelling))
+            }
             BusEvent::AccountSelected(selected) => self.on_selected(selected),
             BusEvent::ResponseHead(head) => self.on_head(head),
             BusEvent::ResponseChunk(chunk) => self.on_chunk(chunk),
@@ -2304,6 +2325,17 @@ impl Engine {
         );
         let open: Vec<(SessionKey, String)> = inner.pending.values().cloned().collect();
         for (key, agent_id) in open {
+            // The lost events may have been this turn's completion, so it counts as the turn that answered, as a
+            // missed one does at the next arrival.
+            if let Some(agent) = inner
+                .sessions
+                .get_mut(&key)
+                .and_then(|s| s.agents.get_mut(&agent_id))
+            {
+                if let Some(started) = agent.current.as_ref().map(|o| o.started) {
+                    agent.last_answered_at = Some(started);
+                }
+            }
             inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
             inner.set_reason(&key, &agent_id, Reason::BusGap);
         }
@@ -2358,7 +2390,7 @@ impl Engine {
         })
     }
 
-    fn on_observed(&self, observed: RequestObserved) {
+    fn on_observed(&self, observed: RequestObserved, resolve: impl Fn(&str) -> Option<String>) {
         // Only an inference request says anything about the cache entry a recipe is for. Token counting
         // carries the same session and agent headers and writes no cache, so it must reach nothing below:
         // not the recipe, not the schedule, and not the request time the kept-warm gap is measured from.
@@ -2466,18 +2498,45 @@ impl Engine {
         if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;
         }
+        // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
+        // ends the observation. It counts as the turn that answered, or the gap this arrival's coverage reads would run
+        // from a turn before it.
+        let missed = inner.sessions[&key].agents[&agent_id]
+            .current
+            .as_ref()
+            .filter(|observation| inner.pending.contains_key(&observation.id))
+            .map(|observation| observation.started);
+        if let Some(started) = missed {
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .last_answered_at = Some(started);
+        }
         // A turn or a second compaction moves the agent past the context an open compaction was reading, so that one
         // ends as a failed one and leaves the recipe to this request's own path.
         inner.end_compaction(&key, &agent_id);
         // A tick asks the router only about the models of retained recipes, so a probe an agent keeps past its
-        // recipe's end can miss a resolution: the one this request carries for its own spelling dates it here,
-        // before the credit compares its model with the request's, a compaction's as a turn's.
+        // recipe's end can miss a resolution: the catalog's acknowledged resolution dates the held probes' spellings
+        // here, the request's own pair first, before the credit compares its model with the request's, a compaction's
+        // as a turn's.
         let mut resolved = HashMap::new();
         if observed.wire_model != observed.canonical_model {
             resolved.insert(
                 observed.wire_model.clone(),
                 observed.canonical_model.clone(),
             );
+        }
+        for held in inner.sessions[&key].agents[&agent_id].held_models() {
+            if resolved.contains_key(&held) {
+                continue;
+            }
+            if let Some(dated) = resolve(&held).filter(|dated| *dated != held) {
+                resolved.insert(held, dated);
+            }
         }
         inner
             .sessions
