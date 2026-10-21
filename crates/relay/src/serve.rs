@@ -31,15 +31,17 @@ use crate::messages::{router, Relay, ShutdownMark};
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
 /// What bounds a connection before a request exists on it: the wait for its head, how many the listener holds
-/// at once, and how long a graceful shutdown waits before it cuts what is still running. All compiled in; the
-/// router names the values.
+/// at once, and how long a graceful shutdown waits before it cuts what is still running. The bounds are compiled
+/// in and the router names the values. The shutdown mark beside them bounds nothing, and the proxy listener alone
+/// reads it.
 #[derive(Clone, Debug)]
 pub struct Limits {
     pub drain_timeout: Duration,
     pub header_read_timeout: Duration,
     pub max_connections: usize,
     /// The relay's shutdown mark, set before the drain deadline's cut so the ends it causes book the router's own
-    /// shutdown. `None` sets nothing.
+    /// shutdown. Only the proxy listener's `serve` reads it, so a `Some` handed to the admin or the metrics listener
+    /// sets nothing, as `None` does.
     pub shutdown_mark: Option<ShutdownMark>,
 }
 

@@ -939,8 +939,8 @@ async fn a_shutdown_past_the_drain_window_books_the_cut_stream_and_the_headless_
     // The cut's completions are published after the abort and the ledger's phase got no time, so its tasks land the
     // two rows on this runtime after `run` returned.
     let ledger = phoebis_ledger::LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
-    let mut rows = Vec::new();
-    for _ in 0..100 {
+    let give_up = std::time::Instant::now() + SETTLE;
+    let rows = loop {
         let (listed, _) = ledger
             .read_blocking(|c| {
                 phoebis_ledger::list_requests(
@@ -952,12 +952,11 @@ async fn a_shutdown_past_the_drain_window_books_the_cut_stream_and_the_headless_
                 )
             })
             .unwrap();
-        rows = listed;
-        if rows.len() == 2 {
-            break;
+        if listed.len() == 2 || std::time::Instant::now() >= give_up {
+            break listed;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    };
     let mut booked: Vec<_> = rows
         .iter()
         .map(|(r, _)| (r.key_id.clone(), r.outcome.clone(), r.error_code.clone()))

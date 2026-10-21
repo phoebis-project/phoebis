@@ -1267,6 +1267,47 @@ async fn a_stream_the_router_s_shutdown_cuts_after_the_head_carries_router_shutd
     up.shutdown().await;
 }
 
+/// The mark attached and unset, as it is while the router serves, so the stream arm keeps the caller's own code.
+#[tokio::test]
+async fn a_client_that_leaves_mid_stream_under_an_unset_mark_keeps_client_gone() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: committed_then_gated(),
+    }])
+    .await;
+    let bus = phoebis_bus::Bus::new();
+    let mut sub = bus.subscribe("test", phoebis_bus::Delivery::Durable);
+    let h = common::harness_with_shutdown_mark(
+        &up,
+        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        common::PoolSpec::default(),
+        bus,
+        common::default_limits(),
+        phoebis_relay::ShutdownMark::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    drop(resp);
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.interruption
+        ),
+        (phoebis_bus::Outcome::Canceled, Some("client_gone"), None),
+        "the client left while the mark was unset"
+    );
+    up.release();
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_forwarded_error_stream_cut_mid_body_stays_failed_with_stream_cut() {
     let (status, cut, complete) = one_stream(
