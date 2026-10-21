@@ -256,3 +256,9 @@ test('the 5-hour timeline draws fewer cells at one width under the 12-hour setti
   assert.ok(d.CELL_MIN_PX['12h'].short > d.CELL_MIN_PX['24h'].short, `the short "12 AM" needs ${d.CELL_MIN_PX['12h'].short} px against ${d.CELL_MIN_PX['24h'].short} px for "06"`);
   assert.ok(d.CELL_MIN_PX['12h'].full > d.CELL_MIN_PX['24h'].full, `the full "12:00 AM" needs ${d.CELL_MIN_PX['12h'].full} px against ${d.CELL_MIN_PX['24h'].full} px for "Sep 13"`);
 });
+
+test('the Quota page lists a subscription account that is paired and not awaiting re-authentication, and no API-key account', () => {
+  for (const status of ['cooldown', 'funding_required', 'paused', 'ready']) assert.equal(d.isQuotaListed({ kind: 'oauth', status }), true, `a subscription account reading ${status}`);
+  for (const status of ['reauth_required', 'unpaired']) assert.equal(d.isQuotaListed({ kind: 'oauth', status }), false, `a subscription account reading ${status}`);
+  assert.equal(d.isQuotaListed({ kind: 'api_key', status: 'ready' }), false, 'an API-key account');
+});

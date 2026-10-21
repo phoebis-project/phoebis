@@ -165,14 +165,15 @@ pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle a
 ![The Quota view: the Quota windows section](assets/quota-windows-light.png#only-light)
 ![The Quota view: the Quota windows section](assets/quota-windows-dark.png#only-dark)
 
-The Quota view covers the subscription accounts alone, since an API-key account has no quota window. Its bar offers
-"Refresh all", whose hover reads "reads the endpoint now unless the account is backing off, and records the reading as
-the scheduled poll does", and at the right edge the split Refresh button, whose body reads the account list again
-("Reads the list again now"), and the count of the accounts, `{n} accounts`, followed in the critical ink by those
-needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section bar shows one of two sections at a time:
-Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. A card's
-reading is the router's reported sample where the router holds one for the window and the ledger's [quota
-sample](statistics.md#quota-samples) otherwise.
+The Quota view covers the subscription accounts that are paired and not awaiting re-authentication, since an API-key
+account has no quota window and an account disconnected or needing re-auth reports none. Its bar offers "Refresh all",
+which reads the endpoint of each of those accounts and whose hover reads "reads the endpoint now unless the account is
+backing off, and records the reading as the scheduled poll does", and at the right edge the split Refresh button, whose
+body reads the account list again ("Reads the list again now"), and the count of those accounts, `{n} accounts`,
+followed in the critical ink by those needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section
+bar shows one of two sections at a time: Accounts, where the view opens, and Quota windows, which a link or a reload
+with `#quota-windows` lands on. A card's reading is the router's reported sample where the router holds one for the
+window and the ledger's [quota sample](statistics.md#quota-samples) otherwise.
 
 Accounts draws a card per account, sorted "Default order", "Soonest recovery", "5-hour pace", "7-day pace" or "7-day
 Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the
@@ -215,20 +216,20 @@ card that shows an error, whose last poll failed, or that is backing off counts 
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
-Weekly or 5-hour, an "Account" axis and a now marker over the bars at the instant's place in the span. Each lane carries
-the chips "5-hour limit", "7-day limit" and "Fable 7-day limit", each with its share left and its reset on hover, and
-one bar per window in the account's color, the current bar filled from the window's start by its used share in a
-stronger tone, so a fill past the now line is ahead of pace and one short of it behind, the upcoming window dashed and
-the elapsed ones muted. The current bar is labeled with the share left and its reset, `59% left · Sep 19 20:10`, or
-with the share alone where the bar is too narrow for both, and a bar too narrow for its label keeps it on hover. On a
-narrow screen each lane stacks its account and its chips above its bars, the now marker and the day grid cross the bars
-alone, the marker's pill under the day labels, and the day axis prints short labels. A 5-hour cell too narrow for its
-time prints the hour alone, `06` under the 24-hour time format and `6 AM` under the 12-hour one. Under the 12-hour
-format the 5-hour mode draws fewer, wider cells where twelve would be too narrow for `12 AM`. An account marked canceled
-with a saved end shows the end on its lane: no window opens after it, and the window that spans it stops there. The
-legend reads current window, upcoming, used, past window, now and plan ends, and the note "Each bar is one full quota
-window, drawn from when it opened to when it resets, and labeled with the instant it resets. Lanes ending together
-compete for the same days."
+Weekly or 5-hour, an "Account" axis and a now marker over the bars at the instant's place in the span. It draws one lane
+per listed account with a window, and each lane carries the chips "5-hour limit", "7-day limit" and "Fable 7-day limit",
+each with its share left and its reset on hover, and one bar per window in the account's color, the current bar filled
+from the window's start by its used share in a stronger tone, so a fill past the now line is ahead of pace and one short
+of it behind, the upcoming window dashed and the elapsed ones muted. The current bar is labeled with the share left and
+its reset, `59% left · Sep 19 20:10`, or with the share alone where the bar is too narrow for both, and a bar too
+narrow for its label keeps it on hover. On a narrow screen each lane stacks its account and its chips above its bars,
+the now marker and the day grid cross the bars alone, the marker's pill under the day labels, and the day axis prints
+short labels. A 5-hour cell too narrow for its time prints the hour alone, `06` under the 24-hour time format and `6 AM`
+under the 12-hour one. Under the 12-hour format the 5-hour mode draws fewer, wider cells where twelve would be too
+narrow for `12 AM`. An account marked canceled with a saved end shows the end on its lane: no window opens after it, and
+the window that spans it stops there. The legend reads current window, upcoming, used, past window, now and plan ends,
+and the note "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the
+instant it resets. Lanes ending together compete for the same days."
 
 ## Accounts
 

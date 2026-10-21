@@ -856,6 +856,26 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(late.map((x) => x.at), [], `samples past the last clean poll of ${iso(clean)}`);
   });
 
+  test(`spare's samples end at the reading its snapshot keeps from before the disconnect, with no poll, at ${at}`, async () => {
+    const s = await story;
+    const spare = s.accounts.find((a) => a.id === 'spare');
+    // The polls stop with the credential, so the snapshot holds the last reading and no poll's standing.
+    assert.deepEqual([spare.usage.status, spare.usage.error, spare.usage.heldUntil, spare.usage.poll], ['success', null, null, null], "spare's snapshot");
+    const read = Date.parse(spare.usage.fetchedAt);
+    const history = await s.api.getQuotaHistory('spare');
+    assert.deepEqual(
+      history.map((h) => h.windowId),
+      [...spare.windows, ...(spare.fableWindow ? [spare.fableWindow] : [])].map((w) => w.id),
+      'one history per window of the reading',
+    );
+    assert.ok(history.length > 0 && history.every((h) => h.samples.length > 0), 'spare has samples');
+    assert.deepEqual(
+      history.map((h) => h.samples.at(-1).at),
+      history.map(() => iso(read)),
+      `each window's last sample at the reading of ${iso(read)}`,
+    );
+  });
+
   test(`a Fable request's member without the model week's reading scores untouched on the model week, at ${at}`, async () => {
     const s = await story;
     const records = (await decisionsOf(s)).filter((r) => r.request.canonicalModel.includes('fable') && r.candidates.some((c) => c.pace !== null));

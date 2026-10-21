@@ -124,7 +124,13 @@ export function burnWords(w: Pick<RateLimitWindow, 'burn'>): string | null {
   return w.burn === null ? null : `the sessions on this account burn ${fmtPct(w.burn, 1)} an hour`;
 }
 
-export const isSubscription = (account: Account) => account.kind === 'oauth';
+export const isSubscription = (account: Pick<Account, 'kind'>) => account.kind === 'oauth';
+/**
+ * Whether the Quota page lists the account. It lists a subscription account that is paired and not awaiting
+ * re-authentication.
+ */
+export const isQuotaListed = (account: Pick<Account, 'kind' | 'status'>): boolean =>
+  isSubscription(account) && account.status !== 'reauth_required' && account.status !== 'unpaired';
 
 /** The fast lane's two cooldown scopes, its rate limit's and its usage-credits refusal's: each holds fast-mode
  *  requests alone, so neither cools the account's standard traffic. */

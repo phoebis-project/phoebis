@@ -1,6 +1,6 @@
 import type { Account, SubscriptionCosts, WindowId } from '@/api/types';
 import { anchorTier, tierCapacity, tierRow } from '@/lib/costs';
-import { isExpired, isSubscription, planLabel, remainingOf, windowOf } from '@/lib/quota';
+import { isExpired, isQuotaListed, planLabel, remainingOf, windowOf } from '@/lib/quota';
 
 /** An account on a quota ring: its own remaining share of the window, 1 for an expired window, and its tier's capacity in windows of the anchor tier. */
 export interface RingRow { color?: never; id: string; label: string; remaining: number; weight: number }
@@ -27,7 +27,7 @@ export function ringFigures(accounts: Account[], windowId: WindowId, costs: Subs
   const rows: RingRow[] = [];
   const leftOut: RingLeftOut[] = [];
   for (const a of accounts) {
-    if (!isSubscription(a) || !a.routingEnabled) continue;
+    if (!isQuotaListed(a) || !a.routingEnabled) continue;
     const w = windowOf(a, windowId);
     if (w === null) continue;
     if (a.subscription === null) {

@@ -41,6 +41,9 @@ function fastLane(input: number, output: number, resetsInMs: number): Account['f
   return { input: reading(input), output: reading(output) };
 }
 
+/** How long before now spare's last poll read its windows, an instant its row, its snapshot and its samples share. */
+const SPARE_READ_AGO = 4 * DAY + 2 * HOUR;
+
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
 // `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold. The
@@ -272,7 +275,9 @@ export const ACCOUNTS: Account[] = ([
     cooldowns: [],
   },
   // Disconnected: the credential is gone and the identity it paired with stays, as a disconnect leaves the row, and
-  // with no subscription block a page has to go by the kind to call it OAuth.
+  // with no subscription block a page has to go by the kind to call it OAuth. The router records `operator` as the
+  // row's `state_cause`, which the decoded row does not carry. The windows are the last poll's before the disconnect,
+  // standing in for a router that still answers them for a disconnected row, and none is projected.
   {
     ...ACCOUNT_SAMPLE,
     id: 'spare',
@@ -281,8 +286,8 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+spare@example.com',
     status: 'unpaired',
     routingEnabled: true,
-    windows: [],
-    fableWindow: null,
+    windows: [win('5h', 0.4, -(3 * DAY + 20 * HOUR), SPARE_READ_AGO, null), win('7d', 0.02, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null)],
+    fableWindow: win('7d_fable', 0, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null),
     extraUsage: null,
     fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
@@ -302,6 +307,8 @@ export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 /** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
 export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
   if (a.kind === 'api_key') return null;
+  // The polls stop with the credential, so the snapshot keeps the reading from before the disconnect and no poll.
+  if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(SPARE_READ_AGO), heldUntil: null, poll: null, status: 'success' };
   if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account, so pair it to load quota', fetchedAt: null, heldUntil: null, poll: null, status: 'error' };
   // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
   if (a.id === 'legacy') {
@@ -371,10 +378,13 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
 
 const HISTORY_SEED: Partial<Record<WindowId, number>> = { '5h': 1, '7d': 2, '7d_fable': 3 };
 
-/** Where an account's samples end: legacy's at its last clean poll, since every poll after it failed, the rest now. */
+/**
+ * Where an account's samples end: at its last reading, legacy's last clean poll, since every poll after it failed,
+ * spare's reading before its disconnect, and the rest now.
+ */
 const samplesEndOf = (account: (typeof ACCOUNTS)[number]): number => {
-  const clean = account.usage?.poll?.lastCleanAt;
-  return account.id === 'legacy' && clean ? Date.parse(clean) : NOW;
+  const last = account.id === 'legacy' ? account.usage?.poll?.lastCleanAt : account.id === 'spare' ? account.usage?.fetchedAt : null;
+  return last ? Date.parse(last) : NOW;
 };
 
 export const QUOTA_HISTORY: QuotaHistory[] = ACCOUNTS.flatMap((account, i) =>

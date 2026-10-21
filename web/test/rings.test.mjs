@@ -138,3 +138,16 @@ test('an account with routing off or without the window is neither weighed nor n
   );
   assert.deepEqual(figures.leftOut, []);
 });
+
+test('a disconnected account with the windows of its last reading and no profile is on no ring and in no left-out list', () => {
+  const accounts = [account('primary', 'default_claude_max_20x', [window('5h', 0.5), window('7d', 0.4)]), account('spare', null, [window('5h', 0.4), window('7d', 0.02)], { status: 'unpaired' })];
+  for (const id of ['5h', '7d']) {
+    const figures = d.ringFigures(accounts, id, COSTS, NOW);
+    assert.deepEqual(
+      figures.rows.map((r) => r.id),
+      ['primary'],
+      `the ${id} ring`,
+    );
+    assert.deepEqual(figures.leftOut, [], `the ${id} ring's left-out list`);
+  }
+});

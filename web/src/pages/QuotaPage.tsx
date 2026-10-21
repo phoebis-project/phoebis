@@ -11,7 +11,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isSubscription, meterTone, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isQuotaListed, meterTone, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 
 type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';
@@ -43,8 +43,9 @@ export function QuotaPage() {
     document.scrollingElement?.scrollTo?.({ top: 0 });
   };
 
-  // An API-key account carries no quota window, so the page reads the subscription accounts alone.
-  const subscriptions = useMemo(() => (accounts.data ?? []).filter(isSubscription), [accounts.data]);
+  // An API-key account carries no quota window, and an account disconnected or awaiting re-authentication reports none,
+  // so the page reads the other subscription accounts alone, whatever windows such a row still carries.
+  const subscriptions = useMemo(() => (accounts.data ?? []).filter(isQuotaListed), [accounts.data]);
   // The slot map reads the whole registry, so a lane keeps the color its account has on the Dashboard.
   const slotOf = useMemo(() => accountSlots((accounts.data ?? []).map((a) => a.id)), [accounts.data]);
   // Each subscription row carries its poll block, so the list read is the one read of every card's standing.
