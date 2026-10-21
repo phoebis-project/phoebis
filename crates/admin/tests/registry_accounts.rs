@@ -442,6 +442,35 @@ async fn the_admin_routes_store_operator_and_the_pairing_confirm_paired() {
 }
 
 #[tokio::test]
+async fn the_account_create_answers_its_own_sentence_to_an_object_that_lacks_id_kind_or_label() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (id, body) in [
+        ("noid", r#"{"kind":"oauth","label":"No id"}"#),
+        ("nokind", r#"{"id":"nokind","label":"No kind"}"#),
+        ("nolabel", r#"{"id":"nolabel","kind":"oauth"}"#),
+    ] {
+        let refused = post(&app, "/admin/accounts", body, Some(&cookie)).await;
+        let status = refused.status().as_u16();
+        assert_eq!(
+            (status, json(refused).await["error"].clone()),
+            (
+                400,
+                serde_json::json!("body must carry id, kind, and label")
+            ),
+            "{body}"
+        );
+        assert_eq!(
+            get(&app, &format!("/admin/accounts/{id}"), Some(&cookie))
+                .await
+                .status(),
+            404,
+            "the refused create left no row: {body}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn an_account_write_ignores_a_member_the_route_does_not_name() {
     let (app, _up, _store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;

@@ -6865,3 +6865,58 @@ async fn an_array_body_is_refused_as_no_object_on_the_pool_and_key_routes() {
         "no refused key write landed"
     );
 }
+
+#[tokio::test]
+async fn an_array_body_is_refused_as_no_object_on_the_account_create_and_edit() {
+    use common::{get, json, login, patch, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let accounts = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    // Serde's sequence form reads a filled array positionally, and every edit member defaults, so a parse that took
+    // one would create the account or land the edit.
+    let requests = [
+        ("POST", "/admin/accounts", "[]"),
+        (
+            "POST",
+            "/admin/accounts",
+            r#"["arrayed","oauth","Arrayed"]"#,
+        ),
+        ("PATCH", "/admin/accounts/business", "[]"),
+        (
+            "PATCH",
+            "/admin/accounts/business",
+            r#"["Relabeled",false]"#,
+        ),
+    ];
+    let mut answers = Vec::new();
+    for (method, route, body) in requests {
+        let response = match method {
+            "POST" => post(&app, route, body, Some(&cookie)).await,
+            _ => patch(&app, route, body, Some(&cookie)).await,
+        };
+        let status = response.status().as_u16();
+        let answer = json(response).await;
+        answers.push((
+            format!("{method} {route} {body}"),
+            status,
+            answer["error"].clone(),
+            answer["label"].clone(),
+        ));
+    }
+    assert_eq!(
+        answers,
+        requests
+            .map(|(method, route, body)| (
+                format!("{method} {route} {body}"),
+                400,
+                serde_json::json!("body must be a JSON object"),
+                serde_json::Value::Null,
+            ))
+            .to_vec()
+    );
+    assert_eq!(
+        json(get(&app, "/admin/accounts", Some(&cookie)).await).await,
+        accounts,
+        "no refused account write landed"
+    );
+}

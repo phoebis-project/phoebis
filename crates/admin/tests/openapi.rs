@@ -1206,6 +1206,31 @@ async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_thr
 }
 
 #[tokio::test]
+async fn the_account_create_lists_the_object_refusal_and_the_members_route_the_missing_list() {
+    let (_app, _up, document) = document().await;
+    let refusals = |id: &str| {
+        let (_, _, operation) = operations(&document)
+            .into_iter()
+            .find(|(_, _, operation)| operation["operationId"] == id)
+            .unwrap_or_else(|| panic!("the operation {id}"));
+        operation["responses"]["400"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    for (id, refusal) in [
+        ("accounts_create", "body must be a JSON object"),
+        ("pool_members_put", "body must carry a members list"),
+    ] {
+        let listed = refusals(id);
+        assert!(
+            listed.contains(&format!("`{refusal}`")),
+            "{id}'s 400 lists {refusal}: {listed}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_account_declares_its_spend_window_with_the_resets_two_sources_and_its_nullable_amounts(
 ) {
     let (_app, _up, document) = document().await;

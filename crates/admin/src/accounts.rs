@@ -18,8 +18,8 @@ use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure};
 use crate::routes::{
-    account, account_json, double_option, failure, failure_with_code, fence_revision, present,
-    reload_or_refuse, store_failure, CreatedId,
+    account, account_json, double_option, failure, failure_with_code, fence_revision, parse_object,
+    present, reload_or_refuse, store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -114,7 +114,7 @@ pub(crate) fn valid_slug(id: &str) -> bool {
     request_body(content = CreateAccountInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The account's fields, the same shape `GET /admin/accounts/{id}` answers.", body = crate::routes::Account),
-        (status = 400, description = "- `body must carry id, kind, and label`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `kind must be oauth or api_key`\n- `an oauth account is paired, not keyed`\n- `an api_key account needs a secret`\n- `credential rejected by the upstream`", body = ErrorBody, example = json!({"error": "body must carry id, kind, and label"})),
+        (status = 400, description = "- `body must be a JSON object`\n- `body must carry id, kind, and label`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `kind must be oauth or api_key`\n- `an oauth account is paired, not keyed`\n- `an api_key account needs a secret`\n- `credential rejected by the upstream`", body = ErrorBody, example = json!({"error": "body must carry id, kind, and label"})),
         (status = 404, description = "`account not found`: the row left between the create and its read-back.", body = ErrorBody, example = json!({"error": "account not found"})),
         (status = 409, description = "`an account with this id exists`", body = ErrorBody, example = json!({"error": "an account with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -123,6 +123,11 @@ pub(crate) fn valid_slug(id: &str) -> bool {
     ),
 )]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
+    // `IgnoredAny` reads any value, so the check refuses a non-object alone, and an object the struct read refuses
+    // keeps the create's own sentence.
+    if let Err(refusal) = parse_object::<serde::de::IgnoredAny>(&body) {
+        return refusal;
+    }
     let Ok(input) = serde_json::from_slice::<CreateAccountInput>(&body) else {
         return failure(
             StatusCode::BAD_REQUEST,
@@ -259,6 +264,9 @@ pub(crate) async fn patch(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
+    if let Err(refusal) = parse_object::<serde::de::IgnoredAny>(&body) {
+        return refusal;
+    }
     let Ok(input) = serde_json::from_slice::<PatchAccountInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
