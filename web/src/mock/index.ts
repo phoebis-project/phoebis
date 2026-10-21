@@ -456,7 +456,8 @@ export class MockApi implements Api {
   private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
   private sessions: Session[] = [...SESSIONS];
-  // The mock answers as a router built from the bundle's own commit would, so no banner draws until a lever asks.
+  // The settings name the bundle's own commit as a router built from it would. The banner reads the build off an
+  // answer's header through `call` alone, which the mock never goes through, so it draws none whatever this holds.
   private settings: Settings = decodeSettings({ ...SETTINGS_WIRE, about: { ...SETTINGS_WIRE.about, build: __PHOEBIS_BUILD__ } });
 
   private token(n: number) {
