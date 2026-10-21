@@ -10,15 +10,16 @@ use phoebis_routing::{
     DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, KeyRefusal, LongContextRates,
     MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates,
     Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, Report, ResolveError,
-    RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
-    UtilizationSample, WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
-    WRITER_DEPTH,
+    RouterConfig, RouterHandle, RoutingState, SelectAnswer, SelectRequest, SelectResult,
+    SharePricer, UtilizationSample, WindowReading, WindowSource, WriterStatus, COMMANDS,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
-    MemberWrite, ModelRule, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding,
-    StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinRow, PoolRow,
+    RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow,
+    WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -929,6 +930,13 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         },
         renewal(pin, 1_000, PinUsage::default(), "client", 0),
         observed("a", sample(1_000)),
+        Report::SpendHead {
+            account_id: "a".into(),
+            utilization: Some(0.5),
+            reset: None,
+            observed_at: 1_000,
+            incarnation: 1,
+        },
         a_million_input("a", 1_000),
     ];
     for report in &reports {
@@ -948,6 +956,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             | Report::PinReleased { .. }
             | Report::PinRenewed { .. }
             | Report::Sample { .. }
+            | Report::SpendHead { .. }
             | Report::Usage { .. } => {}
         }
     }
@@ -5664,6 +5673,272 @@ async fn older_overage_and_credits_readings_never_replace_newer_pending_ones() {
             .then_some(())
     })
     .await;
+}
+
+/// Stores a profile for `account` whose rate-limit tier classes it a usage-based Enterprise seat.
+fn usage_based_seat(store: &Store, account: &str) {
+    store
+        .set_profile(
+            account,
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero"}}"#,
+            &SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+}
+
+/// A head on the usage-based seat `a` carrying the overage family at `utilization` and `reset`.
+fn spend_head(utilization: f64, reset: i64, observed_at: i64) -> Report {
+    Report::SpendHead {
+        account_id: "a".into(),
+        utilization: Some(utilization),
+        reset: Some(reset),
+        observed_at,
+        incarnation: 1,
+    }
+}
+
+/// The persisted credits row of `a` once it reads `utilization`.
+async fn credits_row_reads(store: &Store, utilization: f64) -> phoebis_store::CreditsRow {
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .credits
+            .into_iter()
+            .find(|row| row.account_id == "a" && row.utilization == Some(utilization))
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_spend_head_moves_the_credits_share_with_no_overage_edge_and_an_older_one_changes_nothing(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(spend_head(0.4, 30 * HOUR, 1_000)).await;
+    let row = credits_row_reads(&store, 0.4).await;
+    assert_eq!(
+        (row.enabled, row.disabled_reason, row.observed_at),
+        (true, None, 1_000),
+        "a head before any poll builds the credits state, enabled and with no reason"
+    );
+    handle.report(spend_head(0.9, 31 * HOUR, 900)).await;
+    stays_for(NOT_WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .credits
+            .iter()
+            .all(|row| row.utilization == Some(0.4))
+    })
+    .await;
+    assert_eq!(
+        handle.overage("a").await.unwrap(),
+        None,
+        "the head records no overage evidence"
+    );
+    // A later poll replaces the head's state by its age, as any poll does.
+    handle
+        .report(credits_at(true, None, Some(10.0), 2_000))
+        .await;
+    credits_row_reads(&store, 0.1).await;
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event, phoebis_routing::RouterEvent::OverageStarted { .. }),
+            "a spend head starts no overage episode: {event:?}"
+        );
+    }
+}
+
+#[test]
+fn a_spend_head_keeps_its_reset_beside_the_share_and_an_older_reading_moves_neither() {
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(st.spend_head("a"), None, "no head has named a reset yet");
+    assert!(st.record_spend_head("a", Some(0.4), Some(9 * HOUR), 1_000, 1));
+    assert_eq!(st.spend_head("a"), Some((9 * HOUR, 1_000)));
+    let credits = |st: &RoutingState| {
+        st.credits_of("a", 1).map(|c| {
+            (
+                c.enabled,
+                c.disabled_reason.clone(),
+                c.utilization,
+                c.observed_at,
+            )
+        })
+    };
+    assert_eq!(credits(&st), Some((true, None, Some(0.4), 1_000)));
+    assert!(
+        !st.record_spend_head("a", Some(0.9), Some(8 * HOUR), 900, 1),
+        "an older head moves nothing"
+    );
+    assert_eq!(st.spend_head("a"), Some((9 * HOUR, 1_000)));
+    assert_eq!(credits(&st), Some((true, None, Some(0.4), 1_000)));
+    // The poll's flag and reason stand under a newer head's share.
+    st.record_credits(
+        "a",
+        CreditsState {
+            enabled: true,
+            disabled_reason: Some("member_limit".into()),
+            utilization: Some(0.5),
+            observed_at: 2_000,
+            incarnation: 1,
+        },
+    );
+    assert!(st.record_spend_head("a", Some(0.6), None, 3_000, 1));
+    assert_eq!(
+        credits(&st),
+        Some((true, Some("member_limit".into()), Some(0.6), 3_000))
+    );
+    assert_eq!(
+        st.spend_head("a"),
+        Some((9 * HOUR, 1_000)),
+        "a head that names no reset leaves the held one"
+    );
+}
+
+#[tokio::test]
+async fn two_pending_spend_heads_of_one_account_fold_to_the_newer() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let park = handle.park_loop().await;
+    // The newer reading arrives first, so only the merge rule keeps it.
+    handle.report(spend_head(0.7, 30 * HOUR, 3_000)).await;
+    handle.report(spend_head(0.2, 30 * HOUR, 2_000)).await;
+    drop(park);
+    let row = credits_row_reads(&store, 0.7).await;
+    assert_eq!(row.observed_at, 3_000);
+}
+
+#[tokio::test]
+async fn a_usage_based_seat_starts_out_of_overage_over_a_stored_in_use_row_and_records_none_from_a_head(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.overage_policy = OveragePolicy::Never;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    // The row a head left before the class existed, its reset a day out.
+    store
+        .upsert_overage(&OverageRow {
+            account_id: "a".into(),
+            in_use: true,
+            since: Some(500),
+            reset: Some(25 * HOUR),
+            observed_at: 500,
+            source: "head".into(),
+            incarnation: 1,
+        })
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        handle.overage("a").await.unwrap(),
+        None,
+        "the start drops the seat's stored evidence"
+    );
+    let placed = |answer: SelectAnswer| match answer.result {
+        SelectResult::Selected(selection) => (selection.account.id, selection.in_overage),
+        other => panic!("the seat serves under never, not {other:?}"),
+    };
+    assert_eq!(
+        placed(
+            handle
+                .select(request(&handle, Some("s1"), 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), false),
+        "no never hold reads the seat and its pin reads no overage"
+    );
+    handle.reload().await.unwrap();
+    assert_eq!(
+        handle.overage("a").await.unwrap(),
+        None,
+        "a reload keeps it so"
+    );
+    handle
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(2_000),
+                reset: Some(25 * HOUR),
+                observed_at: 2_000,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
+    assert_eq!(
+        handle.overage("a").await.unwrap(),
+        None,
+        "a leg that reported the overage family as evidence records nothing"
+    );
+    assert_eq!(
+        placed(
+            handle
+                .select(request(&handle, Some("s1"), 3_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), false)
+    );
+    assert_eq!(
+        store
+            .load_routing()
+            .unwrap()
+            .overage
+            .iter()
+            .map(|row| (row.account_id.as_str(), row.observed_at))
+            .collect::<Vec<_>>(),
+        [("a", 500)],
+        "the registry's row stays as written"
+    );
+}
+
+#[tokio::test]
+async fn a_usage_based_seat_under_a_priced_tier_name_is_charged_no_plan_window_share() {
+    let store = seeded_oauth(&["a"]);
+    store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_max_5x","seat_tier":"enterprise_usage_based"}}"#,
+            &SubscriptionRow {
+                tier: Some(TIER.into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(3_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+        ))
+        .await;
+    handle.report(a_million_input("a", 2_000)).await;
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.5),
+        "the seat's spend is billed in dollars, so its usage charges no plan window whatever tier its profile names"
+    );
 }
 
 #[tokio::test]

@@ -406,6 +406,82 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
     }
 }
 
+#[tokio::test]
+async fn a_usage_based_member_under_prefer_plan_holds_under_its_budget_and_never_for_overage() {
+    let mut r = armed(RigSpec {
+        accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0), api_key("b", B, 1)],
+        pool: PoolSpec {
+            overage_policy: OveragePolicy::PreferPlan,
+            ..PoolSpec::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    // The reload publishes the class and the budget together, and the writer's own read after it lands first, so
+    // the spend reported below is the one the gate reads.
+    with_budget_member(&r).await;
+    settled(&r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a")
+    })
+    .await;
+    plant_and_report_spend(&r, "over-budget", 5.01).await;
+    settled(&r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd >= 5.0)
+    })
+    .await;
+    // The overage family of a head as a leg reports it for an account it reads as a plan seat.
+    r.h.router
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: OverageEvidence {
+                in_use: true,
+                since: Some(r.now()),
+                reset: Some(r.now() + 1_000_000),
+                observed_at: r.now(),
+                source: EvidenceSource::Head,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
+    // A query queues behind the report, so its answer says the router has folded it.
+    r.h.router.overage("a").await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Budget),
+        "the seat's probe holds under its budget as an api_key member's does, and no overage hold reads it"
+    );
+    raise_budget(&r).await;
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::Scheduled),
+        "with the budget raised the probe runs: the head's overage family held nothing"
+    );
+}
+
 /// A selection for the session `main`'s pin belongs to, through the same router handle the scheduler reads.
 async fn select_main(r: &Rig) -> SelectResult {
     let pins = r.h.router.pins().await.unwrap();

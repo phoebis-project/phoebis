@@ -2174,6 +2174,96 @@ fn the_cancelled_flag_and_its_end_are_the_operators_alone_and_survive_a_profile_
     );
 }
 
+#[test]
+fn the_term_classes_a_usage_based_seat_from_its_stored_tier_or_seat_tier_and_never_an_api_key_account(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    for (id, kind) in [
+        ("by-tier", AccountKind::Oauth),
+        ("by-seat", AccountKind::Oauth),
+        ("plan", AccountKind::Oauth),
+        ("key", AccountKind::ApiKey),
+    ] {
+        store.insert_account(&account(id, kind)).unwrap();
+    }
+    let profile = |id: &str, tier: &str, seat_tier: Option<&str>| {
+        let document = serde_json::json!({
+            "organization": {"rate_limit_tier": tier, "seat_tier": seat_tier},
+        });
+        store
+            .set_profile(
+                id,
+                &document.to_string(),
+                &SubscriptionRow {
+                    tier: Some(tier.into()),
+                    ..SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    };
+    profile("by-tier", "default_claude_zero", None);
+    profile(
+        "by-seat",
+        "default_claude_max_5x",
+        Some("enterprise_usage_based"),
+    );
+    profile("plan", "default_claude_max_5x", Some("standard"));
+    // A document naming the class on an api_key row: the class reads the kind first.
+    profile("key", "default_claude_zero", Some("enterprise_usage_based"));
+    let classes = |store: &Store| {
+        let loaded: Vec<(String, bool)> = store
+            .load_registry()
+            .unwrap()
+            .terms
+            .into_iter()
+            .map(|term| (term.account_id, term.usage_based))
+            .collect();
+        let read: Vec<(String, bool)> = ["by-seat", "by-tier", "key", "plan"]
+            .into_iter()
+            .map(|id| {
+                let term = store.subscription_term(id).unwrap().unwrap();
+                (term.account_id, term.usage_based)
+            })
+            .collect();
+        (loaded, read)
+    };
+    let expected: Vec<(String, bool)> = [
+        ("by-seat", true),
+        ("by-tier", true),
+        ("key", false),
+        ("plan", false),
+    ]
+    .into_iter()
+    .map(|(id, class)| (id.to_string(), class))
+    .collect();
+    assert_eq!(
+        classes(&store),
+        (expected.clone(), expected),
+        "the tier or the seat tier classes an oauth seat, at the load and through the term read alike"
+    );
+    // The seat tier alone moves the class: the document changes under the tier the store already held.
+    profile(
+        "plan",
+        "default_claude_max_5x",
+        Some("enterprise_usage_based"),
+    );
+    profile("by-tier", "default_claude_max_5x", None);
+    let moved: Vec<(String, bool)> = [
+        ("by-seat", true),
+        ("by-tier", false),
+        ("key", false),
+        ("plan", true),
+    ]
+    .into_iter()
+    .map(|(id, class)| (id.to_string(), class))
+    .collect();
+    assert_eq!(
+        classes(&store),
+        (moved.clone(), moved),
+        "a stored profile moves the class at the next read, with no column of its own"
+    );
+}
+
 fn has_windows_table(path: &std::path::Path) -> bool {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.query_row(

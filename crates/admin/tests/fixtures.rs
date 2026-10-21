@@ -16,7 +16,9 @@ use phoebis_ledger::{
     QuotaSampleRecord, Record, RequestRecord,
 };
 use phoebis_routing::{lane_key, ClientClass};
-use phoebis_store::{AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow,
+};
 use serde_json::{json as j, Value};
 
 fn dir() -> PathBuf {
@@ -448,8 +450,58 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
+    // A usage-based Enterprise seat beside the plan account, paired and classed from its stored profile, so the
+    // account and pool fixtures carry the class on a row that holds it. It shares the seed's two bound tokens, which
+    // the no-secret guard already reads.
+    parts
+        .store
+        .insert_account(&AccountRow {
+            id: "usage-seat".into(),
+            kind: AccountKind::Oauth,
+            label: "Usage seat".into(),
+            enabled: true,
+            identity: Some(Identity {
+                account_uuid: "00000000-0000-4000-8000-000000000003".into(),
+                email: "seat@example.invalid".into(),
+                organization_uuid: Some("00000000-0000-4000-8000-000000000004".into()),
+            }),
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Paired,
+        })
+        .unwrap();
+    parts
+        .store
+        .commit_credentials(
+            "usage-seat",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new(access_token),
+                refresh_token: Some(Secret::new(refresh_token)),
+                issued_at: now,
+                expires_at: now + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    parts.store.set_profile(
+        "usage-seat",
+        r#"{"account":{"uuid":"s","email":"seat@example.invalid","display_name":"Seat"},"organization":{"uuid":"e","name":"Enterprise Org","organization_type":"claude_enterprise","rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based","has_extra_usage_enabled":true}}"#,
+        &SubscriptionRow {
+            plan: None,
+            tier: Some("default_claude_zero".into()),
+            since: None,
+            trial_ends_at: None,
+        },
+    ).unwrap();
     // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]
         .as_str()
@@ -2036,6 +2088,16 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         let response = patch(app, "/admin/pools/main", body, Some(cookie)).await;
         assert_eq!(response.status(), 200, "{body}");
     };
+    // The stories run on the pool's two serving members, so the usage-based seat the earlier captures read leaves
+    // the pool first.
+    let response = common::put(
+        app,
+        "/admin/pools/main/members",
+        r#"{"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0}]}"#,
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(response.status(), 200, "the seat leaves the pool");
 
     // Placed by the static prefix: a session warms the shared static chain on business, and a fresh session lands
     // there by it. The pool places a main conversation by its warm prefix for this.

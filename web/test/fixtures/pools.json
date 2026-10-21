@@ -127,6 +127,20 @@
             "pace_score": 1.0,
             "burn": null,
             "speed": null
+          },
+          {
+            "account_id": "usage-seat",
+            "priority": 2,
+            "eligible": "eligible",
+            "kind": "oauth",
+            "budget_daily_usd": null,
+            "budget_monthly_usd": null,
+            "budget_until": null,
+            "spends": [],
+            "active_pins": 0,
+            "pace_score": 1.0,
+            "burn": null,
+            "speed": null
           }
         ],
         "keys": [

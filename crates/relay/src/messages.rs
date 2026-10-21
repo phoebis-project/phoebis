@@ -1048,6 +1048,12 @@ fn cache_ttl_ms(ttl: Option<CacheTtl>) -> Option<i64> {
     })
 }
 
+/// Whether the account pays for a cache write, which selects the cache TTL policy's metered set: an api_key account,
+/// a usage-based seat and an account in overage do.
+fn pays_for_writes(kind: AccountKind, usage_based: bool, in_overage: bool) -> bool {
+    in_overage || usage_based || kind == AccountKind::ApiKey
+}
+
 fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<CooldownSet> {
     cooldown.map(|c| CooldownSet {
         scope: match c.scope {
@@ -2526,6 +2532,7 @@ impl Relay {
         if let Some(key) = memory_key {
             self.memory.restore(key, (self.clock)()).await;
         }
+        let usage_based = self.router.snapshot().usage_based(&account.id);
         // The body for this leg and what the editor added to it; the head is built per pass and reports its own.
         let build = |skip: &BTreeSet<Injected>| -> Built {
             let mut edited = admitted.raw.to_vec();
@@ -2535,8 +2542,8 @@ impl Relay {
                 phoebis_cch::cache_control_spans(&edited).is_ok_and(|spans| !spans.is_empty());
             let mut body_injected = Vec::new();
             let mut inject_betas: Vec<Injected> = Vec::new();
-            // An api_key account, or an account in overage, pays for the write, so the metered set applies.
-            let writes_cost_money = selection.in_overage || account.kind == AccountKind::ApiKey;
+            let writes_cost_money =
+                pays_for_writes(account.kind, usage_based, selection.in_overage);
             // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
             // retry reuses this body rather than pricing again.
             // A probe replays another turn's markers under that turn's agent, so the branch follows the agent for
@@ -4393,7 +4400,9 @@ impl Relay {
             .await;
     }
 
-    /// Only an OAuth head with the unified headers is evidence; everything else changes nothing.
+    /// Only an OAuth head with the unified headers is evidence, and everything else changes nothing. A usage-based
+    /// seat's overage family is its spend window against the monthly cap, so its head reports the share and the reset
+    /// and never overage evidence.
     async fn report_overage(&self, account: &AccountRow, head: &ResponseHead, now: i64) {
         if account.kind != AccountKind::Oauth {
             return;
@@ -4401,12 +4410,30 @@ impl Relay {
         let Some(unified) = UnifiedHeaders::parse(head) else {
             return;
         };
+        let observed_at = upstream_date(head).unwrap_or(now);
+        if self.router.snapshot().usage_based(&account.id) {
+            let utilization = head
+                .get("anthropic-ratelimit-unified-overage-utilization")
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|share| share.is_finite());
+            if utilization.is_some() || unified.overage_reset.is_some() {
+                self.router
+                    .report(Report::SpendHead {
+                        account_id: account.id.clone(),
+                        utilization,
+                        reset: unified.overage_reset,
+                        observed_at,
+                        incarnation: account.incarnation,
+                    })
+                    .await;
+            }
+            return;
+        }
         let in_use = match unified.overage_in_use {
             Some(flag) => flag,
             None if unified.present() => false,
             None => return,
         };
-        let observed_at = upstream_date(head).unwrap_or(now);
         // The provider's overage reset when it sends one, else the latest reset among the shared windows that
         // read full: the account stays out under `never` until every full window has reset.
         let full = |u: Option<f64>| u.is_some_and(|u| u >= 1.0);
@@ -5482,6 +5509,23 @@ mod tests {
         assert!(!caller_accepts(&caller, "gzip"));
         assert!(caller_accepts(&caller, "br"));
         assert!(!caller_accepts(&HeaderMap::new(), "gzip"));
+    }
+
+    #[test]
+    fn a_usage_based_seat_pays_for_every_cache_write_as_an_api_key_account_does() {
+        assert!(
+            pays_for_writes(AccountKind::Oauth, true, false),
+            "a usage-based seat bills every write in dollars, so the metered set applies"
+        );
+        assert!(pays_for_writes(AccountKind::ApiKey, false, false));
+        assert!(
+            pays_for_writes(AccountKind::Oauth, false, true),
+            "a plan seat in overage pays for its writes"
+        );
+        assert!(
+            !pays_for_writes(AccountKind::Oauth, false, false),
+            "a plan seat on its plan quota keeps the plan set"
+        );
     }
 
     #[test]

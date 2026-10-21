@@ -3,7 +3,7 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Row};
 
-use crate::registry::SubscriptionTerm;
+use crate::registry::{usage_based_of, SubscriptionTerm};
 use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -624,16 +624,21 @@ pub(crate) fn subscription_term_in(
 ) -> Result<Option<SubscriptionTerm>, StoreError> {
     conn.query_row(
         "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
-         subscription_tier FROM accounts WHERE id = ?1",
+         subscription_tier, kind, profile_json FROM accounts WHERE id = ?1",
         params![id],
         |row| {
+            let tier: Option<String> = row.get(5)?;
+            let profile_json: Option<String> = row.get(7)?;
+            let usage_based = row.get::<_, AccountKind>(6)? == AccountKind::Oauth
+                && usage_based_of(tier.as_deref(), profile_json.as_deref());
             Ok(SubscriptionTerm {
                 account_id: row.get(0)?,
                 since: row.get(1)?,
                 trial_ends_at: row.get(2)?,
                 cancelled: row.get(3)?,
                 ends_at: row.get(4)?,
-                tier: row.get(5)?,
+                tier,
+                usage_based,
             })
         },
     )

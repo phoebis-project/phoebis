@@ -2172,6 +2172,10 @@ pub(crate) struct Account {
     /// Null for an `api_key` account. For an `oauth` account `error`, `fetched_at`, `held_until` and `poll`, as
     /// `GET /admin/accounts/{id}/usage` answers them, so one list read carries every account's standing.
     pub usage: Option<UsageStanding>,
+    /// True for an `oauth` account whose stored profile names a usage-based Enterprise seat (the rate-limit tier
+    /// `default_claude_zero` or the seat tier `enterprise_usage_based`), false on every other row, an `api_key`
+    /// account included. Such an account never reads as in overage, so `overage` answers null.
+    pub usage_based: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -2629,12 +2633,16 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 set_at: cooldown.set_at,
             })
             .collect(),
-        overage: overage.map(|overage| Overage {
-            in_use: overage.in_use,
-            since: overage.since,
-            reset: overage.reset,
-            observed_at: overage.observed_at,
-        }),
+        // A usage-based seat's overage family is its spend window, so no evidence the router or a head row from before
+        // the class holds reads as overage on it.
+        overage: overage
+            .filter(|_| !term.usage_based)
+            .map(|overage| Overage {
+                in_use: overage.in_use,
+                since: overage.since,
+                reset: overage.reset,
+                observed_at: overage.observed_at,
+            }),
         profile,
         subscription,
         windows,
@@ -2647,7 +2655,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             .map(|e| ExtraUsage {
                 currency: e.currency.clone(),
                 disabled_reason: e.disabled_reason.clone(),
-                in_use: e.in_use,
+                in_use: e.in_use.filter(|_| !term.usage_based),
                 is_enabled: e.is_enabled,
                 monthly_limit: e.monthly_limit,
                 used_credits: e.used_credits,
@@ -2668,6 +2676,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             lifetime: ctx.lifetime.get(&row.id).map_or(0, |t| t.requests),
         },
         usage,
+        usage_based: term.usage_based,
     }
 }
 

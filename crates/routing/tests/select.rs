@@ -4465,6 +4465,7 @@ fn a_probe_on_a_pin_whose_subscription_ended_answers_the_obstacle_and_moves_noth
             cancelled: true,
             ends_at: Some(1_500),
             tier: None,
+            usage_based: false,
         }],
     );
     let (result, writes, pinned) = probe_after_a_pin_on_a(&snapshot(a_before_b()), &ended, &[]);
@@ -5588,6 +5589,7 @@ fn the_blocker_refuses_a_winding_down_account_for_the_static_tier() {
             cancelled: true,
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
+            usage_based: false,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -6198,6 +6200,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         cancelled: true,
         ends_at: Some(at),
         tier: None,
+        usage_based: false,
     };
     // No runway: b outranks a, so only the bypass can land the request there.
     scenario(
@@ -8103,6 +8106,7 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
         cancelled: true,
         ends_at: Some(at),
         tier: None,
+        usage_based: false,
     };
     let pool = || Pool {
         members: vec![("a", 0), ("b", 1)],
@@ -8490,6 +8494,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
             cancelled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
+            usage_based: false,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8535,6 +8540,7 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
             cancelled: true,
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
+            usage_based: false,
         }];
         let failover = Failover {
             wind_down_minutes: 30,
@@ -8600,6 +8606,7 @@ fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_su
             cancelled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
+            usage_based: false,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8660,6 +8667,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             cancelled: false,
             ends_at: None,
             tier: None,
+            usage_based: false,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8678,6 +8686,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             cancelled: false,
             ends_at: None,
             tier: None,
+            usage_based: false,
         }],
     );
     let mut st2 = RoutingState::from_load(RoutingLoad::default());
@@ -11599,6 +11608,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
             cancelled: true,
             ends_at: Some(T + 10 * MINUTE),
             tier: None,
+            usage_based: false,
         }],
     );
     let mut st = loaded(vec![
@@ -11954,6 +11964,276 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
             .all(|f| f.account_id.as_deref() != Some("b")),
         "a cooled sibling never reaches the gate"
     );
+}
+
+/// The term of a usage-based Enterprise seat, the class the registry derives from the stored profile.
+fn usage_based_seat(id: &str) -> SubscriptionTerm {
+    SubscriptionTerm {
+        account_id: id.into(),
+        tier: Some("default_claude_zero".into()),
+        usage_based: true,
+        ..SubscriptionTerm::default()
+    }
+}
+
+#[test]
+fn a_usage_based_seat_sorts_with_the_api_key_members_under_the_kind_order_and_by_priority_under_the_other_policies(
+) {
+    let pool = |prefer_subscription: bool| Pool {
+        strategy: Strategy::Priority,
+        prefer_subscription,
+        members: vec![("a", 1), ("b", 0), ("c", 2)],
+        kinds: vec![("c", AccountKind::ApiKey)],
+        ..Pool::default()
+    };
+    let ordered = snapshot_with_terms(pool(true), vec![usage_based_seat("b")]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = decide(
+        &mut st,
+        &ordered,
+        &request(&ordered, None, "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&d.result),
+        "a",
+        "plan quota serves ahead of every paid source whatever the priorities"
+    );
+    assert_eq!(
+        (
+            candidate(&d.record, "b").tier,
+            candidate(&d.record, "c").tier
+        ),
+        ((2, 0, 0), (2, 2, 0)),
+        "the seat sorts in the paid group beside the api_key member, by priority inside it"
+    );
+    let by_priority = snapshot_with_terms(pool(false), vec![usage_based_seat("b")]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &by_priority,
+                &request(&by_priority, None, "claude-sonnet-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "b",
+        "with the kind order off the priority decides"
+    );
+}
+
+#[test]
+fn a_usage_based_seat_reads_no_overage_reason_and_no_never_hold_over_evidence_a_row_from_before_the_class_left(
+) {
+    for policy in [OveragePolicy::PreferPlan, OveragePolicy::Never] {
+        let s = snapshot_with_terms(
+            Pool {
+                policy,
+                members: vec![("a", 1), ("b", 0)],
+                ..Pool::default()
+            },
+            vec![usage_based_seat("b")],
+        );
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        let req = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+        assert_eq!(
+            picked(&select(&mut st, &s, &req(1_000), &mut rng()).0),
+            "b",
+            "{policy:?}: the seat leads by its priority"
+        );
+        let pin = pinned(&st, "s1");
+        // The head's overage family as the evidence a row stored before the class carries.
+        st.record_overage("b", overage(true, 1_000, Some(1_000 + 10 * HOUR)));
+        st.purge(&s, 1_500);
+        assert!(
+            !st.in_overage("b", 2_000, FALLBACK_MS),
+            "{policy:?}: the purge drops the seat's evidence"
+        );
+        assert_eq!(
+            st.overage_deadline("b", FALLBACK_MS),
+            None,
+            "{policy:?}: no never hold reads the seat"
+        );
+        assert!(
+            !release_reasons(&st, &s, &pin, &req(2_000)).contains(&"overage"),
+            "{policy:?}: the pin reads no overage reason"
+        );
+        assert_eq!(
+            picked(&select(&mut st, &s, &req(2_000), &mut rng()).0),
+            "b",
+            "{policy:?}: the pin renews on the seat"
+        );
+    }
+}
+
+#[test]
+fn a_usage_based_seat_is_traced_with_no_window_and_no_pace_figure_and_reads_the_paid_units() {
+    let s = snapshot_with_terms(
+        Pool {
+            strategy: Strategy::Pace,
+            members: vec![("a", 0), ("b", 0)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", refreshing(0.2, T + HOUR, T + 24 * HOUR, T - 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    let seat = candidate(&d.record, "b");
+    assert!(
+        seat.windows.is_empty(),
+        "the seat holds no plan window: {:?}",
+        seat.windows
+    );
+    let pace = seat.pace.as_ref().expect("a Pace member's facts");
+    assert_eq!(
+        (
+            pace.hours,
+            pace.window.as_deref(),
+            pace.deadline,
+            pace.burn,
+            pace.score
+        ),
+        (None, None, None, 0.0, 1.0),
+        "the seat scores its remaining allowance alone, as an api_key member does: {pace:?}"
+    );
+    let unit_of = |account: &str| {
+        line(&d.record, "pick")
+            .facts
+            .iter()
+            .find(|f| f.key == "score" && f.account_id.as_deref() == Some(account))
+            .and_then(|f| f.unit)
+    };
+    assert_eq!(
+        (unit_of("a"), unit_of("b")),
+        (Some("percent_per_hour"), Some("percent")),
+        "the plan member scores per hour of its window, the seat by its remaining share"
+    );
+    assert_eq!(
+        BurnUnit::of(AccountKind::Oauth, true, false),
+        BurnUnit::Usd,
+        "the seat's burn reads dollars, as the selector and the Sessions route take it"
+    );
+    assert_eq!(
+        BurnUnit::of(AccountKind::Oauth, false, false),
+        BurnUnit::WindowShare,
+        "a plan seat on its quota keeps the window share"
+    );
+}
+
+#[test]
+fn return_to_plan_lands_no_pin_on_a_usage_based_seat_and_a_pin_on_one_finds_no_paid_destination() {
+    let pool = |kinds: Vec<(&'static str, AccountKind)>| Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds,
+        failover: Failover {
+            return_to_plan: ReturnToPlan::Always,
+            return_to_plan_dwell_seconds: 600,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    };
+    let cold_on_a = || {
+        loaded(vec![PinRow {
+            created_at: T - MINUTE,
+            ..burning("cold", "a", 0.0, false, T)
+        }])
+    };
+    let keyed = snapshot_with_terms(
+        pool(vec![("a", AccountKind::ApiKey)]),
+        vec![usage_based_seat("b")],
+    );
+    let mut st = cold_on_a();
+    assert_eq!(
+        landed(select(&mut st, &keyed, &auxiliary(&keyed, "cold", T), &mut rng()).0),
+        ("a".into(), None),
+        "the seat beside the api_key member is no plan quota to return to"
+    );
+    let seats = snapshot_with_terms(
+        pool(vec![]),
+        vec![usage_based_seat("a"), usage_based_seat("b")],
+    );
+    let mut st = cold_on_a();
+    let d = decide(&mut st, &seats, &auxiliary(&seats, "cold", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "a pin on a seat returns as an api_key pin does, and its sibling seat is no destination"
+    );
+    let rule = line(&d.record, "move:return_to_plan");
+    assert_eq!(
+        (rule.verdict, fact(rule, "no_destination")),
+        ("no", &FactValue::Bool(true)),
+        "the rule ran on the seat's pin and found no destination: {:?}",
+        rule.facts
+    );
+}
+
+#[test]
+fn a_shedding_rounds_destination_read_fits_a_usage_based_seat_as_it_fits_an_api_key_sibling() {
+    let mut terms = tier_terms(&["a", "c"]);
+    terms.push(usage_based_seat("b"));
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1), ("c", 2)],
+            ..Pool::default()
+        },
+        terms,
+    );
+    // `a` at 0.94 with its pins burning 0.05 of the window an hour projects to 0.99, so its round runs and marks s1.
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("c", weekly(0.3, 0.5, 4, T - 500));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let fit = line(&d.record, "fit");
+    assert_eq!(
+        fact_of(fit, "verdict", "b"),
+        &FactValue::Text("fits".into()),
+        "the seat's absent buckets leave it room, as an api_key sibling's do: {:?}",
+        fit.facts
+    );
+}
+
+#[test]
+fn the_spent_move_lands_a_pin_on_a_usage_based_seat_with_no_reading_as_on_an_api_key_sibling() {
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "the seat holds no plan window to read, so its allowance is known as an api_key sibling's is"
+    );
+    assert!(candidate(&d.record, "b").allowance_known);
 }
 
 #[test]
@@ -16343,6 +16623,7 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
             cancelled: false,
             ends_at: None,
             tier: Some(TIER.into()),
+            usage_based: false,
         })
         .collect();
     snapshot_with_terms(pool, terms)
@@ -17257,6 +17538,7 @@ fn tier_terms(ids: &[&str]) -> Vec<SubscriptionTerm> {
             cancelled: false,
             ends_at: None,
             tier: Some(TIER.into()),
+            usage_based: false,
         })
         .collect()
 }
@@ -20016,6 +20298,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             cancelled: false,
             ends_at,
             tier: Some(TIER.into()),
+            usage_based: false,
         })
         .to_vec();
         RegistrySnapshot::from_load(load, [0; 32], 0, 1)
@@ -24354,6 +24637,7 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
                     cancelled: false,
                     ends_at: None,
                     tier: Some(tier.into()),
+                    usage_based: false,
                 })
                 .collect(),
         );
@@ -24664,6 +24948,7 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
             cancelled: false,
             ends_at,
             tier: Some(TIER.into()),
+            usage_based: false,
         })
         .to_vec();
         RegistrySnapshot::from_load(load, [0; 32], 0, 1)
@@ -26437,6 +26722,7 @@ fn a_pin_released_past_its_saved_end_names_the_account_it_left() {
             cancelled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
+            usage_based: false,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());

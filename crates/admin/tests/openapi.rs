@@ -1142,6 +1142,31 @@ async fn the_system_and_about_answers_declare_the_build_beside_the_version() {
 }
 
 #[tokio::test]
+async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_null() {
+    let (_app, _up, document) = document().await;
+    let account = &document["components"]["schemas"]["Account"];
+    let member = &account["properties"]["usage_based"];
+    assert_eq!(member["type"], "boolean", "{account}");
+    assert!(
+        account["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "usage_based")),
+        "every account answer carries the member: {account}"
+    );
+    let description = member["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert!(
+        description.as_deref().is_some_and(|text| {
+            text.contains("`default_claude_zero`")
+                && text.contains("`enterprise_usage_based`")
+                && text.contains("`overage` answers null")
+        }),
+        "the member names the two tier words and the null overage: {member}"
+    );
+}
+
+#[tokio::test]
 async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_account_answers_none()
 {
     let (_app, _up, document) = document().await;

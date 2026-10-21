@@ -139,6 +139,7 @@
         "next_attempt_at": null,
         "rate_limited_in_a_row": 0
       }
-    }
+    },
+    "usage_based": false
   }
 }

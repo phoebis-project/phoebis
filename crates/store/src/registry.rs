@@ -10,8 +10,8 @@ use std::sync::atomic::Ordering;
 
 use crate::credentials::store_api_key_secret;
 use crate::{
-    AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError, SubscriptionRow,
-    LOCK_POISONED,
+    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError,
+    SubscriptionRow, LOCK_POISONED,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -679,7 +679,7 @@ pub struct RetiredSecret {
 }
 
 /// What the engine knows about an account's paid term: the profile's start and trial end, the operator's flag
-/// and the end the operator saved with it (set only while the flag is on).
+/// and the end the operator saved with it (set only while the flag is on), and the class the stored profile names.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SubscriptionTerm {
     pub account_id: String,
@@ -689,6 +689,20 @@ pub struct SubscriptionTerm {
     pub ends_at: Option<i64>,
     /// The profile's rate-limit tier, which prices the router's own use of the account's windows.
     pub tier: Option<String>,
+    /// The class of a usage-based Enterprise seat: the tier `default_claude_zero`, or the stored document's
+    /// `organization.seat_tier` `enterprise_usage_based`. Derived at every load from the stored tier and document,
+    /// never stored, false for an `api_key` account and for a seat that keeps plan windows.
+    pub usage_based: bool,
+}
+
+/// The one derivation of the class, shared by the registry load and `Store::subscription_term`.
+pub fn usage_based_of(tier: Option<&str>, profile_json: Option<&str>) -> bool {
+    tier == Some("default_claude_zero")
+        || profile_json
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .is_some_and(|document| {
+                document["organization"]["seat_tier"] == "enterprise_usage_based"
+            })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -863,16 +877,21 @@ impl Store {
             terms: tx
                 .prepare(
                     "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
-                     subscription_tier FROM accounts ORDER BY id",
+                     subscription_tier, kind, profile_json FROM accounts ORDER BY id",
                 )?
                 .query_map([], |r| {
+                    let tier: Option<String> = r.get(5)?;
+                    let profile_json: Option<String> = r.get(7)?;
+                    let usage_based = r.get::<_, AccountKind>(6)? == AccountKind::Oauth
+                        && usage_based_of(tier.as_deref(), profile_json.as_deref());
                     Ok(SubscriptionTerm {
                         account_id: r.get(0)?,
                         since: r.get(1)?,
                         trial_ends_at: r.get(2)?,
                         cancelled: r.get(3)?,
                         ends_at: r.get(4)?,
-                        tier: r.get(5)?,
+                        tier,
+                        usage_based,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,

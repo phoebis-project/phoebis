@@ -122,9 +122,9 @@ on, a session pinned to it moves to a sibling without a budget, and a pool whose
 `accounts_unavailable` until the writer catches up and reads the spend afresh. No operator action is needed, and the
 state clears on the next landed batch.
 
-`prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then API
-keys) before priority. It is the operator's answer alone, on by default, and no strategy overrides it. The pool dialog's
-"Prioritize subscription accounts" toggle sets it.
+`prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then the
+paid sources: API keys and usage-based seats) before priority. It is the operator's answer alone, on by default, and no
+strategy overrides it. The pool dialog's "Prioritize subscription accounts" toggle sets it.
 
 Each strategy's rule, as the pool dialog's Strategy hint states it:
 
@@ -184,7 +184,8 @@ metered set applies while the write costs money: the serving account is in overa
 request, a keepalive probe's replay included, reads `main` or `subagent` by its agent, and one without an agent id reads
 as the main conversation. The TTL is priced per attempt, so a request that fails over reads its destination's state.
 Mixed TTLs across a session's requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime
-and price alone. The price of each choice is on [Pricing](statistics.md#pricing).
+and price alone. The price of each choice is on [Pricing](statistics.md#pricing). A usage-based seat reads the `metered`
+set as an API-key account does, since it pays for every write in dollars.
 
 ## Keys
 
@@ -372,7 +373,9 @@ its pace allows. An API-key account scores by one minus its worst live rate-limi
 division by hours and no burn, since a bucket refills within a minute and its own reset never enters the score. Either
 way a window nobody has read reads as untouched: remaining 1 over the full week. A subscription window read past its
 reset reads as the router's own use since it, while an API-key bucket past its reset is refunded and reads as untouched,
-with no share of the router's own. Ties are random. `priority` and `round_robin` read no sample at all.
+with no share of the router's own. Ties are random. `priority` and `round_robin` read no sample at all. A usage-based
+seat is a paid source beside the API-key accounts: it sorts in their group with the flag on, and `pace` scores it as an
+API-key account, untouched since it reads no bucket.
 
 
 A non-portable request, one whose body references a `file_id`, a `container` or a server-tool result, is answered by its
@@ -438,7 +441,8 @@ A session's runway on an account is the time until that account's projection, wi
 prompt as one cache write) added now and its burn added to the account's, reaches `window_ceiling`: none when the
 rewrite alone takes a window there, unbounded when nothing burns. The session fits the account when the runway reaches
 the horizon on every window its model draws, `five_hour`, `seven_day` and the model's own week where it has one. An
-API-key account fits while its worst live rate-limit bucket reads under 1.0.
+API-key account fits while its worst live rate-limit bucket reads under 1.0. A usage-based seat fits as an API-key
+account does: with no bucket to read, it has room.
 
 A move or a placement books its rewrite and its burn on the destination as a reservation, which the destination's
 prediction and burn count until the request's usage replaces it, the request ends without usage, or the reservation
@@ -489,17 +493,18 @@ the one its rewrite fits with the longest runway, else on the least bad. When ev
 reset within `retry_in_place_seconds`, the request waits in place for the reset instead of moving cold, once per
 account, and the decision reads held for the reset. The wait runs to the later of the reset and the end of any cooldown
 the 429 set, so the request does not select again on a cooling account, and it holds only when that later instant falls
-within the bound and the request's own deadline. The router has to know the sibling's allowance: an API-key account has
-no plan window to spend, and any other sibling needs a reading of each of those windows, from a head, the poll or the
-windows kept across restarts, carried forward as the windows passage says. A sibling with none stays out of the choice.
-Under `prefer_plan` a sibling in overage does not receive a spent pin, since the overage move would hand the session
-straight back. With the toggle off, or no sibling holding allowance, the session stays.
+within the bound and the request's own deadline. The router has to know the sibling's allowance: an API-key account or a
+usage-based seat has no plan window to spend, and any other sibling needs a reading of each of those windows, from a
+head, the poll or the windows kept across restarts, carried forward as the windows passage says. A sibling with none
+stays out of the choice. Under `prefer_plan` a sibling in overage does not receive a spent pin, since the overage move
+would hand the session straight back. With the toggle off, or no sibling holding allowance, the session stays.
 
 **Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
 moves to a subscription sibling that is not in overage, never to an API-key account. The sibling has to hold allowance
 too, since a spent one would move the session again on its next request. It waits while the reset the overage evidence
 names falls within `overage_move_grace_minutes` (default 30, `0` for no wait), so a session whose account gets its plan
-back soon keeps its cache and moves at most once. Evidence that names no reset moves the pin at once.
+back soon keeps its cache and moves at most once. Evidence that names no reset moves the pin at once. A usage-based seat
+is no destination either, since it holds no plan quota.
 
 **Return to plan** A pin on an API-key account moves to a subscription sibling that holds allowance and is not in
 overage as `return_to_plan` says. Under `always` (the default) it moves once its cache is cold, or once it has sat on
@@ -508,7 +513,8 @@ it at its next request, warm or cold. Under `when_cold` it moves only when the m
 a lane change, which read the request cold (see **Warmth**, below). Under `never` it stays, and leaves the metered
 account on expiry, a cooldown or a mark alone. An API key names no reset, so no grace applies, and the dwell is this
 rule's own: `shed_dwell_seconds` paces the rounds and the no-return keep, `return_to_plan_dwell_seconds` the return of a
-warm metered pin.
+warm metered pin. A pin on a usage-based seat returns to plan quota as a pin on an API-key account does. No pin returns
+onto a usage-based seat, which holds no plan quota.
 
 **Drain** A cold pin on an account winding down toward its subscription end moves to an eligible sibling that is not
 winding down. A warm one stays (see **Subscription end**, below).
@@ -1031,9 +1037,15 @@ A pool's `overage_policy` chooses what happens once an account starts billing ex
   the move it already has, which may land on an API-key sibling. An API-key member returns to plan quota independent of
   this policy, as the pool's `return_to_plan` says: under `always` once its pin is cold or has sat on the account for
   `return_to_plan_dwell_seconds`, under `when_cold` on a free move alone, and under `never` only once an expiry, a
-  cooldown or a mark ends its pin ([Moves](#moves)).
+  cooldown or a mark ends its pin ([Moves](#moves)). A pin on a usage-based seat returns as an API-key member's does,
+  and no pin moves onto a usage-based seat under either rule.
 - **Allow** (`allow`): ignore extra usage.
 - **Never** (`never`): treat an account in extra usage as unavailable until its window resets.
+
+A usage-based Enterprise seat ([Two kinds of account](pairing.md#two-kinds-of-account)) never reads as in overage,
+whatever its heads' overage headers say, so none of the three policies applies to it. It is no destination of the
+overage hand-back or of the return to plan, as an API-key account is not, and its spend cap holds it out until the spend
+window's reset.
 
 Under `allow`, a subscription account whose five-hour window, seven-day window or model week is spent stays a candidate
 on the overage path for every model, since extra usage funds every model: the router sends the request, and a `429`

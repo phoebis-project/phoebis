@@ -39,6 +39,7 @@ mod tests {
             cancelled,
             ends_at,
             tier: None,
+            usage_based: false,
         }
     }
 

@@ -19,7 +19,7 @@ use phoebis_oauth::PollOutcome;
 use phoebis_routing::{EvidenceSource, FIVE_HOUR};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, StorageKey,
-    Store,
+    Store, SubscriptionRow,
 };
 use tokio::time::Instant;
 use tower::ServiceExt;
@@ -1084,6 +1084,52 @@ async fn a_profile_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routi
         "the refresh's invalid_grant landed the mark"
     );
     routing_reads_reauth_required(&h, "a").await;
+    up.shutdown().await;
+}
+
+/// A profile answer whose seat tier names a usage-based Enterprise seat under the plan tier the case stores first.
+fn usage_based_seat_profile_rule() -> Rule {
+    Rule {
+        path_prefix: "/api/oauth/profile".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid"},"organization":{"uuid":"o","rate_limit_tier":"default_claude_max_5x","seat_tier":"enterprise_usage_based"}}"#
+                .to_vec(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn a_profile_refresh_whose_seat_tier_alone_moves_the_class_reloads_the_router() {
+    let up = FakeUpstream::start(vec![usage_rule(), usage_based_seat_profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The refresh repeats the stored tier, so only the seat tier moves.
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_max_5x"}}"#,
+            &SubscriptionRow {
+                tier: Some("default_claude_max_5x".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    assert!(
+        !h.router.snapshot().usage_based("a"),
+        "a plan seat before the refresh"
+    );
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(&h.store, h.usage.as_ref().unwrap(), &h.router, &row).await;
+    assert!(
+        h.store.subscription_term("a").unwrap().unwrap().usage_based,
+        "the stored document classes the seat"
+    );
+    assert!(
+        h.router.snapshot().usage_based("a"),
+        "the routing snapshot reads the class the refresh stored, with no other reload"
+    );
     up.shutdown().await;
 }
 

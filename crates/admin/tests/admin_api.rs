@@ -1184,6 +1184,138 @@ async fn the_account_view_reads_the_extra_usage_flag_from_the_organization_alone
 }
 
 #[tokio::test]
+async fn a_usage_based_account_answers_its_class_and_no_overage_whatever_a_head_or_an_older_row_says(
+) {
+    use common::{get, json, login};
+    use phoebis_ledger::ExtraUsageSampleRecord;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    parts
+        .store
+        .insert_account(&phoebis_store::AccountRow {
+            id: "seat".into(),
+            kind: phoebis_store::AccountKind::Oauth,
+            label: "Seat".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: phoebis_store::AccountState::Ready,
+            state_cause: phoebis_store::StateCause::Paired,
+        })
+        .unwrap();
+    parts
+        .store
+        .set_profile(
+            "seat",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    // The overage family of a head as a leg reports it for a plan seat, on the seat and on the plan account alike,
+    // and a head row from before the class whose flag reads in use.
+    let bucket = phoebis_ledger::bucket_of(now - 60_000);
+    for account in ["seat", "business"] {
+        parts
+            .router
+            .report(phoebis_routing::Report::Overage {
+                account_id: account.into(),
+                evidence: phoebis_routing::OverageEvidence {
+                    in_use: true,
+                    since: Some(now - 60_000),
+                    reset: Some(now + 3_600_000),
+                    observed_at: now - 60_000,
+                    source: phoebis_routing::EvidenceSource::Head,
+                    incarnation: 1,
+                },
+                incarnation: 1,
+            })
+            .await;
+        parts
+            .db
+            .insert_samples(
+                &[],
+                Some(&ExtraUsageSampleRecord {
+                    account_id: account.into(),
+                    bucket,
+                    is_enabled: true,
+                    in_use: Some(true),
+                    monthly_limit: None,
+                    used_credits: None,
+                    utilization: Some(0.4),
+                    currency: None,
+                    disabled_reason: None,
+                    overage_reset: Some(now + 3_600_000),
+                    source: "head".into(),
+                }),
+            )
+            .unwrap();
+    }
+    // A query queues behind the reports, so the views below read the folded state.
+    parts.router.overages().await.unwrap();
+    let listed = json(get(&parts.app, "/admin/accounts", Some(&cookie)).await).await;
+    let row = |id: &str| {
+        listed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {id} row: {listed}"))
+    };
+    let seat = row("seat");
+    assert_eq!(
+        (
+            &seat["usage_based"],
+            &seat["overage"],
+            &seat["extra_usage"]["in_use"]
+        ),
+        (
+            &serde_json::json!(true),
+            &serde_json::Value::Null,
+            &serde_json::Value::Null
+        ),
+        "the seat is classed and never reads as in overage: {seat}"
+    );
+    assert_eq!(
+        seat["extra_usage"]["utilization"],
+        serde_json::json!(0.4),
+        "the row's share still answers: {seat}"
+    );
+    let plan = row("business");
+    assert_eq!(
+        (
+            &plan["usage_based"],
+            &plan["overage"]["in_use"],
+            &plan["extra_usage"]["in_use"]
+        ),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(true),
+            &serde_json::json!(true)
+        ),
+        "a plan account keeps its evidence and its row's flag: {plan}"
+    );
+    assert_eq!(
+        row("direct")["usage_based"],
+        serde_json::json!(false),
+        "an api_key account is never classed"
+    );
+    let shown = json(get(&parts.app, "/admin/accounts/seat", Some(&cookie)).await).await;
+    assert_eq!(
+        (&shown["usage_based"], &shown["overage"]),
+        (&serde_json::json!(true), &serde_json::Value::Null),
+        "the single account answers as its row does: {shown}"
+    );
+}
+
+#[tokio::test]
 async fn a_confirm_on_a_slot_sealed_under_another_key_answers_409_naming_the_account() {
     use common::{get, json, login, post};
     let (app, _up, store, _manager) = common::paired_parts().await;

@@ -187,6 +187,10 @@
               {
                 "account_id": "direct",
                 "obstacle": "ranked"
+              },
+              {
+                "account_id": "usage-seat",
+                "obstacle": "ranked"
               }
             ],
             "placement": null,

@@ -141,6 +141,25 @@ impl CreditsState {
     }
 }
 
+/// 00:00:00 UTC on the first of the calendar month after the UTC month of `now`, in epoch milliseconds: the spend
+/// window's reset while no head has named one.
+pub fn spend_reset_estimate(now: i64) -> i64 {
+    let utc = jiff::tz::TimeZone::UTC;
+    // An instant outside the calendar's range has no month to roll, so it answers itself.
+    jiff::Timestamp::from_millisecond(now)
+        .ok()
+        .and_then(|instant| {
+            instant
+                .to_zoned(utc.clone())
+                .date()
+                .first_of_month()
+                .checked_add(jiff::Span::new().months(1))
+                .ok()
+        })
+        .and_then(|first| first.to_zoned(utc).ok())
+        .map_or(now, |midnight| midnight.timestamp().as_millisecond())
+}
+
 pub const FIVE_HOUR: &str = "five_hour";
 pub const SEVEN_DAY: &str = "seven_day";
 pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
@@ -655,8 +674,8 @@ impl RateTable {
 }
 
 /// Which figure a reader takes for a pin's burn: the share of the account's 5-hour window while a subscription
-/// account runs on its plan, dollars on an api_key account or a subscription account in overage. Serializes
-/// as `window_share` or `usd`.
+/// account runs on its plan, dollars on an api_key account, a usage-based seat or a subscription account in
+/// overage. Serializes as `window_share` or `usd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BurnUnit {
@@ -672,8 +691,8 @@ impl BurnUnit {
         }
     }
 
-    pub fn of(kind: AccountKind, in_overage: bool) -> BurnUnit {
-        match (kind, in_overage) {
+    pub fn of(kind: AccountKind, usage_based: bool, in_overage: bool) -> BurnUnit {
+        match (kind, usage_based || in_overage) {
             (AccountKind::Oauth, false) => BurnUnit::WindowShare,
             (AccountKind::Oauth, true) | (AccountKind::ApiKey, _) => BurnUnit::Usd,
         }
@@ -1220,6 +1239,9 @@ pub struct RoutingState {
     /// selection on the account wrote it. Memory only, as the reservations are: a restart starts every account
     /// unslowed.
     slow_downs: HashMap<(String, String), SlowDownState>,
+    /// Each usage-based account's newest head reset with the head's observation, by account id. Memory only: the
+    /// persisted credits row keeps the share, and a restart reads the estimate until the next head names a reset.
+    spend_heads: HashMap<String, (i64, i64)>,
 }
 
 impl RoutingState {
@@ -1320,6 +1342,7 @@ impl RoutingState {
             shed_rounds,
             slow_down_edges: Vec::new(),
             slow_downs: HashMap::new(),
+            spend_heads: HashMap::new(),
         }
     }
 
@@ -1658,6 +1681,65 @@ impl RoutingState {
         self.credits
             .get(account_id)
             .filter(|state| state.incarnation == incarnation)
+    }
+
+    /// The newest head's spend reset of a usage-based account with its observation, `None` until a head carried one.
+    pub fn spend_head(&self, account_id: &str) -> Option<(i64, i64)> {
+        self.spend_heads.get(account_id).copied()
+    }
+
+    /// Folds a usage-based account's head: the share into the credits state (persisted as the poll's is) and the
+    /// reset beside it. False when the reading is older than the one held, or names no share: the answer is whether
+    /// the credits state moved, the write the caller persists.
+    pub fn record_spend_head(
+        &mut self,
+        account_id: &str,
+        utilization: Option<f64>,
+        reset: Option<i64>,
+        observed_at: i64,
+        incarnation: u64,
+    ) -> bool {
+        if let Some(reset) = reset {
+            if self
+                .spend_heads
+                .get(account_id)
+                .is_none_or(|(_, held_at)| *held_at < observed_at)
+            {
+                self.spend_heads
+                    .insert(account_id.to_string(), (reset, observed_at));
+            }
+        }
+        let Some(utilization) = utilization else {
+            return false;
+        };
+        // A head before any poll, or after one of another holder, has no flag to keep: the head came, so the
+        // spend window answered, and a later poll replaces this state by holder and age.
+        let held = self.credits_of(account_id, incarnation).cloned();
+        let state = match held {
+            Some(held) if held.observed_at >= observed_at => return false,
+            Some(held) => CreditsState {
+                utilization: Some(utilization),
+                observed_at,
+                ..held
+            },
+            None => CreditsState {
+                enabled: true,
+                disabled_reason: None,
+                utilization: Some(utilization),
+                observed_at,
+                incarnation,
+            },
+        };
+        self.credits.insert(account_id.to_string(), state);
+        true
+    }
+
+    /// Drops the overage evidence of every account `snapshot` classes usage-based: a row stored before the class
+    /// existed would otherwise hold the account in overage until its reset. The registry's row stays as written,
+    /// so each start drops it again until the account's own cascade removes it.
+    pub fn drop_usage_based_overage(&mut self, snapshot: &RegistrySnapshot) {
+        self.overage
+            .retain(|account_id, _| !snapshot.usage_based(account_id));
     }
 
     /// Every live cooldown row of one account, whatever its scope, in no particular order. `cooldown` answers
@@ -2061,6 +2143,7 @@ impl RoutingState {
         self.samples.remove(account_id);
         self.charges.remove(account_id);
         self.credits.remove(account_id);
+        self.spend_heads.remove(account_id);
     }
 
     /// Every account's latest reading, by id: one snapshot for a caller that evaluates thresholds over all of them.
@@ -3244,9 +3327,11 @@ impl RoutingState {
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
+        self.drop_usage_based_overage(snapshot);
         self.credits
             .retain(|account_id, state| !gone(account_id, state.incarnation));
         self.samples.retain(|account_id, _| !absent(account_id));
+        self.spend_heads.retain(|account_id, _| !absent(account_id));
         // A bucket names a canonical model, so without the cut every model an account was ever asked for would keep
         // its buckets for the account's life.
         let expired_before = now - BUCKET_TTL_MS;
@@ -3444,6 +3529,24 @@ fn since_of(current: Option<&OverageEvidence>, evidence: &OverageEvidence) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(instant: &str) -> i64 {
+        instant
+            .parse::<jiff::Timestamp>()
+            .expect("an RFC 3339 instant")
+            .as_millisecond()
+    }
+
+    #[test]
+    fn the_spend_reset_estimate_is_the_next_months_first_midnight_in_utc() {
+        for (now, reset) in [
+            ("2026-10-31T23:59:59Z", "2026-11-01T00:00:00Z"),
+            ("2028-02-29T12:00:00Z", "2028-03-01T00:00:00Z"),
+            ("2026-12-31T10:00:00Z", "2027-01-01T00:00:00Z"),
+        ] {
+            assert_eq!(spend_reset_estimate(at(now)), at(reset), "{now}");
+        }
+    }
 
     fn burning(session: &str, burn: f64) -> (PinRow, Option<f64>) {
         let pin = PinRow {

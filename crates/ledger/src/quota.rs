@@ -505,16 +505,20 @@ impl QuotaPoll {
         // admin views show what it says.
         match answer {
             Ok(profile) => {
-                let before = store
-                    .subscription(&account.id)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.tier);
+                // The term carries the class beside the tier, so a document whose seat tier alone moved reloads too.
+                let term = || {
+                    store
+                        .subscription_term(&account.id)
+                        .ok()
+                        .flatten()
+                        .map(|t| (t.tier, t.usage_based))
+                };
+                let before = term();
                 if let Err(error) =
                     store.set_profile(&account.id, &profile.raw.to_string(), &profile.subscription)
                 {
                     tracing::warn!(account = %account.id, %error, "the profile could not be stored");
-                } else if before != profile.subscription.tier {
+                } else if before != term() {
                     if let Err(error) = router.reload().await {
                         tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier");
                     }

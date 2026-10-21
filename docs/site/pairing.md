@@ -17,6 +17,11 @@ answers `400 credential rejected by the upstream`, and a models endpoint that an
 colon. Neither creates the account. A new key for an existing account goes through `PATCH /admin/accounts/{id}` as
 `secret` and is verified the same way, and a check that does not succeed refuses the edit whole.
 
+A usage-based Enterprise seat is an OAuth account the router places as a paid source beside the API-key accounts. The
+router classes it from the stored profile: the rate-limit tier `default_claude_zero`, or the seat tier
+`enterprise_usage_based`. Such a seat has a spend window against its monthly cap in place of the plan windows and is
+billed in dollars at the API rates. A Team or seat-based Enterprise seat keeps its plan windows.
+
 An id matches `[a-z0-9][a-z0-9-]{0,63}`, a label is at most 256 bytes, and an id in use answers
 `409 an account with this id exists`. The create route takes `"kind": "oauth"` too, with no secret, for a script that
 makes the account ahead of its pairing: the account reads `unpaired` until a pairing confirms, and an `oauth` create

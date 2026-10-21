@@ -10,7 +10,7 @@
     "dead": [],
     "ledger": {
       "schema_version": 42,
-      "written": 32,
+      "written": 33,
       "dropped": 0,
       "write_failures": 0,
       "cache_map_orphans": 1,
@@ -42,6 +42,7 @@
         "pin_released": 0,
         "pin_renewed": 0,
         "sample": 0,
+        "spend_head": 0,
         "usage": 0
       },
       "dropped_refusals": 0,

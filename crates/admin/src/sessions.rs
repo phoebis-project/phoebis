@@ -207,9 +207,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // Read right after the pins ask and before the ledger read below awaits: a pin belongs to the live holder
     // of its key id alone, and taking this snapshot before that await keeps a key deleted and recreated during
     // it from stamping this request's pins with the replacement's generation.
-    let live: std::collections::BTreeMap<String, i64> = state
-        .router
-        .snapshot()
+    let snapshot = state.router.snapshot();
+    let live: std::collections::BTreeMap<String, i64> = snapshot
         .keys()
         .map(|k| (k.id.clone(), k.created_at))
         .collect();
@@ -293,8 +292,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             continue;
         }
         held_is_main.insert(key.clone(), is_main);
-        // The unit a reader takes for `burn`, the account's kind and whether its overage evidence stands now:
-        // the same predicate every reader of it applies, so this row never disagrees with the selector. A pin
+        // The unit a reader takes for `burn`, the account's kind, its class and whether its overage evidence stands
+        // now: the same predicate every reader of it applies, so this row never disagrees with the selector. A pin
         // whose account left the registry has no kind to pick a unit from, so both read null rather than
         // guessing one.
         let unit = accounts
@@ -305,7 +304,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 let in_overage = overages
                     .iter()
                     .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
-                BurnUnit::of(kind, in_overage)
+                BurnUnit::of(kind, snapshot.usage_based(&p.account_id), in_overage)
             });
         let equivalent = (unit == Some(BurnUnit::WindowShare))
             .then(|| rates.price_pin(BurnUnit::WindowShare, p))

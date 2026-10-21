@@ -608,6 +608,17 @@ pub enum Report {
         /// The request whose response head carried the reading, or `None` for the usage poll's.
         source_request_id: Option<String>,
     },
+    /// A head on a usage-based account: the overage family read as the spend window's share and reset, no overage
+    /// evidence. Coalesced per account and holder as `Overage` is.
+    SpendHead {
+        account_id: String,
+        /// `anthropic-ratelimit-unified-overage-utilization`, a fraction.
+        utilization: Option<f64>,
+        /// `anthropic-ratelimit-unified-overage-reset`, epoch milliseconds.
+        reset: Option<i64>,
+        observed_at: i64,
+        incarnation: u64,
+    },
     /// A finished inference or probe answer's typed tokens on the account that served it, pinned or not: what the
     /// prediction adds to the account's last reading until the next one lands.
     Usage {
@@ -646,6 +657,7 @@ impl Report {
         "pin_released",
         "pin_renewed",
         "sample",
+        "spend_head",
         "usage",
     ];
 
@@ -666,6 +678,7 @@ impl Report {
             Report::PinReleased { .. } => "pin_released",
             Report::PinRenewed { .. } => "pin_renewed",
             Report::Sample { .. } => "sample",
+            Report::SpendHead { .. } => "spend_head",
             Report::Usage { .. } => "usage",
         }
     }
@@ -694,6 +707,10 @@ enum CoalesceKey {
         account_id: String,
         incarnation: u64,
         windows: Vec<String>,
+    },
+    SpendHead {
+        account_id: String,
+        incarnation: u64,
     },
 }
 
@@ -762,6 +779,14 @@ impl Report {
                 incarnation: *incarnation,
                 windows: sample.windows.keys().cloned().collect(),
             }),
+            Report::SpendHead {
+                account_id,
+                incarnation,
+                ..
+            } => Some(CoalesceKey::SpendHead {
+                account_id: account_id.clone(),
+                incarnation: *incarnation,
+            }),
             Report::Affinity(_)
             | Report::Cooldown { .. }
             | Report::Ended { .. }
@@ -817,6 +842,12 @@ impl Report {
             (Report::Overage { evidence, .. }, Report::Overage { evidence: held, .. }) => {
                 evidence.observed_at >= held.observed_at
             }
+            (
+                Report::SpendHead { observed_at, .. },
+                Report::SpendHead {
+                    observed_at: held, ..
+                },
+            ) => observed_at >= held,
             // One sequential producer, the ledger writer, sends both, so the later arrival is the later reading.
             (Report::Accounting { .. }, Report::Accounting { .. })
             | (Report::MemberSpend(_), Report::MemberSpend(_)) => true,
@@ -1746,6 +1777,7 @@ pub fn spawn(
         now,
     );
     let mut state = RoutingState::from_load(load);
+    state.drop_usage_based_overage(&snapshot.read().expect("snapshot lock poisoned"));
     // One table, shared by the handle (the relay's synchronous permits and tickets) and the state (the
     // selector's cap partition), so a count is exact wherever it is read.
     let in_flight = InFlight::default();
@@ -3671,6 +3703,16 @@ impl Task {
                 if self.moved_past(&account_id, incarnation) {
                     return;
                 }
+                // A usage-based seat's overage family is its spend window, which `Report::SpendHead` carries. A leg
+                // that read its snapshot before the class landed still reports it here, and it records nothing.
+                if self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .usage_based(&account_id)
+                {
+                    return;
+                }
                 evidence.incarnation = incarnation;
                 let at = evidence.observed_at;
                 let (was, since) = match self.state.overage(&account_id) {
@@ -3706,6 +3748,32 @@ impl Task {
                             incarnation: current.incarnation,
                         })]);
                     }
+                }
+            }
+            Report::SpendHead {
+                account_id,
+                utilization,
+                reset,
+                observed_at,
+                incarnation,
+            } => {
+                if self.moved_past(&account_id, incarnation) {
+                    return;
+                }
+                // A head on a usage-based seat is no overage episode, so the fold emits no event. The share persists as
+                // the poll's does, and the reset stays in memory.
+                if !self.state.record_spend_head(
+                    &account_id,
+                    utilization,
+                    reset,
+                    observed_at,
+                    incarnation,
+                ) {
+                    return;
+                }
+                if let Some(state) = self.state.credits_of(&account_id, incarnation) {
+                    let row = RoutingState::credits_row(&account_id, state);
+                    self.write(vec![StateWrite::UpsertCredits(row)]);
                 }
             }
             Report::PinInvalidated {
@@ -4031,10 +4099,12 @@ impl Task {
                     .read()
                     .expect("snapshot lock poisoned")
                     .clone();
-                // An api_key account bills its tokens and has no plan window to charge, and an account whose tier
-                // the profile has not named yet has no factor to price through.
+                // An api_key account bills its tokens and a usage-based seat its spend window, so neither has a plan
+                // window to charge, whatever tier the seat's profile names, and an account whose tier the profile has
+                // not named yet has no factor to price through.
                 if snapshot.account(&account_id).map(|a| a.kind)
                     != Some(phoebis_store::AccountKind::Oauth)
+                    || snapshot.usage_based(&account_id)
                 {
                     return;
                 }

@@ -30,6 +30,9 @@ held as `paused` before it is sent, as one on a disabled account is. A 429 on th
 overage under `never`, an account that is disconnected or unpaired, and the pool's move rules move it as they move a
 real request.
 
+A usage-based Enterprise seat's probes hold under its member budget as an API-key member's do, and never for overage:
+the router reads no overage on such a seat ([Overage](routing.md#overage)).
+
 A probe costs a cache read at list price, which its own row in the request ledger carries under the kind `probe`. A
 later request that read the entry a probe kept, a probe that rewrote the entry included, is counted as kept warm, per
 pool and per hour.

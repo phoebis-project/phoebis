@@ -141,7 +141,8 @@
             "next_attempt_at": null,
             "rate_limited_in_a_row": 0
           }
-        }
+        },
+        "usage_based": false
       },
       {
         "id": "direct",
@@ -172,7 +173,69 @@
           "last_7d": 1,
           "lifetime": 1
         },
-        "usage": null
+        "usage": null,
+        "usage_based": false
+      },
+      {
+        "id": "usage-seat",
+        "kind": "oauth",
+        "label": "Usage seat",
+        "enabled": true,
+        "cancelled": false,
+        "state": "ready",
+        "funding_retry_at": null,
+        "identity": {
+          "email": "seat@example.invalid",
+          "account_uuid": "00000000-0000-4000-8000-000000000003",
+          "organization_uuid": "00000000-0000-4000-8000-000000000004"
+        },
+        "credential": {
+          "access_expires_at": 1791724600000,
+          "refresh_expires_at": null,
+          "generation": 1,
+          "last_refresh_at": null,
+          "last_error": null,
+          "quarantined": false
+        },
+        "lifecycle_generation": 1,
+        "revision": 4294967297,
+        "cooldowns": [],
+        "overage": null,
+        "profile": {
+          "billing_type": null,
+          "display_name": "Seat",
+          "has_extra_usage_enabled": true,
+          "organization_name": "Enterprise Org",
+          "organization_type": "claude_enterprise",
+          "rate_limit_tier": "default_claude_zero"
+        },
+        "subscription": {
+          "plan": null,
+          "tier": "default_claude_zero",
+          "since": null,
+          "trial_ends_at": null,
+          "ends_at": null
+        },
+        "windows": [],
+        "slow_down": null,
+        "fast_lane": null,
+        "extra_usage": null,
+        "pool": {
+          "pool_id": "main",
+          "priority": 2
+        },
+        "requests": {
+          "last_24h": 0,
+          "last_7d": 0,
+          "lifetime": 0
+        },
+        "usage": {
+          "error": "the poll has not read this account yet",
+          "fetched_at": null,
+          "held_until": null,
+          "poll": null
+        },
+        "usage_based": true
       }
     ]
   }
