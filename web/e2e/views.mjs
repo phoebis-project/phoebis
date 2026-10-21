@@ -99,7 +99,6 @@ const VIEWS = [
   { path: '/pools', title: 'Pools', wait: '.pool .serving', slug: 'pools' },
   { path: '/keys', title: 'Keys', wait: '.card--table tbody tr', slug: 'keys' },
   { path: '/guardrails', title: 'Guardrails', wait: '.guardrails__table', slug: 'guardrails' },
-  { path: '/models', title: 'Models', wait: '.models__rules', slug: 'models' },
   { path: '/requests', title: 'Requests', wait: '.requests__table', slug: 'requests' },
   { path: '/analytics', title: 'Analytics', wait: '.analytics-section#traffic', slug: 'analytics' },
   // The page shows one section at a time, so the site's Cache warming shot is a view of its own; like the catalog
@@ -9218,7 +9217,6 @@ try {
         await keyDialogGeometry(theme);
         await keysPageMenus(theme);
       }
-      if (view.path === '/models') await tableColumns(theme, 'models', '.models__rules table', ['Pattern']);
       if (view.path === '/requests') {
         await requestsTableFits(theme);
         if (mock) await requestsTableFitsWithShares(theme);

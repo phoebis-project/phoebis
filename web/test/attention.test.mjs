@@ -46,8 +46,13 @@ test('an item opens the page where its condition is fixed, and an item without a
   assert.equal(attentionHref(item('client_drift', { link: { id: 'a b#c', page: 'keys' } }), NOW), '/keys#a%20b%23c', 'an id travels encoded');
   assert.equal(attentionHref(item('client_drift'), NOW), null, 'a drift refusal that carried no key has nothing to open');
   assert.equal(attentionHref(item('writer_degraded', { subject: { id: 'routing', label: 'routing', type: 'router' } }), NOW), null, "the router's own component has nothing to open");
-  const model = decodeAttention({ detail: {}, kind: 'model_unweighted', link: { id: 'claude-sonnet-4-6', page: 'models' }, pools: [], since: NOW, subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' } });
-  assert.equal(attentionHref(model, NOW), '/models#claude-sonnet-4-6', "an unweighted model's item opens the Models page on the model");
+  // An estimated weight shows in the cost reference dialog, which no address opens, so the item has nothing to open.
+  const unweighted = { detail: { model: 'claude-sonnet-4-6', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, kind: 'model_unweighted', pools: [], since: NOW, subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' } };
+  for (const link of [{ id: 'claude-sonnet-4-6', page: 'models' }, null]) {
+    const model = decodeAttention({ ...unweighted, link });
+    const drawn = [model.link, attentionHref(model, NOW), attentionWords(model, NOW) ?? `${ATTENTION_LABEL[model.kind]}: ${model.subject.label}`, attentionTitle(model, NOW).split('\n')[0]];
+    assert.deepEqual(drawn, [null, null, 'Model weight estimated: claude-sonnet-4-6', attentionDetail(model, NOW)], `an unweighted model's item ${link === null ? 'with no link' : 'naming the models page'} opens nothing and draws its label, its detail on the title`);
+  }
 });
 
 test('a pool exhausted item opens the routing log since the condition began and the other kinds keep their targets', () => {

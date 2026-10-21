@@ -412,15 +412,6 @@ test('a key\'s processed rule list decodes with the level, the rule, and the coo
   );
 });
 
-test('the model state decodes the cooldowns grouped by model and leaves the rejections and permits to the routing log', () => {
-  const body = fixture('models_state');
-  const state = d.decodeModelsState(body);
-  assert.deepEqual(state.cooldowns.map((g) => [g.model, g.rows.length]), [['claude-haiku-4-5-20251001', 1]]);
-  assert.equal(state.cooldowns[0].rows[0].accountId, 'business');
-  assert.ok(body.rejections.length > 0 && body.permits.length > 0, 'the route still answers both lists');
-  assert.deepEqual(Object.keys(state), ['cooldowns'], 'the console reads neither list');
-});
-
 test('a pool decodes its policy, status, members, and traffic', () => {
   const [p] = fixture('pools').pools.map(d.decodePool);
   assert.equal(p.name, 'Main');
@@ -2613,18 +2604,21 @@ test("an attention item of a state writer or a parked record decodes under its o
   assert.deepEqual([writer.kind, writer.link, writer.pools, writer.subject], ['writer_degraded', null, [], { id: 'routing', label: 'routing', type: 'router' }], "the router's own component opens nothing and belongs to no pool");
 });
 
-test("an unweighted model's attention item decodes under its own kind, a model subject opening the Models page, read off the route's capture", () => {
+test("an unweighted model's attention item decodes under its own kind, a model subject with no link, read off the route's capture", () => {
   const raw = fixture('attention').items.find((i) => i.kind === 'model_unweighted');
   assert.ok(raw, 'the capture holds the unweighted model item');
-  assert.deepEqual(d.decodeAttention(raw), {
+  const decoded = {
     detail: raw.detail,
     kind: 'model_unweighted',
-    link: { id: raw.link.id, page: 'models' },
+    link: null,
     pools: [],
     rawKind: null,
     since: new Date(raw.since).toISOString(),
     subject: { id: raw.subject.id, label: raw.subject.label, type: 'model' },
-  });
+  };
+  assert.deepEqual(d.decodeAttention(raw), decoded, 'the item as the capture carries it');
+  assert.deepEqual(d.decodeAttention({ ...raw, link: { id: raw.subject.id, page: 'models' } }), decoded, 'a router that names the models page opens no page the console draws');
+  assert.deepEqual(d.decodeAttention({ ...raw, link: null }), decoded, 'a router that sends no link');
   assert.deepEqual(Object.keys(raw.detail).sort(), ['model', 'requests', 'tier', 'weight_of'], 'the detail names the model, its plan requests, its model tier and the model whose weight prices it');
 });
 

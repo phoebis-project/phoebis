@@ -284,8 +284,8 @@ dated id the catalog lists substituted. One entry therefore covers a model and i
 model the API lists under a dated id is written as a glob: `NOT claude-sonnet-4-5*` covers `claude-sonnet-4-5`,
 `claude-sonnet-4-5-20250929` and the twin of either. An entry that spells an undated id exactly (`claude-sonnet-4-5`)
 never matches, because the router names that model by its dated snapshot, so an exact entry for an undated model is
-written as a glob (`claude-sonnet-4-5*`) too, and the rule editors and the Models view say so beside the list. A model
-the list denies answers `404 model_not_allowed` without reaching an upstream.
+written as a glob (`claude-sonnet-4-5*`) too, and the rule editors say so beside the list. A model the list denies
+answers `404 model_not_allowed` without reaching an upstream.
 
 The grammar is path-style: `*` matches any run of characters other than `/`, `**` any run including `/`, `?` one
 character other than `/`, a backslash quotes the character after it, and a pattern with no wildcard matches its own
@@ -296,8 +296,9 @@ when it is empty, longer than 256 characters, ends in an unquoted backslash or h
 refusal names the entry and the reason: `model_rules[0]: pattern is empty`, `pattern is longer than 256 characters`,
 `pattern ends in an unquoted backslash`, `pattern holds three stars in a row`.
 
-The processed list of a chosen key, the accounts cooling for each model and the link to the routing log's model
-rejected and model permitted rows are on the Models view ([Models](console.md#models)).
+The processed list of a chosen key is the key dialog's Effective list ([Keys](console.md#keys)), the accounts cooling
+for a model are on the Accounts view's cooling-down block ([Accounts](console.md#accounts)), and the model rejected and
+model permitted rows are in the routing log under its Kinds filter ([Routing log](console.md#routing-log)).
 
 ## Selection
 
@@ -921,8 +922,7 @@ seconds. A handshake that stalls is retried once on a fresh connection and then 
 a stalled upstream costs at most 20 seconds before the client hears.
 
 The Accounts view shows what an account is cooling under in a cooling-down block, one line per scope, the whole account
-or one model, with the reason, the deadline and a clear button, and the Models view lists the same rows grouped by
-model ([Accounts](console.md#accounts), [Models](console.md#models)).
+or one model, with the reason, the deadline and a clear button ([Accounts](console.md#accounts)).
 
 ### Retry in place
 

@@ -14,7 +14,6 @@ const FILLED = {
   ACCOUNTS_CODEC: { search: 'git', sort: 'usage', status: 'paused' },
   ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', by: 'session', class: 'claude-code/*', groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', unit: 'share' },
   KEYS_CODEC: { pools: ['all', 'jobs'], search: 'lap', status: 'active' },
-  MODELS_CODEC: { key: 'laptop' },
   POOLS_CODEC: {},
   QUOTA_CODEC: {},
   REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', efforts: ['high', 'low'], guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: '50', search: 'req_1d9c3e55', session: '407dd39b-dd60', speeds: ['fast', 'standard'], statuses: ['200', '429'], turnOrigins: ['agent', 'user'] },
@@ -23,7 +22,7 @@ const FILLED = {
 };
 
 test("each view's codec reads back the address it writes, the range at a preset and at a custom span", () => {
-  assert.equal(Object.keys(FILLED).length, 9);
+  assert.equal(Object.keys(FILLED).length, 8);
   for (const [name, filled] of Object.entries(FILLED)) {
     const codec = d[name];
     assert.deepEqual(codec.fromParams(codec.toParams(filled)), filled, name);

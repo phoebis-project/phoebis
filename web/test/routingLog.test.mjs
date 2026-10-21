@@ -364,12 +364,12 @@ test('PIN_RELEASE_LABEL words every release reason and releaseLabel keeps an unk
 test('each entity links to the route of its kind', () => {
   assert.equal(d.entityHref('account', 'primary'), '/accounts/primary');
   assert.equal(d.entityHref('request', 'req_1d9c3e55-0b2'), '/requests/req_1d9c3e55-0b2');
-  // The Sessions and Models pages read no key for the entity, so the link opens the view itself.
+  // The Sessions page reads no key for the entity, so the link opens the view itself.
   assert.equal(d.entityHref('session', '407dd39b-dd60'), '/sessions');
   assert.equal(d.entityHref('pool', 'all'), '/pools#all');
   assert.equal(d.entityHref('key', 'laptop'), '/keys#laptop');
   assert.equal(d.entityHref('key', 'ci key/2'), '/keys#ci%20key%2F2');
-  assert.equal(d.entityHref('model', 'claude-sonnet-5'), '/models');
+  assert.equal(d.entityHref('model', 'claude-sonnet-5'), '/routing-log?models=claude-sonnet-5&range=24h', "a model opens the log on its rows over the last day");
 });
 
 test('each link in builds its URL with its range', () => {

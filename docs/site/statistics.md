@@ -301,8 +301,8 @@ prediction charges it, the projection and the shedding round price its pin's bur
 answers its figure answers `estimated` true beside it, which the console draws as a `~` before the figure. Once the
 model has served a
 plan-funded request since the start, the ledger raises the `model_unweighted` attention item for the `phoebis_attention`
-gauge, `GET /admin/attention` answers it, and the console lists it on the dashboard's attention line with a link to the
-[Models](console.md#models) view ([Conditions and gauges](#conditions-and-gauges)). A model of no model tier, or of a
+gauge, `GET /admin/attention` answers it, and the console lists it on the dashboard's attention line as a plain badge
+([Conditions and gauges](#conditions-and-gauges)). A model of no model tier, or of a
 model tier with no weighed model, prices no share: the prediction adds no charge, the projection adds no burn, the
 shedding round ranks the pin after every priced one and never marks it, the analytics list the share under model
 unlisted and the cost reference shows a dash. An account tier without a capacity on a window prices no share there
@@ -446,8 +446,7 @@ again, and `phoebis_ledger_parked_priced_total` counts the priced records parked
 
 The views that show the figures above are described on [The console](console.md), each with its figures, filters and
 controls: the [Dashboard](console.md#dashboard) with its attention line, four 24-hour tiles and two capacity rings,
-[Models](console.md#models) with the rules a key's requests are judged by, and [Settings](console.md#settings) with
-the About card that names each price table's path and date.
+and [Settings](console.md#settings) with the About card that names each price table's path and date.
 
 ### Quota
 
@@ -573,8 +572,8 @@ start, each priced at the weight of the latest weighed model of its model tier a
 shows ([Plan meter](#plan-meter)). The ledger keeps the run in memory, so it starts over at a restart, and the next
 plan-funded request on the model raises it again. A later plan-funded request priced at a cost model entry that weighs
 the model clears it. The subject is the model, the dashboard's line reads the item as "Model weight estimated", and it
-opens the [Models](console.md#models) view. It dates from the run's first request, and the detail names the model, its
-model tier, the model whose weight stands in and the requests served since.
+carries no link, since the estimate shows in the cost reference dialog. It dates from the run's first request, and the
+detail names the model, its model tier, the model whose weight stands in and the requests served since.
 
 **`meter_drift`** holds while, for any window kind, the account's newest completed window with a rise of at least 5%
 reads a ratio outside 0.8 to 1.25 between the rise the upstream's readings showed and the share the router priced for

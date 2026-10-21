@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, CostRevision, CostSplit, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, MoveCause, Overview, PairingConfirmed, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
+  MoveCause, Overview, PairingConfirmed, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
 } from './types';
 import type { AgentContext } from './types';
@@ -109,13 +109,6 @@ export function decodeKeyModels(v: unknown): KeyModels {
     modelRulesMode: MODEL_RULES_MODE_VALUES.find((x) => x === str(k.model_rules_mode)) ?? 'extend',
     poolId: str(k.pool_id),
     rules: list(k.rules).map(rec).map((r) => ({ cooldowns: list(r.cooldowns).map(decodeRuleCooldown), level: str(r.level) === 'pool' ? 'pool' : 'key', not: bool(r.not), pattern: str(r.pattern) })),
-  };
-}
-
-export function decodeModelsState(v: unknown): ModelsState {
-  const s = rec(v);
-  return {
-    cooldowns: list(s.cooldowns).map(rec).map((g) => ({ model: str(g.model), rows: list(g.rows).map(decodeRuleCooldown) })),
   };
 }
 
@@ -256,7 +249,7 @@ export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
   return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), heldUntil: isoOrNull(u.held_until), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
 }
 
-export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'models', 'pools'] as const satisfies readonly NonNullable<AttentionItem['link']>['page'][];
+export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'pools'] as const satisfies readonly NonNullable<AttentionItem['link']>['page'][];
 export const ATTENTION_SUBJECT_VALUES = ['account', 'client', 'model', 'pool', 'router'] as const satisfies readonly AttentionItem['subject']['type'][];
 
 export function decodeAttention(v: unknown): AttentionItem {

@@ -220,14 +220,6 @@ export interface KeyModels {
   rules: ProcessedRule[];
 }
 
-/**
- * `GET /admin/models/state`: the live cooldowns grouped by model. The route also answers the newest rejections and
- * permits, which the console reads in the routing log instead.
- */
-export interface ModelsState {
-  cooldowns: { model: string; rows: RuleCooldown[] }[];
-}
-
 export interface QuotaSample {
   at: string;
   utilization: number;
@@ -284,10 +276,10 @@ export interface AttentionItem {
   detail: Record<string, unknown>;
   kind: AttentionKind;
   /**
-   * Where the operator fixes it, null for a drift refusal that carried no key, a router subject, a deleted pool and a
-   * kind the console does not know.
+   * Where the operator fixes it, null for a drift refusal that carried no key, a router subject, a deleted pool, the
+   * model weight estimated item and a kind the console does not know.
    */
-  link: { id: string; page: 'accounts' | 'keys' | 'models' | 'pools' } | null;
+  link: { id: string; page: 'accounts' | 'keys' | 'pools' } | null;
   /** The pools the item belongs to, which a pool card filters the same list by. */
   pools: string[];
   /** The wire's kind where `kind` is `unknown`. Null on a known kind. */

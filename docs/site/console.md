@@ -34,7 +34,7 @@ a "Retry" button that reads the session again. A session that ends while a view 
 `Your session ended, so log in again.`
 
 The sidebar reads the brand "Phoebis Router" over the views in this order: Dashboard, Quota, Accounts, Pools, Keys,
-Guardrails, Models, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log,
+Guardrails, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log,
 shown while the expert view is on or while the open view is a diagnostics view, so a link into the log opens it whatever
 the mode and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the router's version
 as `v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), the "Unit"
@@ -92,12 +92,13 @@ The Dashboard reads its figures again every 30 seconds. A line above the tiles n
 first, each item a badge that opens the account, pool or key where it is fixed, and reads "Nothing needs attention"
 otherwise. The line keeps one row of items and folds the badges past it behind a "+N more" badge that opens the full
 list, so the tiles hold still. An item with no such place (a drift refusal that named no key, a parked record without a
-pool, a pool deleted since, one of the router's own writers, a page unknown to the console or a condition the console
-does not know, which reads "Unknown condition" with its kind on hover) stays a plain badge. The
+pool, a pool deleted since, one of the router's own writers, the model weight estimated item, whose estimate shows in
+the cost reference dialog, a page unknown to the console or a condition the console does not know, which reads "Unknown
+condition" with its kind on hover) stays a plain badge. The
 conditions are the ones the `phoebis_attention` gauge exports ([Conditions and
 gauges](statistics.md#conditions-and-gauges)), and the pool exhausted item opens the [routing log](#routing-log) on the
-pool's exhausted decisions from the moment the condition began. The model weight estimated item opens the
-[Models](#models) view. The four routing conditions read as one sentence each, the subject first, then the count, the
+pool's exhausted decisions from the moment the condition began. The four routing conditions read as one sentence each,
+the subject first, then the count, the
 settings they name (with the pool's values where the item carries them) and the start, such as
 `main: 4 rounds marked nothing, no destination had runway, window_ceiling 95 %, since 14:45` for a pool whose rounds
 found no destination with runway. An account's count reads `2 moves landed and the 5h window was spent within the hour`
@@ -540,6 +541,10 @@ and Capture (Capture request and response bodies as Inherit from pool, an overri
 Server-side auto mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture group
 warns what the bodies hold, the warning [Keys](routing.md#keys) quotes.
 
+A saved key's dialog shows its Effective list under the Models group: the list the key is judged by, top to bottom, with
+the level each entry comes from and, where accounts cool for a model the entry names, a cooling count whose hover names
+them.
+
 ## Guardrails
 
 ![The Guardrails view: a preset's guardrail observing beside an enforcing one](assets/guardrails-light.png#only-light)
@@ -603,25 +608,6 @@ capture or the pool's reads off, "Body capture is off, so there is nothing to te
 Capture group." with the link "The pool's keys" to the Keys view filtered to the pool. The toasts read "Guardrail
 created", "Guardrail saved" and "Guardrail deleted". What the test evaluates and what a blocked client receives are on
 [Testing a guardrail](guardrails.md#testing-a-guardrail).
-
-## Models
-
-![The Models view](assets/models-light.png#only-light)
-![The Models view](assets/models-dark.png#only-dark)
-
-The view opens on "The rules a key's requests are judged by, the first match deciding, and the models accounts refused:
-a refused model cools on that account alone while the request fails over." beside a Key select, the chosen key kept in
-the page's address as `key` (the first key leaves it out). A note under them reads "An entry naming an undated model is
-written with a trailing * (claude-sonnet-4-5*), because the router routes, prices and records that model under its
-dated snapshot." The card `Processed rules for {key}`, subtitled "Extends the pool's rules, and the models listing
-shows [1m] twins" (or "Replaces", or "no [1m] twins"), lists the processed rules as Level, Rule (Allow or Deny), Pattern
-and Cooling, the last naming the accounts cooling for a model the rule matches. Without a key it reads "No keys: a
-key's processed rules show here once one exists.", and without rules "No rules: every model the pool's accounts serve
-is allowed." Then one block per model, titled by the model's short name, lists the accounts cooling for it as Account,
-Scope, Reason and Until with a Clear button per row, which asks "Clear cooldown" with the sentence the Accounts view
-uses, or one "Cooling down" block reads "Nothing cooling down" while nothing cools. The button "View rejections and
-permits in the routing log" opens the [routing log](#routing-log) on the model rejected and model permitted rows of
-the last 24 hours. The rule grammar and the levels are on [Model rules](routing.md#model-rules).
 
 ## Requests
 
@@ -1239,5 +1225,5 @@ card's "Moves in the last hour" figure on the pool's moved decisions over the la
 and the dashboard's pool exhausted item on the pool's exhausted decisions from the moment the condition began, the
 routing conditions' dashboard items and pool card rows on the pool's shedding rounds, the account's moves and spent
 windows, its spent windows, or its slow-down starts and ends, from the moment the condition began, the "Routing log"
-action on an account's Requests card on the account's rows over the last hour, and the Models view's button on the model
-rejected and model permitted rows of the last 24 hours.
+action on an account's Requests card on the account's rows over the last hour, and a model a decision card, an event's
+detail or a log row names on the model's rows over the last 24 hours.

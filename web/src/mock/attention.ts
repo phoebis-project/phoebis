@@ -317,7 +317,7 @@ export const ATTENTION: AttentionItem[] = [
           ...ATTENTION_ITEM_SAMPLE,
           ...sonnetUnweighted,
           kind: 'model_unweighted' as const,
-          link: { id: 'claude-sonnet-4-6', page: 'models' as const },
+          link: null,
           pools: [],
           subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' as const },
         },

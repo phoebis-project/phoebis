@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 
-/** One scope an account cools under: an account's own cooldown row with its id, or a models-state row as is. */
+/** One scope an account cools under: an account's own cooldown row with its id. */
 export type CoolingRow = { accountId: string; reason: string; scope: string; until: string };
 
 const MODEL_SCOPE_PREFIX = 'model:';
@@ -18,8 +18,8 @@ export function scopeLabel(scope: string): string {
 }
 
 /**
- * The rows an account (or a model group) is cooling under, with a clear button per row when `onClear` is given.
- * A model group's rows all share its scope, so `showAccount` names the account each row belongs to.
+ * The rows an account is cooling under, with a clear button per row when `onClear` is given. `showAccount` names the
+ * account each row belongs to where the rows span several accounts.
  */
 export function CoolingDown({ busy = false, now, onClear, rows, showAccount = false, title }: { busy?: boolean; now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; showAccount?: boolean; title: ReactNode }): JSX.Element {
   // Null until the operator toggles, so a block that was empty when it mounted still opens once a row arrives.

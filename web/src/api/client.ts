@@ -20,7 +20,6 @@ import type {
   MemberBudget,
   ModelRule,
   ModelRulesMode,
-  ModelsState,
   OveragePolicy,
   Overview,
   PairingConfirmed,
@@ -235,7 +234,6 @@ export interface Api {
   getGuardrail(id: string): Promise<Guardrail>;
   getKeepaliveOverview(): Promise<KeepaliveOverview>;
   getKeyModels(keyId: string): Promise<KeyModels>;
-  getModelsState(): Promise<ModelsState>;
   getOverview(): Promise<Overview>;
   getQuotaHistory(accountId: string): Promise<QuotaHistory[]>;
   /** Null for a request the ledger no longer holds. */

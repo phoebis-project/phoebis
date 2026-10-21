@@ -824,11 +824,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         <Field
           label="Model rules"
           plain
-          hint={
-            <>
-              Top to bottom, first match wins. The <PageLink to="/models">Models page</PageLink> shows the list per key.
-            </>
-          }
+          hint="Top to bottom, first match wins. The saved key's Effective list shows the list it ends up with."
         >
           <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
         </Field>

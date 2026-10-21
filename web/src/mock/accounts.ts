@@ -75,9 +75,9 @@ export const ACCOUNTS: Account[] = ([
     subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 5_380 },
     // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
-    // scope alone) but which the Models view and this account's own status fold in like any other cooldown. The
-    // fast-lane row ahead of it holds fast-mode requests alone, so neither the status nor the header's cooldown
-    // badge reads it, and it lifts sooner, so a page reading the first row would name the wrong reset.
+    // scope alone) but which this account's own status folds in like any other cooldown. The fast-lane row ahead of
+    // it holds fast-mode requests alone, so neither the status nor the header's cooldown badge reads it, and it lifts
+    // sooner, so a page reading the first row would name the wrong reset.
     cooldowns: [
       {
         reason: 'fast_rate_limit',

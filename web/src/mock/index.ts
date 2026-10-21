@@ -6,7 +6,7 @@ import { decodeStreamCut } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
-  ModelRule, ModelsState, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
@@ -946,7 +946,7 @@ export class MockApi implements Api {
     return latency(emptyStore() ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW);
   }
 
-  /** Every live model-scoped cooldown across the accounts, folded to the shape the two model routes answer. */
+  /** Every live model-scoped cooldown across the accounts, folded to the shape the key models route answers. */
   private modelCooldowns(): RuleCooldown[] {
     return this.accounts.flatMap((a) =>
       a.cooldowns
@@ -972,17 +972,6 @@ export class MockApi implements Api {
       pattern: r.pattern,
     }));
     return latency({ keyId: key.id, longContextTwins: key.longContextTwins, modelRulesMode: key.modelRulesMode, poolId: key.poolId, rules });
-  }
-
-  getModelsState(): Promise<ModelsState> {
-    if (emptyStore()) return latency({ cooldowns: [] });
-    const byModel = new Map<string, RuleCooldown[]>();
-    for (const row of this.modelCooldowns()) {
-      const model = row.scope.slice(MODEL_SCOPE_PREFIX.length);
-      byModel.set(model, [...(byModel.get(model) ?? []), row]);
-    }
-    const cooldowns = [...byModel.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([model, rows]) => ({ model, rows }));
-    return latency({ cooldowns });
   }
 
   getOverview() {

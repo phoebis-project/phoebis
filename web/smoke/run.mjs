@@ -641,7 +641,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
     // The model's item ranks after the poll backoff and before the routing conditions, the route's order of the kinds.
     ...(unweighted
-      ? [['Model weight estimated: claude-sonnet-4-6', 'badge--warning', '/models#claude-sonnet-4-6', [attentionDetail(unweighted, Date.now()), `model: ${unweighted.detail.model}`, `requests: ${unweighted.detail.requests}`, `tier: ${unweighted.detail.tier}`, `weight_of: ${unweighted.detail.weight_of}`]]]
+      ? [['Model weight estimated: claude-sonnet-4-6', 'badge--warning', null, [attentionDetail(unweighted, Date.now()), `model: ${unweighted.detail.model}`, `requests: ${unweighted.detail.requests}`, `tier: ${unweighted.detail.tier}`, `weight_of: ${unweighted.detail.weight_of}`]]]
       : []),
     // Nightly's meter drift ranks after the model's item and before the routing conditions, reads its off window and
     // opens Analytics on the account.
@@ -673,7 +673,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log and an unweighted model's the Models page, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all sixteen while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all sixteen while no layout folds it",
     ok:
       lead() === '16 need attention' &&
       unweighted !== undefined &&
@@ -2288,7 +2288,7 @@ m = await mount('/accounts');
 results.push({ name: 'nav calls the pages Accounts and Keys, and no text names the old page', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Accounts') && [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Keys') && !/\bupstreams\b/i.test(m.text()), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
 {
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Guardrails', 'Models', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
+  results.push({ name: 'nav has Quota after Dashboard and Sessions, the navigation lists no live view, Keepalive or Plugins', ok: JSON.stringify(nav) === JSON.stringify(['Dashboard', 'Quota', 'Accounts', 'Pools', 'Keys', 'Guardrails', 'Requests', 'Analytics', 'Sessions', 'Settings']), missing: nav });
 }
 expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max 20x since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 {
@@ -8386,7 +8386,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
         fieldOf('Model rules')?.querySelector('.segmented') === null &&
         !!fieldOf('Pool rules')?.querySelector('.segmented') &&
         fieldOf('Pool rules')?.querySelector('label') === null &&
-        rulesHint === 'Top to bottom, first match wins. The Models page (opens in a new tab) shows the list per key.',
+        rulesHint === "Top to bottom, first match wins. The saved key's Effective list shows the list it ends up with.",
       missing: [JSON.stringify(labels), rulesHint],
     });
   }
@@ -9312,142 +9312,6 @@ const closeCustom = async (page, button) => {
   rangeButton(button)?.click();
   await page.settle();
 };
-
-m = await mount('/models');
-{
-  const story = requests.find((r) => r.model !== r.canonicalModel);
-  const rulesCard = () => m.container.querySelector('.models__rules');
-  const cells = (tr) => [...tr.children].map((td) => td.textContent?.trim() ?? '');
-  const drawnRules = () => [...(rulesCard()?.querySelectorAll('tbody tr') ?? [])].map((tr) => cells(tr).join(' | '));
-  // The route's own answer for the key, so an edit an earlier check made to a key's list is read rather than assumed.
-  const answeredRules = async (keyId) => (await api.getKeyModels(keyId)).rules.map((r) => [r.level, r.not ? 'Deny' : 'Allow', r.pattern, [...new Set(r.cooldowns.map((c) => c.accountId))].join(', ') || '-'].join(' | '));
-  const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: '/models sits in the nav after Guardrails and titles the page', ok: nav.indexOf('Models') === nav.indexOf('Guardrails') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
-  // The keys checks leave a key of their own at the head of the list, so the first key is read, not assumed.
-  const first = (await api.listKeys())[0];
-  expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'View rejections and permits in the routing log', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
-  const firstRules = first ? await answeredRules(first.id) : [];
-  results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
-  columnsMarked('/models the rules table marks Pattern as its fill column', rulesCard()?.querySelector('table'), ['Pattern']);
-  fillTitles('/models every Pattern cell of the rules table carries its own text as its title', rulesCard()?.querySelector('table'));
-  const select = m.container.querySelector('select[aria-label="Key"]');
-  if (!select) controlMissing('/models switches the key and reads the other key\'s entries', 'Key');
-  else {
-    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'laptop');
-    select.dispatchEvent(new window.Event('change', { bubbles: true }));
-    await m.settle(400);
-    const laptop = await answeredRules('laptop');
-    const drawn = drawnRules();
-    results.push({
-      name: '/models switches the key and reads the other key\'s entries, the key\'s own ahead of the pool\'s',
-      ok: (rulesCard()?.textContent ?? '').includes('Processed rules for laptop') && JSON.stringify(drawn) === JSON.stringify(laptop) && drawn[0]?.startsWith('key | Allow') && drawn.some((r) => r.startsWith('pool | Deny')) && drawn.some((r) => !r.endsWith('| -')),
-      missing: [JSON.stringify(drawn), JSON.stringify(laptop)],
-    });
-    // Each account in the cooling column is its own link, so the operator reaches the block that clears it.
-    const links = [...(rulesCard()?.querySelectorAll('tbody td:last-child a') ?? [])].map((a) => a.getAttribute('href'));
-    results.push({ name: '/models the cooling column links each account', ok: links.length > 0 && links.every((h) => /^\/accounts\/[a-z]+$/.test(h ?? '')), missing: links });
-    results.push({
-      name: '/models a deny entry carries no cooling account even when one cools a model it matches',
-      ok: drawn.includes('key | Deny | * | -'),
-      missing: drawn,
-    });
-  }
-  const state = await api.getModelsState();
-  // A group's heading reads the short model id and carries the whole one on its title, which the block is found by.
-  const headingOf = (c) => c.querySelector('.card__title [title]');
-  const groups = [...m.container.querySelectorAll('.card')].filter((c) => state.cooldowns.some((g) => g.model === headingOf(c)?.getAttribute('title')));
-  const headings = groups.map((c) => [headingOf(c)?.textContent, headingOf(c)?.getAttribute('title')]);
-  const groupRows = groups.flatMap((c) => [...c.querySelectorAll('tbody tr')].map((tr) => cells(tr).slice(0, 2).join(' | ')));
-  const answeredGroupRows = state.cooldowns.flatMap((g) => g.rows.map((r) => `${r.accountId} | ${g.model}`));
-  results.push({
-    name: '/models draws one cooling-down block per model, each row naming its account',
-    ok: state.cooldowns.length > 0 && groups.length === state.cooldowns.length && JSON.stringify(headings) === JSON.stringify(state.cooldowns.map((g) => [shortModel(g.model), g.model])) && JSON.stringify(groupRows) === JSON.stringify(answeredGroupRows),
-    missing: [JSON.stringify(headings), JSON.stringify(groupRows), JSON.stringify(answeredGroupRows)],
-  });
-  {
-    // Recorded rather than sent, so the story's cooldowns stay for the checks after this one.
-    const original = api.clearCooldown;
-    const calls = [];
-    api.clearCooldown = async (accountId, scope) => {
-      calls.push([accountId, scope]);
-    };
-    [...(groups[0]?.querySelectorAll('tbody button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
-    await m.settle(250);
-    const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-    const asked = confirm?.textContent ?? '';
-    [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
-    await m.settle(400);
-    api.clearCooldown = original;
-    const first = state.cooldowns[0]?.rows[0];
-    results.push({
-      name: '/models a row clears its account\'s model scope through the Accounts view\'s confirm',
-      ok: asked.includes('Clear cooldown') && asked.includes('The account becomes eligible immediately.') && JSON.stringify(calls) === JSON.stringify([[first?.accountId, first?.scope]]) && m.text().includes('Cooldown cleared'),
-      missing: [asked.slice(0, 120) || 'no confirm', JSON.stringify(calls)],
-    });
-  }
-  {
-    // Held open rather than resolved at once, so the busy window between the confirm and the answer is
-    // observable instead of collapsing to nothing.
-    let resolveClear;
-    const original = api.clearCooldown;
-    api.clearCooldown = () => new Promise((resolve) => { resolveClear = resolve; });
-    [...(groups[0]?.querySelectorAll('tbody button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
-    await m.settle(250);
-    const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-    [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
-    await m.settle(50);
-    const clearButtons = () => [...(groups[0]?.querySelectorAll('tbody button') ?? [])].filter((b) => b.textContent?.trim() === 'Clear');
-    const disabledWhileBusy = clearButtons().length > 0 && clearButtons().every((b) => b.disabled);
-    resolveClear?.(undefined);
-    await m.settle(400);
-    api.clearCooldown = original;
-    const reenabledAfter = clearButtons().length > 0 && clearButtons().every((b) => !b.disabled);
-    results.push({
-      name: '/models every Clear button in the block is disabled while a clear is in flight',
-      ok: disabledWhileBusy && reenabledAfter,
-      missing: [String(disabledWhileBusy), String(reenabledAfter)],
-    });
-  }
-}
-m.unmount();
-{
-  // The rejections and permits are read in the routing log, so one link below the cooling-down blocks opens it on the
-  // two model kinds over the last 24 hours, a preset the log reads from its own load.
-  const page = await mount('/models', { now: CLOCK_ORIGIN });
-  const links = [...page.container.querySelectorAll('a')].filter((a) => a.textContent?.trim() === 'View rejections and permits in the routing log');
-  const link = links[0];
-  const cards = [...page.container.querySelectorAll('.card')];
-  const href = link?.getAttribute('href') ?? null;
-  link?.click();
-  await page.settle(300);
-  const landed = page.location();
-  results.push({
-    name: '/models the link opens the log on the two model kinds over the last 24 hours',
-    ok:
-      links.length === 1 &&
-      link.classList.contains('btn') &&
-      link.classList.contains('btn--secondary') &&
-      cards.length > 1 &&
-      cards.every((c) => c.compareDocumentPosition(link) & window.Node.DOCUMENT_POSITION_FOLLOWING) &&
-      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'model_rejected,model_permitted', range: '24h' }) &&
-      `${landed.pathname}${landed.search}` === href,
-    missing: [`${links.length} links`, href ?? 'no link', JSON.stringify(landed)],
-  });
-  page.unmount();
-  {
-    // The link reads none of the cooldowns, so the error state that takes their place leaves it standing.
-    failNextCall('getModelsState', '/admin/models/state', 'ledger locked');
-    const failed = await mount('/models', { now: CLOCK_ORIGIN });
-    const error = failed.text().includes('Could not load the model cooldowns');
-    const kept = [...failed.container.querySelectorAll('a')].find((a) => a.textContent?.trim() === 'View rejections and permits in the routing log');
-    results.push({
-      name: '/models a failed cooldowns read keeps the link to the routing log',
-      ok: error && kept !== undefined && kept.getAttribute('href') === href,
-      missing: [`error ${error}`, kept?.getAttribute('href') ?? 'no link', href ?? 'no href'],
-    });
-    failed.unmount();
-  }
-}
 
 m = await mount('/requests');
 expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', 'fable-5-1', 'desktop', 'laptop', 'shown']);
@@ -13012,7 +12876,7 @@ m.unmount();
     });
   }
   {
-    // The links the dashboard, the pool cards and the Models view write name their kinds, which read as any set does.
+    // The kinds a link from another view writes read as any set does.
     const chips = [];
     for (const kinds of ['exhausted', 'model_rejected,model_permitted', 'moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended', 'slow_down_ended,wind_down_started,mark_cleared,held,slow_down_started,shedding_round,moved']) {
       const page = await mount(`/routing-log?kinds=${kinds}`, { now: CLOCK_ORIGIN });
@@ -13617,7 +13481,8 @@ m.unmount();
     });
   }
   {
-    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/models$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions$/ };
+    // The request refused before it resolved a model records an empty one, which the row still draws as a model link.
+    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/routing-log\?models=[^&]*&range=24h$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions$/ };
     const wrong = [];
     const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
     const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
@@ -15138,8 +15003,8 @@ m.unmount();
     // The re-made drawer check: the account that refused the model and the one that served it, and both of its names.
     const rejected = modelLinks.model_rejected;
     const permitted = modelLinks.model_permitted;
-    // The Models page reads no model key, so each model's link opens the view itself and its text names the model.
-    const model = (pair, id) => JSON.stringify([pair.links, pair.texts]) === JSON.stringify([['/models'], [id]]);
+    // Each model's link opens the routing log on the model's rows over the last 24 hours, and its text names the model.
+    const model = (pair, id) => JSON.stringify([pair.links, pair.texts]) === JSON.stringify([[`/routing-log?${new URLSearchParams({ models: id, range: '24h' })}`], [id]]);
     const pairOf = (entry, label) => ({ links: entry.links[label], texts: entry.texts[label] });
     results.push({
       name: '/routing-log the model rejected and permitted details link each account and model they name',
@@ -19378,6 +19243,11 @@ m.unmount();
 m = await mount('/keepalive');
 results.push({ name: '/keepalive redirects to /sessions', ok: m.text().includes('One row per session'), missing: [m.text().slice(0, 120)] });
 m.unmount();
+for (const path of ['/models', '/models#claude-sonnet-4-6']) {
+  m = await mount(path);
+  results.push({ name: `${path} redirects to /keys`, ok: m.location().pathname === '/keys' && m.container.querySelector('.topbar__title')?.textContent === 'Keys', missing: [JSON.stringify(m.location()), m.container.querySelector('.topbar__title')?.textContent ?? 'no title'] });
+  m.unmount();
+}
 
 {
   // The page reads the overview, the recipes and the sessions again at its one auto reload interval, 5 s at the start,
@@ -20080,28 +19950,6 @@ m.unmount();
       ok: JSON.stringify(landed) === JSON.stringify([{ hash: '#jobs', pathname: '/pools', search: '', card: true }, { hash: '#quota-windows', pathname: '/quota', search: '', timeline: true }, { hash: '', pathname: '/sessions', search: '' }]),
       missing: landed.map((l) => JSON.stringify(l)),
     });
-  }
-  {
-    const name = '/models reads the key from the address, and the first key writes nothing';
-    const firstKey = (await api.listKeys())[0]?.id;
-    const page = await mount('/models?key=laptop');
-    const select = page.container.querySelector('select[aria-label="Key"]');
-    const read = select?.value ?? null;
-    if (select && firstKey !== undefined) await chooseIn(page, select, firstKey);
-    const cleared = page.location().search;
-    if (select) await chooseIn(page, select, 'laptop');
-    results.push({ name, ok: firstKey !== 'laptop' && read === 'laptop' && cleared === '' && page.location().search === '?key=laptop' && select?.value === 'laptop', missing: [`first ${firstKey}`, `read ${read}`, `cleared ${cleared}`, page.location().search] });
-    page.unmount();
-  }
-  {
-    const name = '/models reads a key the list does not carry as the first key, its rules and its name';
-    const [first] = await api.listKeys();
-    const spy = countCalls('getKeyModels');
-    const page = await mount('/models?key=nope');
-    spy.restore();
-    const read = { last: spy.calls.at(-1)?.[0] ?? null, select: page.container.querySelector('select[aria-label="Key"]')?.value ?? null, title: page.container.querySelector('.models__rules .card__title')?.textContent?.trim() ?? null };
-    results.push({ name, ok: first !== undefined && JSON.stringify(read) === JSON.stringify({ last: first.id, select: first.id, title: `Processed rules for ${first.name}` }), missing: [`first ${first?.id}`, JSON.stringify(read)] });
-    page.unmount();
   }
 }
 
@@ -22896,7 +22744,6 @@ m.unmount();
     ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).slice(0, 4).join(' ') === '0 0 0 0' && pairLines(c).join(' over ') === '0% subscription over $0.00 billed', 'no pool card, tiles 0 0 0 0, the cost tile 0% subscription over $0.00 billed'],
     ['/keys', (c, t) => t.includes('No keys yet'), 'No keys yet'],
     ['/guardrails', (c) => c.querySelector('.guardrails__table .empty__title')?.textContent === 'No guardrails yet', 'No guardrails yet inside the table'],
-    ['/models', (c, t) => t.includes("No keys: a key's processed rules show here once one exists."), 'No keys: ...'],
     ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],
     ['/analytics', (c, t) => t.includes('No traffic in this range.'), 'No traffic in this range.'],
     ['/sessions', (c, t) => t.includes('No live sessions'), 'No live sessions'],
@@ -24197,7 +24044,7 @@ m.unmount();
     const own = where === `/requests/${laptopRow.id}` ? badges.filter((b) => b.closest('.drawer')) : badges.filter((b) => !b.closest('.topbar'));
     counts.push({ onPage: own.length, seen: badges.length, where });
   };
-  for (const path of ['/', '/accounts', '/analytics', '/keys', '/models', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
+  for (const path of ['/', '/accounts', '/analytics', '/keys', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
     await page.navigate(path);
     if (path === '/sessions') await expandAll();
     sweep(path);

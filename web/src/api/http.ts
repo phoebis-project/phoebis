@@ -222,7 +222,6 @@ export class HttpApi implements Api {
   getGuardrail = async (id: string) => d.decodeGuardrail(await call('GET', `/admin/guardrails/${enc(id)}`));
   getKeepaliveOverview = async () => d.decodeKeepaliveOverview(await call('GET', '/admin/keepalive/overview'));
   getKeyModels = async (keyId: string) => d.decodeKeyModels(await call('GET', `/admin/keys/${enc(keyId)}/models`));
-  getModelsState = async () => d.decodeModelsState(await call('GET', '/admin/models/state'));
   getOverview = async () => d.decodeDashboard(await call('GET', '/admin/dashboard'));
   getQuotaHistory = async (accountId: string) => d.decodeQuotaHistory(await call('GET', `/admin/accounts/${enc(accountId)}/quota?range=7d`));
   getRequest = async (id: string): Promise<RequestDetail | null> => {

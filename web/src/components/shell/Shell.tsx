@@ -6,7 +6,7 @@ import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync, useMediaQuery } from '@/lib/hooks';
 import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
-import { IconArrowRight, IconChart, IconFunnel, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
+import { IconArrowRight, IconChart, IconFunnel, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 import { UnitLegend, UnitSwitch } from '@/components/ui/UnitControls';
 
@@ -19,7 +19,6 @@ const NAV: NavItem[] = [
   { to: '/pools', label: 'Pools', icon: <IconLayers size={16} /> },
   { to: '/keys', label: 'Keys', icon: <IconKey size={16} /> },
   { to: '/guardrails', label: 'Guardrails', icon: <IconFunnel size={16} /> },
-  { to: '/models', label: 'Models', icon: <IconShield size={16} /> },
   { to: '/requests', label: 'Requests', icon: <IconList size={16} /> },
   { to: '/analytics', label: 'Analytics', icon: <IconChart size={16} /> },
   { to: '/sessions', label: 'Sessions', icon: <IconSessions size={16} /> },
@@ -35,7 +34,6 @@ export const PAGE_TITLES: Record<string, string> = {
   '/analytics': 'Analytics',
   '/guardrails': 'Guardrails',
   '/keys': 'Keys',
-  '/models': 'Models',
   '/pools': 'Pools',
   '/quota': 'Quota',
   '/requests': 'Requests',

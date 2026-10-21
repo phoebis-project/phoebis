@@ -3072,8 +3072,7 @@
 }
 
 /* A button that opens the routing log is a link, so its hover keeps the button's look rather than an underline. */
-.drawer__actions a.btn:hover,
-.models__log a.btn:hover {
+.drawer__actions a.btn:hover {
   text-decoration: none;
 }
 

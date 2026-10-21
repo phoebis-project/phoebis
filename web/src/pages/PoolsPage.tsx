@@ -1726,12 +1726,7 @@ export function PoolDialog({
         <Field
           label="Model rules"
           plain
-          hint={
-            <>
-              Top to bottom, first match wins. A model no rule names is allowed, and a closing Deny * allows only what the list names. Write an undated id with a trailing *. A key extends or replaces these rules, and the{' '}
-              <PageLink to="/models">Models page</PageLink> shows the list a key ends up with.
-            </>
-          }
+          hint="Top to bottom, first match wins. A model no rule names is allowed, and a closing Deny * allows only what the list names. Write an undated id with a trailing *. A key extends or replaces these rules, and the saved key's Effective list shows the list it ends up with."
         >
           <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
         </Field>

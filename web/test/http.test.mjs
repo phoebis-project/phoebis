@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ApiError, HttpApi, SessionNotKept, call, noteBuild, quietly, setBuildHook, setHooks, slug } from './dist/api.js';
+import { ATTENTION_PAGE_VALUES, ApiError, HttpApi, SessionNotKept, call, noteBuild, quietly, setBuildHook, setHooks, slug } from './dist/api.js';
 
 const answer = (status, body, headers = {}) => ({ headers: { get: (k) => headers[k.toLowerCase()] ?? null }, ok: status >= 200 && status < 300, status, text: async () => (body === undefined ? '' : JSON.stringify(body)), json: async () => body });
 const stub = (handler) => { const calls = []; globalThis.fetch = async (url, init = {}) => { calls.push({ init, url }); return handler(url, init); }; return calls; };
@@ -617,7 +617,11 @@ test('the attention read is one GET, and its failures reach no toast, since the 
   const calls = stub(() => answer(200, body));
   const items = await new HttpApi().getAttention();
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
-  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), body.items.map((i) => [i.kind, i.subject.id, { id: i.link.id, page: i.link.page }]), 'every captured kind decodes as itself, its link whole');
+  assert.deepEqual(
+    items.map((i) => [i.kind, i.subject.id, i.link]),
+    body.items.map((i) => [i.kind, i.subject.id, i.link && ATTENTION_PAGE_VALUES.includes(i.link.page) ? { id: i.link.id, page: i.link.page } : null]),
+    'every captured kind decodes as itself, its link whole where its page is one the console knows and null otherwise',
+  );
   assert.ok(items.some((i) => i.kind === 'model_unweighted'), "the capture's unweighted model among them");
   assert.deepEqual(
     items.filter((i) => ['wall_reached', 'destination_spent', 'shed_no_runway'].includes(i.kind)).map((i) => [i.kind, i.subject.id, i.link]),

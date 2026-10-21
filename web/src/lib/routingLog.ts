@@ -711,9 +711,10 @@ export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id:
     case 'key':
     case 'pool':
       return `/${kind}s#${encodeURIComponent(id)}`;
-    // Neither page has a filter for the entity, so the link opens the view.
+    // A model has no view of its own, so its link opens the log on the model's rows over the last day.
     case 'model':
-      return '/models';
+      return logHref({ models: [id], range: '24h' });
+    // The Sessions page has no filter for the entity, so the link opens the view.
     case 'session':
       return '/sessions';
   }

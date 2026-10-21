@@ -293,13 +293,6 @@ export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
   status: { default: 'all', kind: 'choice', name: 'status', values: ['all', ...ACCOUNT_STATUSES] },
 });
 
-export interface ModelsAddress {
-  /** The chosen key, empty for the first listed key. */
-  key: string;
-}
-
-export const MODELS_CODEC = codecOf<ModelsAddress>({ key: text('key') });
-
 // These views have no filter, so their codecs read and write nothing: the Pools page keeps its hash and its one-shot
 // `edit` and `group`, the Quota page's hash is its section, and a filter either view gains later lands here.
 export const POOLS_CODEC = codecOf<Record<string, never>>({});

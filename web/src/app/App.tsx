@@ -6,7 +6,6 @@ import { reloadOnChunkFailure } from '@/lib/chunks';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { GuardrailsPage } from '@/pages/GuardrailsPage';
 import { KeysPage } from '@/pages/KeysPage';
-import { ModelsPage } from '@/pages/ModelsPage';
 import { QuotaPage } from '@/pages/QuotaPage';
 import { RequestsPage } from '@/pages/RequestsPage';
 import { RoutingLogPage } from '@/pages/RoutingLogPage';
@@ -40,8 +39,8 @@ export const routes = [
       { path: 'guardrails', element: <GuardrailsPage /> },
       // Bookmarks and links out there still point at the old path.
       { path: 'keepalive', element: <Navigate to="/sessions" replace /> },
+      { path: 'models', element: <Navigate to="/keys" replace /> },
       { path: 'keys', element: <KeysPage /> },
-      { path: 'models', element: <ModelsPage /> },
       { path: 'pools', element: lazily(<PoolsPage />), errorElement: <PageLoadFailed /> },
       { path: 'quota', element: <QuotaPage /> },
       { path: 'requests', element: <RequestsPage /> },

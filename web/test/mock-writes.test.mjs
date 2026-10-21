@@ -522,12 +522,12 @@ test('a model-scoped cooldown reads its window from its reason, not a fixed mode
   const api = await signedIn();
   const primary = api.accounts.find((a) => a.id === 'primary');
   const sample = primary.cooldowns[0];
-  primary.cooldowns = [...primary.cooldowns, { ...sample, reason: 'permission', scope: 'model:claude-test-permission' }];
-  const state = await api.getModelsState();
-  const permitted = state.cooldowns.find((g) => g.model === 'claude-test-permission');
-  assert.equal(permitted.rows[0].window, 'permission', 'a non-model_rejected reason reports its own text as the window');
-  const rejected = state.cooldowns.find((g) => g.model === 'claude-haiku-4-5-20251001');
-  assert.equal(rejected.rows[0].window, 'model_rejection', 'model_rejected still reports model_rejection');
+  // laptop's rules allow both models ahead of their closing deny, and primary is a member of laptop's pool.
+  primary.cooldowns = [...primary.cooldowns, { ...sample, reason: 'permission', scope: 'model:claude-sonnet-4-6' }];
+  const { rules } = await api.getKeyModels('laptop');
+  const windowOn = (pattern) => rules.find((r) => r.pattern === pattern && !r.not)?.cooldowns.find((c) => c.accountId === 'primary')?.window;
+  assert.equal(windowOn('claude-sonnet-4-6'), 'permission', 'a non-model_rejected reason reports its own text as the window');
+  assert.equal(windowOn('claude-haiku-4-5-20251001'), 'model_rejection', 'model_rejected still reports model_rejection');
 });
 
 test('the catalog union names each model once and a failed fetch contributes nothing', async () => {

@@ -73,8 +73,8 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
  * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens Analytics on
  * the account with the Burn section in view, where the reconciled windows behind it are listed. Every other kind opens
- * the account, pool, key or model where it is fixed. Null when the item names none, and for a kind this console does
- * not know whatever its link, since the console cannot say what the page would fix.
+ * the account, pool or key where it is fixed. Null when the item names none, and for a kind this console does not
+ * know whatever its link, since the console cannot say what the page would fix.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
