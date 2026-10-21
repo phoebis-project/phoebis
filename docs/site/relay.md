@@ -515,13 +515,12 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 | The slow-down's hold | The pool's `slow_down_hold_seconds`, 1 to 300, default 120 | Before the head, so the client's first-byte window covers it |
 | The wait for a moved pin's first head | The pool's `slow_down_hold_seconds` from the first request's dispatch, never past the request's deadline | Before the head, so the client's first-byte window covers it |
 
-A connect or handshake that times out counts as unsent, so the request is written once more on a fresh connection, about
-a second later when no connection could be opened and at once when a reused connection died. A retry in place sleeps the
-throttle's delay on the same account, with the same credential, before any byte of the answer's head reaches the client
-([Retry in place](routing.md#retry-in-place)). The slow-down's hold sleeps to the pin's deadline, which a retry or a
-sibling request of the pin rejoins, before the request is selected again ([Slow-down](routing.md#slow-down)). A reset
-wait and the slow-down and rewrite holds end inside the head guard whatever its length: at the request's deadline where
-the guard leaves one, else at the guard itself.
+A connect or handshake that times out counts as unsent, so the request is written once more on a fresh connection after
+a wait of about a second. A retry in place sleeps the throttle's delay on the same account, with the same credential,
+before any byte of the answer's head reaches the client ([Retry in place](routing.md#retry-in-place)). The slow-down's
+hold sleeps to the pin's deadline, which a retry or a sibling request of the pin rejoins, before the request is selected
+again ([Slow-down](routing.md#slow-down)). A reset wait and the slow-down and rewrite holds end inside the head guard
+whatever its length: at the request's deadline where the guard leaves one, else at the guard itself.
 
 Beneath these sit Claude Code's own waits. The client cuts a stream that has gone silent for 180 seconds with its
 watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The four

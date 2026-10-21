@@ -415,9 +415,10 @@ async fn a_request_refused_on_both_connects_answers_502_after_one_wait() {
         resp.headers().get("x-phoebis-error-code").unwrap(),
         "upstream_unreachable"
     );
+    eprintln!("two refused connects answered after {elapsed:?}");
     assert!(
-        elapsed >= CONNECT_RETRY_WAIT,
-        "one wait between the two connects, answered after {elapsed:?}"
+        elapsed >= CONNECT_RETRY_WAIT && elapsed < 2 * CONNECT_RETRY_WAIT,
+        "one wait between the two connects and none after the second, answered after {elapsed:?}"
     );
     let outcome = resp
         .extensions()
@@ -425,6 +426,51 @@ async fn a_request_refused_on_both_connects_answers_502_after_one_wait() {
         .expect("a relayed response carries its outcome");
     assert_eq!(outcome.attempt, 2, "no third attempt after the retry");
     assert!(!outcome.written, "neither connect carried a byte");
+}
+
+#[tokio::test]
+async fn the_accounts_removal_during_the_connect_wait_answers_account_canceled_with_no_retry() {
+    // Every connection is closed at accept, so the first dial fails its handshake and the wait starts. The relay's
+    // debug line right before the wait is the signal to remove the account, and the removal and the reload take
+    // milliseconds on this harness, well inside the one-second wait.
+    let captured = common::Captured::default();
+    let _log = captured.install_at(tracing::Level::DEBUG);
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::CloseImmediately,
+    }])
+    .await;
+    let (h, _sub) = bus_harness(&up, common::default_limits()).await;
+    let inflight = tokio::spawn(h.app.clone().oneshot(common::stream_request(common::KEY)));
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        captured
+            .text()
+            .contains("retrying a request that never reached the upstream")
+            .then_some(())
+    })
+    .await;
+    h.store.delete_account("a", "test").unwrap();
+    h.router.reload().await.unwrap();
+    let resp = tokio::time::timeout(Duration::from_secs(5), inflight)
+        .await
+        .expect("the removal ends the request")
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "account_canceled"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert_eq!(
+        outcome.attempt, 1,
+        "the cancellation ended the wait, so the removed account was not dialed again"
+    );
+    assert!(!outcome.written, "the failed dial carried no byte");
+    up.shutdown().await;
 }
 
 #[tokio::test]
