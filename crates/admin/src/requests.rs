@@ -144,7 +144,8 @@ pub(crate) struct RequestSummary {
     pub shape: RequestShape,
     pub usage: RequestUsage,
     pub cost_usd: f64,
-    /// Null for a request billed in dollars: an overage attempt, a fast answer, an API key account or no attempt.
+    /// Null for a request billed in dollars: an overage attempt, a fast answer, an API key account, a usage-based seat
+    /// or no attempt.
     /// Else an object keyed by the account's window ids, `five_hour`, `seven_day` and the model's own week where it
     /// has one, each the serving attempt's share of that window under the account tier the attempt recorded, priced
     /// at read time on the cost revision in force at the request's receipt with the peak band read at the attempt's
@@ -266,6 +267,8 @@ pub(crate) struct Attempt {
     /// present only when the head carried it.
     pub windows: Vec<AttemptWindow>,
     pub overage_in_use: Option<bool>,
+    /// The serving account's class at the attempt, false on a row from before the router recorded it.
+    pub usage_based: bool,
     /// The attempt's dollars at the cells its own prompt selects on the API price revision in force at its request's
     /// receipt, priced when it is read, null for a model the revision lacks and for an attempt without usage.
     pub estimated_usd: Option<f64>,
@@ -613,7 +616,13 @@ fn plan_figures(
     tables: &PlanTables,
 ) -> Option<PlanFigures> {
     let a = attempts.last()?;
-    if funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()) != Funding::Plan {
+    if funding_of(
+        &a.account_kind,
+        a.usage_based,
+        a.overage_in_use,
+        a.speed.as_deref(),
+    ) != Funding::Plan
+    {
         return None;
     }
     let usage = PinUsage {
@@ -765,6 +774,7 @@ fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -
         }),
         windows,
         overage_in_use: a.overage_in_use,
+        usage_based: a.usage_based,
         estimated_usd: attempt_usd(a, r, prices),
         selection: a
             .selection

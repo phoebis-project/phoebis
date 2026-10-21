@@ -368,6 +368,7 @@ async fn a_later_selection_supersedes_an_earlier_attempts_evidence() {
             attempt: 2,
             account_id: "b".into(),
             account_kind: "api_key".into(),
+            usage_based: false,
             pin_epoch: Some(2),
             started_at: r.now(),
             cache_ttl_ms: None,

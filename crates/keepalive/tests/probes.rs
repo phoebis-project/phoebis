@@ -1667,6 +1667,7 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
             attempt: 1,
             account_id: "a".into(),
             account_kind: "api_key".into(),
+            usage_based: false,
             pin_epoch: Some(1),
             started_at: r.now(),
             cache_ttl_ms: Some(ONE_HOUR_MS),

@@ -56,12 +56,13 @@ Each operation names its request (path segments, query parameters, or body field
             (newline-separated patterns. Under `group_by=user_agent` each names a group, a row falls in the first that \
             matches its agent's token, and the rest group under `other`), `clients` (newline-separated patterns over \
             the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`). Both also \
-            take `funding` (`billed` keeps the overage and fast rows and every row an API key account served, `plan` \
-            the rows a subscription window paid for and the rows of a request no account served. Each row files under \
-            the funding its serving attempt had when the ledger recorded it, so deleting an account, or recreating its \
-            id as the other kind, moves none of its rows. A probe's cost files under the funding of the probe's own \
-            request, while a recipe's settlement, which carries the probes' waste, files under the kind its record \
-            carries: `billed` for an API key account, else `fast` for a fast recipe, else `plan`. Absent keeps every \
+            take `funding` (`billed` keeps the overage and fast rows, every row an API key account served and every \
+            row a usage-based seat served, `plan` the rows a subscription window paid for and the rows of a request \
+            no account served. Each row files under the funding its serving attempt had when the ledger recorded it, \
+            so deleting an account, or recreating its id as the other kind, moves none of its rows. A probe's cost \
+            files under the funding of the probe's own request, while a recipe's settlement, which carries the \
+            probes' waste, files under the kind and the class its record carries: `billed` for an API key account, \
+            `usage_based` for a usage-based seat, else `fast` for a fast recipe, else `plan`. Absent keeps every \
             row. The two subsets partition the rows). `/accounts` takes `range` alone. `GET /admin/analytics/budgets`, \
             `/burn`, `/placements`, `/reconciliations`, and `/rewrites`, elsewhere under this tag, take their own \
             request shapes."),
@@ -364,7 +365,8 @@ pub(crate) struct TrafficBucketView {
     pub failed: u64,
     pub tokens: u64,
     pub cost_usd: f64,
-    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
+    /// `cost_usd`.
     pub billed_usd: f64,
     /// The plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
     pub equivalent: SharedEquivalentView,
@@ -681,7 +683,8 @@ pub(crate) struct BreakdownRow {
     /// The saving in the 20x window equivalent per window, under every grouping, a window absent where a row could not
     /// be priced on it.
     pub saving_equivalent: BTreeMap<String, f64>,
-    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
+    /// `cost_usd`.
     pub billed_usd: f64,
     /// `billed_usd` by token kind.
     pub billed: CostSplitView,
@@ -812,7 +815,8 @@ pub(crate) struct SeriesPointView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct HourPointView {
     pub at: i64,
-    /// The dollars of the hour's billed rows alone (fast mode, overage and API key accounts), a part of `cost`.
+    /// The dollars of the hour's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a
+    /// part of `cost`.
     pub billed: f64,
     pub cost: f64,
     /// The hour's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.

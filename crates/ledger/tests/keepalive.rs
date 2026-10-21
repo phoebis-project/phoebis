@@ -600,9 +600,11 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         // table leave for the same reason. Migration 40's two request columns leave for the same reason. Migration 41's
         // index leaves before its column, which SQLite refuses to drop while indexed, and its wall column leaves with
         // them. Migration 42's flag and refusals map leave too, both ahead of the rebuild, which lays the rollup table
-        // out from its own columns and leaves no map column to drop.
+        // out from its own columns and leaves no map column to drop. Migration 43's attempt class leaves as well, while
+        // the samples table keeps its shape, since that step's rebuild names the columns it copies.
         let mut sql = format!(
-            "ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
+            "ALTER TABLE attempts DROP COLUMN usage_based; \
+             ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
              DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
              ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms; \
              DROP TABLE routing_conditions; DROP TABLE window_reconciliations; {VERSION_33_ROLLUPS} "
@@ -692,7 +694,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),
@@ -761,10 +763,12 @@ async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_
         // The file as version 36 left it: the one count, holding what a credit booked before the split.
         // Migration 38 creates the reconciliations' table and migration 39 the guardrails' column and table, so each
         // leaves before the replay adds it again. Migration 40's two request columns, migration 41's index and two
-        // columns, the index first, and migration 42's flag and refusals map leave for the same reason.
+        // columns, the index first, migration 42's flag and refusals map and migration 43's attempt class leave for the
+        // same reason.
         db.write(|c| {
             c.execute_batch(
-                "ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
+                "ALTER TABLE attempts DROP COLUMN usage_based; \
+                 ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
                  DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms; \
                  ALTER TABLE requests DROP COLUMN classifier; ALTER TABLE requests DROP COLUMN client_contract; \
@@ -780,7 +784,7 @@ async fn migration_thirty_seven_keeps_a_rollup_rows_kept_warm_tokens_under_five_
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let counts: (i64, i64, i64) = db
         .read_blocking(|c| {
             Ok(c.query_row(
@@ -818,6 +822,103 @@ async fn the_writer_lands_a_keepalive_record_in_its_batch() {
         (1, 5)
     );
     up.shutdown().await;
+}
+
+/// A usage-based seat's kept-warm credit and wasted probe file under the seat's own funding word beside the request row
+/// they credit, ahead of the overage flag the answer reported, as `funding_of` reads the request's attempt.
+#[test]
+fn a_usage_based_seats_credit_and_wasted_probe_fold_under_usage_based_beside_its_request_row() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let at = 1_700_000_000_000;
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: at,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            cache_read_tokens: Some(2_000),
+            overage_in_use: Some(true),
+            usage_based: true,
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let on_the_seat = |d: KeepaliveDelta| KeepaliveDelta {
+        account_kind: Some(phoebis_store::AccountKind::Oauth),
+        usage_based: true,
+        overage_in_use: Some(true),
+        ..d
+    };
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &on_the_seat(KeepaliveDelta {
+                kept_warm_request_id: Some("r1".into()),
+                kept_warm_requests: 1,
+                kept_warm_5m_tokens: 2_000,
+                ..delta(at, "inference")
+            }),
+        )?;
+        fold_keepalive(
+            &tx,
+            &on_the_seat(KeepaliveDelta {
+                wasted_probes: 1,
+                wasted_input_tokens: 100,
+                wasted_probe_reasons: BTreeMap::from([("idle_limit".to_string(), 1)]),
+                ..delta(at, "probe")
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| {
+            read_rollups(
+                c,
+                hour_of(at),
+                hour_of(at) + 3_600,
+                &RollupSelect::default(),
+            )
+        })
+        .unwrap();
+    let mut filed: Vec<(&str, &str, u64, u64, u64)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.kind.as_str(),
+                r.funding.as_str(),
+                r.requests,
+                r.kept_warm_requests,
+                r.wasted_probes,
+            )
+        })
+        .collect();
+    filed.sort();
+    assert_eq!(
+        filed,
+        [
+            ("inference", "usage_based", 1, 1, 0),
+            ("probe", "usage_based", 0, 0, 1),
+        ],
+        "the credit lands on its request's own row and the wasted probe beside it, both under the seat's word"
+    );
 }
 
 /// A fast-mode session's probes and credits are dollars at the fast cells, so they file beside the fast

@@ -201,6 +201,9 @@ pub struct RelayOutcome {
     /// answer alone, an account that leaves the registry while the probe is in flight included. `None` for an answer
     /// the relay built before any selection.
     pub account_kind: Option<AccountKind>,
+    /// The served account's class as the leg stamped it beside `account_kind`, so a probe settles under the funding
+    /// its request row takes. False for an answer the relay built before any selection.
+    pub usage_based: bool,
     /// The source of the `diagnostics` member on the answering leg's body; `None` for an answer the relay built
     /// before any leg and for a leg that sent none.
     pub diagnostics: Option<DiagnosticsSource>,
@@ -670,6 +673,7 @@ impl Trace {
         &self,
         attempt: u8,
         account: &AccountRow,
+        usage_based: bool,
         pin_epoch: Option<u64>,
         started_at: i64,
         cache_ttl_ms: Option<i64>,
@@ -684,6 +688,7 @@ impl Trace {
                 AccountKind::Oauth => "oauth",
             }
             .into(),
+            usage_based,
             pin_epoch,
             started_at,
             cache_ttl_ms,
@@ -2323,10 +2328,12 @@ impl Relay {
                         in_overage: selection.in_overage,
                     });
                     // Stamped here rather than where the upstream's head is read, so an answer the relay built
-                    // itself after the selection carries the attempt's account kind too, the fact the ledger files
-                    // the attempt's funding from.
+                    // itself after the selection carries the attempt's account kind and class too, the facts the
+                    // ledger files the attempt's funding from.
                     if let Some(outcome) = response.extensions_mut().get_mut::<RelayOutcome>() {
                         outcome.account_kind = Some(selection.account.kind);
+                        outcome.usage_based =
+                            self.router.snapshot().usage_based(&selection.account.id);
                     }
                     return response;
                 }
@@ -2758,6 +2765,7 @@ impl Relay {
                 .selected(
                     *attempt,
                     account,
+                    usage_based,
                     pin_epoch,
                     (self.clock)(),
                     cache_ttl_ms(ttl),
@@ -4369,6 +4377,7 @@ impl Relay {
             cache_ttl_ms,
             overage_in_use: None,
             account_kind: None,
+            usage_based: false,
             diagnostics: None,
             diagnostics_named: false,
             obstacle: None,
@@ -5585,6 +5594,7 @@ mod tests {
             cache_ttl_ms: None,
             overage_in_use: None,
             account_kind: None,
+            usage_based: false,
             diagnostics: None,
             diagnostics_named: false,
             obstacle: None,

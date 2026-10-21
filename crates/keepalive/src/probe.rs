@@ -77,6 +77,9 @@ pub(crate) struct ProbeResult {
     /// the account leaves the registry while the probe is in flight. `None` for an answer the relay built before any
     /// selection.
     pub account_kind: Option<AccountKind>,
+    /// The served account's class off `RelayOutcome::usage_based`, stamped beside the kind, so the settlement reads the
+    /// funding the request row files under. False for an answer the relay built before any selection.
+    pub usage_based: bool,
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
     /// The relay's `RelayOutcome::obstacle`: `budget` for a probe the selector refused on the pinned member's
@@ -166,6 +169,8 @@ pub struct ProbeRecord {
     /// credit files under the kind the request row carries even when the account leaves while the probe is in flight.
     /// `None` for an answer the relay built before any selection, which prices nothing.
     pub kind: Option<AccountKind>,
+    /// The served account's class as the same leg stamped it beside the kind, false where no leg answered.
+    pub usage_based: bool,
     pub outcome: ProbeOutcome,
     pub pool_id: String,
     pub usage: ProbeUsage,
@@ -283,6 +288,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             cache_ttl_ms: None,
             in_overage: false,
             account_kind: None,
+            usage_based: false,
             retry_after_secs: None,
             obstacle: None,
         }),
@@ -314,6 +320,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                         .as_ref()
                         .is_some_and(|o| o.overage_in_use == Some(true)),
                     account_kind: outcome.as_ref().and_then(|o| o.account_kind),
+                    usage_based: outcome.as_ref().is_some_and(|o| o.usage_based),
                     retry_after_secs,
                     obstacle: outcome.as_ref().and_then(|o| o.obstacle),
                 }
@@ -345,7 +352,9 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         // a registry write mid-exchange never changes which account this probe is charged against, and an answer the
         // relay never built names no account: its probe settles in dollars and the credit path never matches it.
         let in_overage = record.in_overage;
-        let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
+        let funding = record
+            .kind
+            .map(|kind| Funding::of(kind, record.usage_based, in_overage));
         // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's
         // speed decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its
         // request row files it.
@@ -429,6 +438,7 @@ impl Inner {
             key: job.key.clone(),
             key_generation: job.key_generation,
             kind: None,
+            usage_based: false,
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
@@ -449,6 +459,7 @@ impl Inner {
         };
         record.in_overage = result.in_overage;
         record.kind = result.account_kind;
+        record.usage_based = result.usage_based;
         if let Some(account) = &result.account {
             record.account = account.clone();
         }
@@ -570,6 +581,7 @@ impl Inner {
                             band: record.band,
                             entry_expires: job.started + ttl,
                             kind: record.kind,
+                            usage_based: record.usage_based,
                             in_overage: record.in_overage,
                             // The landing's coverage checks never ran on this path, so the probe earns no credit,
                             // and a turn on its lineage that reads the cache leaves it unwasted.
@@ -595,6 +607,7 @@ impl Inner {
                 band: record.band,
                 speed: answered_speed(record.usage),
                 kind: record.kind,
+                usage_based: record.usage_based,
                 in_overage: record.in_overage,
             });
             return Applied::Orphaned;
@@ -669,6 +682,7 @@ impl Inner {
             expires: job.started + ttl,
             covered: false,
             kind: record.kind,
+            usage_based: record.usage_based,
             in_overage: record.in_overage,
         });
         let Some(account) = result.account.clone() else {
@@ -1091,6 +1105,7 @@ mod tests {
             cache_ttl_ms: None,
             in_overage: false,
             account_kind: None,
+            usage_based: false,
             retry_after_secs: Some(5),
             obstacle: None,
         })

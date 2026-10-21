@@ -117,6 +117,11 @@ pub(crate) fn samples_from_unified(
         disabled_reason: unified.overage_disabled_reason.clone(),
         overage_reset: unified.overage_reset,
         source: "head".into(),
+        spend_limit_minor: None,
+        spend_used_minor: None,
+        spend_percent: None,
+        spend_currency: None,
+        spend_exponent: None,
     });
     (quota, extra)
 }
@@ -161,6 +166,11 @@ pub fn samples_from_poll(
             disabled_reason: e.disabled_reason.clone(),
             overage_reset: None,
             source: "poll".into(),
+            spend_limit_minor: None,
+            spend_used_minor: None,
+            spend_percent: None,
+            spend_currency: None,
+            spend_exponent: None,
         });
     (quota, extra)
 }

@@ -98,7 +98,7 @@ pub use rollup::{
     read_rollups, read_rollups_paged, AccountRollupRow, CostSplit, KeySelector, RollupRow,
     RollupSelect, BILLED_FUNDING, DIMENSION_MAX_BYTES, EFFORTS, FAST_FUNDING, KEY_RANGE_PREDICATE,
     LONG_BAND, NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, STANDARD_BAND,
-    UNATTRIBUTED,
+    UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 pub use task::{
     spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, UnweightedModel,

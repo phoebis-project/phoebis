@@ -1985,7 +1985,7 @@ fn the_model_serializes_back_to_the_files_keys_in_the_files_order() {
 #[test]
 fn the_funding_reads_the_account_kind_before_the_speed_and_the_overage_flag() {
     assert_eq!(
-        funding_of("api_key", Some(true), Some("fast")),
+        funding_of("api_key", false, Some(true), Some("fast")),
         Funding::ApiKey,
         "an api_key attempt is billed in dollars whatever its speed or overage flag"
     );

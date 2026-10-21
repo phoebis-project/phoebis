@@ -148,9 +148,10 @@ async fn a_streamed_request_publishes_observed_selected_head_chunks_and_complete
         (
             selected.attempt,
             selected.account_id.as_str(),
-            selected.account_kind.as_str()
+            selected.account_kind.as_str(),
+            selected.usage_based
         ),
-        (1, "a", "oauth")
+        (1, "a", "oauth", false)
     );
     assert!(
         selected.selection.is_some(),
@@ -222,6 +223,58 @@ async fn a_streamed_request_publishes_observed_selected_head_chunks_and_complete
     assert!(matches!(phases[1], Phase::FirstContentDelta));
     assert!(matches!(phases[2], Phase::ToolUseDelta));
     assert!(matches!(phases[3], Phase::MessageDelta { usage } if usage.output_tokens == Some(7)));
+    up.shutdown().await;
+}
+
+/// A leg on a usage-based seat stamps the seat's class on the bus's selection and on the answer's outcome, the facts
+/// the ledger's attempt row and a probe's settlement file the funding under.
+#[tokio::test]
+async fn a_usage_based_seats_selection_and_its_outcome_carry_the_class() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let served = outcome(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let selected = events
+        .iter()
+        .find_map(|e| match e {
+            Event::AccountSelected(selected) => Some(selected),
+            _ => None,
+        })
+        .expect("the leg published its selection");
+    assert_eq!(
+        (
+            selected.account_id.as_str(),
+            selected.usage_based,
+            served.usage_based
+        ),
+        ("a", true, true),
+        "the selection and the outcome both carry the seat's class"
+    );
     up.shutdown().await;
 }
 

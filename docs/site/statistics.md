@@ -56,13 +56,14 @@ carries that conversation's root and the matched depth as well. The session the 
 and the Sessions view groups a row by it. The request row records who put the cache
 diagnostics member on the body the upstream compared: the client, the router, or none.
 
-The attempt row names the account and its kind, the upstream status, request id and message id, the outcome, the
-cooldown the attempt set, the stop reason, the model the answer names when it differs from the one the router resolved,
-the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended
-model. It carries the five token counts, with the thinking share of the output and the web search and fetch calls the
-answer made, the cache miss reason the diagnostics beta reports, the unified rate-limit window readings, overage, and
-the serving account's rate-limit tier as the router held it when the request landed. No dollar is stored: every price is
-computed when it is read, from these counts, at the price revision in force when the request arrived.
+The attempt row names the account and its kind, whether the account is a usage-based seat, the upstream status, request
+id and message id, the outcome, the cooldown the attempt set, the stop reason, the model the answer names when it
+differs from the one the router resolved, the speed, the region inference ran in, the tokens a context edit cleared, and
+a refusal's category and recommended model. It carries the five token counts, with the thinking share of the output and
+the web search and fetch calls the answer made, the cache miss reason the diagnostics beta reports, the unified
+rate-limit window readings, overage, and the serving account's rate-limit tier as the router held it when the request
+landed. No dollar is stored: every price is computed when it is read, from these counts, at the price revision in force
+when the request arrived.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -71,15 +72,17 @@ every account at its cap, by any request's landing on another agent's pin of its
 
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
 day and the current month: an API-key member's rows whole, a subscription member's metered rows alone (`overage` and
-`fast`). A keepalive probe's cost counts toward it the same as any other request's, since a probe on an API-key member
-still draws real money. A member's spend is the period's hourly sums priced at the revision in force at each hour, so a
-revision that lands moves the spend at the next refresh, and a model priced by prompt length sums its hours by the band
-each attempt fell in. The rollups file each hour's traffic under who paid for it: the plan, overage, or a fast answer's
-usage credits, as the response reported it. They also count, per account and pool, the time the slow-down held the
-hour's requests before their heads and how many requests it held, which the Analytics view's held chart reads
-([Slow-down](routing.md#slow-down)). An account's rollups also book a cooldown's time when its announcement
-lands, each part to the hour it falls in, up to seven days past the announcement, a later announcement booking on from
-the end already booked, and a cooldown cleared early gives back the time after the clear.
+`fast`, and `usage_based` for a usage-based seat). A keepalive probe's cost counts toward it the same as any other
+request's, since a probe on an API-key member still draws real money. A member's spend is the period's hourly sums
+priced at the revision in force at each hour, so a revision that lands moves the spend at the next refresh, and a model
+priced by prompt length sums its hours by the band each attempt fell in. The rollups file each hour's traffic under who
+paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it, or, for a usage-based
+seat, the fifth word `usage_based`, priced in dollars at the API rates with no window share and kept by the analytics
+`billed` funding filter. They also count, per account and pool, the time the slow-down held the hour's requests before
+their heads and how many requests it held, which the Analytics view's held chart reads
+([Slow-down](routing.md#slow-down)). An account's rollups also book a cooldown's time when its announcement lands, each
+part to the hour it falls in, up to seven days past the announcement, a later announcement booking on from the end
+already booked, and a cooldown cleared early gives back the time after the clear.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
@@ -122,7 +125,8 @@ A sample's window is one of the endpoint's keys: `five_hour`, `seven_day`, `seve
 overage-included week), `seven_day_fable` (the `limits` window) and any other `seven_day_*` key the poll reports. The
 metric's `window` label uses the same spelling, and the console draws the windows it knows under its own labels and any
 other key as it is. A head and a poll of the same five-minute bucket write one row per window, the head's where both
-read it.
+read it. The extra-usage rows are keyed by the source too, so a head and a poll of one bucket each keep a row, and
+`GET /admin/accounts/{id}/quota` answers both samples at one instant, the head's first.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
 accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the first
@@ -207,17 +211,19 @@ every prompt at the long-context cells. The list itself is refused when it is em
 ## Plan meter
 
 A subscription account's plan-side figures read as a share of its own 5-hour and 7-day windows, a percent with the
-window named. An API-key account, and a subscription account in overage, read dollars, and an overage request adds to
-no window share.
+window named. An API-key account, and a subscription account in overage, read dollars, and an overage request adds to no
+window share. A usage-based seat reads dollars at the API rates with no window share, since its spend is billed against
+its cap and draws no plan window.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, the projection, or the burn a shedding
 round ranks by. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which
 Spend per minute charts under every grouping. An answer in overage reads the same in the burn figures, a zero share in
-Plan per hour and its dollars in `usd`. A member's budget counts a fast answer at the fast cells, a subscription
-member's as an API-key member's.
+Plan per hour and its dollars in `usd`. A usage-based seat's answer counts its dollars in `usd` with no share, and the
+burn route names its group's unit `usd`, as an API-key account's. A member's budget counts a fast answer at the fast
+cells, a subscription member's as an API-key member's.
 
 A client classifier call reads a zero share and a zero equivalent on a subscription account, with the reason
-`client_classifier` on the request, and its dollars in the overage and on an API key.
+`client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat.
 
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in

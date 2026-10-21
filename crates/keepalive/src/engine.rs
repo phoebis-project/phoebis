@@ -404,22 +404,25 @@ pub enum Funding {
     ApiKey,
     Overage,
     Plan,
+    /// A usage-based Enterprise seat: dollars at the API rates, as an API-key member's probe settles.
+    UsageBased,
 }
 
 impl Funding {
-    pub fn of(kind: AccountKind, in_overage: bool) -> Funding {
-        match (kind, in_overage) {
-            (AccountKind::Oauth, false) => Funding::Plan,
-            (AccountKind::Oauth, true) => Funding::Overage,
-            (AccountKind::ApiKey, _) => Funding::ApiKey,
+    pub fn of(kind: AccountKind, usage_based: bool, in_overage: bool) -> Funding {
+        match (kind, usage_based, in_overage) {
+            (AccountKind::ApiKey, ..) => Funding::ApiKey,
+            (AccountKind::Oauth, true, _) => Funding::UsageBased,
+            (AccountKind::Oauth, false, true) => Funding::Overage,
+            (AccountKind::Oauth, false, false) => Funding::Plan,
         }
     }
 
-    /// `Plan` is the share of the account's 5-hour window, the other two dollars: `BurnUnit::of`'s rule.
+    /// `Plan` is the share of the account's 5-hour window, the other three dollars: `BurnUnit::of`'s rule.
     pub fn unit(self) -> SavingsUnit {
         match self {
             Funding::Plan => SavingsUnit::WindowShare,
-            Funding::ApiKey | Funding::Overage => SavingsUnit::Usd,
+            Funding::ApiKey | Funding::Overage | Funding::UsageBased => SavingsUnit::Usd,
         }
     }
 }
@@ -934,6 +937,7 @@ pub(crate) struct OpenCompaction {
     pub attempt: u8,
     pub account: Option<String>,
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
     /// Whether the current attempt's head was a 2xx, without which its stream's usage is no evidence about the cache.
     pub ok_head: bool,
@@ -972,6 +976,7 @@ struct Credit {
     ttl_ms: i64,
     fast: bool,
     kind: Option<AccountKind>,
+    usage_based: bool,
     in_overage: bool,
     client: Option<String>,
 }
@@ -1065,6 +1070,8 @@ pub(crate) struct Observation {
     /// The kind of the account the current attempt was placed on, read off `AccountSelected`, so a skip and a kept-warm
     /// credit file under the funding this request ran under whatever the registry holds by then.
     pub kind: Option<AccountKind>,
+    /// The class of that account, off the same fact beside the kind.
+    pub usage_based: bool,
     /// Whether the current attempt's head reported overage in use, the fact the request's own row files under.
     pub in_overage: bool,
 }
@@ -1089,9 +1096,10 @@ pub(crate) struct Settlement {
     /// The speed the probe's answer reported, `answered_speed` of its usage, so the waste prices at the cells and files
     /// under the funding its own cost row took even when a fast recipe's answer came back at standard speed.
     pub speed: Speed,
-    /// The kind the probe was served under and whether its answer reported overage, as the probe's own cost row
-    /// took them, so the waste files under the same funding word whatever the registry holds now.
+    /// The kind and the class the probe was served under and whether its answer reported overage, as the probe's own
+    /// cost row took them, so the waste files under the same funding word whatever the registry holds now.
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
 }
 
@@ -1105,9 +1113,10 @@ pub(crate) struct Skipped {
     pub canonical_model: String,
     pub fast: bool,
     pub state: RecipeState,
-    /// The kind and the overage of the request the recipe came from, off its observation, so the skip files under the
-    /// funding that request ran under.
+    /// The kind, the class and the overage of the request the recipe came from, off its observation, so the skip files
+    /// under the funding that request ran under.
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
 }
 
@@ -1122,6 +1131,7 @@ impl Skipped {
             fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
             state,
             kind: agent.current.as_ref().and_then(|o| o.kind),
+            usage_based: agent.current.as_ref().is_some_and(|o| o.usage_based),
             in_overage: agent.current.as_ref().is_some_and(|o| o.in_overage),
         }
     }
@@ -1155,9 +1165,10 @@ pub(crate) struct UnansweredProbe {
     /// `NoProbeCacheEvidence`, an unexpected output or a missing account keeps false and is still paid for and
     /// settled, so the cost record and the coverage record never merge.
     pub covered: bool,
-    /// The kind the probe was served under and whether its answer reported overage, off its `ProbeRecord`, so its
-    /// settlement files under the funding its cost row took.
+    /// The kind and the class the probe was served under and whether its answer reported overage, off its
+    /// `ProbeRecord`, so its settlement files under the funding its cost row took.
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
 }
 
@@ -1181,6 +1192,7 @@ pub(crate) struct Kept {
     /// settlement reads the chain's last entry (`chain_expires`).
     pub entry_expires: i64,
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
     /// What the probe proved, carried from its `UnansweredProbe` by `Kept::of`, so a turn that arrives after the
     /// ceiling moved the probe here reads the evidence the unanswered list held.
@@ -1208,6 +1220,7 @@ impl Kept {
             band: probe.band,
             entry_expires: probe.expires,
             kind: probe.kind,
+            usage_based: probe.usage_based,
             in_overage: probe.in_overage,
             covered: probe.covered,
             unit: probe.unit,
@@ -1229,6 +1242,7 @@ impl Kept {
             band: self.band,
             speed: crate::savings::answered_speed(self.usage),
             kind: self.kind,
+            usage_based: self.usage_based,
             in_overage: self.in_overage,
         }
     }
@@ -1392,8 +1406,9 @@ impl Engine {
         accounts: &[AccountRow],
     ) -> Option<ResolvedCeilings> {
         let mut fundings: Vec<Funding> = Vec::new();
+        let snapshot = self.parts.router.snapshot();
         for account in accounts {
-            let funding = Funding::of(account.kind, false);
+            let funding = Funding::of(account.kind, snapshot.usage_based(&account.id), false);
             if !fundings.contains(&funding) {
                 fundings.push(funding);
             }
@@ -2486,6 +2501,7 @@ impl Engine {
                 attempt: 0,
                 account: None,
                 kind: None,
+                usage_based: false,
                 in_overage: false,
                 ok_head: false,
                 read: 0,
@@ -2603,6 +2619,7 @@ impl Engine {
             poisoned,
             dispatched_ms: None,
             kind: None,
+            usage_based: false,
             in_overage: false,
         });
         agent.body_dirty = true;
@@ -2627,6 +2644,7 @@ impl Engine {
                     compaction.attempt = selected.attempt;
                     compaction.account = Some(selected.account_id);
                     compaction.kind = kind_of_word(&selected.account_kind);
+                    compaction.usage_based = selected.usage_based;
                     compaction.in_overage = false;
                     compaction.ok_head = false;
                     compaction.read = 0;
@@ -2662,6 +2680,7 @@ impl Engine {
         observation.ttl_ms = 0;
         observation.dispatched_ms = selected.cache_ttl_ms;
         observation.kind = kind_of_word(&selected.account_kind);
+        observation.usage_based = selected.usage_based;
         observation.in_overage = false;
         agent.cache_started = observation.started;
         agent.expires = None;
@@ -2898,6 +2917,7 @@ impl Engine {
                         agent.canonical_model.clone(),
                         fast,
                         served.and_then(|o| o.kind),
+                        served.is_some_and(|o| o.usage_based),
                         served.is_some_and(|o| o.in_overage),
                         agent.client_label.clone(),
                     )
@@ -2978,7 +2998,18 @@ impl Engine {
             }
         }
         let credit = credited.map(
-            |(read, key_generation, pool_id, account, model, fast, kind, in_overage, client)| {
+            |(
+                read,
+                key_generation,
+                pool_id,
+                account,
+                model,
+                fast,
+                kind,
+                usage_based,
+                in_overage,
+                client,
+            )| {
                 Credit {
                     at: request_received,
                     key,
@@ -2990,6 +3021,7 @@ impl Engine {
                     ttl_ms: observed_ttl,
                     fast,
                     kind,
+                    usage_based,
                     in_overage,
                     client,
                 }
@@ -3057,6 +3089,7 @@ impl Engine {
             band,
             credit.fast,
             credit.kind,
+            credit.usage_based,
             credit.in_overage,
             credit.client.as_deref(),
         );
@@ -3134,6 +3167,7 @@ impl Inner {
                 ttl_ms,
                 fast: compaction.fast,
                 kind: compaction.kind,
+                usage_based: compaction.usage_based,
                 in_overage: compaction.in_overage,
                 client: Some(compaction.client_label.clone()),
             });
@@ -3741,7 +3775,11 @@ pub(crate) fn ceilings_for(
         .as_deref()
         .and_then(|id| view.snapshot.account(id))
     {
-        Some(account) if !fast => Funding::of(account.kind, view.overage.contains(&account.id)),
+        Some(account) if !fast => Funding::of(
+            account.kind,
+            view.snapshot.usage_based(&account.id),
+            view.overage.contains(&account.id),
+        ),
         _ => Funding::ApiKey,
     };
     let ttl_ms = agent.ttl_ms.max(FIVE_MINUTES_MS);
@@ -3967,6 +4005,43 @@ mod tests {
         );
     }
 
+    /// The class decides after the kind: a usage-based seat's probe settles in dollars whatever the overage flag, as an
+    /// API-key member's does, and a plan account's in its window share or, in overage, in dollars.
+    #[test]
+    fn a_usage_based_seat_funds_its_probes_in_dollars_whatever_the_overage_flag() {
+        for in_overage in [false, true] {
+            assert_eq!(
+                (
+                    Funding::of(AccountKind::Oauth, true, in_overage),
+                    Funding::of(AccountKind::ApiKey, false, in_overage)
+                ),
+                (Funding::UsageBased, Funding::ApiKey),
+                "overage flag {in_overage}"
+            );
+        }
+        assert_eq!(
+            (
+                Funding::of(AccountKind::Oauth, false, false),
+                Funding::of(AccountKind::Oauth, false, true)
+            ),
+            (Funding::Plan, Funding::Overage)
+        );
+        assert_eq!(
+            [
+                Funding::UsageBased.unit(),
+                Funding::ApiKey.unit(),
+                Funding::Overage.unit(),
+                Funding::Plan.unit()
+            ],
+            [
+                SavingsUnit::Usd,
+                SavingsUnit::Usd,
+                SavingsUnit::Usd,
+                SavingsUnit::WindowShare
+            ]
+        );
+    }
+
     /// One pool holding one key and two members, subscription account `o` and api_key account `a`, with keepalive
     /// on.
     fn pool_view(o_in_overage: bool) -> RouterView {
@@ -4070,6 +4145,7 @@ mod tests {
             poisoned: false,
             dispatched_ms: None,
             kind: None,
+            usage_based: false,
             in_overage: false,
         }
     }

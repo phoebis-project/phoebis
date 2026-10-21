@@ -15,7 +15,9 @@ use jiff::Timestamp;
 use phoebis_routing::{window_for, BandSegment, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::PinBurn;
 
-use crate::rollup::{BILLED_FUNDING, FAST_FUNDING, OVERAGE_FUNDING, PLAN_FUNDING};
+use crate::rollup::{
+    BILLED_FUNDING, FAST_FUNDING, OVERAGE_FUNDING, PLAN_FUNDING, USAGE_BASED_FUNDING,
+};
 use crate::LedgerError;
 
 const SHIPPED_SUBSCRIPTION_COSTS: &str = include_str!("../subscription_costs.yaml");
@@ -1301,29 +1303,36 @@ impl PlanTables {
 }
 
 /// Who paid for an attempt. The account's kind decides first: an api_key account's answer is billed in dollars
-/// whatever its speed or overage flag, and the rollup key files it under `billed` so every reader prices it so. On
-/// an oauth account a fast answer draws usage credits, then an answer in overage is billed in dollars, else the
-/// subscription's window paid. The console's `fundingOf` reads the same three facts in the same order.
+/// whatever its speed or overage flag, and the rollup key files it under `billed` so every reader prices it so. Then
+/// the account's class: a usage-based seat's answer is billed in dollars at the API rates whatever its speed, under
+/// `usage_based`. On any other oauth account a fast answer draws usage credits, then an answer in overage is billed in
+/// dollars, else the subscription's window paid. The console's `fundingOf` reads the same four facts in the same
+/// order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Funding {
     Plan,
     Overage,
     Fast,
+    /// A usage-based Enterprise seat's answer: billed in dollars at the API rates whatever its speed, with no plan
+    /// window and no overage.
+    UsageBased,
     ApiKey,
 }
 
-/// The funding of an attempt from its row's three facts: the account's kind, the answer's `speed` and the head's
-/// `overage_in_use`, read in `Funding`'s order.
+/// The funding of an attempt from its row's four facts: the account's kind, its class, the answer's `speed` and
+/// the head's `overage_in_use`, read in `Funding`'s order.
 pub fn funding_of(
     account_kind: &str,
+    usage_based: bool,
     overage_in_use: Option<bool>,
     speed: Option<&str>,
 ) -> Funding {
-    match (account_kind, speed, overage_in_use) {
-        ("api_key", _, _) => Funding::ApiKey,
-        (_, Some("fast"), _) => Funding::Fast,
-        (_, _, Some(true)) => Funding::Overage,
+    match (account_kind, usage_based, speed, overage_in_use) {
+        ("api_key", ..) => Funding::ApiKey,
+        (_, true, ..) => Funding::UsageBased,
+        (_, _, Some("fast"), _) => Funding::Fast,
+        (_, _, _, Some(true)) => Funding::Overage,
         _ => Funding::Plan,
     }
 }
@@ -1334,6 +1343,7 @@ impl Funding {
     pub fn of_rollup(funding: &str) -> Funding {
         match funding {
             BILLED_FUNDING => Funding::ApiKey,
+            USAGE_BASED_FUNDING => Funding::UsageBased,
             FAST_FUNDING => Funding::Fast,
             OVERAGE_FUNDING => Funding::Overage,
             _ => Funding::Plan,
@@ -1347,6 +1357,7 @@ impl Funding {
             Funding::Plan => PLAN_FUNDING,
             Funding::Overage => OVERAGE_FUNDING,
             Funding::Fast => FAST_FUNDING,
+            Funding::UsageBased => USAGE_BASED_FUNDING,
             Funding::ApiKey => BILLED_FUNDING,
         }
     }
@@ -1356,6 +1367,7 @@ impl Funding {
             Funding::Plan => "plan",
             Funding::Overage => "overage",
             Funding::Fast => "fast",
+            Funding::UsageBased => "usage_based",
             Funding::ApiKey => "api_key",
         }
     }

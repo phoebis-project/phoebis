@@ -1090,6 +1090,77 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
     );
 }
 
+/// A probe the idle limit left pending on a usage-based seat comes back from a restart with the class its answer
+/// carried, and a payload written before the class rode the record reads none, so its probe settles as it did.
+#[tokio::test]
+async fn a_restart_restores_a_pending_probe_with_its_class_and_a_payload_from_before_reads_none() {
+    const OAUTH: &str = "sk-ant-oat01-OOOO";
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH, 0)],
+        tier: Some("default_claude_zero"),
+        policy: KeepalivePolicy {
+            enabled: true,
+            max_idle_seconds: 500,
+            ..KeepalivePolicy::default()
+        },
+        ..on_disk()
+    })
+    .await;
+    r.observe("main").await;
+    r.up.push_credential_rule(OAUTH, "/v1/messages", probe_answer(2_000, 0));
+    r.advance(270_000);
+    r.step().await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 1),
+        "the idle limit left the probe pending"
+    );
+    let (sessions, agents) = r.engine.persist_rows();
+    let class_of = |payload: &str| {
+        let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
+        (
+            payload["kept"][0]["kind"].as_str().map(String::from),
+            payload["kept"][0]["usage_based"].as_bool(),
+        )
+    };
+    assert_eq!(
+        class_of(&agents[0].payload),
+        (Some("oauth".to_string()), Some(true)),
+        "the save writes the class the probe's answer carried"
+    );
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second.persist_rows().1,
+        agents,
+        "the agent with its pending probe reads back as it stood"
+    );
+    let mut before = agents.clone();
+    let mut payload: serde_json::Value = serde_json::from_str(&before[0].payload).unwrap();
+    payload["kept"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("usage_based");
+    before[0].payload = payload.to_string();
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions,
+            agents: before,
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let third = r.restart().await;
+    third.load_persisted().await;
+    assert_eq!(
+        class_of(&third.persist_rows().1[0].payload),
+        (Some("oauth".to_string()), Some(false)),
+        "a payload from before the class loads and reads none"
+    );
+}
+
 /// A saved session of an older record version carries probes with no funding to settle under, so the load drops it
 /// whole: no session comes back, nothing settles, its session row and its agent row leave the registry, and one warn
 /// line names the count.

@@ -372,11 +372,13 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     let extra = resumed(h.db.extra_usage_samples("a", bucket, bucket + 300))
         .await
         .unwrap();
-    assert_eq!(extra.len(), 1, "one extra-usage row per bucket");
     assert_eq!(
-        (extra[0].source.as_str(), extra[0].used_credits),
-        ("head", None),
-        "the head row keeps its bucket, and credits wait for a bucket the poll owns"
+        extra
+            .iter()
+            .map(|e| (e.source.as_str(), e.used_credits))
+            .collect::<Vec<_>>(),
+        [("head", None), ("poll", Some(1_234))],
+        "the head row keeps its bucket, and the poll lands its credits on a row of its own beside it"
     );
 
     // The next slot, an interval on, lands in the next bucket and writes the credits there.
@@ -402,6 +404,60 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
         "extra-usage credits come from the poll only"
     );
     up.shutdown().await;
+}
+
+/// A head row and a poll row of one bucket both stand whichever lands first: the samples answer both, the head's share
+/// and the poll's amounts each on its own row, and the account's latest reading is the bucket's head row, one row per
+/// account.
+#[tokio::test]
+async fn a_head_and_a_poll_of_one_bucket_both_stand_in_either_order_and_the_latest_reading_is_the_head(
+) {
+    let now = NOW + 600_000;
+    let bucket = phoebis_ledger::bucket_of(now);
+    let head = phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: "a".into(),
+        bucket,
+        is_enabled: true,
+        in_use: Some(false),
+        utilization: Some(0.4),
+        overage_reset: Some(now + 3_600_000),
+        source: "head".into(),
+        ..Default::default()
+    };
+    let poll = phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: "a".into(),
+        bucket,
+        is_enabled: true,
+        monthly_limit: Some(5_000),
+        used_credits: Some(1_234),
+        utilization: Some(0.25),
+        currency: Some("USD".into()),
+        source: "poll".into(),
+        ..Default::default()
+    };
+    for (first, second, order) in [
+        (&head, &poll, "the head first"),
+        (&poll, &head, "the poll first"),
+    ] {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        db.insert_samples(&[], Some(first)).unwrap();
+        db.insert_samples(&[], Some(second)).unwrap();
+        assert_eq!(
+            db.extra_usage_samples("a", bucket, bucket + 300)
+                .await
+                .unwrap(),
+            [head.clone(), poll.clone()],
+            "{order}: neither hides the other"
+        );
+        let latest = db
+            .read_blocking(move |c| phoebis_ledger::latest_extra_usage(c, now))
+            .unwrap();
+        assert_eq!(
+            latest,
+            std::slice::from_ref(&head),
+            "{order}: the bucket's head row is the account's one latest reading"
+        );
+    }
 }
 
 #[tokio::test]

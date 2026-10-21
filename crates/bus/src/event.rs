@@ -415,6 +415,8 @@ pub struct AccountSelected {
     pub attempt: u8,
     pub account_id: String,
     pub account_kind: String,
+    /// The serving account's class at the attempt, the registry's `usage_based` flag as the leg read it.
+    pub usage_based: bool,
     pub pin_epoch: Option<u64>,
     pub started_at: i64,
     /// The TTL the relay rewrote the body to on this attempt, in milliseconds; `None` when the body went as sent.

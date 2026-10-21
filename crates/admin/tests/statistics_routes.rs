@@ -308,8 +308,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(42), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that flags the router's refusals before any account"
+        (Some(43), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that records the attempt's class and keys the samples by source"
     );
     assert_eq!(
         (
@@ -1003,6 +1003,11 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                 disabled_reason: None,
                 overage_reset: None,
                 source: "poll".into(),
+                spend_limit_minor: None,
+                spend_used_minor: None,
+                spend_percent: None,
+                spend_currency: None,
+                spend_exponent: None,
             }),
         )
         .unwrap();
@@ -2400,6 +2405,54 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
             &serde_json::json!(false),
         ),
         "a bucket with tokens and no plan row reads a zero 20x equivalent, and a fast row marks no estimate: {point}"
+    );
+}
+
+/// A usage-based seat spends dollars at the API rates and draws no plan window, so its burn group charts in `usd` as an
+/// API key account's does.
+#[tokio::test]
+async fn a_usage_based_seats_burn_group_charts_in_dollars() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_profile(
+            "business",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    parts.ledger.record(record(
+        "burn-seat",
+        common::NOW - HOUR,
+        "claude-opus-5-5",
+        "s1",
+    ));
+    landed(&parts, &["burn-seat"]).await;
+    let burn = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let units: std::collections::BTreeSet<&str> = burn["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["group"] == "business")
+        .filter_map(|p| p["unit"].as_str())
+        .collect();
+    assert_eq!(
+        units,
+        std::collections::BTreeSet::from(["usd"]),
+        "the seat's group charts in dollars: {burn}"
     );
 }
 

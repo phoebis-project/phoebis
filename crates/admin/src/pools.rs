@@ -1074,7 +1074,8 @@ pub(crate) struct Pool {
     pub status: String,
     pub requests_24h: u64,
     pub cost_24h: f64,
-    /// The dollars of the day's billed rows alone (fast mode, overage and API key accounts), a part of `cost_24h`.
+    /// The dollars of the day's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part
+    /// of `cost_24h`.
     pub billed_24h: f64,
     /// The day's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
     #[schema(value_type = crate::openapi::SharedEquivalentView)]

@@ -2921,6 +2921,7 @@ fn selected_event(id: &str, attempt: u8, account: &str, at: i64) -> BusEvent {
         attempt,
         account_id: account.into(),
         account_kind: "oauth".into(),
+        usage_based: false,
         pin_epoch: None,
         started_at: at,
         cache_ttl_ms: None,
@@ -3042,6 +3043,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         // keeps the shape the class dimension joins, since a primary-key column cannot be dropped in place and the
         // rebuild names its own columns regardless of what the source table still carries.
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3097,7 +3099,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3183,6 +3185,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3217,7 +3220,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -3289,6 +3292,21 @@ const VERSION_39_REQUESTS: &str =
 const VERSION_41_REQUESTS: &str =
     "ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json;";
 
+/// What migration 43 adds, dropped over a file the current schema built so a replay from an earlier version adds it
+/// again: the attempt's class, and the extra-usage samples table laid back under its old key without the five `spend`
+/// columns, its rows copied over.
+const VERSION_42_TABLES: &str = "ALTER TABLE attempts DROP COLUMN usage_based; \
+     CREATE TABLE extra_usage_samples_prev (account_id TEXT NOT NULL, bucket INTEGER NOT NULL, \
+     is_enabled INTEGER NOT NULL, in_use INTEGER, monthly_limit INTEGER, used_credits INTEGER, utilization REAL, \
+     currency TEXT, disabled_reason TEXT, overage_reset INTEGER, source TEXT NOT NULL, \
+     PRIMARY KEY (account_id, bucket)); \
+     INSERT INTO extra_usage_samples_prev (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, \
+     utilization, currency, disabled_reason, overage_reset, source) SELECT account_id, bucket, is_enabled, in_use, \
+     monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source \
+     FROM extra_usage_samples; \
+     DROP TABLE extra_usage_samples; \
+     ALTER TABLE extra_usage_samples_prev RENAME TO extra_usage_samples;";
+
 /// The table migration 23 drops, recreated so a forward replay from version 20 or 21 can drop it again.
 const RECREATE_DROPPED_TABLE: &str = "CREATE TABLE window_reconciliations (account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL, computed_at INTEGER NOT NULL, PRIMARY KEY (account_id, window, window_end)); -- rollback";
 
@@ -3299,6 +3317,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3327,7 +3346,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -3390,6 +3409,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         // SQLite cannot drop a primary-key column, so the version-21 table is rebuilt from the live one with
         // the speed left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3424,7 +3444,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -3478,6 +3498,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         // SQLite cannot drop a primary-key column, so the version-23 table is rebuilt from the live one with
         // the funding left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3512,7 +3533,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3567,6 +3588,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3595,7 +3617,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -3637,6 +3659,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3664,7 +3687,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3704,6 +3727,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         // and a poll of one bucket could each hold a row for one window; the top-level `seven_day_overage_included`
         // and `seven_day_fable` rows stand for a poll key the captured bodies never carried.
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3738,7 +3762,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let rows: Vec<(i64, String, Option<f64>, String)> = db
         .quota_samples("a", 0, i64::MAX)
         .await
@@ -3800,6 +3824,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3820,7 +3845,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3885,6 +3910,7 @@ async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -3902,7 +3928,7 @@ async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3976,6 +4002,7 @@ fn ledger_left_at_39(path: &std::path::Path) {
     )
     .unwrap();
     db.write(|c| {
+        c.execute_batch(VERSION_42_TABLES)?;
         c.execute_batch(VERSION_41_REQUESTS)?;
         c.execute_batch(VERSION_40_COLUMNS)?;
         c.execute_batch(VERSION_39_REQUESTS)?;
@@ -4040,6 +4067,7 @@ fn ledger_left_at_41(path: &std::path::Path) {
         db.insert_request(&request, &attempts, None).unwrap();
     }
     db.write(|c| {
+        c.execute_batch(VERSION_42_TABLES)?;
         c.execute_batch(VERSION_41_REQUESTS)?;
         c.execute_batch("UPDATE meta SET value = '41' WHERE key = 'schema_version';")?;
         Ok(())
@@ -4066,7 +4094,7 @@ async fn the_ledger_step_adds_the_classifier_and_the_contract_item_and_a_ledger_
     let path = dir.path().join("ledger.sqlite");
     ledger_left_at_39(&path);
     let db = Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let fresh = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
     for (ledger, which) in [(&*db, "the carried file"), (&fresh, "a fresh file")] {
         let requests = names_of(ledger, "SELECT name FROM pragma_table_info('requests')");
@@ -4109,7 +4137,7 @@ async fn the_ledger_step_flags_the_stored_refusals_and_a_ledger_left_at_41_is_ca
     let path = dir.path().join("ledger.sqlite");
     ledger_left_at_41(&path);
     let db = Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let fresh = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
     for (ledger, which) in [(&*db, "the carried file"), (&fresh, "a fresh file")] {
         let requests = names_of(ledger, "SELECT name FROM pragma_table_info('requests')");
@@ -4150,6 +4178,127 @@ async fn the_ledger_step_flags_the_stored_refusals_and_a_ledger_left_at_41_is_ca
             ("r-unavailable".to_string(), false),
         ],
         "the block before any attempt is the one stored refusal"
+    );
+}
+
+/// The extra-usage row `ledger_left_at_42` stores, a poll's from before the `spend` columns.
+fn polled_before_the_spend_columns() -> phoebis_ledger::ExtraUsageSampleRecord {
+    phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: "a".into(),
+        bucket: 3_600,
+        is_enabled: true,
+        monthly_limit: Some(5_000),
+        used_credits: Some(1_234),
+        utilization: Some(0.25),
+        currency: Some("USD".into()),
+        source: "poll".into(),
+        ..Default::default()
+    }
+}
+
+/// A ledger file at version 42 holding one attempt row and one extra-usage row, each landed as a row from before
+/// the step: the attempt with no class column, the samples table under its old key with no `spend` column.
+fn ledger_left_at_42(path: &std::path::Path) {
+    let db = phoebis_ledger::LedgerDb::open(path).unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r-before".into(),
+            received_at: 3_600_000,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r-before".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    db.insert_samples(&[], Some(&polled_before_the_spend_columns()))
+        .unwrap();
+    db.write(|c| {
+        c.execute_batch(VERSION_42_TABLES)?;
+        c.execute_batch("UPDATE meta SET value = '42' WHERE key = 'schema_version';")?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// The step adds the attempt's class, false on a row from before it with nothing backfilled, and widens the
+/// extra-usage samples key by the source with the five `spend` columns, the carried row keeping its values and no
+/// spend.
+#[tokio::test]
+async fn the_ledger_step_adds_the_attempt_class_and_widens_the_samples_key_and_a_ledger_left_at_42_is_carried_to_43(
+) {
+    let fresh = Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    assert_eq!(
+        fresh.schema_version().await.unwrap(),
+        43,
+        "a fresh file opens at the step"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    ledger_left_at_42(&path);
+    let db = Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 43);
+    for (ledger, which) in [(&*fresh, "a fresh file"), (&*db, "the carried file")] {
+        let attempts = names_of(ledger, "SELECT name FROM pragma_table_info('attempts')");
+        assert!(
+            attempts.iter().any(|c| c == "usage_based"),
+            "{which} carries the attempt's class: {attempts:?}"
+        );
+        let key = names_of(
+            ledger,
+            "SELECT name FROM pragma_table_info('extra_usage_samples') WHERE pk > 0 ORDER BY pk",
+        );
+        assert_eq!(
+            key,
+            ["account_id", "bucket", "source"],
+            "{which} keys the samples by the source too, so a head and a poll of one bucket both stand"
+        );
+        let columns = names_of(
+            ledger,
+            "SELECT name FROM pragma_table_info('extra_usage_samples')",
+        );
+        assert_eq!(
+            columns.get(columns.len().saturating_sub(5)..),
+            Some(
+                &[
+                    "spend_limit_minor".to_string(),
+                    "spend_used_minor".to_string(),
+                    "spend_percent".to_string(),
+                    "spend_currency".to_string(),
+                    "spend_exponent".to_string(),
+                ][..]
+            ),
+            "{which} carries the five spend columns last: {columns:?}"
+        );
+    }
+    let (_, attempts) = db
+        .request("r-before")
+        .await
+        .unwrap()
+        .expect("the carried request");
+    assert_eq!(
+        attempts.iter().map(|a| a.usage_based).collect::<Vec<_>>(),
+        [false],
+        "a row from before the column reads no class"
+    );
+    assert_eq!(
+        db.extra_usage_samples("a", 0, i64::MAX).await.unwrap(),
+        [polled_before_the_spend_columns()],
+        "the rebuild carries the row over with its values and no spend"
     );
 }
 
@@ -4372,6 +4521,7 @@ async fn a_ledger_below_the_walls_time_column_gains_it_at_zero_on_every_account_
         })
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch("UPDATE meta SET value = '40' WHERE key = 'schema_version';")?;
@@ -4380,7 +4530,7 @@ async fn a_ledger_below_the_walls_time_column_gains_it_at_zero_on_every_account_
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let rollups = db
         .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -4411,6 +4561,7 @@ async fn a_ledger_below_the_landing_stamp_gains_it_with_nulls_no_filter_answers(
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch("UPDATE meta SET value = '40' WHERE key = 'schema_version';")?;
@@ -4419,7 +4570,7 @@ async fn a_ledger_below_the_landing_stamp_gains_it_with_nulls_no_filter_answers(
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let since = |landed_after: Option<i64>| {
         db.read_blocking(|c| {
             phoebis_ledger::list_request_page(
@@ -4525,6 +4676,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -4544,7 +4696,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let (row, attempts) = db
         .read_blocking(|c| phoebis_ledger::request_by_id(c, "r0"))
         .unwrap()
@@ -4615,6 +4767,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         db.insert_request(&request("r0", Some("client")), &[], None)
             .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
             c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
@@ -4632,7 +4785,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         .unwrap();
     }
     let db = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 42);
+    assert_eq!(db.schema_version().await.unwrap(), 43);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.diagnostics_source, None,
@@ -4663,7 +4816,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
     let event_indexes = "SELECT name FROM pragma_index_list('events') ORDER BY name";
     {
         let fresh = Arc::new(LedgerDb::open(&path).unwrap());
-        assert_eq!(fresh.schema_version().await.unwrap(), 42);
+        assert_eq!(fresh.schema_version().await.unwrap(), 43);
         assert_eq!(
             names(
                 &fresh,
@@ -4701,6 +4854,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         // The indexes leave first, since SQLite refuses to drop an indexed column.
         fresh
             .write(|c| {
+                c.execute_batch(VERSION_42_TABLES)?;
                 c.execute_batch(VERSION_41_REQUESTS)?;
                 c.execute_batch(VERSION_40_COLUMNS)?;
                 c.execute_batch(VERSION_39_REQUESTS)?;
@@ -4730,7 +4884,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         );
     }
     let existing = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(existing.schema_version().await.unwrap(), 42);
+    assert_eq!(existing.schema_version().await.unwrap(), 43);
     assert_eq!(
         names(&existing, event_columns),
         [
@@ -6015,6 +6169,113 @@ fn an_api_key_account_s_attempt_folds_under_billed_whatever_its_speed_or_overage
         ],
         "an api_key account's answer is billed in dollars whatever its speed or the head's overage flag, and the key \
          says so without the registry"
+    );
+}
+
+/// A selection on a usage-based seat lands its class on the attempt row, the row folds under the seat's own funding
+/// word and its counts price in dollars at the API rates with no share and no equivalent.
+#[test]
+fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_and_prices_in_dollars_alone(
+) {
+    let mut assembler = Assembler::new(Arc::new(|| NOW));
+    let BusEvent::RequestObserved(mut observed) = observed_event("r1") else {
+        unreachable!()
+    };
+    observed.received_at = NOW;
+    assembler.observe(BusEvent::RequestObserved(observed));
+    let BusEvent::AccountSelected(mut selected) = selected_event("r1", 1, "seat", minutes(1))
+    else {
+        unreachable!()
+    };
+    selected.usage_based = true;
+    assembler.observe(BusEvent::AccountSelected(selected));
+    let BusEvent::RequestComplete(mut complete) = complete_event("r1") else {
+        unreachable!()
+    };
+    complete.attempt = 1;
+    complete.account_id = Some("seat".into());
+    complete.usage = Some(Usage {
+        input_tokens: Some(1_000_000),
+        ..Usage::default()
+    });
+    let records = assembler.observe(BusEvent::RequestComplete(complete));
+    let [Record::Request {
+        request, attempts, ..
+    }] = records.as_slice()
+    else {
+        panic!("{} records at completion", records.len());
+    };
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    db.insert_request(request, attempts, None).unwrap();
+    let stored = db
+        .read_blocking(|c| phoebis_ledger::request_by_id(c, "r1"))
+        .unwrap()
+        .expect("the request landed")
+        .1;
+    assert_eq!(
+        stored.iter().map(|a| a.usage_based).collect::<Vec<_>>(),
+        [true],
+        "the attempt row stores the class its selection carried"
+    );
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.funding.as_str()).collect::<Vec<_>>(),
+        [phoebis_ledger::USAGE_BASED_FUNDING],
+        "the row files under the seat's own funding word"
+    );
+    // A flat dollar a token on the test's own list, so the figure is the count.
+    let rate = 1_000_000.0;
+    let prices = PriceRevisions::new(
+        vec![phoebis_ledger::PriceTable {
+            effective: "1970-01-01".into(),
+            models: [(
+                "claude-sonnet-5".to_string(),
+                phoebis_ledger::ModelRow {
+                    standard: phoebis_ledger::ModelPrice {
+                        input: rate,
+                        cache_write_5m: rate,
+                        cache_write_1h: rate,
+                        cache_read: rate,
+                        output: rate,
+                    },
+                    fast: None,
+                    long_context: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }],
+        "test",
+    )
+    .expect("one entry");
+    let row = &rows[0];
+    let priced = phoebis_ledger::price_row(
+        &prices,
+        &PlanTables::shipped(),
+        &phoebis_ledger::RowKey {
+            model: &row.canonical_model,
+            speed: Speed::of(Some(row.speed.as_str())),
+            band: phoebis_ledger::Band::of_rollup(&row.band),
+            funding: phoebis_ledger::Funding::of_rollup(&row.funding),
+            kind: &row.kind,
+            tier: None,
+            entrypoint: None,
+            classifier: false,
+            at: row.hour * 1_000,
+            band_at: None,
+        },
+        row.usage(),
+    );
+    assert_eq!(
+        (
+            priced.usd.as_ref().map(|usd| usd.total()),
+            &priced.shares,
+            &priced.equivalent
+        ),
+        (Some(1_000_000.0), &None, &None),
+        "the seat's counts read dollars alone: {priced:?}"
     );
 }
 

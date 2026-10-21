@@ -50,8 +50,8 @@
           }
         ],
         "usage_7d": {
-          "billed_usd": 0.010700000000000001,
-          "cost_usd": 0.024900000000000002,
+          "billed_usd": 0.014250000000000002,
+          "cost_usd": 0.028450000000000003,
           "equivalent": {
             "five_hour": 0.0000393625,
             "seven_day": 0.000010496666666666667,
@@ -61,12 +61,12 @@
             }
           },
           "estimated": true,
-          "requests": 7,
-          "tokens": 14400
+          "requests": 8,
+          "tokens": 16200
         },
         "lifetime": {
-          "billed_usd": 0.010700000000000001,
-          "cost_usd": 0.024900000000000002,
+          "billed_usd": 0.014250000000000002,
+          "cost_usd": 0.028450000000000003,
           "equivalent": {
             "five_hour": 0.0000393625,
             "seven_day": 0.000010496666666666667,
@@ -76,7 +76,7 @@
             }
           },
           "estimated": true,
-          "requests": 7
+          "requests": 8
         }
       }
     ]

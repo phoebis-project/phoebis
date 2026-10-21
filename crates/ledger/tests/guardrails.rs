@@ -107,12 +107,13 @@ async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_
         let db = LedgerDb::open(&path).unwrap();
         db.insert_request(&request("before", 1_000, "k", Vec::new()), &[], None)
             .unwrap();
-        // Migration 40's two request columns, migration 41's index and two columns and migration 42's flag and
-        // refusals map leave too, the index before the column SQLite refuses to drop while indexed, so the replay from
-        // 38 adds them again.
+        // Migration 40's two request columns, migration 41's index and two columns, migration 42's flag and
+        // refusals map and migration 43's attempt class leave too, the index before the column SQLite refuses to drop
+        // while indexed, so the replay from 38 adds them again.
         db.write(|c| {
             c.execute_batch(
-                "ALTER TABLE requests DROP COLUMN refused; \
+                "ALTER TABLE attempts DROP COLUMN usage_based; \
+                 ALTER TABLE requests DROP COLUMN refused; \
                  ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
                  DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms; \
@@ -131,7 +132,7 @@ async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_
         (&fresh, "the fresh ledger"),
         (&migrated, "the ledger at 38"),
     ] {
-        assert_eq!(db.schema_version().await.unwrap(), 42, "{which}");
+        assert_eq!(db.schema_version().await.unwrap(), 43, "{which}");
         assert!(
             names(db, "SELECT name FROM pragma_table_info('requests')")
                 .iter()

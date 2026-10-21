@@ -162,17 +162,18 @@ the policy does not hold, is refused with `keepalive is not a policy object: {de
 
 For the console, `GET /admin/pools` also answers each pool's `keepalive_resolved`: the break-even and the three ceilings
 in seconds and the idle window's cost as a share of one re-write, each as the lowest and the highest figure over the
-pool's combinations. An OAuth member brings the cost model's factors and an API-key member the price table's. The pool's
-cache TTL policy gives the main conversation's TTL under each, and a policy that leaves the markers as sent brings both
-TTLs. The models are the price table's and those the cache TTL policy's per-model rows and the model rules' entries
-without a wildcard name, which carry the catalog's dated ids, each kept where the pool's model rules allow it. Rules
-that allow none of them leave a model priced nowhere. An undated price row the router's catalog maps to a dated id is
-judged under that id, as a request on the model is, so a deny entry naming the dated id drops the row. On a router
-without a catalog reading the row is judged under its own id, and a deny entry naming a dated id leaves the model's
-undated price row in the range, so for a model the catalog lists only dated, such as Haiku, the range keeps a figure no
-request on the pool reaches. A pool with no member answers `null`. A fast recipe is dollar-funded at the fast cells
-whatever funds the account, and `keepalive_resolved` describes standard speed, so a fast recipe's break-even reads the
-fast cells and not the figures the pool dialog shows.
+pool's combinations. An OAuth member brings the cost model's factors and an API-key member the price table's. A
+usage-based seat brings the price table's too, since its probes settle in dollars. The pool's cache TTL policy gives the
+main conversation's TTL under each, and a policy that leaves the markers as sent brings both TTLs. The models are the
+price table's and those the cache TTL policy's per-model rows and the model rules' entries without a wildcard name,
+which carry the catalog's dated ids, each kept where the pool's model rules allow it. Rules that allow none of them
+leave a model priced nowhere. An undated price row the router's catalog maps to a dated id is judged under that id, as a
+request on the model is, so a deny entry naming the dated id drops the row. On a router without a catalog reading the
+row is judged under its own id, and a deny entry naming a dated id leaves the model's undated price row in the range, so
+for a model the catalog lists only dated, such as Haiku, the range keeps a figure no request on the pool reaches. A pool
+with no member answers `null`. A fast recipe is dollar-funded at the fast cells whatever funds the account, and
+`keepalive_resolved` describes standard speed, so a fast recipe's break-even reads the fast cells and not the figures
+the pool dialog shows.
 
 The schedule's numbers are fixed. A probe is due 60 seconds before a five-minute entry expires and 360 seconds before a
 one-hour entry, less a random jitter of up to 5 and 30 seconds that spreads a pool's probes so one tick never bursts. At
@@ -374,11 +375,12 @@ read, at the dearest listed cells for a model the price table does not know, and
 landed on a different account than the recipe's. `wasted_probes` counts the probes settled wasted by one of the reasons
 above, and `wasted_probe_reasons` counts them by the reason. The wasted probes' five token counts sit on the hourly
 rollup beside their count, priced the same way. Each wasted probe files beside its own cost row, in the hour the relay
-received the probe and under the funding that row took (the kind of the account that served it, the speed its answer
-reported and whether its answer reported overage in use), so the wasted part of a probe share reads the plan-funded
-probes' waste against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than
-sending, for example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
-`503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
+received the probe and under the funding that row took (the kind of the account that served it, whether that account is
+a usage-based seat, the speed its answer reported and whether its answer reported overage in use), so the wasted part of
+a probe share reads the plan-funded probes' waste against their own cost. `probes_skipped` counts a due probe a gate or
+a lapsed entry withheld rather than sending, for example because a cooldown already held the recipe. `probes_held`
+counts a probe the router refused with `503 ledger_behind` while its ledger caught up and sent again, outside the failed
+probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
 `plan_ok`, `skipped`, where `plan_ok` counts the answered probes a subscription window paid for, inside `ok`), and per

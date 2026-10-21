@@ -1253,6 +1253,11 @@ async fn a_usage_based_account_answers_its_class_and_no_overage_whatever_a_head_
                     disabled_reason: None,
                     overage_reset: Some(now + 3_600_000),
                     source: "head".into(),
+                    spend_limit_minor: None,
+                    spend_used_minor: None,
+                    spend_percent: None,
+                    spend_currency: None,
+                    spend_exponent: None,
                 }),
             )
             .unwrap();
@@ -1312,6 +1317,73 @@ async fn a_usage_based_account_answers_its_class_and_no_overage_whatever_a_head_
         (&shown["usage_based"], &shown["overage"]),
         (&serde_json::json!(true), &serde_json::Value::Null),
         "the single account answers as its row does: {shown}"
+    );
+}
+
+/// An attempt answers the class the ledger stored for it, true on a usage-based seat's attempt and false on a plan
+/// account's, on the request list and on the request's own answer alike.
+#[tokio::test]
+async fn an_attempt_on_a_usage_based_seat_answers_its_class_and_one_on_a_plan_account_answers_false(
+) {
+    use common::{get, json, login, wait_json};
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let served = |id: &str, account: &str, usage_based: bool| Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: now - 1_000,
+            finished_at: Some(now - 500),
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: "oauth".into(),
+            started_at: now - 1_000,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            usage_based,
+            ..Default::default()
+        }],
+        bodies: None,
+    };
+    parts.ledger.record(served("r-seat", "seat", true));
+    parts.ledger.record(served("r-plan", "business", false));
+    let listed = wait_json(&parts.app, "/admin/requests", &cookie, |v| {
+        v["requests"].as_array().is_some_and(|rows| rows.len() >= 2)
+    })
+    .await;
+    let class_of = |id: &str| {
+        listed["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .map(|r| r["attempts"][0]["usage_based"].clone())
+            .unwrap_or_else(|| panic!("no {id} row: {listed}"))
+    };
+    assert_eq!(
+        (class_of("r-seat"), class_of("r-plan")),
+        (serde_json::json!(true), serde_json::json!(false)),
+        "each attempt answers the class its row stored: {listed}"
+    );
+    let shown = json(get(&parts.app, "/admin/requests/r-seat", Some(&cookie)).await).await;
+    assert_eq!(
+        shown["request"]["attempts"][0]["usage_based"],
+        serde_json::json!(true),
+        "the request's own answer carries the member as the list does: {shown}"
     );
 }
 

@@ -13,7 +13,7 @@ use phoebis_ledger::{
     GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow,
     PlanTables, PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
     RollupSelect, SeriesFilter, SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING,
-    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -1736,6 +1736,7 @@ struct ShareRow<'a> {
     client: Option<&'a str>,
     tier: Option<&'a str>,
     classifier: Option<&'a str>,
+    usage_based: bool,
 }
 
 impl Default for ShareRow<'_> {
@@ -1753,6 +1754,7 @@ impl Default for ShareRow<'_> {
             client: None,
             tier: Some("test_tier"),
             classifier: None,
+            usage_based: false,
         }
     }
 }
@@ -1796,6 +1798,7 @@ fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
                 .tier
                 .filter(|_| row.account_kind != "api_key")
                 .map(String::from),
+            usage_based: row.usage_based,
             ..Default::default()
         }],
         None,
@@ -2999,6 +3002,88 @@ async fn the_funding_filter_partitions_the_rows() {
         (sum(&billed), sum(&plan), sum(&every)),
         (3, 2, 5),
         "the two subsets partition the rows"
+    );
+}
+
+/// A usage-based seat's attempt files its rollup row under the seat's own funding word, which the `billed` filter keeps
+/// and the `plan` filter drops, and the budget's metered sum counts its dollars as it counts an overage or a fast row.
+#[tokio::test]
+async fn a_usage_based_seats_row_files_under_usage_based_stays_billed_and_counts_in_the_metered_sum(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-seat",
+            account: "seat",
+            usage_based: true,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plan",
+            ..ShareRow::default()
+        },
+    );
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let word_of = |account: &str| {
+        rows.iter()
+            .find(|r| r.account_id == account)
+            .map(|r| r.funding.as_str())
+    };
+    assert_eq!(
+        (word_of("seat"), word_of("a")),
+        (Some(USAGE_BASED_FUNDING), Some(PLAN_FUNDING)),
+        "the seat's row carries its own word in the key beside the plan row's: {rows:?}"
+    );
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let read = |funding: FundingFilter| {
+        let db = db.clone();
+        async move {
+            let filter = RollupFilter {
+                funding: Some(funding),
+                ..RollupFilter::default()
+            };
+            account_groups(&db, &filter, from, to, None)
+                .await
+                .iter()
+                .map(|g| (g.key.clone(), g.requests))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        (
+            read(FundingFilter::Billed).await,
+            read(FundingFilter::Plan).await
+        ),
+        (vec![("seat".to_string(), 1)], vec![("a".to_string(), 1)]),
+        "billed keeps the seat's row and plan drops it"
+    );
+    // A flat dollar a token, so the sum is the row's token count.
+    let prices = priced_table("claude-fable-5-1", 1.0);
+    let metered = db
+        .read_blocking(|c| {
+            member_spends(
+                c,
+                &[BudgetedMember {
+                    pool_id: "p".into(),
+                    account_id: "seat".into(),
+                    period: BudgetPeriod::Day,
+                    metered_only: true,
+                }],
+                WEEKDAY_OFF_PEAK + 3_600_000,
+                &prices,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        metered.iter().map(|m| m.spent_usd).collect::<Vec<_>>(),
+        [1_100.0],
+        "the metered sum counts the seat's thousand input and hundred output tokens"
     );
 }
 

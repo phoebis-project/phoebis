@@ -225,9 +225,9 @@
           "priority": 2
         },
         "requests": {
-          "last_24h": 0,
-          "last_7d": 0,
-          "lifetime": 0
+          "last_24h": 1,
+          "last_7d": 1,
+          "lifetime": 1
         },
         "usage": {
           "error": "the poll has not read this account yet",

@@ -754,6 +754,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 disabled_reason: None,
                 overage_reset: None,
                 source: "poll".into(),
+                spend_limit_minor: None,
+                spend_used_minor: None,
+                spend_percent: None,
+                spend_currency: None,
+                spend_exponent: None,
             }),
         )
         .unwrap();
@@ -1154,6 +1159,29 @@ async fn every_route_is_captured_and_holds_its_shape() {
         attempts: Vec::new(),
         bodies: None,
     });
+    // A request the usage-based seat served, billed in dollars under the seat's own funding word, so the request rows
+    // carry the attempt's class with one true. The oldest row and in no session, so the list's first rows keep their
+    // places and the session rows their counts.
+    let seat_at = refused_at - 600;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            session_id: None,
+            ..request(
+                key_generation,
+                "r-usage-seat",
+                seat_at,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![AttemptRecord {
+            usage_based: true,
+            ..attempt("r-usage-seat", 1, "usage-seat", 200, "succeeded", seat_at)
+        }],
+        bodies: None,
+    });
     parts
         .keepalive
         .apply_event(
@@ -1312,6 +1340,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     "oauth"
                 }
                 .into(),
+                usage_based: false,
                 pin_epoch: Some(1),
                 started_at: now,
                 cache_ttl_ms: None,
@@ -1355,6 +1384,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             attempt: 1,
             account_id: "direct".into(),
             account_kind: "api_key".into(),
+            usage_based: false,
             pin_epoch: Some(1),
             started_at: now,
             cache_ttl_ms: None,
@@ -1390,7 +1420,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 9
+        v["requests"].as_array().unwrap().len() == 10
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);

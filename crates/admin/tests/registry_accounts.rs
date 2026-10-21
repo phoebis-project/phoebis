@@ -1069,6 +1069,11 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
                 disabled_reason: None,
                 overage_reset: None,
                 source: "poll".into(),
+                spend_limit_minor: None,
+                spend_used_minor: None,
+                spend_percent: None,
+                spend_currency: None,
+                spend_exponent: None,
             }),
         )
         .unwrap();

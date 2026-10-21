@@ -9,8 +9,8 @@
     "ready": true,
     "dead": [],
     "ledger": {
-      "schema_version": 42,
-      "written": 33,
+      "schema_version": 43,
+      "written": 34,
       "dropped": 0,
       "write_failures": 0,
       "cache_map_orphans": 1,

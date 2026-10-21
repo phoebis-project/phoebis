@@ -145,6 +145,9 @@ pub(crate) struct PersistedObservation {
     pub poisoned: bool,
     pub recipe: PersistedRecipe,
     pub kind: Option<String>,
+    /// Absent from a payload written before the class rode the observation, which reads false and settles as before.
+    #[serde(default)]
+    pub usage_based: bool,
     pub in_overage: bool,
 }
 
@@ -197,6 +200,9 @@ pub(crate) struct PersistedUnanswered {
     pub expires: i64,
     pub covered: bool,
     pub kind: Option<String>,
+    /// Absent from a payload written before the class rode the probe, which reads false and settles as before.
+    #[serde(default)]
+    pub usage_based: bool,
     pub in_overage: bool,
 }
 
@@ -214,6 +220,9 @@ pub(crate) struct PersistedKept {
     pub band: String,
     pub entry_expires: i64,
     pub kind: Option<String>,
+    /// Absent from a payload written before the class rode the probe, which reads false and settles as before.
+    #[serde(default)]
+    pub usage_based: bool,
     pub in_overage: bool,
     pub covered: bool,
     pub unit: Option<String>,
@@ -406,6 +415,7 @@ impl PersistedAgent {
                     tail_hash: o.recipe.tail_hash.clone(),
                 },
                 kind: o.kind.map(|kind| kind_word(kind).to_string()),
+                usage_based: o.usage_based,
                 in_overage: o.in_overage,
             }),
             expires: agent.expires,
@@ -446,6 +456,7 @@ impl PersistedAgent {
                     expires: probe.expires,
                     covered: probe.covered,
                     kind: probe.kind.map(|kind| kind_word(kind).to_string()),
+                    usage_based: probe.usage_based,
                     in_overage: probe.in_overage,
                 })
                 .collect(),
@@ -464,6 +475,7 @@ impl PersistedAgent {
                     band: kept.band.as_str().to_string(),
                     entry_expires: kept.entry_expires,
                     kind: kept.kind.map(|kind| kind_word(kind).to_string()),
+                    usage_based: kept.usage_based,
                     in_overage: kept.in_overage,
                     covered: kept.covered,
                     unit: kept.unit.map(unit_word),
@@ -547,6 +559,7 @@ impl PersistedAgent {
                     expires: probe.expires,
                     covered: probe.covered,
                     kind: optional_kind(probe.kind)?,
+                    usage_based: probe.usage_based,
                     in_overage: probe.in_overage,
                 })
             })
@@ -567,6 +580,7 @@ impl PersistedAgent {
                     band: Band::of_rollup(&kept.band),
                     entry_expires: kept.entry_expires,
                     kind: optional_kind(kept.kind)?,
+                    usage_based: kept.usage_based,
                     in_overage: kept.in_overage,
                     covered: kept.covered,
                     unit: optional_unit(kept.unit)?,
@@ -628,6 +642,7 @@ impl PersistedObservation {
             poisoned: false,
             dispatched_ms: row.dispatched_ms,
             kind: optional_kind(self.kind)?,
+            usage_based: self.usage_based,
             in_overage: self.in_overage,
         })
     }

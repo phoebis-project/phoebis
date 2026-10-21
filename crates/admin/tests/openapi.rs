@@ -1167,6 +1167,30 @@ async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_n
 }
 
 #[tokio::test]
+async fn the_attempt_declares_the_serving_accounts_usage_based_class() {
+    let (_app, _up, document) = document().await;
+    let attempt = &document["components"]["schemas"]["Attempt"];
+    let member = &attempt["properties"]["usage_based"];
+    assert_eq!(member["type"], "boolean", "{attempt}");
+    assert!(
+        attempt["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "usage_based")),
+        "every attempt answer carries the member: {attempt}"
+    );
+    let description = member["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert_eq!(
+        description.as_deref(),
+        Some(
+            "The serving account's class at the attempt, false on a row from before the router recorded it."
+        ),
+        "{member}"
+    );
+}
+
+#[tokio::test]
 async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_account_answers_none()
 {
     let (_app, _up, document) = document().await;

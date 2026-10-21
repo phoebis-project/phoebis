@@ -336,6 +336,12 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// them. The flag is set on every stored rejected row other than a probe with one of the refusal codes and no attempt,
 /// and the first start after the step takes each such row's share out of the hourly row that holds it, whichever
 /// fold keyed that row, and into the map.
+///
+/// Version 43: an attempt row carries the serving account's class, false on a row from before with nothing
+/// backfilled, so a usage-based seat's attempts file under a funding of their own. The extra-usage samples are keyed
+/// by the source too, so a head and a poll of one five-minute bucket both stand, and gain five columns for the poll's
+/// `spend` object, null on every row from before. The table is rebuilt once as the rollups were, a rowid table still,
+/// since the purge deletes by `rowid`.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -1065,4 +1071,34 @@ CREATE INDEX requests_landed_at ON requests(landed_at);
 ALTER TABLE account_rollups_hourly ADD COLUMN wall_early_ms INTEGER NOT NULL DEFAULT 0;",
     ),
     (42, crate::refusals::REFUSED_STEP_SQL),
+    (
+        43,
+        "ALTER TABLE attempts ADD COLUMN usage_based INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE extra_usage_samples_next (
+  account_id TEXT NOT NULL,
+  bucket INTEGER NOT NULL,
+  is_enabled INTEGER NOT NULL,
+  in_use INTEGER,
+  monthly_limit INTEGER,
+  used_credits INTEGER,
+  utilization REAL,
+  currency TEXT,
+  disabled_reason TEXT,
+  overage_reset INTEGER,
+  source TEXT NOT NULL,
+  spend_limit_minor INTEGER,
+  spend_used_minor INTEGER,
+  spend_percent REAL,
+  spend_currency TEXT,
+  spend_exponent INTEGER,
+  PRIMARY KEY (account_id, bucket, source)
+);
+INSERT INTO extra_usage_samples_next (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits,
+  utilization, currency, disabled_reason, overage_reset, source)
+SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason,
+  overage_reset, source
+FROM extra_usage_samples;
+DROP TABLE extra_usage_samples;
+ALTER TABLE extra_usage_samples_next RENAME TO extra_usage_samples;",
+    ),
 ];

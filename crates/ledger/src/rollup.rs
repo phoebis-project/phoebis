@@ -45,6 +45,9 @@ pub const FAST_FUNDING: &str = "fast";
 /// The funding of an attempt an api_key account served: billed in dollars whatever its speed or the head's overage
 /// flag, as `funding_of` reads the kind first.
 pub const BILLED_FUNDING: &str = "billed";
+/// The funding of an attempt a usage-based seat served: billed in dollars at the API rates whatever its speed or the
+/// head's overage flag, as `funding_of` reads the class after the kind.
+pub const USAGE_BASED_FUNDING: &str = "usage_based";
 
 /// The prompt-length band a row's attempts priced at: the key word of `Band::Standard`.
 pub const STANDARD_BAND: &str = "standard";
@@ -541,7 +544,7 @@ fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64
 
 /// One delta per distinct (band, speed, funding) triple among the attempts with usage, the band from the attempt's
 /// own prompt against the revision in force at the request's `received_at`, the speed the attempt's own and the
-/// funding `funding_of` reads off the attempt's three facts, each delta summing its attempts' five counts,
+/// funding `funding_of` reads off the attempt's four facts, each delta summing its attempts' five counts,
 /// `thinking_tokens`, `web_search_requests`, `web_fetch_requests` and its attempt count. The request counters,
 /// `failovers`, the cache figures, the histograms and the errors sit on the serving attempt's delta alone (its band,
 /// its speed, its funding). A request with no attempt with usage files one delta under `STANDARD_BAND` keyed by the
@@ -556,11 +559,17 @@ pub fn deltas_of(
     let model = request.canonical_model.as_str();
     let last = attempts.last();
 
-    // An attempt's funding whole, read off its own three facts, so the key tells billed spend from plan spend without
+    // An attempt's funding whole, read off its own four facts, so the key tells billed spend from plan spend without
     // the registry. A request no attempt served files under `plan`.
     let funding_word = |a: Option<&AttemptRecord>| {
         a.map_or(PLAN_FUNDING, |a| {
-            funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()).rollup_word()
+            funding_of(
+                &a.account_kind,
+                a.usage_based,
+                a.overage_in_use,
+                a.speed.as_deref(),
+            )
+            .rollup_word()
         })
     };
     let band_of = |a: &AttemptRecord| {
@@ -1012,10 +1021,13 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
             STANDARD_SPEED
         },
         // A credit files beside its probe's request row, in the order `funding_of` reads an attempt: `billed` on an
-        // api_key account, `fast` for a fast delta (a fast answer's request row `deltas_of` keys `fast` whatever the
-        // overage flag), else the overage fact the probe's answer reported, else `plan`.
+        // api_key account, `usage_based` on a usage-based seat, `fast` for a fast delta (a fast answer's request row
+        // `deltas_of` keys `fast` whatever the overage flag), else the overage fact the probe's answer reported, else
+        // `plan`.
         if delta.account_kind == Some(AccountKind::ApiKey) {
             BILLED_FUNDING
+        } else if delta.usage_based {
+            USAGE_BASED_FUNDING
         } else if delta.speed == Some(Speed::Fast) {
             FAST_FUNDING
         } else if delta.overage_in_use == Some(true) {
@@ -2460,7 +2472,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2524,7 +2536,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2620,7 +2632,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -4284,7 +4296,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

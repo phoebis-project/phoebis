@@ -27,8 +27,8 @@ pub(crate) struct Dashboard {
     pub tokens_cached_24h: u64,
     /// The window's estimated cost in dollars.
     pub cost_24h: f64,
-    /// The dollars of the window's billed rows alone (fast mode, overage and API key accounts), a part of
-    /// `cost_24h`.
+    /// The dollars of the window's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a
+    /// part of `cost_24h`.
     pub billed_24h: f64,
     /// The window's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served
     /// them.
