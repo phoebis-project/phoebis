@@ -89,7 +89,8 @@ export function linkedKeyIds(selected: string[], sessionKey: string | null): str
  * `models` and `pools`, the class pattern as `client`, a session id as `session`, and a breakdown row's group as its
  * own filter: `accounts`, `classifiers`, `client`, `efforts`, `keys`, `kind`, `models`, `pools`, `request_classes` or
  * `speeds`. A client group keyed `other`, or keyed with a class the rollups would fold, answers no address, and outside
- * the client grouping neither does a class pattern that matches `other`.
+ * the client grouping neither does a class pattern that matches `other`, unless it is stars alone, which matches the
+ * raw and the folded alike.
  */
 export function requestsLink({ count, filters, group, reason, window }: RequestsLinkInput): RequestsLinkTarget {
   if (count === 0) return { href: null, title: NOTHING_TO_LIST };

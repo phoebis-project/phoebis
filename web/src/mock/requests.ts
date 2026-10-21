@@ -2074,7 +2074,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     const hour = iso(startOfHour(Date.parse(r.at)));
     // A request answered at the cap before any account served it files under `-`, as the ledger files what it could
     // not attribute. The funding is part of the key, so a lane-hour on both sides of nightly's overage raise splits.
-    const key = [hour, r.keyId, r.poolId, r.accountId ?? '-', r.model, r.kind, r.sessionId, fundingKey(r)].join('|');
+    // The model is the one the router resolved, as the ledger keys it, so an alias files under its resolved id.
+    const key = [hour, r.keyId, r.poolId, r.accountId ?? '-', r.canonicalModel, r.kind, r.sessionId, fundingKey(r)].join('|');
     const list = groups.get(key) ?? [];
     list.push(r);
     groups.set(key, list);

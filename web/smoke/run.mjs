@@ -16425,10 +16425,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         const withPlan = points.filter((p) => p.groups.some(planned));
         if (withPlan.length < 2) return points;
         template = withPlan[0].groups.find(planned);
-        const unpriced = (key) => ({ ...template, cacheEquivalent: {}, costEquivalent: {}, equivalentSplit: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }, key, label: key });
+        const unpriced = (key, label = key) => ({ ...template, cacheEquivalent: {}, costEquivalent: {}, equivalentSplit: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }, key, label });
+        // The route labels a group alike in every bucket, and an earlier holder of a key is labeled apart from its key.
         return [
           { at: withPlan[0].at, groups: [template, unpriced(unpricedKey)] },
-          { at: withPlan[1].at, groups: [unpriced(template.key), unpriced(unpricedKey)] },
+          { at: withPlan[1].at, groups: [unpriced(template.key, template.label), unpriced(unpricedKey)] },
         ];
       };
       const chartPage = await mount('/analytics#cost', { now: CLOCK_ORIGIN });

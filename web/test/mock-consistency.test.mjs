@@ -12,6 +12,12 @@ const DAY = 24 * HOUR;
 const startOfHour = (ms) => Math.floor(ms / HOUR) * HOUR;
 const iso = (ms) => new Date(ms).toISOString();
 
+/**
+ * Whether an instant, a request's arrival or a rollup's hour, falls in a range as the analytics routes read it: from
+ * the hour holding the start up to the hour ceiling of the end, so an end exactly on the hour leaves that hour out.
+ */
+const inHours = (ms, fromMs, toMs) => ms >= startOfHour(fromMs) && ms < Math.ceil(toMs / HOUR) * HOUR;
+
 /** A rollup row's requests, as the analytics routes count them. */
 const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone;
 const tokensOf = (r) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
@@ -448,8 +454,45 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(sum(s.pools, (p) => p.requests24h), s.totalled.length, "the pools' days");
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
     const points = await s.api.getAnalyticsSeries({ ...range, groupBy: 'all' });
-    const day = s.rollups.filter((r) => Date.parse(r.hour) >= Date.parse(range.from) && Date.parse(r.hour) <= Date.parse(range.to));
+    const day = s.rollups.filter((r) => inHours(Date.parse(r.hour), Date.parse(range.from), Date.parse(range.to)));
     assert.equal(sum(points, (pt) => sum(pt.groups, (g) => g.requests)), sum(day, requestsOf));
+  });
+
+  test(`the breakdown of a range starting inside an hour counts the requests of the hour holding its start, at ${at}`, async () => {
+    const s = await story;
+    const from = s.now - DAY;
+    const edge = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) === startOfHour(from));
+    assert.ok(from > startOfHour(from) && edge.length > 0, 'the range starts inside an hour that holds a request');
+    const [all] = await s.api.getAnalyticsBreakdown({ from: iso(from), groupBy: 'all', to: iso(s.now) });
+    const kept = s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, s.now));
+    assert.equal(all.requests, kept.length, `the range counts ${edge.map((r) => r.id).join(', ')}`);
+  });
+
+  test(`the breakdown of a range ending on the hour leaves out the requests of the hour its end starts, at ${at}`, async () => {
+    const s = await story;
+    const from = s.now - DAY;
+    const to = startOfHour(s.now);
+    const current = s.requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= to);
+    assert.ok(current.length > 0, 'the hour the end starts holds requests');
+    const [all] = await s.api.getAnalyticsBreakdown({ from: iso(from), groupBy: 'all', to: iso(to) });
+    const kept = s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, to));
+    assert.equal(all.requests, kept.length, `the range leaves out the ${current.length} requests from ${iso(to)} on`);
+  });
+
+  test(`the rollups file a request sent under an alias under the model it resolved to, so the model groups name resolved ids alone, at ${at}`, async () => {
+    const s = await story;
+    const aliased = s.requests.filter((r) => r.model !== r.canonicalModel);
+    assert.ok(aliased.length > 0, 'the story holds a request sent under an alias');
+    for (const r of aliased) {
+      const hour = iso(startOfHour(Date.parse(r.at)));
+      const lane = s.allRollups.filter((x) => x.hour === hour && x.keyId === r.keyId && x.poolId === r.poolId && x.accountId === (r.accountId ?? '-') && x.kind === r.kind && x.sessionId === r.sessionId);
+      const models = lane.map((x) => x.model);
+      assert.ok(models.includes(r.canonicalModel) && !models.includes(r.model), `${r.id}, sent as ${r.model}, files under ${models.join(', ')}`);
+    }
+    // From the hour a day back the rollups are the request log's own, so their models are the log's resolved ids.
+    const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.totalledFrom), groupBy: 'model', to: iso(s.now) });
+    const resolved = [...new Set(s.requests.filter((r) => Date.parse(r.at) >= s.totalledFrom).map((r) => r.canonicalModel))].sort();
+    assert.deepEqual(groups.map((g) => g.key).sort(), resolved, 'the model groups');
   });
 
   test(`the mock flags a window where a plan row with tokens priced nothing on it, so the story reads no flag, and its unpriced request flags the day under its switch, at ${at}`, async () => {
@@ -2189,7 +2232,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const costs = s.settings.subscriptionCosts;
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
     const groups = await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'account' });
-    const day = s.allRollups.filter((r) => Date.parse(r.hour) >= Date.parse(range.from) && Date.parse(r.hour) <= Date.parse(range.to));
+    const day = s.allRollups.filter((r) => inHours(Date.parse(r.hour), Date.parse(range.from), Date.parse(range.to)));
     const kinds = new Map(s.accounts.map((a) => [a.id, a.kind]));
     const tiers = new Map(s.accounts.map((a) => [a.id, a.subscription?.rateLimitTier]));
     const usageOf = (r) => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
@@ -2348,7 +2391,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const laneOf = (hour, keyId, poolId, accountId, model, kind, sessionId) => [hour, keyId, poolId, accountId, model, kind, sessionId].join('|');
     const expected = new Map();
     for (const r of s.requests) {
-      const lane = laneOf(iso(startOfHour(Date.parse(r.at))), r.keyId, r.poolId, r.accountId ?? '-', r.model, r.kind, r.sessionId);
+      const lane = laneOf(iso(startOfHour(Date.parse(r.at))), r.keyId, r.poolId, r.accountId ?? '-', r.canonicalModel, r.kind, r.sessionId);
       expected.set(lane, new Set([...(expected.get(lane) ?? []), fundingOf(r)]));
     }
     const filed = new Map();
@@ -2365,7 +2408,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of history) assert.equal(r.funding, 'billed', `the history row of ${r.hour} on ${r.accountId} files under billed`);
     const unserved = s.requests.filter((r) => r.attempts.length === 0 && r.shape.requestedSpeed === 'fast');
     if (unserved.length > 0) {
-      const lane = laneOf(iso(startOfHour(Date.parse(unserved[0].at))), unserved[0].keyId, unserved[0].poolId, '-', unserved[0].model, unserved[0].kind, unserved[0].sessionId);
+      const lane = laneOf(iso(startOfHour(Date.parse(unserved[0].at))), unserved[0].keyId, unserved[0].poolId, '-', unserved[0].canonicalModel, unserved[0].kind, unserved[0].sessionId);
       assert.ok(filed.get(lane)?.has('plan'), `${unserved[0].id} asked for fast and no attempt served it, so its rollup files under plan`);
     }
   });
@@ -2393,8 +2436,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   });
 
   // The Analytics page's default range, the last day up to the story's instant, read off the rollups as the mock's
-  // `inQuery` reads them: every hour that starts inside the range.
-  const defaultRange = (s) => s.allRollups.filter((r) => Date.parse(r.hour) >= s.now - DAY && Date.parse(r.hour) <= s.now);
+  // `inQuery` reads them: from the hour holding the range's start up to the hour ceiling of its end.
+  const defaultRange = (s) => s.allRollups.filter((r) => inHours(Date.parse(r.hour), s.now - DAY, s.now));
 
   test(`every reason the default range's totals count lists a request under it in the window its link writes, at ${at}`, async () => {
     const s = await story;
@@ -2412,7 +2455,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the default range's effort, request class and classifier breakdowns count the story's rows per folded value, at ${at}`, async () => {
     const s = await story;
-    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
+    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY));
     const folds = { classifier: (r) => s.lib.foldClassifier(r.classifier), effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
     for (const [groupBy, fold] of Object.entries(folds)) {
       const want = {};
@@ -2437,7 +2480,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const closed = s.requests.filter((r) => r.outcome === 'canceled');
     assert.ok(closed.length > 0, 'the story holds a stream the client closed');
     for (const r of closed) assert.equal(r.errorCode, 'client_gone', `${r.id} names the code`);
-    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= s.now - DAY);
+    const rows = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY));
     const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
     assert.equal(totals.errors.client_gone ?? 0, rows.filter((r) => r.errorCode === 'client_gone').length, 'the Errors by code panel reads the story');
     // An undecodable stream files under its own code, apart from the upstream errors.

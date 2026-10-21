@@ -148,7 +148,8 @@ function passesFunding(r: HourlyRollup, funding: AnalyticsQuery['funding']): boo
 
 function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: number): boolean {
   const hour = Date.parse(r.hour);
-  if (hour < fromMs || hour > toMs) return false;
+  // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
+  if (hour < Math.floor(fromMs / HOUR) * HOUR || hour >= Math.ceil(toMs / HOUR) * HOUR) return false;
   if (!passesFunding(r, q.funding)) return false;
   if (q.accountIds?.length && !q.accountIds.includes(r.accountId)) return false;
   if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, r))) return false;
