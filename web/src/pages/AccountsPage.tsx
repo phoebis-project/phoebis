@@ -18,7 +18,7 @@ import { ACCOUNTS_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
-import { accountPatchOf, advancesOwnToken, derivedId, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
+import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -29,7 +29,7 @@ import { joinTrend } from '@/lib/trend';
 const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LABEL[s], value: s })) };
 /** A save the router refused, as the editor's callout draws it. `stale` marks a row that moved under the editor. */
 type EditorRefusal = { message: string; stale: boolean };
-const END_HINT = "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.";
+const END_HINT = "The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.";
 /** With auto reload off, how often the page reads the list while a pairing's first reading is in flight, and for how long. */
 const FIRST_READING_EVERY_MS = 2_000;
 const FIRST_READING_FOR_MS = 30_000;
@@ -294,6 +294,7 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
     };
   }, []);
   const endRefusal = endForm ? subscriptionEndRefusal(endForm) : null;
+  const endsLabel = endZoneLabel();
   const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
 
@@ -604,8 +605,8 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
                 <input type="checkbox" checked={endForm.cancelled} disabled={busy} onChange={(e) => setEndForm(tickCancelled(endForm, e.target.checked))} />
                 <span className="field__label">Cancelled</span>
               </label>
-              <Field label="Ends" hint={END_HINT}>
-                <Input type="datetime-local" value={endForm.endsAt} disabled={busy} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label="Ends" />
+              <Field label={endsLabel} hint={END_HINT}>
+                <Input type="datetime-local" value={endForm.endsAt} disabled={busy} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label={endsLabel} />
               </Field>
               {endRefusal && (
                 <div className="callout callout--critical" role="alert">

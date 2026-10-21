@@ -407,6 +407,9 @@ export function subscriptionEndFormOf(
   return { cancelled: account.cancelled, endsAt: end ? toLocalInput(Date.parse(end)) : '', revision: account.revision };
 }
 
+/** The viewer's zone as the end editor names it beside its label, `Ends (Europe/Berlin)`. */
+export const endZoneLabel = (zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'): string => `Ends (${zone})`;
+
 /**
  * Ticking leaves the field as it stands, since the end is the date the provider's billing page shows and nothing the
  * console can work out. Unticking clears it, since the route keeps no end without the flag.

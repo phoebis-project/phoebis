@@ -259,6 +259,11 @@ test('ticking cancelled leaves the end as typed, unticking clears it, and the fo
   assert.equal(reopened.revision, saved.revision, 'the reopened editor fences on the revision of the row it opened with');
 });
 
+test("the end editor names the zone its field reads in, the browser's own by default", () => {
+  assert.equal(d.endZoneLabel('Europe/Berlin'), 'Ends (Europe/Berlin)');
+  assert.equal(d.endZoneLabel(), `Ends (${Intl.DateTimeFormat().resolvedOptions().timeZone})`, "the default reads the runtime's zone");
+});
+
 const rules = (...patterns) => patterns.map((p) => (p.startsWith('NOT ') ? { not: true, pattern: p.slice(4) } : { not: false, pattern: p }));
 
 test('a model rule list is refused in the route\'s order and words, and the refusal holds a pool save', () => {

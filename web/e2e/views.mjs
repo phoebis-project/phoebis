@@ -7310,7 +7310,7 @@ async function subscriptionEndForm(theme) {
   measurements.push(`${theme} /accounts subscription end ${JSON.stringify({ ...read, held, save })}`);
   if (read.end !== '') say(`ticking Cancelled filled the end with ${JSON.stringify(read.end)}, where the operator types it`);
   if (!(read.callout ?? '').includes('A cancelled plan needs the date it ends.') || !held) say(`ticking Cancelled with no end drew ${JSON.stringify(read.callout)} with Save ${held ? 'held' : 'open'}, not the refusal that names the date`);
-  if (read.hint !== "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.") say(`the Ends hint reads ${JSON.stringify(read.hint)}`);
+  if (read.hint !== "The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.") say(`the Ends hint reads ${JSON.stringify(read.hint)}`);
   for (const finding of [
     // A select keeps room for its chevron, so the padding is left out.
     ...compare(read.ends, read.sort, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the Sort select'),

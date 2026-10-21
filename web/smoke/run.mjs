@@ -2280,8 +2280,11 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     expect('/accounts/primary the subscription end editor', identity()?.textContent ?? '', [
       'Cancelled',
       'Ends',
-      "The date the plan's billing settings show as its end. An annual plan is marked cancelled in its final month only.",
+      "The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.",
     ]);
+    // The smoke runs in UTC, so the label names UTC. The `.field` scope skips the checkbox's Cancelled field label.
+    const endsLabel = identity()?.querySelector('.field .field__label')?.textContent?.trim() ?? '';
+    results.push({ name: "/accounts/primary the Ends field names the browser's zone beside its label", ok: endsLabel === 'Ends (UTC)', missing: [endsLabel || 'no Ends label'] });
     const before = field()?.value;
     box()?.click();
     await m.settle(100);

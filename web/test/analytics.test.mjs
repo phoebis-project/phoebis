@@ -429,6 +429,13 @@ test('the key grouping names an earlier holder of a key id as the breakdown does
   assert.deepEqual(lines.map((l) => l.label), ['desktop', d.earlierHolderLabel('desktop', generation)]);
 });
 
+test("a deleted key's group reads its creation minute in the viewer's zone, and its wire label without the instant", () => {
+  const created = 1_791_720_940_000;
+  const group = { key: `desktop@${created}`, key_id: 'desktop', label: 'desktop (deleted)' };
+  assert.equal(d.decodeAnalyticsGroup({ ...group, key_created_at: created }).label, `desktop (deleted, created ${d.fmtMinute(new Date(created).toISOString())})`, "the instant formats in the host's zone");
+  assert.equal(d.decodeAnalyticsGroup(group).label, 'desktop (deleted)', 'a group with no instant reads its label alone');
+});
+
 test('a priced bucket between unpriced ones, or at an end beside one, is an isolated slot the plan chart marks', () => {
   const plan = (at, over) => point(at * HOUR, 'primary', { tokens: 100, uncachedTokens: 100, unit: 'window_share', ...over });
   const { rows } = d.foldBurn([plan(0), plan(1, { fiveHourShare: 0.05 }), plan(2)], 'account', 3_600, new Set(['primary']));

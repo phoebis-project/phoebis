@@ -257,23 +257,24 @@ it." The actions, with the dialog each opens:
 
 "Identity" lists, for a subscription account, Type ("OAuth login"), Plan by its tier with its start (`Max 20x since
 {date}`), Rate-limit tier, Ends and Trial ends where known, Organization and Billing type, and "Edit end" opens the end
-editor: the checkbox "Cancelled", the field "Ends" with the hint "The date the plan's billing settings show as its end.
-An annual plan is marked cancelled in its final month only.", Save and Cancel, and "Reload" where the row changed under
-the editor. The card closes on "Renewal date is not reported by the provider." For an API-key account it lists Type
-("API key") and Windows ("None reported, billed per token"). "Usage" ("Remaining share of each window") draws the three
-windows as the Quota view does, the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this
-month" with its spend meter and an "in use" badge, the reason the provider gave for disabling extra usage, and a "Fast
-mode" line with the share of the fast lane's input and output buckets used and a chip while the fast lane cools, or
-reads "This account does not report quota windows.", or "The first quota reading is in flight" from a pairing's confirm
-until the account's first reading lands. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the
-5-hour, 7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota samples appear after
-the first successful quota fetch." "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the
-model), Reason and Until with a Clear button per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The
-account becomes eligible immediately. If the account is still rate limited, the next request re-enters cooldown." "Pool"
-links the pool with `priority {n}`, or reads "Not a member of a pool." "Credential" lists Access token, Refresh token,
-Last refresh and Last error for a subscription account, and Secret ("stored encrypted at rest") and Last error for an
-API-key account. "Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link that opens the log on the
-account's rows over the last hour.
+editor: the checkbox "Cancelled", the field `Ends ({zone})`, whose label names the browser's time zone, with the hint
+"The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The
+time is in this browser's zone.", Save and Cancel, and "Reload" where the row changed under the editor. The card closes
+on "Renewal date is not reported by the provider." For an API-key account it lists Type ("API key") and Windows ("None
+reported, billed per token"). "Usage" ("Remaining share of each window") draws the three windows as the Quota view does,
+the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this month" with its spend meter and an
+"in use" badge, the reason the provider gave for disabling extra usage, and a "Fast mode" line with the share of the
+fast lane's input and output buckets used and a chip while the fast lane cools, or reads "This account does not report
+quota windows.", or "The first quota reading is in flight" from a pairing's confirm until the account's first reading
+lands. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day
+windows of a subscription account, or "No samples yet" with "Quota samples appear after the first successful quota
+fetch." "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the model), Reason and Until
+with a Clear button per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The account becomes eligible
+immediately. If the account is still rate limited, the next request re-enters cooldown." "Pool" links the pool with
+`priority {n}`, or reads "Not a member of a pool." "Credential" lists Access token, Refresh token, Last refresh and Last
+error for a subscription account, and Secret ("stored encrypted at rest") and Last error for an API-key account.
+"Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link that opens the log on the account's rows over
+the last hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
 tokens, Output tokens and Effort levels, or "The upstream lists no models."
