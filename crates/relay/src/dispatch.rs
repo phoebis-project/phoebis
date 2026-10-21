@@ -4,6 +4,7 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use bytes::BytesMut;
 use phoebis_oauth::Clock;
@@ -19,6 +20,11 @@ use crate::messages::Relay;
 /// The one authority the relay dials: `api.anthropic.com` on 443, so the `Host` value, the resolver's input,
 /// and the pool key's host are the bare name.
 pub(crate) const UPSTREAM_AUTHORITY: &str = phoebis_store::INFERENCE_HOST;
+
+/// The wait before the one retry of a request whose connection could not be opened: it gives a listener that
+/// refused, or a handshake that failed, a moment to come back. A reused connection that died on the write is retried
+/// at once, because the host answered on it a moment before.
+pub(crate) const CONNECT_RETRY_WAIT: Duration = Duration::from_secs(1);
 
 pub(crate) struct Sent<C> {
     pub conn: C,
@@ -37,8 +43,10 @@ pub(crate) enum AttemptFailure {
     #[error("the response was lost: {0}")]
     Lost(String),
     /// The request was never written whole into a live connection, so nothing upstream can have acted on it.
-    #[error("the request never reached the upstream: {0}")]
-    Unsent(String),
+    /// `connect` says no connection was opened at all (the checkout's error, the handshake's error or the connect
+    /// bound's expiry), as against a checked-out connection that died on the write.
+    #[error("the request never reached the upstream: {detail}")]
+    Unsent { detail: String, connect: bool },
 }
 
 /// `None` once the account is gone. A read that outlives a disconnect must not classify, refresh, or mark
@@ -83,8 +91,9 @@ pub(crate) async fn attempt(
         // whole head timeout, ten minutes, before the one retry on a fresh connection.
         let conn = tokio::time::timeout(relay.limits.connect_timeout, checkout)
             .await
-            .map_err(|_| {
-                AttemptFailure::Unsent("timed out before a connection was ready".into())
+            .map_err(|_| AttemptFailure::Unsent {
+                detail: "timed out before a connection was ready".into(),
+                connect: true,
             })??;
         send_and_read(conn, request, &sending, &relay.clock).await
     };
@@ -102,9 +111,10 @@ async fn bounded<T>(
     tokio::select! {
         result = work => match result {
             Ok(result) => result,
-            Err(_) if !sending.load(Ordering::SeqCst) => Err(AttemptFailure::Unsent(
-                "timed out before a connection was ready".into(),
-            )),
+            Err(_) if !sending.load(Ordering::SeqCst) => Err(AttemptFailure::Unsent {
+                detail: "timed out before a connection was ready".into(),
+                connect: true,
+            }),
             Err(_) => Err(AttemptFailure::Lost(
                 "timed out sending the request or waiting for the response head".into(),
             )),
@@ -127,9 +137,10 @@ async fn send_and_read<C: AsyncRead + AsyncWrite + Unpin>(
     write_request(&mut conn, request)
         .await
         .map_err(|failure| match failure.progress {
-            WriteProgress::NothingWritten | WriteProgress::HeadWritten => {
-                AttemptFailure::Unsent(failure.error.to_string())
-            }
+            WriteProgress::NothingWritten | WriteProgress::HeadWritten => AttemptFailure::Unsent {
+                detail: failure.error.to_string(),
+                connect: false,
+            },
             // The body is already in the socket and only the flush failed, so the upstream may well have
             // read the whole request.
             WriteProgress::BodyWritten => AttemptFailure::Lost(failure.error.to_string()),
@@ -172,7 +183,10 @@ async fn checkout_fresh(
 }
 
 fn unsent(error: TransportError) -> AttemptFailure {
-    AttemptFailure::Unsent(error.to_string())
+    AttemptFailure::Unsent {
+        detail: error.to_string(),
+        connect: true,
+    }
 }
 
 #[cfg(test)]
@@ -186,9 +200,10 @@ mod tests {
     use bytes::Bytes;
     use phoebis_oauth::Clock;
     use phoebis_transport::request::RawRequest;
+    use phoebis_transport::TransportError;
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-    use super::{send_and_read, AttemptFailure};
+    use super::{send_and_read, unsent, AttemptFailure};
 
     /// A connection that takes every byte of the request and then fails the flush.
     struct FlushFails;
@@ -237,5 +252,37 @@ mod tests {
             .expect("a failed flush fails the attempt");
         assert!(matches!(failure, AttemptFailure::Lost(_)), "{failure}");
         assert!(sending.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_checkout_that_could_not_open_a_connection_is_unsent_as_a_connect_failure() {
+        let failure = unsent(TransportError::Io(io::ErrorKind::ConnectionRefused.into()));
+        assert!(
+            matches!(failure, AttemptFailure::Unsent { connect: true, .. }),
+            "{failure:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_that_fails_on_a_checked_out_connection_is_unsent_but_no_connect_failure() {
+        let request = RawRequest {
+            method: "POST",
+            target: "/v1/messages".into(),
+            headers: vec![("Content-Length".into(), "2".into())],
+            body: Bytes::from_static(b"{}"),
+        };
+        let clock: Clock = Arc::new(|| 0);
+        let sending = AtomicBool::new(false);
+        // An open connection whose peer has gone, so the first write fails before any byte is taken.
+        let (conn, peer) = tokio::io::duplex(64);
+        drop(peer);
+        let failure = send_and_read(conn, &request, &sending, &clock)
+            .await
+            .err()
+            .expect("a failed write fails the attempt");
+        assert!(
+            matches!(failure, AttemptFailure::Unsent { connect: false, .. }),
+            "{failure:?}"
+        );
     }
 }

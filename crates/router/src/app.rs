@@ -40,7 +40,8 @@ const SHUTDOWN_BUDGET: Duration = Duration::from_secs(35);
 /// end with the runtime.
 const LISTENER_DRAIN: Duration = Duration::from_secs(30);
 
-/// A first TLS handshake on a cold host runs well under this; a stalled one costs at most twice it before the 502.
+/// A first TLS handshake on a cold host runs well under this, and a stalled one costs at most twice it plus the
+/// one-second wait between the two tries before the 502.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The relay's own ceiling on a silent upstream, above any client's wait: Claude Code 2.1.296 aborts a stream

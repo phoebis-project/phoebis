@@ -823,8 +823,9 @@ alone (an auxiliary class, or a request foreign to the conversation) moves that 
 | 404 `not_found_error` naming a model | Model-scoped, `routing.model_rejection_seconds`, reason `model_rejected` | Yes |
 | 529 | None | No, forwarded, the client retries |
 | Other 5xx | None | No, forwarded |
-| Transport failure before fully written | None | Yes, once, same account |
+| Transport failure before fully written | None | Yes, once, same account, after about a second when no connection could be opened and at once when a reused connection died |
 | Transport failure after fully written, no head at all | None | No, 502 `upstream_unreachable`, the client retries |
+| Transport failure before fully written, on the retry as well | None | No, 502 `upstream_unreachable`, the client retries |
 | Transport failure after the head, before any byte reached the client | None | No, 502 `upstream_cut` |
 | A coding or a payload the router cannot decode, before any byte reached the client | None | No, 502 `upstream_undecodable` |
 | Idle bound after the head, before any byte reached the client | None | No, 502 `upstream_stalled` |
@@ -928,8 +929,8 @@ tokens. The same-account retries keep their bounds: one transport retry after a 
 was fully written, one refresh replay, one strip retry when an upstream answers 400 naming a beta or field the router
 itself added (the router strips it and retries once on the same account, correcting its own edit), and one retry in
 place for a short throttle. The connect and the TLS handshake toward the upstream have their own bound of 10 seconds. A
-handshake that stalls is retried once on a fresh connection and then answered `502 upstream_unreachable`, so a stalled
-upstream costs at most 20 seconds before the client hears.
+handshake that stalls is retried once on a fresh connection after a wait of about a second and then answered
+`502 upstream_unreachable`, so a stalled upstream costs at most 21 seconds before the client hears.
 
 The Accounts view shows what an account is cooling under in a cooling-down block, one line per scope, the whole account
 or one model, with the reason, the deadline and a clear button, and the Models view lists the same rows grouped by

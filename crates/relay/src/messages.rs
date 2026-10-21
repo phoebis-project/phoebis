@@ -2934,14 +2934,31 @@ impl Relay {
                         )
                         .await),
                 };
+            let dispatched = match dispatched {
+                Err(AttemptFailure::Unsent { detail, connect }) if !retried => {
+                    tracing::debug!(
+                        account = %account.id,
+                        %detail,
+                        connect,
+                        "retrying a request that never reached the upstream"
+                    );
+                    // A cancellation that ends the wait answers as one during the attempt, since nothing was written.
+                    if connect
+                        && until_canceled(tokio::time::sleep(dispatch::CONNECT_RETRY_WAIT), cancel)
+                            .await
+                            .is_none()
+                    {
+                        Err(AttemptFailure::Canceled)
+                    } else {
+                        fresh = true;
+                        retried = true;
+                        continue;
+                    }
+                }
+                dispatched => dispatched,
+            };
             let next = match dispatched {
                 Ok(next) => next,
-                Err(AttemptFailure::Unsent(detail)) if !retried => {
-                    tracing::debug!(account = %account.id, %detail, "retrying a request that never reached the upstream");
-                    fresh = true;
-                    retried = true;
-                    continue;
-                }
                 Err(AttemptFailure::Canceled) => {
                     let outcome = self.outcome(
                         admitted.trace,

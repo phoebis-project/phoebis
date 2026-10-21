@@ -345,10 +345,14 @@ async fn a_lost_response_after_the_body_was_written_is_not_replayed() {
     up.shutdown().await;
 }
 
+/// The relay's wait before it retries a request whose connection could not be opened.
+const CONNECT_RETRY_WAIT: Duration = Duration::from_secs(1);
+
 #[tokio::test]
-async fn a_connection_that_dies_before_any_byte_is_retried_once_on_a_fresh_one() {
-    // The first connection is closed at accept, which is what a pooled connection the upstream already dropped
-    // looks like to the client: nothing was written and nothing can have been billed.
+async fn a_connection_that_cannot_be_opened_is_retried_once_after_the_wait() {
+    // The first connection is closed at accept, so its handshake fails: no connection was opened, nothing was
+    // written and nothing can have been billed. Real time rather than the test clock, since the wait sits before a
+    // real socket's dial.
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::CloseImmediately,
@@ -364,20 +368,63 @@ async fn a_connection_that_dies_before_any_byte_is_retried_once_on_a_fresh_one()
         },
     );
     let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let started = Instant::now();
     let resp = app
         .oneshot(common::stream_request("phoebis-testkey"))
         .await
         .unwrap();
+    let elapsed = started.elapsed();
     assert_eq!(resp.status(), 200);
-    assert_eq!(up.connections(), 2, "one dead connection, one retry");
+    assert!(
+        elapsed >= CONNECT_RETRY_WAIT,
+        "the retry waits before it dials again, answered after {elapsed:?}"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert_eq!(outcome.attempt, 2, "the failed dial and the one retry");
     let recorded = up.requests();
     assert_eq!(
         recorded.len(),
         1,
-        "the dead connection never carried a request"
+        "the closed connection never carried a request"
     );
     assert!(recorded[0].complete);
     up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_request_refused_on_both_connects_answers_502_after_one_wait() {
+    // The listener is bound and dropped before the request, so both connects are refused. An API-key account, so
+    // the relay calls no control plane on the dead address.
+    let up = FakeUpstream::start(Vec::new()).await;
+    let app = common::relay_with(phoebis_store::AccountKind::ApiKey, &up).await;
+    up.shutdown().await;
+    let started = Instant::now();
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.oneshot(common::stream_request("phoebis-testkey")),
+    )
+    .await
+    .expect("two refused connects and one wait end the request well inside the bound")
+    .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(resp.status(), 502);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "upstream_unreachable"
+    );
+    assert!(
+        elapsed >= CONNECT_RETRY_WAIT,
+        "one wait between the two connects, answered after {elapsed:?}"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert_eq!(outcome.attempt, 2, "no third attempt after the retry");
+    assert!(!outcome.written, "neither connect carried a byte");
 }
 
 #[tokio::test]
@@ -676,15 +723,16 @@ async fn a_timeout_with_the_request_in_the_socket_is_not_retried() {
 }
 
 #[tokio::test]
-async fn a_stalled_handshake_answers_502_within_two_connect_bounds() {
+async fn a_stalled_handshake_answers_502_within_two_connect_bounds_and_the_wait() {
     // The listener accepts and never answers the ClientHello. Real time rather than the test clock: the bound
     // under test is a timer racing a socket, and a paused clock would jump straight past the socket wait.
     let up = FakeUpstream::start_silent().await;
+    let connect_timeout = Duration::from_secs(1);
     let app = common::relay_with_limits(
         phoebis_store::AccountKind::ApiKey,
         &up,
         phoebis_relay::Limits {
-            connect_timeout: Duration::from_secs(1),
+            connect_timeout,
             head_timeout: Duration::from_secs(60),
             ..common::default_limits()
         },
@@ -696,18 +744,68 @@ async fn a_stalled_handshake_answers_502_within_two_connect_bounds() {
         app.oneshot(common::stream_request("phoebis-testkey")),
     )
     .await
-    .expect("two connect bounds end the request long before the head timeout")
+    .expect("two connect bounds and the wait end the request long before the head timeout")
     .unwrap();
-    eprintln!("a stalled handshake answered after {:?}", started.elapsed());
+    let elapsed = started.elapsed();
+    eprintln!("a stalled handshake answered after {elapsed:?}");
     assert_eq!(resp.status(), 502);
     assert_eq!(
         resp.headers().get("x-phoebis-error-code").unwrap(),
         "upstream_unreachable"
     );
+    assert!(
+        elapsed >= 2 * connect_timeout + CONNECT_RETRY_WAIT,
+        "each dial waits out the connect bound, with the wait between them, answered after {elapsed:?}"
+    );
     assert_eq!(
         up.connections(),
         2,
         "the first dial and the one retry on a fresh connection"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_handshake_stalled_past_the_head_bound_answers_502_within_two_head_bounds_and_the_wait() {
+    // The head bound is the shorter one here, so it expires while the handshake is still running and nothing was
+    // sent: a connection that could not be opened, as the connect bound's expiry is.
+    let up = FakeUpstream::start_silent().await;
+    let head_timeout = Duration::from_secs(1);
+    let app = common::relay_with_limits(
+        phoebis_store::AccountKind::ApiKey,
+        &up,
+        phoebis_relay::Limits {
+            connect_timeout: Duration::from_secs(60),
+            head_timeout,
+            ..common::default_limits()
+        },
+    )
+    .await;
+    let started = Instant::now();
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.oneshot(common::stream_request("phoebis-testkey")),
+    )
+    .await
+    .expect("two head bounds and the wait end the request long before the connect timeout")
+    .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(resp.status(), 502);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "upstream_unreachable"
+    );
+    assert!(
+        elapsed >= 2 * head_timeout + CONNECT_RETRY_WAIT,
+        "each dial waits out the head bound, with the wait between them, answered after {elapsed:?}"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert!(
+        !outcome.written,
+        "nothing was sent before either bound expired"
     );
     up.shutdown().await;
 }

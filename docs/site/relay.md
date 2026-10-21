@@ -330,8 +330,9 @@ bytes does not decode, with no `stream_interrupted` event and the coding named a
 The cooldown tables, the windows and the reasons are on [Cooldowns and failover](routing.md#cooldowns-and-failover).
 The rate-limit families the router reads off a head are `anthropic-ratelimit-unified-*`, `anthropic-ratelimit-*` and
 `anthropic-fast-*`. A connection that fails before the whole request was written is retried once on a fresh connection,
-and one that may have reached the upstream is never sent again: an upstream that read the request and closed without
-answering is indistinguishable from one that never saw it, and sending it again could bill it twice.
+after about a second when no connection could be opened and at once when a reused connection died, and one that may
+have reached the upstream is never sent again: an upstream that read the request and closed without answering is
+indistinguishable from one that never saw it, and sending it again could bill it twice.
 
 ## The edits toward the client
 
@@ -506,7 +507,7 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 
 | Wait | Bound | Why |
 | --- | --- | --- |
-| The upstream connect and TLS handshake | 10 seconds | A first handshake on a cold host runs well under it, and a stalled one costs at most twice it before the `502` |
+| The upstream connect and TLS handshake | 10 seconds | A first handshake on a cold host runs well under it, and a stalled one costs at most twice it plus the one-second wait between the two tries before the `502` |
 | The upstream response head | 600 seconds | The relay's own ceiling on a silent upstream, above the client's wait with the client's default timeouts: Claude Code gives the head 180 seconds plus 1 second per 32 KiB of body under its own 600-second cap, so the client leaves no later than this guard |
 | The gap between two stream events | 600 seconds | The same ceiling: Claude Code aborts a stream after 180 seconds without a byte while its watchdog is on, so the client leaves no later than this guard |
 | The pre-commit hold | 30 seconds and 64 KiB | The client is waiting, and a longer hold buys no better verdict |
@@ -514,12 +515,13 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 | The slow-down's hold | The pool's `slow_down_hold_seconds`, 1 to 300, default 120 | Before the head, so the client's first-byte window covers it |
 | The wait for a moved pin's first head | The pool's `slow_down_hold_seconds` from the first request's dispatch, never past the request's deadline | Before the head, so the client's first-byte window covers it |
 
-A connect or handshake that times out counts as unsent, so the request is written once more on a fresh connection. A
-retry in place sleeps the throttle's delay on the same account, with the same credential, before any byte of the
-answer's head reaches the client ([Retry in place](routing.md#retry-in-place)). The slow-down's hold sleeps to the pin's
-deadline, which a retry or a sibling request of the pin rejoins, before the request is selected again
-([Slow-down](routing.md#slow-down)). A reset wait and the slow-down and rewrite holds end inside the head guard whatever
-its length: at the request's deadline where the guard leaves one, else at the guard itself.
+A connect or handshake that times out counts as unsent, so the request is written once more on a fresh connection, about
+a second later when no connection could be opened and at once when a reused connection died. A retry in place sleeps the
+throttle's delay on the same account, with the same credential, before any byte of the answer's head reaches the client
+([Retry in place](routing.md#retry-in-place)). The slow-down's hold sleeps to the pin's deadline, which a retry or a
+sibling request of the pin rejoins, before the request is selected again ([Slow-down](routing.md#slow-down)). A reset
+wait and the slow-down and rewrite holds end inside the head guard whatever its length: at the request's deadline where
+the guard leaves one, else at the guard itself.
 
 Beneath these sit Claude Code's own waits. The client cuts a stream that has gone silent for 180 seconds with its
 watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The four
