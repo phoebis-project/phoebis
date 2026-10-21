@@ -2,10 +2,10 @@
 
 `views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs in
 through the login screen, then for each theme visits the dashboard, quota, accounts (which lands on the first account
-through a client-side redirect, since `/accounts` carries no account id), pools, keys, request logs, analytics
-(on its Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once more on its
-Cache warming tab and the Quota page once more on its Quota windows section. Per view it waits for one element, asserts
-the document title, records every console error and page error, and writes a full-page screenshot to
+through a client-side redirect, since `/accounts` carries no account id), pools, keys, guardrails, request logs,
+analytics (on its Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once
+more on its Cache warming tab and the Quota page once more on its Quota windows section. Per view it waits for one
+element, asserts the document title, records every console error and page error, and writes a full-page screenshot to
 `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one function each in `views.mjs`, in
 the order the file defines them (the rail's two levels (the indent, the gaps, the hairlines, a parent's color at rest
 and under the pointer), the create marks with and without the refusal dots (a mark's size, weight and ink, 6 px after
@@ -117,7 +117,9 @@ and 83 px as the Analytics sticky bar, each chip 26 px with its word in `--ink-2
 line on one line, the first card's head below the bar, on a card view the next element and the tiles below it, on
 Analytics the Group by select against Add filter, and on the routing log and Analytics the width of the row's slots and
 gaps at rest under the view's bound, and at 950 by 800 on Analytics and Requests the bar's scroll width at most its
-client width with the count inside the window, the trailing slots wrapped), the Kinds list through Add filter on the
+client width with the count inside the window, the trailing slots wrapped, and at 400 by 800 on every view with a bar,
+at rest, the bar and the row no wider than their boxes with the count where the view draws one and the Refresh button
+inside the window), the Kinds list through Add filter on the
 routing log (Select all, the eight presets and the 42 kinds, its popover 8 px inside the window at 1280 by 800), the
 split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count beside it
 never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request landing

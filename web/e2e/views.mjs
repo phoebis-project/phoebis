@@ -5032,7 +5032,9 @@ const MIDNIGHT = (origin) => {
  * after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths and the gaps between
  * them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add filter button's height
  * and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes and the right edge, and
- * the count where the view draws one, end inside the window. Records to `measurements`.
+ * the count where the view draws one, end inside the window. At 400 by 800, at rest on every view, the bar and its row
+ * run no wider than their boxes and the Refresh button, and the count where the view draws one, end inside the window.
+ * Records to `measurements`.
  */
 async function barRow(theme, view) {
   const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
@@ -5141,6 +5143,28 @@ async function barRow(theme, view) {
         if (narrow.edge === null || narrow.edge > narrow.window) say(`950 by 800: the right edge ends at ${narrow.edge ?? 'none'} px, past the ${narrow.window} px window`);
         if (view === '/requests' && (narrow.count === null || narrow.count > narrow.window)) say(`950 by 800: the count ends at ${narrow.count ?? 'none'} px, past the ${narrow.window} px window`);
       }
+    }
+    // At 400 px the shell drops its sidebar and leaves the row 368 px. A short row (Pools', Sessions') fits on one line
+    // there, so the read asserts no second line, only that nothing runs past its box or the window.
+    await page.setViewportSize({ height: 800, width: 400 });
+    await page.goto(`${base}${view}`);
+    await booted();
+    await advance(LOAD_MS);
+    await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
+    const phone = await page.evaluate(() => {
+      const bar = document.querySelector('.filter-bar');
+      const row = bar?.querySelector(':scope > .filter-bar__row');
+      if (!bar || !row) return null;
+      const right = (el) => (el ? Math.round(el.getBoundingClientRect().right) : null);
+      return { bar: { client: bar.clientWidth, scroll: bar.scrollWidth }, count: right(row.querySelector('.filter-bar__count')), edge: right(row.querySelector('.filter-bar__edge')), refresh: right(row.querySelector('.refresh-control')), row: { client: row.clientWidth, scroll: row.scrollWidth }, window: window.innerWidth };
+    });
+    measurements.push(`${theme} ${view} bar row at 400 by 800 ${JSON.stringify(phone)}`);
+    if (phone === null) say('400 by 800: no bar to measure');
+    else {
+      if (phone.bar.scroll > phone.bar.client) say(`400 by 800: the bar runs ${phone.bar.scroll} px in ${phone.bar.client}`);
+      if (phone.row.scroll > phone.row.client) say(`400 by 800: the row runs ${phone.row.scroll} px in ${phone.row.client}`);
+      if (phone.refresh === null || phone.refresh > phone.window) say(`400 by 800: the Refresh button ends at ${phone.refresh ?? 'none'} px, past the ${phone.window} px window`);
+      if (phone.count !== null && phone.count > phone.window) say(`400 by 800: the count ends at ${phone.count} px, past the ${phone.window} px window`);
     }
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
@@ -9271,6 +9295,7 @@ try {
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       // After the shot, since it resizes the page and back, and before the measures that reload or leave the view.
       await topBarFits(theme, view.path);
+      if (view.path === '/guardrails') await barRow(theme, view.path);
       if (view.path === '/pools') await utilizationCeiling(theme);
       if (view.path === '/') await topbarHeights(theme);
       if (view.path === '/keys') await keysLayout(theme);
