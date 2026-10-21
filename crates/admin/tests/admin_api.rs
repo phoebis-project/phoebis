@@ -210,6 +210,42 @@ async fn every_answer_to_a_kept_login_renews_its_cookie_under_the_same_session_i
 }
 
 #[tokio::test]
+async fn a_kept_logins_renewal_carries_secure_under_tls_or_a_fronts_https_and_not_otherwise() {
+    use common::{cookie_of, get, post, post_forwarded};
+    let (tls, _up) = common::admin_app_tls().await;
+    let cookie = cookie_of(&post(&tls, "/admin/session", KEPT_LOGIN, None).await);
+    let terminated = get(&tls, "/admin/session", Some(&cookie)).await;
+    assert_eq!(terminated.status(), 200);
+    assert!(
+        cookie_attributes(&terminated).ends_with("; Secure"),
+        "a read under TLS renews the cookie with the whole attribute"
+    );
+
+    let (plain, _up) = common::admin_app().await;
+    let login = post_forwarded(&plain, "/admin/session", KEPT_LOGIN, None, "https").await;
+    let cookie = cookie_of(&login);
+    let fronted = post_forwarded(
+        &plain,
+        "/admin/accounts/business/pause",
+        "",
+        Some(&cookie),
+        "https",
+    )
+    .await;
+    assert_eq!(fronted.status(), 204);
+    assert!(
+        cookie_attributes(&fronted).ends_with("; Secure"),
+        "an answer behind a front's https renews the cookie with the attribute"
+    );
+    let bare = get(&plain, "/admin/session", Some(&cookie)).await;
+    assert_eq!(bare.status(), 200);
+    assert!(
+        !cookie_attributes(&bare).contains("Secure"),
+        "a plain read's renewal carries none"
+    );
+}
+
+#[tokio::test]
 async fn the_session_answer_reads_persistent_for_a_kept_login_alone() {
     use common::{cookie_of, get, json, login, post};
     let (app, _up) = common::admin_app().await;
@@ -1127,6 +1163,65 @@ async fn a_confirm_on_a_slot_sealed_under_another_key_answers_409_naming_the_acc
         Some(&cookie),
     )
     .await;
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        confirmed.headers()["x-phoebis-error-code"],
+        "sealed_under_another_key"
+    );
+    assert_eq!(
+        json(confirmed).await["error"],
+        "Business holds a credential sealed under another storage key, so disconnect it before pairing again"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
+}
+
+/// The commit's own refusal: a token answer without a refresh token makes the commit open the credential it replaces
+/// to carry that token forward, so a credential sealed under another key after the confirm's read refuses the commit
+/// as the read's refusal does. The read parks on another thread, so the runtime has two.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_confirm_whose_commit_opens_a_credential_sealed_under_another_key_answers_409_naming_the_account(
+) {
+    use common::{get, json, login, post};
+    let (app, up, store, _manager) = common::paired_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let mut token: serde_json::Value =
+        serde_json::from_slice(phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Token,
+        ))
+        .unwrap();
+    token.as_object_mut().unwrap().remove("refresh_token");
+    up.set_rule_after(
+        0,
+        "/v1/oauth/token",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&token).unwrap(),
+        },
+    );
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    let hold = store.debug_hold_after_next_credential_read();
+    let confirm = tokio::spawn({
+        let (app, cookie, path) = (
+            app.clone(),
+            cookie.clone(),
+            format!("/admin/oauth/sessions/{id}/confirm"),
+        );
+        async move { post(&app, &path, "", Some(&cookie)).await }
+    });
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !hold.is_parked() {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the confirm's credential read never parked"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    // The slot's credential keeps its generation, so the commit's fence passes and its open is what refuses it.
+    store.debug_corrupt_credentials("business").unwrap();
+    hold.release();
+    let confirmed = confirm.await.unwrap();
     assert_eq!(confirmed.status(), 409);
     assert_eq!(
         confirmed.headers()["x-phoebis-error-code"],
@@ -5161,7 +5256,6 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
 }
 
 /// A pin of `agent` on `session` holding a last prompt of `last_input_tokens`, used at `last_used_at`.
-#[allow(clippy::too_many_arguments)]
 fn context_pin(
     session: &str,
     agent: &str,
@@ -5542,6 +5636,7 @@ async fn a_session_whose_newest_request_named_the_long_context_twin_reads_a_wind
             pin("s-long", "worker-1", "claude-opus-5", "direct", 100_000),
             pin("s-long", "worker-2", "claude-sonnet-5", "direct", 40_000),
             pin("s-short", "main", "claude-opus-5", "business", 150_000),
+            pin("s-root", "main", "claude-opus-5", "business", 300_000),
         ]
     })
     .await;
@@ -5559,8 +5654,17 @@ async fn a_session_whose_newest_request_named_the_long_context_twin_reads_a_wind
             .ledger
             .record(spelled_request(id, session, agent, model, at, generation));
     }
+    // The only request of `s-root`, the pinned session, named the twin.
+    parts.ledger.record(spelled_request(
+        "r6",
+        "s-root",
+        "main",
+        "claude-opus-5[1m]",
+        NOW - 30_000,
+        generation,
+    ));
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        [("s-long", 3), ("s-short", 2)]
+        [("s-long", 3), ("s-short", 2), ("s-root", 1)]
             .iter()
             .all(|(session, requests)| {
                 v["sessions"]
@@ -5589,6 +5693,11 @@ async fn a_session_whose_newest_request_named_the_long_context_twin_reads_a_wind
         context_of(&session_row(&sessions, "s-short"))[..2],
         [Some(json!(200_000)), Some(json!(0.75))],
         "an older request that named the twin gives way to the newest"
+    );
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-root"))[..2],
+        [Some(json!(1_000_000)), Some(json!(0.3))],
+        "a request names the twin for its own session"
     );
 }
 

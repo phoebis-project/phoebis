@@ -21,7 +21,10 @@ pub fn build_commit(dir: &Path, forced: Option<&str>) -> (String, Vec<PathBuf>) 
     let branch = git(dir, &["symbolic-ref", "-q", "HEAD"]);
     let path = |name: &str| git(dir, &["rev-parse", "--git-path", name]).map(|path| dir.join(path));
     // Cargo reruns a script on every build while a watched path is missing, so each is named only where it stands. A
-    // packed ref has no file of its own until the next commit writes one, which moves the directory that receives it.
+    // packed ref has no file of its own until the next commit writes one, which moves the directory that receives it,
+    // so the nearest existing directory stands in for it, the whole `refs/heads` where nothing else stands. Any
+    // branch's new loose ref there, a `git branch` or a commit in another worktree, then reruns both build scripts and
+    // recompiles `phoebis-router` until the next run names the loose file, the answer staying right.
     let mut inputs: Vec<PathBuf> = ["HEAD", "packed-refs"]
         .into_iter()
         .filter_map(&path)

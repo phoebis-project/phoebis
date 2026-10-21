@@ -2227,9 +2227,10 @@ impl Relay {
                     // the cooldown's end, or to its one bound or its `wait_bound` when one of those comes first, and
                     // selects again with the account still open to it, so the pin renews in place. A wait the bound
                     // cut short, or one the account left during, passes the account over. A hold that ends at or past
-                    // `wait_bound` could not be waited out inside the head guard, so that wait is refused and the
-                    // account passed over, and the selection that follows tries a sibling as the retry-in-place path
-                    // does.
+                    // `wait_bound` is refused and the account passed over, and the selection that follows tries a
+                    // sibling as the retry-in-place path does: where the head timeout is the bound the wait could not
+                    // end inside the head guard, and under the shipped 600 s guard `wait_bound` is the request's
+                    // `deadline`, at which the loop head answers the pool exhausted.
                     if hold.reason == "reset" {
                         if hold.until.is_some_and(|until| until >= admitted.wait_bound) {
                             held_out = true;
@@ -5187,8 +5188,8 @@ struct Admitted<'a> {
     retry_in_place: Duration,
     target: &'a str,
     trace: &'a Trace,
-    /// The bound a reset wait and a hold sleep under: `deadline` where the head timeout leaves one, else the head
-    /// timeout itself, so a short head timeout bounds the waits that would otherwise outlast it.
+    /// The bound a reset wait and the slow-down and rewrite holds sleep under: `deadline` where the head timeout leaves
+    /// one, else the head timeout itself, so a short head timeout bounds the waits that would otherwise outlast it.
     wait_bound: i64,
 }
 

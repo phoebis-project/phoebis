@@ -23,8 +23,8 @@ use crate::record::{
 use crate::{schema, LedgerError};
 
 /// How long a writing connection waits for the write lock while the other holds it. A batch holds it for
-/// milliseconds and a purge slice, bounded in rows and a bodies slice in bytes, for a fraction of this, so a write
-/// waits behind one slice at most. The registry waits as long.
+/// milliseconds, and a purge slice, bounded in rows and for bodies in bytes, holds it for a fraction of this, so a
+/// write waits behind one slice at most. The registry waits as long.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct LedgerDb {

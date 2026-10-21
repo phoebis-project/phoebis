@@ -519,7 +519,7 @@ pub(crate) struct SessionView {
     request_body(content = LoginInput, description = "The admin secret, and `stay_logged_in` for a login that stays", content_type = "application/json"),
     responses(
         (status = 204, description = "Logged in. The `phoebis_admin` cookie is set and the answer carries no body.",
-            headers(("Set-Cookie" = String, description = "`phoebis_admin=<token>; Path=/admin; HttpOnly; SameSite=Strict`, with `; Secure` where the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`. The session lives 15 minutes idle and 12 hours in all. With `stay_logged_in` true the token is signed and the cookie carries `; Max-Age=2592000` before any `; Secure`: the session lives 30 days from its last read, across a restart, every answer to it sets a renewed cookie of the same shape and life, and a secret rotation or a logout of a kept login ends it."))),
+            headers(("Set-Cookie" = String, description = "`phoebis_admin=<token>; Path=/admin; HttpOnly; SameSite=Strict`, with `; Secure` where the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`. The session lives 15 minutes idle and 12 hours in all. With `stay_logged_in` true the token is signed and the cookie carries `; Max-Age=2592000` before any `; Secure`: the session lives 30 days from its last read, across a restart, every answer to it but its logout's sets a renewed cookie of the same shape and life, and a secret rotation or a logout of a kept login ends it."))),
         (status = 400, description = "`body must carry a secret`", body = ErrorBody, example = json!({"error": "body must carry a secret"})),
         (status = 401, description = "`secret does not match`", body = ErrorBody, example = json!({"error": "secret does not match"})),
         (status = 429, description = "`too many failed logins, try again in a minute`", body = ErrorBody, example = json!({"error": "too many failed logins, try again in a minute"})),
@@ -2156,8 +2156,8 @@ pub(crate) struct Account {
     /// The whole object null for an `api_key` account or an `oauth` account with no profile document yet and not
     /// cancelled.
     pub subscription: Option<AccountSubscription>,
-    /// The account's quota windows: the router's reported sample first and the ledger's samples of today for the
-    /// rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
+    /// The account's quota windows: the router's reported sample first and the ledger's samples of the last day for
+    /// the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
     /// account in the `disconnected` or `reauth_required` state, whose last reading the view no longer answers.
     pub windows: Vec<AccountWindow>,
     /// The account's slow-down entry in force as the router reads it, null on an api_key account, an untiered account

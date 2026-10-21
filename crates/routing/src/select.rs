@@ -280,7 +280,8 @@ impl MigrateReason {
     }
 }
 
-/// Which classes refresh a pin's warmth and re-arm a recipe; every other class is auxiliary.
+/// Which classes refresh a pin's warmth: `main` and `subagent` re-arm a recipe, and a completed `compaction` stops it
+/// until the next main turn. Every other class is auxiliary.
 pub const REFRESHING_CLASSES: &[&str] = &["compaction", "main", "subagent"];
 
 /// What the incoming request says about the pin's cache: a refreshing turn, a cold one (compacted or

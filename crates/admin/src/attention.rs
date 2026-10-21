@@ -52,20 +52,20 @@ pub(crate) struct AttentionItem {
     /// (the tier's latest weighted model, whose weight prices it). `meter_drift` carries `windows` (per window whose
     /// newest reconciled row among those that ended in the last eight days with a rise of at least 0.05 read a ratio
     /// under 0.8 or over 1.25 over a priced share of at least 0.05, so a newer row with a smaller rise leaves it
-    /// standing: `window`, `ratio`, `observed_rise`, `predicted_share`, `window_end` and
-    /// `requests`), `source` (`shipped` or `file`, where the cost model came from) and `effective` (the date of the
-    /// revision in force), and names no setting, since the fix is the cost model file. The other routing conditions
-    /// carry `setting`, the names of the settings they read against: `wall_reached` with `walls`, `windows`,
-    /// `projection_error` and `early_ms`, read off the newest shedding round on the account on the wall's window inside
-    /// the window's length before the wall (`projection_error` one less a projection round's projection, `early_ms`
-    /// after a stretch round the milliseconds the newest wall arrived before its window's reset, 0 at or after it, each
-    /// null after the other trigger's round and both null with none), `destination_spent` with `moves`, `fits` (the
-    /// moves' destination fits with counts) and `windows`, `shed_no_runway` with `rounds` and `accounts`, and
-    /// `slowed_long` with `spans` (the slow-down spans counted), `slowed_ms` (their parts inside the day, summed),
-    /// `bar_ms` (the bar the sum passed, twice the stretch threshold of the newest counted span's start and at least an
-    /// hour), `open` (whether a span still stands) and `factor_min` (the lowest factor of the spans). `shed_no_runway`
-    /// and `slowed_long` add `setting_values` (the pool's value of each setting `setting` names, present only for a
-    /// pool the registry still holds).
+    /// standing: `window`, `ratio`, `observed_rise`, `predicted_share`, `window_end` and `requests`), `source`
+    /// (`shipped` or `file`, where the cost model came from) and `effective` (the date of the revision in force), and
+    /// names no setting, since the fix is the cost model file. The other routing conditions carry `setting`, the names
+    /// of the settings they read against: `wall_reached` with `walls`, `windows`, `projection_error` and `early_ms`,
+    /// read off the newest shedding round on the account on the wall's window inside the window's length before the
+    /// wall (`projection_error` one less a projection round's projection, `early_ms` after a stretch round the
+    /// milliseconds the newest wall arrived before its window's reset, 0 at or after it, each null after the other
+    /// trigger's round and both null with none), `destination_spent` with `moves`, `fits` (the moves' destination fits
+    /// with counts) and `windows`, `shed_no_runway` with `rounds` and `accounts`, and `slowed_long` with `spans` (the
+    /// slow-down spans counted), `slowed_ms` (their parts inside the day, summed), `bar_ms` (the bar the sum passed,
+    /// twice the stretch threshold of the newest counted span's start and at least an hour), `open` (whether a span
+    /// still stands) and `factor_min` (the lowest factor of the spans). `shed_no_runway` and `slowed_long` add
+    /// `setting_values` (the pool's value of each setting `setting` names, present only for a pool the registry still
+    /// holds).
     #[schema(value_type = Object)]
     pub detail: Value,
 }

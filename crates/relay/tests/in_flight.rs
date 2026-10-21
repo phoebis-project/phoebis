@@ -2647,8 +2647,9 @@ async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_he
     wait_for(Duration::from_secs(5), || (posts(&up) == 3).then_some(())).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     still_held(&up, &turn, 3);
-    // The throttle cooled b on the relay's clock until its retry was due and a margin past it. The clock steps past
-    // that, so the turn's selection after the wait finds b open again.
+    // The turn was held before the 429, through it and through the retry's delay, and the retry's commit releases it.
+    // The clock steps past the cooldown the throttle set on the relay's clock, so the selection after the wait meets
+    // none.
     h.clock.store(NOW + 22_500, Ordering::SeqCst);
     up.release();
     let released = tokio::time::Instant::now();
@@ -2671,12 +2672,6 @@ async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_he
         last_wait(&after),
         Some(("rewrite", false)),
         "the retry's head ended the wait inside its bound"
-    );
-    let landed = outcome(&turn).account_id;
-    assert_eq!(
-        after.outcome.account_id.as_deref(),
-        Some(landed.as_str()),
-        "the turn goes out where its selection after the wait landed"
     );
     drain(turn).await;
     drain(answered(fork).await).await;

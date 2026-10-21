@@ -494,12 +494,13 @@ async fn a_migrated_probe_is_priced_and_the_next_request_counts_as_kept_warm() {
 
 /// A migrated probe's mark files under the funding and the speed its own answer was served at, as the probe's request
 /// row does: `billed` on the api_key account it moved to whatever overage the answer reported, and `overage` on a
-/// subscription account in overage whose answer reported it.
+/// subscription account in overage whose answer reported it. A fast recipe's probe answered fast files under `fast`.
 #[tokio::test]
 async fn a_migrated_probes_mark_files_under_the_funding_and_the_speed_its_answer_was_served_at() {
-    for (target, funding) in [
-        (api_key("b", B, 1), "billed"),
-        (oauth("o", OAUTH_SECRET, 1), "overage"),
+    for (target, funding, speed) in [
+        (api_key("b", B, 1), "billed", "standard"),
+        (oauth("o", OAUTH_SECRET, 1), "overage", "standard"),
+        (api_key("b", B, 1), "billed", "fast"),
     ] {
         let (target_id, secret) = (target.id, target.secret);
         let subscription = target.kind == phoebis_store::AccountKind::Oauth;
@@ -523,7 +524,13 @@ async fn a_migrated_probes_mark_files_under_the_funding_and_the_speed_its_answer
             })
             .await;
         }
-        r.observe_with("main", &priced_body()).await;
+        let fast = speed == "fast";
+        let body = if fast {
+            priced_body().replacen('{', r#"{"speed":"fast","#, 1)
+        } else {
+            priced_body()
+        };
+        r.observe_with("main", &body).await;
         assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
         r.up.push_credential_rule(
             A,
@@ -532,6 +539,17 @@ async fn a_migrated_probes_mark_files_under_the_funding_and_the_speed_its_answer
         );
         let Respond::Json { body: written, .. } = probe_answer(0, 2_000) else {
             unreachable!("the standing probe answer is a JSON body")
+        };
+        let written = if fast {
+            String::from_utf8(written)
+                .unwrap()
+                .replace(
+                    r#""output_tokens":0}"#,
+                    r#""output_tokens":0,"speed":"fast"}"#,
+                )
+                .into_bytes()
+        } else {
+            written
         };
         r.up.push_credential_rule(
             secret,
@@ -566,8 +584,8 @@ async fn a_migrated_probes_mark_files_under_the_funding_and_the_speed_its_answer
             .collect();
         assert_eq!(
             marks,
-            [(target_id, funding, "standard")],
-            "{target_id}: the mark files under its probe's funding: {rows:?}"
+            [(target_id, funding, speed)],
+            "{target_id}: the mark files under its probe's funding and speed: {rows:?}"
         );
     }
 }
@@ -2110,6 +2128,299 @@ async fn a_probe_pending_past_its_recipes_end_follows_a_resolution_to_the_next_r
         "the probe's lineage followed the resolution, so the request answered it and was credited"
     );
     assert!(row(&r, &second).await.kept_warm);
+}
+
+/// A compaction's observation on `main` under the wire spelling `claude-sonnet-4-5`, named `canonical` as the relay
+/// resolved it.
+fn compaction_named(r: &Rig, id: &str, canonical: &str) -> phoebis_bus::Event {
+    let mut event = r.observed_with(
+        id,
+        "main",
+        Some("compaction"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    );
+    if let phoebis_bus::Event::RequestObserved(observed) = &mut event {
+        observed.canonical_model = canonical.into();
+    }
+    event
+}
+
+/// `id`'s answer: a `message_start` that reads 2,000, then the completion.
+fn a_warm_answer(r: &Rig, id: &str) {
+    r.engine.observe(message_start(
+        id,
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(2_000),
+            ..Default::default()
+        },
+    ));
+    r.engine.observe(completed(r, id, 2_000));
+}
+
+/// The models of the rows that carry a kept-warm credit.
+fn credited_models(rows: &[RollupRow]) -> Vec<&str> {
+    rows.iter()
+        .filter(|row| row.kept_warm_requests > 0)
+        .map(|row| row.canonical_model.as_str())
+        .collect()
+}
+
+/// A compaction follows the resolution its own request carries as a turn does: past its recipe's end, with no tick
+/// asking the router, a compaction under the dated id reads the entry the pending probe kept under the spelling as its
+/// own lineage, so it earns the credit and settles nothing as a cold return.
+#[tokio::test]
+async fn a_compaction_past_its_recipes_end_follows_its_own_resolution_to_the_pending_probes_credit()
+{
+    let dated = "claude-sonnet-4-5-20250929";
+    let mut r = ended_by_the_idle_limit().await;
+    let listing = relay_common::catalog_rules().remove(0);
+    r.h.catalog_up
+        .push_credential_rule(A, &listing.path_prefix, listing.respond);
+    let a = r.h.store.account("a").unwrap().unwrap();
+    r.h.catalog.refresh(&a).await;
+    let views = r.engine.router_views();
+    r.advance(10_000);
+    r.step().await;
+    assert_eq!(
+        (r.engine.router_views(), r.status("main").unanswered),
+        (views, 1),
+        "the tick asked the router nothing and the probe still waits"
+    );
+    r.engine.observe(compaction_named(&r, "compaction", dated));
+    r.engine.observe(r.selected("compaction", "a"));
+    a_warm_answer(&r, "compaction");
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the probe's lineage followed the compaction's resolution, so the compaction answered it and was credited"
+    );
+    assert_eq!(credited_models(&rows), [dated]);
+}
+
+/// A resolution that lands while a compaction is open moves the compaction with the recipe and its probes: the probe
+/// under the spelling 270 s in, a compaction under the spelling 330 s in, then the dated id and a tick while it
+/// streams. The completion credits under the dated id and answers the probe, so no cold return sits beside the credit.
+#[tokio::test]
+async fn a_model_resolved_while_a_compaction_is_open_moves_its_credit_and_its_answer_together() {
+    let dated = "claude-sonnet-4-5-20250929";
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").probes,
+        1,
+        "the probe landed under the spelling"
+    );
+    r.advance(60_000);
+    r.engine
+        .observe(compaction_named(&r, "compaction", "claude-sonnet-4-5"));
+    r.engine.observe(r.selected("compaction", "a"));
+    let listing = relay_common::catalog_rules().remove(0);
+    r.h.catalog_up
+        .push_credential_rule(A, &listing.path_prefix, listing.respond);
+    let a = r.h.store.account("a").unwrap().unwrap();
+    r.h.catalog.refresh(&a).await;
+    r.step().await;
+    assert_eq!(
+        r.status("main").canonical_model,
+        dated,
+        "the tick followed the resolution while the compaction was open"
+    );
+    a_warm_answer(&r, "compaction");
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the compaction answered the probe it was credited for"
+    );
+    assert_eq!(credited_models(&rows), [dated]);
+}
+
+/// A tick asks the router about an open compaction's models even where its agent's recipe has ended: another agent's
+/// recipe makes the tick ask, and the resolution of the compaction's spelling moves the compaction and the pending
+/// probe together, so the credit files under the dated id. Main's recipe ends as `ended_by_the_idle_limit` ends it,
+/// with a worker registered while the session was attended.
+#[tokio::test]
+async fn a_tick_follows_a_resolution_for_a_compaction_open_on_an_ended_recipe() {
+    let dated = "claude-sonnet-4-5-20250929";
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_seconds: 500,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("worker".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "one covering probe");
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.engine.stats().retained_bytes),
+        (Reason::IdleLimit, 0),
+        "the window ended main's recipe"
+    );
+    // A recipe on a model the catalog leaves as it is, so the tick asks the router.
+    r.engine
+        .observe(r.observed("worker-first", "worker", &opus_body()));
+    r.engine.observe(r.selected("worker-first", "a"));
+    r.engine.observe(message_start(
+        "worker-first",
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(0),
+            cache_write_5m_tokens: Some(2_000),
+            ..Default::default()
+        },
+    ));
+    r.engine.observe(completed(&r, "worker-first", 0));
+    r.engine
+        .observe(compaction_named(&r, "compaction", "claude-sonnet-4-5"));
+    r.engine.observe(r.selected("compaction", "a"));
+    let listing = relay_common::catalog_rules().remove(0);
+    r.h.catalog_up
+        .push_credential_rule(A, &listing.path_prefix, listing.respond);
+    let a = r.h.store.account("a").unwrap().unwrap();
+    r.h.catalog.refresh(&a).await;
+    let views = r.engine.router_views();
+    r.advance(10_000);
+    r.step().await;
+    assert_eq!(
+        (r.engine.router_views(), r.status("main").unanswered),
+        (views + 1, 1),
+        "the tick asked the router and the probe still waits"
+    );
+    assert_eq!(
+        r.status("main").canonical_model,
+        dated,
+        "the tick followed the resolution of the compaction's spelling"
+    );
+    a_warm_answer(&r, "compaction");
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the compaction answered the probe it was credited for"
+    );
+    assert_eq!(credited_models(&rows), [dated]);
+}
+
+/// A compaction's kept-warm credit files under the TTL its own write proves, as a turn's does. An hour recipe, a
+/// covering probe 3,240 s in, and a compaction 3,640 s in that reads 2,000 and writes 100 under five minutes: the
+/// credit books five minutes whether the selection named no TTL or the hour, and whether the write reached the engine
+/// on the stream or on the completion alone.
+#[tokio::test]
+async fn a_compaction_credit_files_under_the_ttl_its_own_usage_proves() {
+    let five_minute_write = || phoebis_bus::Usage {
+        cache_read_tokens: Some(2_000),
+        cache_write_5m_tokens: Some(100),
+        cache_write_1h_tokens: Some(0),
+        ..Default::default()
+    };
+    for (dispatched, streamed) in [(None, true), (Some(3_600_000), true), (None, false)] {
+        let mut r = rig(RigSpec {
+            accounts: vec![api_key("a", A, 0)],
+            ..RigSpec::default()
+        })
+        .await;
+        let hour = opus_body().replace(
+            r#""cache_control":{"type":"ephemeral"}"#,
+            r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+        );
+        r.engine.observe(r.observed("first", "main", &hour));
+        r.engine.observe(r.selected("first", "a"));
+        r.engine.observe(message_start(
+            "first",
+            phoebis_bus::Usage {
+                cache_read_tokens: Some(0),
+                cache_write_1h_tokens: Some(2_000),
+                ..Default::default()
+            },
+        ));
+        r.engine.observe(completed(&r, "first", 0));
+        assert_eq!(r.status("main").cache_ttl_ms, 3_600_000, "a one-hour entry");
+        r.advance_attended(3_600_000 - 360_000);
+        r.step().await;
+        assert_eq!(
+            (r.status("main").probes, r.status("main").unanswered),
+            (1, 1),
+            "a covering probe"
+        );
+        // The probe refreshed its one-hour entry 3,240 s in, so it is there until 6,840 s in, and the compaction
+        // arrives 3,640 s in, past the hour since the first.
+        r.advance_attended(400_000);
+        r.engine.observe(r.observed_with(
+            "compaction",
+            "main",
+            Some("compaction"),
+            None,
+            &[],
+            hour.as_bytes(),
+            OPUS,
+        ));
+        let mut selected = r.selected("compaction", "a");
+        if let phoebis_bus::Event::AccountSelected(selected) = &mut selected {
+            selected.cache_ttl_ms = dispatched;
+        }
+        r.engine.observe(selected);
+        let done = if streamed {
+            r.engine.observe(head(
+                &r,
+                "compaction",
+                1,
+                200,
+                phoebis_bus::AttemptOutcome::Succeeded,
+            ));
+            r.engine
+                .observe(message_start("compaction", five_minute_write()));
+            completed(&r, "compaction", 2_000)
+        } else {
+            r.complete(
+                "compaction",
+                phoebis_bus::Outcome::Succeeded,
+                Some(five_minute_write()),
+            )
+        };
+        r.engine.observe(done);
+        let credit = inference_rows(&final_rollups(&r).await);
+        assert_eq!(
+            (
+                credit.kept_warm_requests,
+                credit.kept_warm_5m_tokens,
+                credit.kept_warm_1h_tokens
+            ),
+            (1, 2_000, 0),
+            "dispatched {dispatched:?}, the write on the stream: {streamed}"
+        );
+    }
 }
 
 /// The head of `id`'s attempt `attempt`, answered at `status`.

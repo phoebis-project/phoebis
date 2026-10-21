@@ -364,6 +364,102 @@ fn a_fall_inside_a_run_splits_it_and_the_row_sums_its_parts() {
     assert!(close(row.ratio, 1.0), "{}", row.ratio);
 }
 
+/// The readings of a run split at a fall: 0.05 to 0.89 before a grant empties the window, then 0.0 to 0.10.
+fn a_run_split_at_a_fall(db: &LedgerDb, reset: i64) {
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.05, reset),
+            reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.89, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.0, reset),
+            reading(FIVE_HOUR, SATURDAY + 30 * MINUTE, 0.10, reset),
+        ],
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_attempt_the_tables_cannot_price_in_one_part_skips_the_whole_row() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    a_run_split_at_a_fall(&db, reset);
+    // 0.84 of the window from 84 Sonnet units before the grant, and after it an attempt on a model of a tier with no
+    // weighted model, which the tables price to no share whatever its tokens.
+    served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 84, None);
+    served(&db, "after", MYSTERY, SATURDAY + 25 * MINUTE, 20, None);
+    let now = reset + HOUR;
+    fold(&db, now);
+    assert_eq!(
+        rows(&db, now),
+        [],
+        "the second part's rise carries a draw no share prices, so the window writes no row"
+    );
+}
+
+#[test]
+fn a_part_with_no_priced_attempt_adds_nothing_and_the_other_part_writes_the_row() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    a_run_split_at_a_fall(&db, reset);
+    // 0.84 of the window from 84 Sonnet units before the grant, and no attempt after it.
+    served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 84, None);
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.window.as_str(),
+                r.first_reading_at,
+                r.last_reading_at,
+                r.requests,
+                r.estimated
+            ))
+            .collect::<Vec<_>>(),
+        [(FIVE_HOUR, SATURDAY, SATURDAY + 10 * MINUTE, 1, 0)],
+        "the row reads the first part alone: {rows:?}"
+    );
+    let row = &rows[0];
+    assert!(close(row.observed_rise, 0.84), "{}", row.observed_rise);
+    assert!(close(row.predicted_share, 0.84), "{}", row.predicted_share);
+}
+
+/// A run its own reset closed reads as one that slid only where its key lies past the closing reading's instant by
+/// more than the reset tolerance: the key rounds a fractional reset up by up to half a second, and a router clock that
+/// lags moves the closing instant earlier, while a live slide moves the reset by whole 10-minute steps.
+#[test]
+fn a_run_closed_inside_the_reset_tolerance_before_its_key_writes_its_row_and_one_closed_earlier_slid(
+) {
+    let reset = SATURDAY + HOUR;
+    for (early, written) in [(MINUTE, true), (MINUTE + 1_000, false)] {
+        let db = LedgerDb::open_in_memory().unwrap();
+        seed_request(&db, "seed", SATURDAY - MINUTE);
+        db.insert_samples(
+            &[
+                reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+                reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.30, reset),
+                reading(FIVE_HOUR, reset - early, 0.0, reset + 5 * HOUR),
+            ],
+            None,
+        )
+        .unwrap();
+        served(&db, "r1", SONNET, SATURDAY + 10 * MINUTE, 20, None);
+        let now = reset + HOUR;
+        fold(&db, now);
+        let expected: &[i64] = if written { &[reset] } else { &[] };
+        assert_eq!(
+            rows(&db, now)
+                .iter()
+                .map(|r| r.window_end)
+                .collect::<Vec<_>>(),
+            expected,
+            "the next reset read {early} ms before the run's own"
+        );
+    }
+}
+
 #[test]
 fn a_run_a_later_reset_closed_while_its_own_lay_ahead_writes_no_row() {
     let db = LedgerDb::open_in_memory().unwrap();

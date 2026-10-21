@@ -1161,10 +1161,11 @@ impl SealedRow {
 /// stop a start whose key the rows behind it inside the bound prove, and a wrong key, which opens none, costs a
 /// bounded read rather than every row of a large registry at each start and each `check-config`.
 ///
-/// The bound leaves a dead end in two shapes. A registry without a canary whose readable credential or API-key rows
+/// The proof leaves a dead end in two shapes. A registry without a canary whose readable credential or API-key rows
 /// all sit past the 32nd of their kind refuses the right key at the start, and so does one whose readable rows sit
 /// only among the keepalive bodies, which this proof never reads, beside credential or API-key rows that do not open.
-/// `recover-key` scans every row, so it accepts the key in both shapes and is the way out.
+/// `recover-key` scans every sealed row, so it reads the right key as matching and refuses to discard, and it seals no
+/// canary, so no command leads out of either shape with the rows kept.
 const PROOF_ROWS_PER_KIND: i64 = 32;
 
 /// Whether the key opens any of the sealed rows `leading_sealed_rows` reads, or `None` when the registry holds

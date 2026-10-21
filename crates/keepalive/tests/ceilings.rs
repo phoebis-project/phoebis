@@ -1,7 +1,7 @@
 //! The three ceilings a retained recipe is probed under: the idle window of the main conversation in every state,
 //! a park on a background command or a subagent, and a park on a scheduled wakeup, active while any of them says
-//! probe. Every figure is the exact millisecond the break-even gives at the production timing, and a recipe ends at
-//! the first tick at or after it.
+//! probe. Every break-even figure is the exact millisecond the break-even gives at the production timing, and a recipe
+//! ends at the first tick at or after its ceiling.
 mod common;
 
 use std::collections::BTreeMap;

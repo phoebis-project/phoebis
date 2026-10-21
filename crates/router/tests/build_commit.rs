@@ -1,6 +1,6 @@
 //! The commit a build names and the Git paths its build scripts rerun on, read in a repository of the test's own
 //! under a temporary directory: a checkout on one branch and a linked worktree on another, their refs loose and then
-//! packed.
+//! packed, a call from a subdirectory of the checkout, and a detached `HEAD`.
 
 #[path = "../build_commit.rs"]
 mod build_commit;
@@ -178,6 +178,50 @@ fn a_commit_on_the_branch_reruns_the_build_through_the_refs_directory_where_the_
         &git_dir.join("refs/heads"),
         &packed_refs,
     );
+}
+
+#[test]
+fn a_build_from_a_subdirectory_names_the_checkouts_head_and_its_branch_ref() {
+    let root = tempfile::tempdir().unwrap();
+    let (checkout, _worktree) = repository(root.path());
+    // One level down, as the console's script calls it from `web/`, where git answers each path relative to it.
+    let subdirectory = checkout.join("web");
+    std::fs::create_dir(&subdirectory).unwrap();
+    let git_dir = checkout.join(".git");
+    let (answer, inputs) = build_commit(&subdirectory, None);
+    assert_eq!(answer, git(&checkout, &["rev-parse", "HEAD"]));
+    assert!(inputs.iter().all(|input| input.exists()), "{inputs:?}");
+    let inputs: Vec<PathBuf> = inputs.iter().map(|input| canonical(input)).collect();
+    for path in [git_dir.join("HEAD"), git_dir.join("refs/heads/main")] {
+        assert!(inputs.contains(&canonical(&path)), "{path:?} in {inputs:?}");
+    }
+}
+
+#[test]
+fn a_detached_head_is_watched_itself_and_a_commit_on_it_reruns_the_build_and_moves_its_answer() {
+    let root = tempfile::tempdir().unwrap();
+    let (checkout, _worktree) = repository(root.path());
+    git(&checkout, &["checkout", "-q", "--detach"]);
+    let git_dir = checkout.join(".git");
+    let head = git_dir.join("HEAD");
+    let before = git(&checkout, &["rev-parse", "HEAD"]);
+    assert_eq!(build_commit(&checkout, None).0, before);
+    let inputs = watched(&checkout);
+    assert!(inputs.contains(&canonical(&head)), "HEAD in {inputs:?}");
+    let refs = canonical(&git_dir.join("refs"));
+    assert!(
+        !inputs.iter().any(|input| input.starts_with(&refs)),
+        "a detached HEAD names no branch ref to watch: {inputs:?}"
+    );
+    let head_before = contents(&head);
+    let after = commit(&checkout, "detached");
+    assert_ne!(after, before);
+    assert_ne!(
+        contents(&head),
+        head_before,
+        "a commit on a detached HEAD moves HEAD itself"
+    );
+    assert_eq!(build_commit(&checkout, None).0, after);
 }
 
 #[test]

@@ -693,8 +693,8 @@ impl Agent {
     }
 
     /// Moves every model name the agent holds that `canonical` dates, and answers whether any moved: the recipe's
-    /// own, the one its open observation took from the recipe before it, and its kept and unanswered probes', which
-    /// an agent keeps after its recipe ended.
+    /// own, the one its open observation took from the recipe before it, an open compaction's own and the one it took,
+    /// and its kept and unanswered probes', which an agent keeps after its recipe ended.
     pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) -> bool {
         let mut moved = false;
         if let Some(dated) = canonical.get(&self.canonical_model) {
@@ -705,6 +705,20 @@ impl Agent {
             if let Some(dated) = canonical.get(&prior.model) {
                 prior.model = dated.clone();
                 moved = true;
+            }
+        }
+        // The completion credits through the compaction's `prior` and settles the probes against its own model, so
+        // both follow the probes' move, or a credit would sit beside a cold return of the probe that earned it.
+        if let Some(compaction) = self.compaction.as_mut() {
+            if let Some(dated) = canonical.get(&compaction.canonical_model) {
+                compaction.canonical_model = dated.clone();
+                moved = true;
+            }
+            if let Some(prior) = compaction.prior.as_mut() {
+                if let Some(dated) = canonical.get(&prior.model) {
+                    prior.model = dated.clone();
+                    moved = true;
+                }
             }
         }
         for kept in &mut self.kept {
@@ -926,7 +940,8 @@ pub(crate) struct OpenCompaction {
     /// What the current attempt's stream read from the cache, for a completion that carries no usage of its own.
     pub read: u64,
     /// The TTL the relay dispatched the attempt's body with, or where it went as sent, the one the recipe's evidence
-    /// settled on, the same conversation's markers: the bucket its kept-warm credit files under.
+    /// settled on, the same conversation's markers, refined by the compaction's own usage: the bucket its kept-warm
+    /// credit files under.
     pub ttl_ms: i64,
     /// What the previous recipe had proved at the admission, as a turn's observation takes it.
     pub prior: Option<PriorCoverage>,
@@ -2011,18 +2026,26 @@ impl Inner {
     }
 
     /// Every model name a live recipe compares against the router's rows: the recipe's own, and the one its
-    /// open observation took from the recipe before it.
+    /// open observation took from the recipe before it. An open compaction's own and the one it took count too, since
+    /// its completion compares them while the recipe it would answer may have ended.
     pub(crate) fn retained_models(&self) -> Vec<String> {
         let mut models = BTreeSet::new();
         for (key, session) in &self.sessions {
             for (agent_id, agent) in &session.agents {
-                let Some(observation) = agent.current.as_ref().filter(|_| self.live(key, agent_id))
-                else {
+                if !self.live(key, agent_id) {
                     continue;
-                };
-                models.insert(agent.canonical_model.clone());
-                if let Some(prior) = &observation.prior {
-                    models.insert(prior.model.clone());
+                }
+                if let Some(observation) = &agent.current {
+                    models.insert(agent.canonical_model.clone());
+                    if let Some(prior) = &observation.prior {
+                        models.insert(prior.model.clone());
+                    }
+                }
+                if let Some(compaction) = &agent.compaction {
+                    models.insert(compaction.canonical_model.clone());
+                    if let Some(prior) = &compaction.prior {
+                        models.insert(prior.model.clone());
+                    }
                 }
             }
         }
@@ -2431,6 +2454,24 @@ impl Engine {
         // A turn or a second compaction moves the agent past the context an open compaction was reading, so that one
         // ends as a failed one and leaves the recipe to this request's own path.
         inner.end_compaction(&key, &agent_id);
+        // A tick asks the router only about the models of retained recipes, so a probe an agent keeps past its
+        // recipe's end can miss a resolution: the one this request carries for its own spelling dates it here,
+        // before the credit compares its model with the request's, a compaction's as a turn's.
+        let mut resolved = HashMap::new();
+        if observed.wire_model != observed.canonical_model {
+            resolved.insert(
+                observed.wire_model.clone(),
+                observed.canonical_model.clone(),
+            );
+        }
+        inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap()
+            .follow_resolutions(&resolved);
         if verdict == Guard::Compaction {
             // The recipe, its schedule and its probes wait as they stood, so a compaction that fails leaves the old
             // context the live one. Nothing of the turn's admission below runs: the idle window's prefix, the agent's
@@ -2480,24 +2521,6 @@ impl Engine {
                 .clone()
                 .zip(observed.boundaries.last().cloned());
         }
-        // A tick asks the router only about the models of retained recipes, so a probe an agent keeps past its
-        // recipe's end can miss a resolution: the one this request carries for its own spelling dates it here,
-        // before the credit compares its model with the request's.
-        let mut resolved = HashMap::new();
-        if observed.wire_model != observed.canonical_model {
-            resolved.insert(
-                observed.wire_model.clone(),
-                observed.canonical_model.clone(),
-            );
-        }
-        inner
-            .sessions
-            .get_mut(&key)
-            .unwrap()
-            .agents
-            .get_mut(&agent_id)
-            .unwrap()
-            .follow_resolutions(&resolved);
         // Taken before anything below overwrites it and consumed with the observation.
         let prior = prior_coverage(&inner.sessions[&key].agents[&agent_id], now);
         let poisoned = inner.gap_backlog > 0;
@@ -2766,6 +2789,9 @@ impl Engine {
                 .filter(|compaction| compaction.attempt == chunk.attempt && compaction.ok_head)
             {
                 compaction.read = compaction.read.max(usage.read);
+                // The credit files under the TTL the compaction's own write would take, which its usage proves over
+                // the selection's figure, as a turn's `observe_usage` settles it.
+                compaction.ttl_ms = usage.ttl_ms(compaction.ttl_ms, 0);
             }
             return;
         }
@@ -3078,6 +3104,10 @@ impl Inner {
             .as_ref()
             .and_then(|usage| usage.cache_read_tokens)
             .unwrap_or(compaction.read);
+        // An answer without a stream proves its TTL here alone, as the stream's phases do in `on_chunk`.
+        let ttl_ms = complete.usage.as_ref().map_or(compaction.ttl_ms, |usage| {
+            ProbeUsage::from_bus(usage).ttl_ms(compaction.ttl_ms, 0)
+        });
         let mut probes = std::mem::take(&mut agent.kept);
         let unanswered = std::mem::take(&mut agent.unanswered);
         probes.extend(unanswered.iter().map(|probe| Kept::of(agent, probe)));
@@ -3101,7 +3131,7 @@ impl Inner {
                 account: compaction.account.clone(),
                 model: compaction.canonical_model.clone(),
                 read,
-                ttl_ms: compaction.ttl_ms,
+                ttl_ms,
                 fast: compaction.fast,
                 kind: compaction.kind,
                 in_overage: compaction.in_overage,

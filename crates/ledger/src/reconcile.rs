@@ -215,13 +215,13 @@ fn rounded(value: f64) -> f64 {
 /// folds the routing conditions, so `meter_drift` reads the windows the same tick closed.
 ///
 /// A run is complete once a later reset appears or its reset lies behind `now`, and one a later reset closed while its
-/// own lay ahead slid rather than ended, so it writes no row. A run splits into parts at each fall, and the row sums
-/// each part's rise between its two ends of one source against the attempts priced between them, a part without two
-/// such ends or without a priced attempt adding nothing. The row is skipped when no part adds, when its first end is
-/// older than the oldest retained request, whose rise the router's own requests would explain only in part, or when a
-/// part holds a plan-funded attempt carrying tokens that the tables price to no share on the window, whose draw the
-/// rise holds and the sum would miss. The ledger reads no registry: every account with a reading is read, and an
-/// account whose attempts draw no plan window writes no row.
+/// own lay ahead by more than the reset tolerance slid rather than ended, so it writes no row. A run splits into parts
+/// at each fall, and the row sums each part's rise between its two ends of one source against the attempts priced
+/// between them, a part without two such ends or without a priced attempt adding nothing. The row is skipped when no
+/// part adds, when its first end is older than the oldest retained request, whose rise the router's own requests would
+/// explain only in part, or when a part holds a plan-funded attempt carrying tokens that the tables price to no share
+/// on the window, whose draw the rise holds and the sum would miss. The ledger reads no registry: every account with a
+/// reading is read, and an account whose attempts draw no plan window writes no row.
 pub fn reconcile(
     tx: &Transaction<'_>,
     prices: &PriceRevisions,
@@ -256,9 +256,15 @@ pub fn reconcile(
                 if !complete || key < cutoff || newest.is_some_and(|n| key <= n) {
                     continue;
                 }
-                // The reset slid rather than ended. A closing reading stored before its instant was kept carries
-                // none, so its run reconciles as one its own reset closed.
-                if run.closed_at.is_some_and(|closed_at| key > closed_at) {
+                // The reset slid rather than ended. The margin is the reset tolerance: the key rounds a fractional poll
+                // reset up by as much as half a second and a router clock that lags moves the closing instant earlier,
+                // so a run its own reset closed can read just short of its key, while a live slide moves the reset by
+                // whole 10-minute steps. A closing reading stored before its instant was kept carries none, so its run
+                // reconciles as one its own reset closed.
+                if run
+                    .closed_at
+                    .is_some_and(|closed_at| key > closed_at + RESET_TOLERANCE_MS)
+                {
                     continue;
                 }
                 let (mut first_at, mut last_at) = (None, 0);

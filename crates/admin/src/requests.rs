@@ -273,7 +273,9 @@ pub(crate) struct Attempt {
     /// priority, overage_bit]` the choice was made in, null for a renewed pin), `renewed`, `moved` (the reason a
     /// fail-over or a move landed it here), `skipped` (array of `account_id`, `obstacle`, every candidate the
     /// choice passed over), `placement` (null, or `rung` (`content`, `static`, or `with_main`), `depth`, and
-    /// `prefix_tokens` for a fresh placement with no pin of its own).
+    /// `prefix_tokens` for a fresh placement with no pin of its own). The completion adds `cache_read`, the tokens the
+    /// answer read from the cache, and `passthrough`, the content coding (`gzip`, for instance) of an answer the client
+    /// took as the upstream sent it.
     #[schema(value_type = Option<Object>)]
     pub selection: Option<Value>,
     pub response: AttemptResponse,

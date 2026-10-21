@@ -78,9 +78,9 @@ pub(crate) struct Session {
     /// The context of the row's pin, the main agent's where it holds one: its last turn's prompt in tokens, cache
     /// reads and writes included, 0 before its first turn.
     pub last_input_tokens: Option<u64>,
-    /// The pin's context window in tokens as the client sizes it: 1,000,000 where the newest request of the pin's
-    /// agent named the model's `[1m]` twin (the session's newest where that agent sent none), else 200,000. Null on a
-    /// row with no pin, on a historical row and where `last_input_tokens` is 0.
+    /// The pin's context window in tokens as the client sizes it: 1,000,000 where the newest request of the pin's agent
+    /// named a `[1m]` twin (the session's newest where that agent sent none), else 200,000. Null on a row with no pin,
+    /// on a historical row and where `last_input_tokens` is 0.
     pub context_window_tokens: Option<u64>,
     /// `last_input_tokens` over `context_window_tokens`, rounded to three decimals, null where the window is.
     pub context_share: Option<f64>,

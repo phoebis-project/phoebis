@@ -492,8 +492,8 @@ pub struct RequestComplete {
     /// Events the stream's parser skipped for passing its bound, 0 where none was: the relay logs them and the
     /// ledger reads nothing of it.
     pub skipped_events: u32,
-    /// `None` for a clean end, a client that left, a local answer, and an error stream the upstream sent whole (the
-    /// forwarded error's arm and an `error` event after the head).
+    /// `None` for a clean end, a client that left, a local answer, and a stream that carried an `error` event, whose
+    /// code is the error's own type.
     pub interruption: Option<Interruption>,
     /// The coding of a streamed body the relay passed through as sent (`br`, `deflate`, `gzip` or `zstd`), named
     /// whatever the relay's own copy made of the bytes. `None` for a body the relay decoded for the caller, an

@@ -19,9 +19,11 @@ pub const MAX_CAPTURED_BODY: usize = 8 << 20;
 /// behind a whole pass, and the WAL grows by a slice's pages.
 pub const PURGE_SLICE: usize = 1_000;
 
-/// The bytes one bodies slice frees at most, as the request rows count them: the bytes a slice frees hold the
+/// About the bytes one bodies slice frees, the stored response counted at its length: the bytes a slice frees hold the
 /// writer's lock, and 32 MiB holds it well under `BUSY_TIMEOUT` at the slowest disk read, where an hourly pass of 1
-/// to 3 MB bodies held it 11 to 52 s.
+/// to 3 MB bodies held it 11 to 52 s. A body above the budget goes alone in a slice of its own, since a slice always
+/// takes its first body: up to `proxy.max_request_bytes` and the 8 MiB response cap, 40 MiB at the defaults, still
+/// well under the busy timeout.
 pub const PURGE_SLICE_BYTES: usize = 32 << 20;
 
 const DAY_MS: i64 = 86_400_000;
@@ -170,24 +172,29 @@ pub fn run_retention_blocking(
 /// oldest thousand.
 const PURGE_BODIES: &str = "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2)";
 
-/// The bodies `PURGE_BODIES` takes next, in its order, with their request rows' byte counts. The join reads the bodies
-/// record's first column and the request row by its key, so no blob is read: the record's own `request_len_seen` sits
+/// The bodies `PURGE_BODIES` takes next, in its order, with their request rows' request counts and the stored
+/// responses' lengths. The join reads the bodies record's first column and the request row by its key, and SQLite
+/// answers `length()` of a blob from the record's header, so no blob is read: the record's own `request_len_seen` sits
 /// behind both blobs, and reading it would walk each row's overflow pages under the lock the budget exists to shorten.
-const EXPIRED_BODY_BYTES: &str = "SELECT r.id IS NOT NULL, r.request_bytes, r.response_bytes FROM bodies b LEFT JOIN requests r ON r.id = b.request_id WHERE b.expires_at <= ?1 ORDER BY b.expires_at, b.rowid LIMIT ?2";
+/// The request row's `response_bytes` counts what the caller received, compressed on a pass-through, so it bounds
+/// nothing the bodies row holds.
+const EXPIRED_BODY_BYTES: &str = "SELECT r.id IS NOT NULL, r.request_bytes, length(b.response_body) FROM bodies b LEFT JOIN requests r ON r.id = b.request_id WHERE b.expires_at <= ?1 ORDER BY b.expires_at, b.rowid LIMIT ?2";
 
-/// What one body frees as its request row counts it: the request as received, which the capture never cuts, and the
-/// response at most `MAX_CAPTURED_BODY`, the capture's cap, a null column counting the cap. A body whose request row
-/// is gone counts the whole budget, since no smaller figure bounds a request blob that was never cut.
+/// What one body frees: the request as its row counts it, received whole since the capture never cuts it, at
+/// `MAX_CAPTURED_BODY` where the count is null, and the stored response at its length, 0 where none was stored. A body
+/// whose request row is gone counts the whole budget, since no smaller figure bounds a request blob that was never
+/// cut.
 fn body_bytes(request_row: bool, request: Option<i64>, response: Option<i64>) -> usize {
     if !request_row {
         return PURGE_SLICE_BYTES;
     }
-    let column = |bytes: Option<i64>| {
-        bytes
-            .and_then(|b| usize::try_from(b).ok())
-            .unwrap_or(MAX_CAPTURED_BODY)
-    };
-    column(request).saturating_add(column(response).min(MAX_CAPTURED_BODY))
+    let request = request
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .unwrap_or(MAX_CAPTURED_BODY);
+    let response = response
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .unwrap_or(0);
+    request.saturating_add(response)
 }
 
 /// How many of the bodies `PURGE_BODIES` takes next fit the byte budget, at least one, and whether a body read past
@@ -221,8 +228,8 @@ const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SELECT rowid 
 const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (SELECT rowid FROM decisions WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)";
 
 /// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid, a bodies slice
-/// freeing at most `PURGE_SLICE_BYTES` as the request rows count them, so the writer waits behind one slice at most
-/// and the slice holds the lock for a fraction of the busy timeout.
+/// freeing about `PURGE_SLICE_BYTES` with the stored response counted at its length, a body above it alone in its
+/// slice, so the writer waits behind one slice at most and the slice holds the lock for a fraction of the busy timeout.
 fn purge_slice(
     db: &LedgerDb,
     family: Family,
@@ -417,24 +424,35 @@ mod tests {
         (dir, db)
     }
 
-    /// Bodies of a few bytes, expired before `NOW` and oldest first, each with its request row's byte counts or none:
-    /// the bound reads the counts, never the blobs.
-    fn expired(db: &LedgerDb, bodies: &[(&str, Option<(usize, usize)>)]) {
+    /// What every seeded request row carries as `response_bytes`: a compressed count, which the bound never reads.
+    const COMPRESSED: i64 = 1_024;
+
+    /// One seeded body: its request id, its request row's `request_bytes` (`None` for no row, `Some(None)` for a null
+    /// count) and the length of its stored response blob (`None` for none stored).
+    type Seeded<'a> = (&'a str, Option<Option<usize>>, Option<usize>);
+
+    /// Bodies expired before `NOW` whatever their number, oldest first, each written as its `Seeded` names it. The
+    /// request blob holds two bytes whatever its row counts, since the bound reads the row's count for it.
+    fn expired(db: &LedgerDb, bodies: &[Seeded<'_>]) {
         db.write(|c| {
             let tx = c.transaction()?;
-            for (at, (id, counts)) in bodies.iter().enumerate() {
-                if let Some((request, response)) = counts {
+            for (at, (id, request, response)) in bodies.iter().enumerate() {
+                if let Some(request) = request {
                     tx.execute(
                         "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, \
                          outcome, attempts, request_bytes, response_bytes, bodies_captured) \
                          VALUES (?1, 0, 'm', 'm', 0, 'inference', 'client', 'succeeded', 1, ?2, ?3, 1)",
-                        params![id, *request as i64, *response as i64],
+                        params![id, request.map(|bytes| bytes as i64), COMPRESSED],
                     )?;
                 }
                 tx.execute(
                     "INSERT INTO bodies (request_id, request_body, response_body, expires_at) \
-                     VALUES (?1, x'7b7d', x'7b7d', ?2)",
-                    params![id, at as i64],
+                     VALUES (?1, x'7b7d', CASE WHEN ?2 IS NULL THEN NULL ELSE zeroblob(?2) END, ?3)",
+                    params![
+                        id,
+                        response.map(|bytes| bytes as i64),
+                        NOW - (bodies.len() - at) as i64
+                    ],
                 )?;
             }
             tx.commit()?;
@@ -485,11 +503,11 @@ mod tests {
         expired(
             &db,
             &[
-                ("half", Some((2 * quarter, 0))),
-                ("quarter-1", Some((quarter, 0))),
-                ("quarter-2", Some((quarter, 0))),
-                ("byte-1", Some((1, 0))),
-                ("byte-2", Some((1, 0))),
+                ("half", Some(Some(2 * quarter)), None),
+                ("quarter-1", Some(Some(quarter)), None),
+                ("quarter-2", Some(Some(quarter)), None),
+                ("byte-1", Some(Some(1)), None),
+                ("byte-2", Some(Some(1)), None),
             ],
         );
         assert_eq!(
@@ -508,7 +526,10 @@ mod tests {
     fn a_bodies_slice_takes_purge_slice_rows_and_no_more_however_few_their_bytes() {
         let (_dir, db) = ledger();
         let ids: Vec<String> = (0..PURGE_SLICE + 5).map(|i| format!("b{i:04}")).collect();
-        let bodies: Vec<_> = ids.iter().map(|id| (id.as_str(), Some((3, 3)))).collect();
+        let bodies: Vec<_> = ids
+            .iter()
+            .map(|id| (id.as_str(), Some(Some(3)), Some(3)))
+            .collect();
         expired(&db, &bodies);
         assert_eq!(take(&db), (ids[..PURGE_SLICE].to_vec(), true));
         assert_eq!(stored(&db), ids[PURGE_SLICE..]);
@@ -520,10 +541,10 @@ mod tests {
         expired(
             &db,
             &[
-                ("small-1", Some((1, 0))),
-                ("large", Some((PURGE_SLICE_BYTES + 1, 0))),
-                ("small-2", Some((1, 0))),
-                ("small-3", Some((1, 0))),
+                ("small-1", Some(Some(1)), None),
+                ("large", Some(Some(PURGE_SLICE_BYTES + 1)), None),
+                ("small-2", Some(Some(1)), None),
+                ("small-3", Some(Some(1)), None),
             ],
         );
         assert_eq!(take(&db), (owned(&["small-1"]), true));
@@ -537,9 +558,9 @@ mod tests {
         expired(
             &db,
             &[
-                ("small-1", Some((1, 0))),
-                ("orphan", None),
-                ("small-2", Some((1, 0))),
+                ("small-1", Some(Some(1)), None),
+                ("orphan", None, None),
+                ("small-2", Some(Some(1)), None),
             ],
         );
         assert_eq!(take(&db), (owned(&["small-1"]), true));
@@ -548,19 +569,47 @@ mod tests {
     }
 
     #[test]
-    fn a_response_above_the_capture_cap_counts_at_the_cap() {
+    fn a_response_counts_at_its_stored_length_whatever_its_request_row_says_the_caller_received() {
         let (_dir, db) = ledger();
-        // At the cap the large response leaves room for the fill and no byte more: counted whole it would leave the
-        // fill outside the budget, and left out it would let the tail in.
+        // Each body frees 1 KiB of request and a response stored at the cap, which its request row counts at the
+        // compressed 1 KiB: three take 24 MiB and 3 KiB of the budget, and a fourth would pass it.
+        let ids = ["full-1", "full-2", "full-3", "full-4", "full-5"];
+        let bodies: Vec<_> = ids
+            .iter()
+            .map(|id| (*id, Some(Some(1_024)), Some(MAX_CAPTURED_BODY)))
+            .collect();
+        expired(&db, &bodies);
+        assert_eq!(take(&db), (owned(&ids[..3]), true));
+        assert_eq!(take(&db), (owned(&ids[3..]), false));
+    }
+
+    #[test]
+    fn a_null_request_count_counts_the_capture_cap_and_a_response_never_stored_counts_nothing() {
+        // The null count fills the budget to the byte with the fill, so the tail waits for the next slice.
+        let (_dir, db) = ledger();
         expired(
             &db,
             &[
-                ("large-response", Some((1, 2 * MAX_CAPTURED_BODY))),
-                ("fill", Some((PURGE_SLICE_BYTES - MAX_CAPTURED_BODY - 1, 0))),
-                ("tail", Some((1, 0))),
+                ("null-request", Some(None), None),
+                (
+                    "fill",
+                    Some(Some(PURGE_SLICE_BYTES - MAX_CAPTURED_BODY)),
+                    None,
+                ),
+                ("tail", Some(Some(1)), None),
             ],
         );
-        assert_eq!(take(&db), (owned(&["large-response", "fill"]), true));
+        assert_eq!(take(&db), (owned(&["null-request", "fill"]), true));
         assert_eq!(take(&db), (owned(&["tail"]), false));
+        // Two requests that fill the budget to the byte go in one slice, since neither stored a response.
+        let (_dir, db) = ledger();
+        expired(
+            &db,
+            &[
+                ("no-response", Some(Some(PURGE_SLICE_BYTES - 1)), None),
+                ("byte", Some(Some(1)), None),
+            ],
+        );
+        assert_eq!(take(&db), (owned(&["no-response", "byte"]), false));
     }
 }

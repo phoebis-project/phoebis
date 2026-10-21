@@ -173,8 +173,9 @@ pub struct RoutingConfig {
     /// How often every enabled account's model listing is read again, 60 to 604800.
     #[serde(default = "default_catalog_refresh")]
     pub catalog_refresh_seconds: u64,
-    /// How long an account is cooled when a rate limit's rejection names neither a reset nor a `retry-after`, and
-    /// how long overage evidence that names no reset stands, 1 to 3600.
+    /// How long an account is cooled when a rate limit's rejection names neither a reset nor a `retry-after` (for an
+    /// `api_key` account, when it names no `retry-after`), and how long overage evidence that names no reset stands, 1
+    /// to 3600.
     #[serde(default = "default_cooldown_fallback")]
     pub cooldown_fallback_seconds: u64,
     /// How long an account is skipped for a model it answered 404 for.
@@ -312,8 +313,8 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-/// Reads, parses and validates the bootstrap file and leaves the admin secret unresolved, for `check-config` and
-/// `health`, which must run without the environment the service gets from its unit.
+/// Reads, parses and validates the bootstrap file and leaves the admin secret unresolved, for `check-config`, `health`
+/// and `status`, which must run without the environment the service gets from its unit.
 pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
         path: path.to_path_buf(),

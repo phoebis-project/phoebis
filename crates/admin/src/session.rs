@@ -243,9 +243,17 @@ fn random_token() -> String {
 }
 
 fn token_key(secret: &Secret, epoch: u64) -> [u8; 32] {
-    let mut input = secret.expose().as_bytes().to_vec();
+    let secret = secret.expose().as_bytes();
+    // Sized up front so the secret's copy never moves to a second allocation the wipe below would miss.
+    let mut input = Vec::with_capacity(secret.len() + 8);
+    input.extend_from_slice(secret);
     input.extend_from_slice(&epoch.to_be_bytes());
-    digest_with(&[0; 32], &input)
+    let key = digest_with(&[0; 32], &input);
+    // The admin secret's copy is wiped before the buffer is freed, and `black_box` keeps the compiler from
+    // dropping the writes to a buffer nothing reads again.
+    input.fill(0);
+    std::hint::black_box(&input);
+    key
 }
 
 /// `base64url(session_id || issued_at_ms || nonce || tag)`, the tag the digest of the rest under `key` and the nonce

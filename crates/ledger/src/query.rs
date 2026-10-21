@@ -5102,7 +5102,15 @@ mod tests {
         let sentinel: WindowShares =
             IndexMap::from([(FIVE_HOUR, Some(0.375)), (SEVEN_DAY, Some(0.0625))]);
         let at = HOUR * 1_000;
-        let repriced = price_equivalent(&costs, None, model, row.usage(), at, at).shares;
+        let repriced = price_equivalent(
+            &costs,
+            entrypoint_of_client(&row.client),
+            model,
+            row.usage(),
+            at,
+            at,
+        )
+        .shares;
         for (window, share) in &sentinel {
             assert_ne!(
                 repriced.get(window).copied().flatten(),

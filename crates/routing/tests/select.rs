@@ -9479,6 +9479,30 @@ fn a_main_turn_on_a_pin_only_auxiliary_requests_used_clears_its_flag_and_it_read
 }
 
 #[test]
+fn a_fresh_placement_under_main_or_with_no_class_leaves_the_new_pins_flag_clear() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(&mut st, &s, &classed(&s, "main", T), &mut rng());
+    pinned(&st, "s1");
+    assert!(
+        !st.auxiliary_only(&pin_key("s1")),
+        "a main turn refreshes the pin it places"
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let classless = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    assert_eq!(classless.request_class, None);
+    select(&mut st, &s, &classless, &mut rng());
+    pinned(&st, "s1");
+    assert!(
+        !st.auxiliary_only(&pin_key("s1")),
+        "a request that names no class is no auxiliary one"
+    );
+}
+
+#[test]
 fn a_main_turn_on_another_lane_keeps_the_flag_of_a_pin_only_auxiliary_requests_used() {
     let s = snapshot(Pool {
         members: vec![("a", 0)],
