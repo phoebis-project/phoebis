@@ -2705,7 +2705,7 @@ async fn a_funding_marks_acknowledgment_credits_no_later_mark_stamped_at_the_sam
     assert_eq!(
         handle.funding_retries().await.unwrap(),
         vec![("a".to_string(), 310_000)],
-        "the second mark is stamped at the clock it read"
+        "the second mark's retry runs from the clock it read"
     );
     let last = store.debug_hold_next_routing_write();
     between.release();
@@ -2842,7 +2842,7 @@ async fn a_funding_retrys_success_dispatched_under_an_older_mark_clears_nothing_
     assert_eq!(
         handle.funding_retries().await.unwrap(),
         vec![("a".to_string(), 200_000 + 300_000)],
-        "the third mark is stamped at the stepped-back clock"
+        "the third mark's retry runs from the stepped-back clock"
     );
     handle
         .report(Report::AccountState {

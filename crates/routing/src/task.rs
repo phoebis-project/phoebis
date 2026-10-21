@@ -4246,7 +4246,7 @@ impl Task {
                 }
                 // The store keeps no instant for a mark, so the retry is stamped here. A verdict about a holder the
                 // id no longer has moves no retry, as its write moves no state.
-                let mut marked = None;
+                let mut marked_ordinal = None;
                 if !self.superseded(
                     &account_id,
                     incarnation,
@@ -4256,11 +4256,12 @@ impl Task {
                     if state == AccountState::FundingRequired {
                         let interval = i64::try_from(self.config.funding_retry.as_millis())
                             .unwrap_or(i64::MAX);
-                        let now = (self.clock)();
-                        let ordinal =
-                            self.state
-                                .funding_marked(&account_id, incarnation, now, interval);
-                        marked = Some((now, ordinal));
+                        marked_ordinal = Some(self.state.funding_marked(
+                            &account_id,
+                            incarnation,
+                            (self.clock)(),
+                            interval,
+                        ));
                     } else {
                         self.state.funding_cleared(&account_id);
                     }
@@ -4279,8 +4280,7 @@ impl Task {
                     credential_generation,
                     cause,
                     detail,
-                    marked_at: marked.map(|(at, _)| at),
-                    marked_ordinal: marked.map(|(_, ordinal)| ordinal),
+                    marked_ordinal,
                 }]);
             }
         }
@@ -5086,24 +5086,17 @@ impl Deferred {
             match rows_of(write) {
                 Ok(rows) => {
                     for (key, mut write) in rows {
-                        // An account-state write that carries no stamp, a superseded verdict's, keeps the stamp of
+                        // An account-state write that carries no ordinal, a superseded verdict's, keeps the ordinal of
                         // the write it replaces, so the writer's acknowledgment still names the entry that write's
                         // mark stamped and a load that reads the row past it drops that entry.
-                        if let StateWrite::AccountState {
-                            marked_at,
-                            marked_ordinal,
-                            ..
-                        } = &mut write
-                        {
+                        if let StateWrite::AccountState { marked_ordinal, .. } = &mut write {
                             if marked_ordinal.is_none() {
                                 if let Some(StateWrite::AccountState {
-                                    marked_at: held_at,
-                                    marked_ordinal: held_ordinal,
+                                    marked_ordinal: held,
                                     ..
                                 }) = self.open.get(&key)
                                 {
-                                    *marked_at = *held_at;
-                                    *marked_ordinal = *held_ordinal;
+                                    *marked_ordinal = *held;
                                 }
                             }
                         }
@@ -5149,7 +5142,6 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             credential_generation,
             cause,
             detail,
-            marked_at,
             marked_ordinal,
         } => one(
             DeferredKey::AccountState {
@@ -5166,7 +5158,6 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 credential_generation,
                 cause,
                 detail,
-                marked_at,
                 marked_ordinal,
             },
         ),
