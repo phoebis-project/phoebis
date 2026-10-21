@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a window priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
@@ -708,6 +708,26 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     name: '/ with the dashboard open, a refresh tick draws the items the route gains, an item without a link as a badge that opens nothing, and the next one the quiet state once they clear',
     ok: gained[0] === '2 need attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/routing-log'], ['Client drift: 2.1.272', 'badge--serious', null]]) && gained[2] === 1 && lost,
     missing: [...gained.map(String), `quiet after the clear: ${lost}`],
+  });
+  // A condition this console does not know, shaped as the decoder writes it: the kind `unknown`, the wire's kind kept
+  // as `rawKind`, and no link.
+  const later = { detail: {}, kind: 'unknown', link: null, pools: [], rawKind: 'later_kind', since: new Date(Date.now() - 3 * 60_000).toISOString(), subject: { id: 'primary', label: 'primary', type: 'account' } };
+  api.getAttention = async () => [later];
+  await tick();
+  const [unknownBadge] = await badges();
+  const unknownLinks = line()?.querySelectorAll('a').length;
+  api.getAttention = getAttention;
+  await tick();
+  results.push({
+    name: '/ a condition the console does not know draws the Unknown condition badge in the warning tone, its raw kind on hover and no link',
+    ok:
+      unknownBadge?.text === 'Unknown condition: primary' &&
+      unknownBadge.tone === 'badge--warning' &&
+      unknownBadge.href === null &&
+      unknownBadge.title.split('\n').includes('kind: later_kind') &&
+      unknownLinks === 0 &&
+      quiet(),
+    missing: [JSON.stringify(unknownBadge ?? null), `links ${unknownLinks}`, `quiet after the clear: ${quiet()}`],
   });
   api.getAttention = () => Promise.reject(new Error('the store is unavailable'));
   await tick();
@@ -23602,6 +23622,59 @@ m.unmount();
     name: 'a toast queued before Log out or a 401 does not show after the next login',
     ok: beforeLogout.length === 1 && beforeExpiry.length === 1 && ended && afterLogout.keys && afterExpiry.keys && afterLogout.toasts.length === 0 && afterExpiry.toasts.length === 0,
     missing: [`before Log out ${JSON.stringify(beforeLogout)}, after ${JSON.stringify(afterLogout)}`, `before the 401 ${JSON.stringify(beforeExpiry)}, ended ${ended}, after ${JSON.stringify(afterExpiry)}`],
+  });
+
+  // The reload banner. The mock answers its bundle's own build, so a plain mount draws none, and the lever feeds the
+  // transport another router build, as an answer's header would. The banner's Reload is not pressed, since jsdom does
+  // not navigate.
+  const bannerOf = (p) => p.container.querySelector('.main > .callout[role="status"]');
+  page = await mount('/keys');
+  const plain = bannerOf(page);
+  mismatchBuild();
+  await page.settle(100);
+  mismatchBuild();
+  await page.settle(100);
+  const banner = bannerOf(page);
+  const drawn = {
+    atTop: banner?.nextElementSibling?.matches('header.topbar') === true,
+    buttons: banner ? [...banner.querySelectorAll('button')].map((b) => b.textContent?.trim() ?? '') : [],
+    count: page.container.querySelectorAll('.main > .callout').length,
+    words: banner?.firstElementChild?.textContent ?? null,
+  };
+  page.unmount();
+  results.push({ name: "/keys the shell draws no reload banner while the router answers from the bundle's own build", ok: plain === null, missing: [plain?.outerHTML.slice(0, 200) ?? 'no banner'] });
+  results.push({
+    name: '/keys a router answering from another build draws the reload banner once, over the top bar, its two sentences beside a Reload button',
+    ok: drawn.atTop && drawn.count === 1 && drawn.words === 'The router runs a newer build than this console. Reload to pick it up.' && JSON.stringify(drawn.buttons) === JSON.stringify(['Reload']),
+    missing: [JSON.stringify(drawn)],
+  });
+
+  // The shell registers its build hook beside the session's handlers, so with the banner drawn a failed read still
+  // toasts and a 401 still returns to the login, and the shell that mounts after the next login registers it again.
+  failNextCall('listKeys', '/admin/keys', 'ledger locked');
+  page = await mount('/keys');
+  mismatchBuild();
+  await page.settle(100);
+  const withBanner = { banner: bannerOf(page) !== null, toasts: toasts(page) };
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'no admin session' }), { status: 401 });
+  try {
+    await call('GET', '/admin/keys').catch(() => undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  await page.settle(100);
+  const endedUnderBanner = page.text().includes('Your session ended, so log in again.');
+  await logIn(page);
+  mismatchBuild();
+  await page.settle(100);
+  const relogged = { banner: bannerOf(page) !== null, keys: page.container.querySelector('.card--table') !== null };
+  page.unmount();
+  await api.logout();
+  localStorage.setItem('phoebis.mockSession', 'admin');
+  results.push({
+    name: '/keys with the reload banner drawn a failed read still toasts and a 401 still returns to the login, and the shell after the next login draws the banner again',
+    ok: withBanner.banner && withBanner.toasts.length === 1 && withBanner.toasts[0].startsWith('/admin/keys failed') && endedUnderBanner && relogged.banner && relogged.keys,
+    missing: [JSON.stringify(withBanner), `ended ${endedUnderBanner}`, JSON.stringify(relogged)],
   });
 }
 

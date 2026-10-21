@@ -46,6 +46,31 @@ export const setHooks = (next: Hooks) => {
   hooks = next;
 };
 
+let buildHook: ((router: string) => void) | null = null;
+let buildNoted = false;
+
+/**
+ * The build the router named on an answer, compared with the bundle's own. The registered hook fires once on a
+ * difference.
+ */
+export function noteBuild(build: string | null): void {
+  // A side that cannot name its build never differs, so a local build without a tree and an older router never nag.
+  if (build === null || build === 'unknown' || __PHOEBIS_BUILD__ === 'unknown' || build === __PHOEBIS_BUILD__) return;
+  if (buildHook === null || buildNoted) return;
+  buildNoted = true;
+  buildHook(build);
+}
+
+/**
+ * The shell's build hook, apart from setHooks, whose call replaces the provider's handlers. A registration arms the
+ * hook again, and an answer that lands with none registered (the login's, before the shell mounts) notes nothing,
+ * since the next answer carries the header too.
+ */
+export function setBuildHook(hook: ((router: string) => void) | null): void {
+  buildHook = hook;
+  buildNoted = false;
+}
+
 let quiet = false;
 
 /**
@@ -92,6 +117,8 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
     if (!login && !silent) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null, path);
   }
+  // Before the 204's return, since every answer names the router's build, a refusal's and an empty one's among them.
+  noteBuild(response.headers.get('x-phoebis-build'));
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   let parsed: unknown;

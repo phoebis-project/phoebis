@@ -19,6 +19,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   refresh_failed: 'Credential refresh failed',
   shed_no_runway: 'Rounds without a destination',
   slowed_long: 'Slowed past twice the stretch',
+  unknown: 'Unknown condition',
   wall_reached: 'Wall reached under the ceiling',
   writer_degraded: 'State writer degraded',
 };
@@ -38,6 +39,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'war
   refresh_failed: 'serious',
   shed_no_runway: 'warning',
   slowed_long: 'warning',
+  unknown: 'warning',
   wall_reached: 'warning',
   writer_degraded: 'serious',
 };
@@ -48,8 +50,8 @@ export const ATTENTION_REFRESH_MS = 30_000;
 type LinkedItem = Pick<AttentionItem, 'kind' | 'link' | 'since'>;
 
 /**
- * The pool whose exhausted decisions the item opens in the routing log. The decoder reads a kind this build does not
- * know as `pool_exhausted`, so the link must name a pool as well, or an account's id would be read as one.
+ * The pool whose exhausted decisions a `pool_exhausted` item opens in the routing log. The pool link alone names the
+ * log, so a link to any other page opens none.
  */
 const exhaustedPool = ({ kind, link }: LinkedItem): string | null => (kind === 'pool_exhausted' && link?.page === 'pools' ? link.id : null);
 
@@ -71,11 +73,12 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
  * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens Analytics on
  * the account with the Burn section in view, where the reconciled windows behind it are listed. Every other kind opens
- * the account, pool, key or model where it is fixed. Null when the item names none.
+ * the account, pool, key or model where it is fixed. Null when the item names none, and for a kind this console does
+ * not know whatever its link, since the console cannot say what the page would fix.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
-  if (link === null) return null;
+  if (link === null || item.kind === 'unknown') return null;
   const since = sinceCondition(Date.parse(item.since), now);
   const pool = exhaustedPool(item);
   if (pool !== null) return logHref({ pools: [pool], kinds: ['exhausted'], ...since });
@@ -172,6 +175,8 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       return slowedWords(item, now);
     case 'meter_drift':
       return driftWords(item, now);
+    case 'unknown':
+      return `a condition this console does not know (${item.rawKind ?? 'unknown'})`;
   }
 }
 
@@ -271,7 +276,8 @@ export function attentionWords(item: AttentionItem, now: number): string | null 
  * The detail's members as `name: value` lines in name order, an instant the route sends in milliseconds read as one,
  * then the age: the title of a badge on the dashboard's line. A member the route left null says nothing and is left
  * out. An item that carries no pool leads with its sentence, since no pool card's row draws it. An item that opens the
- * routing log ends with the line that says so.
+ * routing log ends with the line that says so. A kind this console does not know opens with the kind the route named,
+ * pooled or not, since its badge's label cannot name it.
  */
 export function attentionTitle(item: AttentionItem, now: number): string {
   const members = Object.entries(item.detail)
@@ -281,9 +287,10 @@ export function attentionTitle(item: AttentionItem, now: number): string {
       const at = /_(at|since)$|^expires$/.test(name) ? instant(v) : null;
       return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v) : String(v)}`;
     });
+  const kind = item.kind === 'unknown' ? [`kind: ${item.rawKind}`] : [];
   const sentence = item.pools.length === 0 ? [attentionDetail(item, now)] : [];
   const log = attentionLogLine(item, now);
-  return [...sentence, ...members, `started ${fmtRelative(item.since, now)}`, ...(log === null ? [] : [log])].join('\n');
+  return [...kind, ...sentence, ...members, `started ${fmtRelative(item.since, now)}`, ...(log === null ? [] : [log])].join('\n');
 }
 
 export interface AttentionRead {

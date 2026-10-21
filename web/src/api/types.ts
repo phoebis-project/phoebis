@@ -275,17 +275,23 @@ export interface QuotaSnapshot {
  * so not alphabetical.
  */
 export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff', 'model_unweighted', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'] as const;
-export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
+/** `unknown` stands for a kind this console does not know, which the route never answers under that name. */
+export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number] | 'unknown';
 
 /** One condition that holds now, as `GET /admin/attention` answers it. */
 export interface AttentionItem {
   /** The members the condition's kind carries, passed through as the route sent them. */
   detail: Record<string, unknown>;
   kind: AttentionKind;
-  /** Where the operator fixes it; null for a drift refusal that carried no key, a router subject and a deleted pool. */
+  /**
+   * Where the operator fixes it, null for a drift refusal that carried no key, a router subject, a deleted pool and a
+   * kind the console does not know.
+   */
   link: { id: string; page: 'accounts' | 'keys' | 'models' | 'pools' } | null;
   /** The pools the item belongs to, which a pool card filters the same list by. */
   pools: string[];
+  /** The wire's kind where `kind` is `unknown`. Null on a known kind. */
+  rawKind: string | null;
   /** When the condition started, as an ISO instant. */
   since: string;
   /**
@@ -1955,7 +1961,8 @@ export interface CostRevision {
 }
 
 export interface Settings {
-  about: { profile: string; version: string };
+  /** `build` is the commit the router was built from, or `unknown` where it names none. */
+  about: { build: string; profile: string; version: string };
   access: { adminConfigured: boolean };
   /**
    * The price table used to cost the ledger, its rows in the file's order. `effective` is the date as the router sent

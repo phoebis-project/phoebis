@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '@/api';
+import { setBuildHook } from '@/api/http';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync, useMediaQuery } from '@/lib/hooks';
@@ -70,6 +71,14 @@ export function Shell() {
     if (settings.data) setModelTiers({ modelTier: settings.data.subscriptionCosts.modelTier, tierOrder: settings.data.subscriptionCosts.tierOrder });
   }, [settings.data, setModelTiers]);
 
+  // A registration of its own, since setHooks would replace the session's handlers. The banner holds until the reload,
+  // so nothing takes it down again.
+  const [newerBuild, setNewerBuild] = useState(false);
+  useEffect(() => {
+    setBuildHook(() => setNewerBuild(true));
+    return () => setBuildHook(null);
+  }, []);
+
   return (
     <div className={`shell ${navOpen ? 'nav-open' : ''}`}>
       <aside className="sidebar">
@@ -107,6 +116,14 @@ export function Shell() {
         </div>
       </aside>
       <div className="main">
+        {newerBuild && (
+          <div className="callout callout--info" role="status">
+            <span>The router runs a newer build than this console. Reload to pick it up.</span>
+            <Button size="sm" onClick={() => window.location.reload()}>
+              Reload
+            </Button>
+          </div>
+        )}
         <header className="topbar">
           <button type="button" className="topbar__menu" aria-label="Toggle navigation" onClick={() => setNavOpen((v) => !v)}>
             <IconList size={18} />

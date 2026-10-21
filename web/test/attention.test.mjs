@@ -33,6 +33,7 @@ test('each attention kind has its word and its tone, a client drift and a failed
     refresh_failed: 'Credential refresh failed',
     shed_no_runway: 'Rounds without a destination',
     slowed_long: 'Slowed past twice the stretch',
+    unknown: 'Unknown condition',
     wall_reached: 'Wall reached under the ceiling',
     writer_degraded: 'State writer degraded',
   });
@@ -157,17 +158,28 @@ test("a badge's title for an item that carries no pool leads with its sentence, 
   assert.equal(attentionTitle(pooled, NOW), ['component: ledger', 'started 2h ago'].join('\n'), "an item a pool carries reads its sentence on that pool's card");
 });
 
-test('a kind this build does not know opens its link, never a pool log named by an account', () => {
+test('a kind this console does not know draws no link and never a pool log', () => {
   // The route sends the start in milliseconds.
   const since = Date.parse('2026-09-18T10:00:00.000Z');
   const later = decodeAttention({ detail: { account: 'legacy' }, kind: 'quota_drift', link: { id: 'legacy', page: 'accounts' }, pools: [], since, subject: { id: 'legacy', label: 'legacy', type: 'account' } });
-  assert.equal(later.kind, 'pool_exhausted', 'the decoder reads an unknown kind as the worst one');
-  assert.equal(attentionHref(later, NOW), '/accounts/legacy');
+  assert.deepEqual([later.kind, later.rawKind], ['unknown', 'quota_drift'], 'the decoder reads an unknown kind as unknown, never as a kind it knows');
+  assert.equal(attentionHref(later, NOW), null);
   assert.equal(attentionTitle(later, NOW).split('\n').pop(), 'started 2h ago', 'and its title names no log');
   const pooled = decodeAttention({ detail: {}, kind: 'quota_drift', link: { id: 'jobs', page: 'pools' }, pools: ['jobs'], since, subject: { id: 'jobs', label: 'jobs', type: 'pool' } });
-  assert.equal(new URL(attentionHref(pooled, NOW), 'http://console.test').pathname, '/routing-log', 'one that names a pool opens its log');
+  assert.deepEqual([attentionHref(pooled, NOW), attentionLogLine(pooled, NOW)], [null, null], 'one that names a pool opens no log of it either');
   const known = ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'].map((kind) => decodeAttention({ detail: {}, kind, link: null, pools: [], since, subject: { id: 'x', label: 'x', type: 'account' } }).kind);
   assert.deepEqual(known, ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'], 'the four routing conditions decode as themselves');
+});
+
+test('an unknown condition reads its label in the warning tone, names its raw kind on hover and opens nothing, whatever its link', () => {
+  assert.deepEqual([ATTENTION_LABEL.unknown, ATTENTION_TONE.unknown], ['Unknown condition', 'warning']);
+  const lone = item('unknown', { link: { id: 'legacy', page: 'accounts' }, rawKind: 'later_kind' });
+  assert.equal(attentionWords(lone, NOW), null, 'the badge reads its label and subject');
+  assert.deepEqual(attentionTitle(lone, NOW).split('\n'), ['kind: later_kind', 'a condition this console does not know (later_kind)', 'started 2h ago']);
+  const pooled = item('unknown', { detail: { pool: 'jobs' }, link: { id: 'jobs', page: 'pools' }, pools: ['jobs'], rawKind: 'later_kind' });
+  assert.deepEqual(attentionTitle(pooled, NOW).split('\n'), ['kind: later_kind', 'pool: jobs', 'started 2h ago'], "a pooled item's title names the raw kind too, the sentence left to the pool card's row");
+  assert.equal(attentionDetail(pooled, NOW), 'a condition this console does not know (later_kind)');
+  assert.deepEqual([lone, pooled].map((it) => [attentionHref(it, NOW), attentionLogLine(it, NOW)]), [[null, null], [null, null]]);
 });
 
 test("the four routing conditions open the routing log on their subject's moves, walls, rounds and slow-downs since the condition began", () => {

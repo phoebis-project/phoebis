@@ -456,7 +456,8 @@ export class MockApi implements Api {
   private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
   private sessions: Session[] = [...SESSIONS];
-  private settings: Settings = decodeSettings(SETTINGS_WIRE);
+  // The mock answers as a router built from the bundle's own commit would, so no banner draws until a lever asks.
+  private settings: Settings = decodeSettings({ ...SETTINGS_WIRE, about: { ...SETTINGS_WIRE.about, build: __PHOEBIS_BUILD__ } });
 
   private token(n: number) {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');

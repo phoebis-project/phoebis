@@ -265,12 +265,15 @@ export function decodeAttention(v: unknown): AttentionItem {
   const link = a.link ? rec(a.link) : null;
   // A page this build does not know has no place to open the subject on, so the item draws no link.
   const page = link ? ATTENTION_PAGE_VALUES.find((p) => p === str(link.page)) : undefined;
+  const raw = str(a.kind);
+  const kind = ATTENTION_KIND_VALUES.find((k) => k === raw);
   return {
     detail: rec(a.detail),
-    // A kind this build does not know reads as the worst one, so it is never drawn quieter than it may be.
-    kind: ATTENTION_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'pool_exhausted',
-    link: link && page !== undefined ? { id: str(link.id), page } : null,
+    kind: kind ?? 'unknown',
+    // A kind this build does not know names no fix the console can vouch for, so it opens nothing whatever its page.
+    link: kind !== undefined && link && page !== undefined ? { id: str(link.id), page } : null,
     pools: strings(a.pools),
+    rawKind: kind === undefined ? raw : null,
     since: isoOr(a.since, epoch),
     subject: { id: str(subject.id), label: str(subject.label), type: ATTENTION_SUBJECT_VALUES.find((t) => t === str(subject.type)) ?? 'pool' },
   };
@@ -1099,7 +1102,7 @@ export function decodeSettings(v: unknown): Settings {
   const kept = rec(s.retention);
   const store = rec(s.storage);
   return {
-    about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
+    about: { build: str(rec(s.about).build, 'unknown'), profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy), proxyTls: bool(l.proxy_tls) },

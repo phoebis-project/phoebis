@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { api } from '@/api';
 import { decodeSettings, effectiveLabel } from '@/api/decode';
-import { ApiError, call, reportFailure, SessionNotKept } from '@/api/http';
+import { ApiError, call, noteBuild, reportFailure, SessionNotKept } from '@/api/http';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
@@ -115,6 +115,9 @@ export const failNextCall = (name: string, path: string, message: string, option
     return Promise.reject(new ApiError(status, message, null, path));
   };
 };
+
+/** Feeds the transport a router build other than the bundle's, so the shell's banner is on the smoke. */
+export const mismatchBuild = (): void => noteBuild('0000000000000000000000000000000000000000');
 
 /**
  * Fails every call of the named methods, keyed to the route each one reads, the way an outage of the store

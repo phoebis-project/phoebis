@@ -39,9 +39,12 @@ shown while the expert view is on or while the open view is a diagnostics view, 
 the mode and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the router's version
 as `v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), the "Unit"
 switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and System, stored under
-`phoebis.theme` (`system` until you pick one). The time format lives under `phoebis.timeFormat` (`24h` by default). The
-theme, the time format and the unit are browser preferences, which the Settings view's Appearance card also sets, and
-nothing in the shell changes a router setting. On a narrow window a menu button opens the sidebar over the view.
+`phoebis.theme` (`system` until you pick one). When the router answers from a build other than the one the console's
+files were built from, a banner above the top bar reads `The router runs a newer build than this console. Reload to pick
+it up.` beside a "Reload" button, and it stays until the page reloads. The time format lives under `phoebis.timeFormat`
+(`24h` by default). The theme, the time format and the unit are browser preferences, which the Settings view's
+Appearance card also sets, and nothing in the shell changes a router setting. On a narrow window a menu button opens the
+sidebar over the view.
 
 The "Unit" switch sets the unit the Dashboard, Pools, Keys, Requests and Analytics views price a request in, stored
 under `phoebis.unit` (`native` until you pick one). Its button "What the units mean" opens the legend, which closes on
@@ -84,7 +87,8 @@ The Dashboard reads its figures again every 30 seconds. A line above the tiles n
 first, each item a badge that opens the account, pool or key where it is fixed, and reads "Nothing needs attention"
 otherwise. The line keeps one row of items and folds the badges past it behind a "+N more" badge that opens the full
 list, so the tiles hold still. An item with no such place (a drift refusal that named no key, a parked record without a
-pool, a pool deleted since, one of the router's own writers, a page unknown to the console) stays a plain badge. The
+pool, a pool deleted since, one of the router's own writers, a page unknown to the console or a condition the console
+does not know, which reads "Unknown condition" with its kind on hover) stays a plain badge. The
 conditions are the ones the `phoebis_attention` gauge exports ([Conditions and
 gauges](statistics.md#conditions-and-gauges)), and the pool exhausted item opens the [routing log](#routing-log) on the
 pool's exhausted decisions from the moment the condition began. The model weight estimated item opens the

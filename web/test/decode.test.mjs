@@ -2238,7 +2238,7 @@ test('settings decode the members the route answers and nothing more', () => {
   assert.deepEqual(
     members,
     {
-      about: ['profile', 'version'],
+      about: ['build', 'profile', 'version'],
       access: ['adminConfigured'],
       apiPrices: ['effective', 'effectiveDate', 'models', 'revisions', 'source'],
       listeners: ['metrics', 'proxy', 'proxyTls'],
@@ -2270,7 +2270,7 @@ test('a settings member the answer leaves out decodes to its default', () => {
     delete bare[name];
     return d.decodeSettings(bare)[name];
   };
-  assert.deepEqual(without('about'), { profile: '', version: '' });
+  assert.deepEqual(without('about'), { build: 'unknown', profile: '', version: '' });
   assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
   assert.deepEqual(without('listeners'), { metrics: '', proxy: '', proxyTls: false });
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0, retentionDays: 0, rollupRetentionDays: 0 });
@@ -2298,6 +2298,14 @@ test('a settings member the answer leaves out decodes to its default', () => {
     },
     'an answer without the cost model reads as an empty one, with no capacity, no weight, no model tier and no problem',
   );
+});
+
+test("settings decode the router's build beside its version, unknown where the answer names none", () => {
+  const wire = fixture('settings');
+  const build = '0123456789abcdef0123456789abcdef01234567';
+  assert.equal(d.decodeSettings({ ...wire, about: { ...wire.about, build } }).about.build, build);
+  const { build: _named, ...unnamed } = { ...wire.about };
+  assert.equal(d.decodeSettings({ ...wire, about: unnamed }).about.build, 'unknown', 'an older router names no build');
 });
 
 test('settings decode the subscription cost model from its envelope', () => {
@@ -2582,10 +2590,11 @@ test("an attention item decodes the route's shape, its start an instant and its 
     kind: 'pool_exhausted',
     link: { id: 'main', page: 'pools' },
     pools: ['main'],
+    rawKind: null,
     since: new Date(raw.since).toISOString(),
     subject: { id: 'main', label: 'Main', type: 'pool' },
   });
-  const drift = d.decodeAttention({ ...raw, detail: { client_version: '2.1.271', key: null, trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], subject: { id: '2.1.271', label: '2.1.271', type: 'client' } });
+  const drift =d.decodeAttention({ ...raw, detail: { client_version: '2.1.271', key: null, trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], subject: { id: '2.1.271', label: '2.1.271', type: 'client' } });
   assert.deepEqual([drift.kind, drift.link, drift.pools, drift.subject.type], ['client_drift', null, [], 'client'], 'a drift refusal that carried no key links nowhere');
 });
 
@@ -2596,6 +2605,7 @@ test("an attention item of a state writer or a parked record decodes under its o
     kind: 'ledger_record_parked',
     link: { id: 'main', page: 'pools' },
     pools: ['main'],
+    rawKind: null,
     since: new Date(parked.since).toISOString(),
     subject: { id: 'main', label: 'Main', type: 'pool' },
   });
@@ -2611,19 +2621,29 @@ test("an unweighted model's attention item decodes under its own kind, a model s
     kind: 'model_unweighted',
     link: { id: raw.link.id, page: 'models' },
     pools: [],
+    rawKind: null,
     since: new Date(raw.since).toISOString(),
     subject: { id: raw.subject.id, label: raw.subject.label, type: 'model' },
   });
   assert.deepEqual(Object.keys(raw.detail).sort(), ['model', 'requests', 'tier', 'weight_of'], 'the detail names the model, its plan requests, its model tier and the model whose weight prices it');
 });
 
-test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and no link', () => {
+test('an attention item with a spelling the console does not know reads the unknown kind with its raw kind, a pool subject and no link', () => {
   const odd = d.decodeAttention({ detail: 'text', kind: 'cache_cold', link: { id: 'r1', page: 'settings' }, pools: ['all', 3], since: 'yesterday', subject: { id: 'x', label: 'x', type: 'key' } });
   assert.deepEqual(
-    [odd.kind, odd.subject.type, odd.link, odd.pools, odd.since, odd.detail],
-    ['pool_exhausted', 'pool', null, ['all'], '1970-01-01T00:00:00.000Z', {}],
+    [odd.kind, odd.rawKind, odd.subject.type, odd.link, odd.pools, odd.since, odd.detail],
+    ['unknown', 'cache_cold', 'pool', null, ['all'], '1970-01-01T00:00:00.000Z', {}],
   );
   assert.equal(d.decodeAttention({ ...fixture('attention').items[0], link: { id: 'main' } }).link, null, 'a link that names no page opens nothing');
+});
+
+test('an attention kind the console does not know keeps its wire spelling and opens nothing, and a known kind carries none', () => {
+  const [raw] = fixture('attention').items;
+  const later = d.decodeAttention({ ...raw, kind: 'later_kind', link: { id: 'main', page: 'pools' } });
+  assert.deepEqual([later.kind, later.rawKind, later.link], ['unknown', 'later_kind', null], 'a known page is no place to fix a condition the console cannot read');
+  const named = d.decodeAttention({ ...raw, kind: 'unknown' });
+  assert.deepEqual([named.kind, named.rawKind, named.link], ['unknown', 'unknown', null], "the route's own spelling of unknown is a kind the list lacks too");
+  assert.equal(d.decodeAttention(raw).rawKind, null);
 });
 
 test('a_guardrail_decodes_with_its_conditions_preset_and_attachments', () => {

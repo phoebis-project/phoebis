@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ApiError, HttpApi, SessionNotKept, call, quietly, setHooks, slug } from './dist/api.js';
+import { ApiError, HttpApi, SessionNotKept, call, noteBuild, quietly, setBuildHook, setHooks, slug } from './dist/api.js';
 
 const answer = (status, body, headers = {}) => ({ headers: { get: (k) => headers[k.toLowerCase()] ?? null }, ok: status >= 200 && status < 300, status, text: async () => (body === undefined ? '' : JSON.stringify(body)), json: async () => body });
 const stub = (handler) => { const calls = []; globalThis.fetch = async (url, init = {}) => { calls.push({ init, url }); return handler(url, init); }; return calls; };
+/** The build `test/vite.config.ts` gives the bundle, and a router build other than it. */
+const BUNDLE_BUILD = 'feedfacefeedfacefeedfacefeedfacefeedface';
+const ROUTER_BUILD = '0000000000000000000000000000000000000000';
 
 test('call sends same-origin credentials and JSON, and answers the parsed body', async () => {
   const calls = stub(() => answer(200, { keys: [] }));
@@ -50,6 +53,77 @@ test("the login route's refusals reach the login screen alone, never the shell's
   stub(() => answer(429, { error: 'too many failed logins, try again in a minute' }));
   await assert.rejects(call('GET', '/admin/keys'));
   assert.equal(failures, 1, 'the same refusal on any other route still reaches the toast');
+});
+
+test("a router build other than the bundle's calls the build hook once per registration, and no build, unknown or the bundle's own calls nothing", () => {
+  const seen = [];
+  setBuildHook((router) => seen.push(router));
+  noteBuild(null);
+  noteBuild('unknown');
+  noteBuild(BUNDLE_BUILD);
+  assert.deepEqual(seen, [], 'nothing differs');
+  noteBuild(ROUTER_BUILD);
+  noteBuild(ROUTER_BUILD);
+  assert.deepEqual(seen, [ROUTER_BUILD], 'the hook fires once over two answers');
+  setBuildHook((router) => seen.push(router));
+  noteBuild(ROUTER_BUILD);
+  assert.deepEqual(seen, [ROUTER_BUILD, ROUTER_BUILD], 'a registration arms the hook again');
+  setBuildHook(null);
+});
+
+test('an answer that lands with no build hook registered notes nothing, so a registration after it waits for the next answer', () => {
+  setBuildHook(null);
+  noteBuild(ROUTER_BUILD);
+  const seen = [];
+  setBuildHook((router) => seen.push(router));
+  assert.deepEqual(seen, []);
+  noteBuild(ROUTER_BUILD);
+  assert.deepEqual(seen, [ROUTER_BUILD]);
+  setBuildHook(null);
+});
+
+test("call reads the router's build off every answer, a 204 and a refusal among them", async () => {
+  setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
+  const seen = [];
+  setBuildHook((router) => seen.push(router));
+  stub(() => answer(200, { keys: [] }));
+  await call('GET', '/admin/keys');
+  stub(() => answer(200, { keys: [] }, { 'x-phoebis-build': BUNDLE_BUILD }));
+  await call('GET', '/admin/keys');
+  stub(() => answer(204, undefined, { 'x-phoebis-build': 'unknown' }));
+  await call('DELETE', '/admin/keys/k');
+  assert.deepEqual(seen, [], 'an older router, the same build and a router that cannot name its build draw nothing');
+  stub(() => answer(204, undefined, { 'x-phoebis-build': ROUTER_BUILD }));
+  await call('DELETE', '/admin/keys/k');
+  assert.deepEqual(seen, [ROUTER_BUILD], 'a 204 names the build too');
+  setBuildHook((router) => seen.push(router));
+  stub(() => answer(503, { error: 'ledger locked' }, { 'x-phoebis-build': ROUTER_BUILD }));
+  await assert.rejects(call('GET', '/admin/keys'));
+  assert.deepEqual(seen, [ROUTER_BUILD, ROUTER_BUILD], 'and so does a refusal');
+  setBuildHook(null);
+});
+
+test("the build hook's registration leaves the session's handlers in place, whichever of the two comes first", async () => {
+  for (const buildFirst of [true, false]) {
+    const ran = { build: 0, failure: 0, unauthorized: 0 };
+    const handlers = { onFailure: () => { ran.failure += 1; }, onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => { ran.unauthorized += 1; } };
+    const hook = () => { ran.build += 1; };
+    if (buildFirst) {
+      setBuildHook(hook);
+      setHooks(handlers);
+    } else {
+      setHooks(handlers);
+      setBuildHook(hook);
+    }
+    stub(() => answer(401, { error: 'no admin session' }));
+    await assert.rejects(call('GET', '/admin/keys'));
+    stub(() => answer(503, { error: 'ledger locked' }));
+    await assert.rejects(call('GET', '/admin/keys'));
+    stub(() => answer(200, { keys: [] }, { 'x-phoebis-build': ROUTER_BUILD }));
+    await call('GET', '/admin/keys');
+    assert.deepEqual(ran, { build: 1, failure: 1, unauthorized: 1 }, buildFirst ? 'the build hook registered first' : 'the build hook registered last');
+  }
+  setBuildHook(null);
 });
 
 test('the HttpApi encodes ids into paths and lists into comma-separated query values', async () => {

@@ -47,7 +47,8 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
   const drawn = error === null && items !== null && items.length > 0;
   const badges = (drawn ? items : []).map((item) => ({
     href: attentionHref(item, now),
-    key: `${item.kind}:${item.subject.type}:${item.subject.id}`,
+    // The raw kind keeps two conditions the console does not know apart on one subject.
+    key: `${item.rawKind ?? item.kind}:${item.subject.type}:${item.subject.id}`,
     text: attentionWords(item, now) ?? `${ATTENTION_LABEL[item.kind]}: ${item.subject.label}`,
     title: attentionTitle(item, now),
     tone: ATTENTION_TONE[item.kind],

@@ -9,7 +9,9 @@ export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
   // A lib bundle serves no public assets, and a copy of them beside it would be picked up as another entry.
   publicDir: false,
-  define: { 'import.meta.env.VITE_PHOEBIS_MOCK': '"0"' },
+  // One fixed build, written alike in the smoke's config, so a case compares an answer's build with a known one. This
+  // config does not read the root one, so without its own entry the bundle would meet an undefined name.
+  define: { __PHOEBIS_BUILD__: JSON.stringify('feedfacefeedfacefeedfacefeedfacefeedface'), 'import.meta.env.VITE_PHOEBIS_MOCK': '"0"' },
   build: {
     outDir: fileURLToPath(new URL('./dist', import.meta.url)),
     emptyOutDir: true,
