@@ -1024,7 +1024,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     let now = common::NOW;
     parts.store.set_profile(
         "business",
-        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
+        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","has_extra_usage_enabled":true,"subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
         &SubscriptionRow {
             plan: Some("max".into()),
             tier: Some("default_claude_max_5x".into()),

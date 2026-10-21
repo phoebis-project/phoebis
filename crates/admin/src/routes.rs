@@ -2223,7 +2223,8 @@ pub(crate) struct AccountProfile {
     pub billing_type: Value,
     /// Usually a string, null when the document lacks it.
     pub display_name: Value,
-    /// Usually a boolean, null when the document lacks it.
+    /// Usually a boolean, read from the document's `organization` as the tier is, null when the document lacks it
+    /// there.
     pub has_extra_usage_enabled: Value,
     /// Usually a string, null when the document lacks it.
     pub organization_name: Value,
@@ -2458,7 +2459,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .map(|p| AccountProfile {
             billing_type: p["organization"]["billing_type"].clone(),
             display_name: p["account"]["display_name"].clone(),
-            has_extra_usage_enabled: p["account"]["has_extra_usage_enabled"].clone(),
+            has_extra_usage_enabled: p["organization"]["has_extra_usage_enabled"].clone(),
             organization_name: p["organization"]["name"].clone(),
             organization_type: p["organization"]["organization_type"].clone(),
             rate_limit_tier: p["organization"]["rate_limit_tier"].clone(),
@@ -2766,9 +2767,9 @@ fn compose_usage(
         windows,
         fable_window: fable,
         extra_usage: latest.as_ref().and_then(|s| s.extra_usage.clone()),
+        spend: latest.as_ref().and_then(|s| s.spend.clone()),
         raw_keys: latest.map(|s| s.raw_keys).unwrap_or_default(),
         error: None,
-        spend: None,
     })
 }
 

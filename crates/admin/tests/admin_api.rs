@@ -1148,6 +1148,42 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
 }
 
 #[tokio::test]
+async fn the_account_view_reads_the_extra_usage_flag_from_the_organization_alone() {
+    use common::{get, json, login};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    // An older client document carried the flag under `account`, and the client reads the organization's, so the
+    // view ignores the account's copy.
+    store
+        .set_profile(
+            "business",
+            r#"{"account":{"has_extra_usage_enabled":true},"organization":{"has_extra_usage_enabled":false}}"#,
+            &phoebis_store::SubscriptionRow::default(),
+        )
+        .unwrap();
+    let both = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    store
+        .set_profile(
+            "business",
+            r#"{"account":{"has_extra_usage_enabled":true},"organization":{}}"#,
+            &phoebis_store::SubscriptionRow::default(),
+        )
+        .unwrap();
+    let account_only = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            both["profile"].get("has_extra_usage_enabled"),
+            account_only["profile"].get("has_extra_usage_enabled"),
+        ),
+        (
+            Some(&serde_json::json!(false)),
+            Some(&serde_json::Value::Null)
+        ),
+        "the organization's flag answers over the account's, and a flag under the account alone answers null"
+    );
+}
+
+#[tokio::test]
 async fn a_confirm_on_a_slot_sealed_under_another_key_answers_409_naming_the_account() {
     use common::{get, json, login, post};
     let (app, _up, store, _manager) = common::paired_parts().await;
