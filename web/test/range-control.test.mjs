@@ -103,6 +103,25 @@ test('a preset click writes the preset with the instants dropped, and a click on
   assert.deepEqual(pressed.writes, []);
 });
 
+test('a preset click with the Custom popover open closes it and writes the preset', () => {
+  const { container, writes } = render();
+  click(custom(container));
+  assert.ok(popover() !== null, 'Custom opens the popover');
+  click(pills(container)[1]);
+  assert.equal(popover(), null, 'the preset click closes the popover');
+  assert.deepEqual(writes, [{ from: '', preset: '6h', to: '' }]);
+});
+
+test('a second click on the Custom pill closes the popover and writes nothing', () => {
+  const { container, writes } = render();
+  click(custom(container));
+  assert.ok(popover() !== null, 'the first click opens the popover');
+  click(custom(container));
+  assert.equal(popover(), null, 'the second click closes it');
+  assert.equal(custom(container).getAttribute('aria-expanded'), 'false');
+  assert.deepEqual(writes, []);
+});
+
 test('the Custom pill reads Custom at rest, and under a span reads pressed with the span and the pair in its title', () => {
   const from = at('2026-09-16T13:00:00Z');
   const to = at('2026-09-16T14:30:00Z');

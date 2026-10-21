@@ -227,7 +227,8 @@ export function AddFilter({ buttonRef, dimensions, disabled = {}, edit, filters,
         )}
         {d.kind === 'choice' && (
           <div role="radiogroup" aria-labelledby={titleId}>
-            {[{ label: d.anyLabel ?? '', value: none }, ...known].map((o) => {
+            {/* An option holding the default value would draw a second any row under the same key. */}
+            {[{ label: d.anyLabel ?? '', value: none }, ...known.filter((o) => o.value !== none)].map((o) => {
               const on = o.value === none ? !hasValue(d, value) : value === o.value;
               return (
                 <button key={o.value} type="button" role="radio" aria-checked={on} className="add-filter__row" onClick={() => write(d, o.value)}>

@@ -789,6 +789,7 @@ textarea.input {
   box-shadow: var(--shadow-pop);
 }
 
+/* Option lists */
 .mselect__search {
   margin-bottom: 4px;
 }

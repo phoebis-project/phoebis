@@ -39,6 +39,25 @@ export interface OptionListProps {
 const ROWS = '[role="option"], [role="radio"]';
 
 /**
+ * The one key map of the menus and the lists: the index a key moves to from `at` among `count` rows, the arrows
+ * wrapping at either end and Home and End jumping to the first and the last row. Null for a key the walk leaves alone.
+ */
+export function walkIndex(key: string, count: number, at: number): number | null {
+  switch (key) {
+    case 'ArrowDown':
+      return (at + 1) % count;
+    case 'ArrowUp':
+      return (at <= 0 ? count : at) - 1;
+    case 'Home':
+      return 0;
+    case 'End':
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+/**
  * The list's keys: ArrowDown and ArrowUp walk the list's field and its rows, wrapping at either end, and Home and End
  * jump to the first and last row from a row. Home and End stay with the field, where they move the caret.
  */
@@ -46,18 +65,10 @@ export function walkRows(e: KeyboardEvent<HTMLElement>, list: HTMLElement): void
   const search = list.querySelector<HTMLInputElement>('input');
   const choices = [...list.querySelectorAll<HTMLElement>(ROWS)];
   const stops: HTMLElement[] = search ? [search, ...choices] : choices;
-  const at = stops.indexOf(e.target as HTMLElement);
   const onChoice = choices.includes(e.target as HTMLElement);
-  const to =
-    e.key === 'ArrowDown'
-      ? stops[(at + 1) % stops.length]
-      : e.key === 'ArrowUp'
-        ? stops[(at <= 0 ? stops.length : at) - 1]
-        : e.key === 'Home' && onChoice
-          ? choices[0]
-          : e.key === 'End' && onChoice
-            ? choices[choices.length - 1]
-            : undefined;
+  const walked = e.key === 'Home' || e.key === 'End' ? (onChoice ? choices : []) : stops;
+  const i = walkIndex(e.key, walked.length, walked.indexOf(e.target as HTMLElement));
+  const to = i === null ? undefined : walked[i];
   if (!to) return;
   e.preventDefault();
   to.focus();

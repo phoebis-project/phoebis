@@ -162,6 +162,17 @@ test('the menu offers the five intervals with a check on the chosen one, and a r
   assert.ok(document.activeElement === c.part(), 'focus returns to the part');
 });
 
+test('in the menu ArrowUp from the first row reaches the last, Home the first and End the last', () => {
+  const c = control();
+  click(c.part());
+  press('ArrowUp', rows()[0]);
+  assert.ok(document.activeElement === rows()[4], 'ArrowUp wraps from the first row to the last');
+  press('Home', rows()[4]);
+  assert.ok(document.activeElement === rows()[0], 'Home moves to the first row');
+  press('End', rows()[0]);
+  assert.ok(document.activeElement === rows()[4], 'End moves to the last row');
+});
+
 test('Escape closes the menu with focus on the part', () => {
   const c = control();
   click(c.part());

@@ -7,6 +7,7 @@ import { clock } from '@/lib/clock';
 import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
+import { walkIndex } from './OptionList';
 
 const DescriptionHost = createContext<{ base: string; register: (text: string) => () => void } | null>(null);
 const fnv1a = (text: string): string => {
@@ -1036,17 +1037,8 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
       return;
     }
     const items = [...(listRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
-    const at = items.indexOf(e.target as HTMLButtonElement);
-    const to =
-      e.key === 'ArrowDown'
-        ? items[(at + 1) % items.length]
-        : e.key === 'ArrowUp'
-          ? items[(at <= 0 ? items.length : at) - 1]
-          : e.key === 'Home'
-            ? items[0]
-            : e.key === 'End'
-              ? items[items.length - 1]
-              : undefined;
+    const i = walkIndex(e.key, items.length, items.indexOf(e.target as HTMLButtonElement));
+    const to = i === null ? undefined : items[i];
     if (!to) return;
     e.preventDefault();
     to.focus();

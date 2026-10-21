@@ -55,8 +55,10 @@ export { costUnitOf } from '@/lib/requests';
 // The drawer's widenings, so a check reads the drawer's links against the addresses the page builds them from.
 export { requestsWiden } from '@/lib/requestsLink';
 export { fmtWindows, ringFigures } from '@/lib/rings';
+// Every kind the Kinds list offers, so the Kinds link check mounts an address that lists every kind.
+export { ALL_KINDS } from '@/lib/routingLog';
 // The walk's words, so a card check reads a popover's column and its title as the console words them.
-export { ALL_KINDS, keyWord, STEP_NAME, words } from '@/lib/routingLog';
+export { keyWord, STEP_NAME, words } from '@/lib/routingLog';
 // The legend's words, so the shell's check reads the popover against the one source the console draws it from.
 export { UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE } from '@/lib/unit';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;

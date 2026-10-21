@@ -472,6 +472,17 @@ test('a choice applies and closes on a click with the any row first, and a flag 
   assert.ok([...b.container.querySelectorAll('.chip__body')].some((el) => el.textContent === 'held only'));
 });
 
+test('a choice whose options hold the any value draws one any row', () => {
+  const b = bar({}, { options: { ...OPTIONS, kind: [{ label: 'Any', value: '' }, ...OPTIONS.kind] } });
+  click(b.button());
+  click(b.rowOf('Kind'));
+  const radios = [...box().querySelectorAll('[role="radiogroup"] [role="radio"]')];
+  assert.deepEqual(
+    radios.map((r) => [r.textContent, r.getAttribute('aria-checked')]),
+    [['Any kind', 'true'], ['Inference', 'false'], ['Probe', 'false']],
+  );
+});
+
 test("a chip's click opens step two anchored at the chip, and Remove clears the dimension, closes and moves focus to the next chip or to Add filter", () => {
   const b = bar({ accounts: ['acc_1'], agent: 'claude*', kind: 'probe' });
   const kindChip = b.chipBody('kind');

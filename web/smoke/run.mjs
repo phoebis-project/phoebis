@@ -2280,7 +2280,9 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   results.push({ name: '/accounts Disconnect and Delete account are danger, and Delete account is last', ok: dangers.join('|') === 'Disconnect|Delete account' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete account', missing: dangers });
   {
     // The Status step of Add filter lists the statuses the router reports after the choice that clears it, and a pick
-    // writes the status to the address, narrows the rows and stands as a chip until its x clears it.
+    // writes the status to the address, narrows the rows and stands as a chip until its x clears it. The labels are the
+    // docs' six in their order, written out so a dropped status or an unknown label fails the read.
+    const STATUS_STEP = ['All statuses', 'Cooling down', 'Needs funding', 'Paused', 'Needs re-auth', 'Ready', 'Not paired'];
     const box = await addFilter(m, 'Status');
     const statuses = boxOptions().map((o) => o.textContent?.trim() ?? '');
     const cooling = (await api.listAccounts()).filter((a) => a.status === 'cooldown').map((a) => a.id);
@@ -2291,7 +2293,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     await removeChip(m, 'status');
     results.push({
       name: '/accounts the status filter offers only the statuses the router reports and writes the one picked to the address',
-      ok: box !== null && statuses[0] === 'All statuses' && statuses.length > 2 && !statuses.includes('Disabled') && cooling.length > 0 && picked.status === 'cooldown' && picked.chip === 'status: Cooling down' && JSON.stringify(picked.rows.sort()) === JSON.stringify([...cooling].sort()) && m.location().search === '' && chipOf(m, 'status') === undefined,
+      ok: box !== null && JSON.stringify(statuses) === JSON.stringify(STATUS_STEP) && cooling.length > 0 && picked.status === 'cooldown' && picked.chip === 'status: Cooling down' && JSON.stringify(picked.rows.sort()) === JSON.stringify([...cooling].sort()) && m.location().search === '' && chipOf(m, 'status') === undefined,
       missing: [box === null ? 'no Status step' : statuses.join(', '), JSON.stringify(picked), `cooling ${cooling.join(',')}`, m.location().search],
     });
   }
@@ -11947,7 +11949,7 @@ m.unmount();
     });
   }
   {
-    // A span ends by the instant the page takes its address, not its mount: an hour after the page opened, the drawer's
+    // A span ends by the instant the page took its range, not its mount: an hour after the page opened, the drawer's
     // "this minute" on a request half an hour old lands on a minute that has ended, which reads Off and polls nothing.
     const old = requests.find((r) => r.kind !== 'probe' && Date.parse(r.at) > CLOCK_ORIGIN - 40 * 60_000 && Date.parse(r.at) < CLOCK_ORIGIN - 20 * 60_000);
     const page = await mount('/requests', { now: CLOCK_ORIGIN - HOUR });
@@ -15228,6 +15230,18 @@ m.unmount();
   spy.restore();
   open.unmount();
 
+  // jsdom reports the tab as shown, so the case stands in a hidden one: past the same boundary it moves no end.
+  const hiddenCheck = '/analytics a hidden tab moves no end past the next hour boundary';
+  const hidden = await mount('/analytics', { now: CLOCK_ORIGIN });
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+  const held = countCalls('getAnalyticsSeries');
+  tick(31 * 60_000);
+  await hidden.settle();
+  held.restore();
+  delete document.hidden;
+  results.push({ name: hiddenCheck, ok: held.calls.length === 0, missing: held.calls.map(([q]) => `${q?.groupBy} to ${q?.to}`) });
+  hidden.unmount();
+
   const retryCheck = '/analytics Try again after a failed read sends a later to';
   const failing = failCalls({ getAnalyticsSeries: '/admin/analytics/series' }, 'ledger locked');
   const failed = await mount('/analytics', { now: CLOCK_ORIGIN });
@@ -15307,6 +15321,14 @@ m.unmount();
     select?.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
   await act('Include probes', async () => addFilter(page, 'Include probes'));
+  // The clock moves first, so a flag chosen again that slipped past the no-op guard would move the end and read.
+  tick(5_000);
+  at += 5_000;
+  const again = countCalls('getAnalyticsSeries');
+  await addFilter(page, 'Include probes');
+  await page.settle();
+  again.restore();
+  results.push({ name: '/analytics Include probes chosen again through Add filter sends no series read', ok: again.calls.length === 0, missing: again.calls.map(([q]) => `${q?.groupBy} to ${q?.to}`) });
   await act('the session', async () => applyText(page, 'Session', requests.find((r) => r.sessionId !== null)?.sessionId ?? ''));
   spy.restore();
   page.unmount();
@@ -19906,11 +19928,12 @@ const CARD_VIEWS = [
   const page = await mount('/keys?pools=jobs,all', { now: CLOCK_ORIGIN });
   const cells = [...page.container.querySelectorAll('.card--table tbody tr td:nth-child(3)')].map((td) => td.textContent?.trim() ?? '');
   const chips = [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim() ?? '');
+  const count = page.container.querySelector('.filter-bar__count')?.textContent?.trim() ?? 'no count';
   page.unmount();
   results.push({
     name,
-    ok: both.length > 0 && both.length < stored.length && JSON.stringify(chips) === JSON.stringify(['pool: jobs', 'pool: all']) && cells.length === both.length && cells.includes('jobs') && cells.includes('all') && cells.every((c) => c === 'jobs' || c === 'all'),
-    missing: [JSON.stringify(chips), `${cells.length} rows of ${both.length} in jobs or all, ${stored.length} listed`, ...new Set(cells)],
+    ok: both.length > 0 && both.length < stored.length && JSON.stringify(chips) === JSON.stringify(['pool: jobs', 'pool: all']) && cells.length === both.length && cells.includes('jobs') && cells.includes('all') && cells.every((c) => c === 'jobs' || c === 'all') && count === `${both.length} ${both.length === 1 ? 'key' : 'keys'}`,
+    missing: [JSON.stringify(chips), `${cells.length} rows of ${both.length} in jobs or all, ${stored.length} listed`, `count ${count}`, ...new Set(cells)],
   });
 }
 {
@@ -23318,11 +23341,9 @@ m.unmount();
   // page wrote the picker's own key with every value. Each list opens in Add filter's values step, and its chip reads
   // what the list holds.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const filterOf = (page, label) => (filterBox()?.querySelector('.popover__title')?.textContent?.trim() === label ? (filterBox()?.querySelector('.option-list') ?? undefined) : undefined);
-  const openList = async (page, label) => addFilter(page, label);
-  const closeList = async (page) => closeBoxes(page);
+  const filterOf = (label) => (filterBox()?.querySelector('.popover__title')?.textContent?.trim() === label ? (filterBox()?.querySelector('.option-list') ?? undefined) : undefined);
   const read = (page, label, key) => {
-    const filter = filterOf(page, label);
+    const filter = filterOf(label);
     const head = filter?.querySelector('.mselect__option--all');
     // A preset row sets its members, so the choices are the options alone.
     const choices = [...(filter?.querySelectorAll(`${CHOICE}:not(.mselect__option--preset)`) ?? [])];
@@ -23341,13 +23362,18 @@ m.unmount();
       trigger: chip?.textContent?.trim() ?? `no ${label} chip`,
     };
   };
+  /**
+   * A status by the code its label starts with, which its chip and the address carry, and any other label as it stands:
+   * the Model list the routing log searches labels each option with the id the address carries.
+   */
+  const codesOf = (label, list) => (label === 'Status' ? list.map((c) => c.split(' ')[0]) : list);
   /** The words a picker's chip shows with `checked` on: its word, three of its values and "+N" with every label in its title, a status by its code alone. */
   const summary = (label, checked) => {
-    const values = label === 'Status' ? checked.map((c) => c.split(' ')[0]) : checked;
+    const values = codesOf(label, checked);
     return { title: checked.join(', '), trigger: `${label.toLowerCase()}: ${values.slice(0, 3).join(', ')}${values.length > 3 ? ` +${values.length - 3}` : ''}` };
   };
   const clickHead = async (page, label) => {
-    filterOf(page, label)?.querySelector('.mselect__option--all')?.click();
+    filterOf(label)?.querySelector('.mselect__option--all')?.click();
     await page.settle(700);
   };
   const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
@@ -23379,7 +23405,7 @@ m.unmount();
     const back = read(page, label, key);
     await clickHead(page, label);
     const spy = countCalls('listRoutingLog');
-    [...(filterOf(page, label)?.querySelectorAll(CHOICE) ?? [])].find((o) => o.textContent?.trim() === ONE_KIND)?.click();
+    [...(filterOf(label)?.querySelectorAll(CHOICE) ?? [])].find((o) => o.textContent?.trim() === ONE_KIND)?.click();
     await page.settle(700);
     spy.restore();
     const sent = spy.calls.at(-1)?.[0] ?? null;
@@ -23389,8 +23415,8 @@ m.unmount();
   /** Select all's uncheck, then the list closed and opened again, read as it opens. */
   const reopenCleared = async (page, label, key) => {
     await clickHead(page, label);
-    await closeList(page);
-    await openList(page, label);
+    await closeBoxes(page);
+    await addFilter(page, label);
     return read(page, label, key);
   };
   for (const [view, pickers] of PICKERS) {
@@ -23403,8 +23429,8 @@ m.unmount();
       const name = kinds
         ? `${view} Select all's uncheck on Kinds clears every check with every kind listed, a kind's click then lists it alone, Select all returns every kind, and the list reopens checked`
         : `${view} Select all on ${label} checks every option and a second click clears them`;
-      await openList(page, label);
-      if (!filterOf(page, label)) {
+      await addFilter(page, label);
+      if (!filterOf(label)) {
         controlMissing(name, label);
         continue;
       }
@@ -23472,7 +23498,7 @@ m.unmount();
       const [queried, query] = QUERIED[view] ?? [];
       if (label === queried) {
         const queryName = `${view} Select all on ${label} under a query checks the options the search shows and leaves the hidden ones unchecked`;
-        const search = filterOf(page, label)?.querySelector('.mselect__search');
+        const search = filterOf(label)?.querySelector('.mselect__search');
         const type = async (text) => {
           setter.call(search, text);
           search.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -23499,7 +23525,7 @@ m.unmount();
               sameSet(whole.checked, shown.choices) &&
               whole.head?.checked === 'mixed' &&
               whole.address !== null &&
-              whole.address.length === shown.choices.length &&
+              sameSet(whole.address, codesOf(label, shown.choices)) &&
               whole.trigger === words.trigger &&
               whole.title === words.title,
             missing: [`shown ${shown.choices.join(',')}`, `under the query: ${brief(under)}`, `whole list: ${brief(whole)}, checked ${whole.checked.join(',')}, address ${whole.address?.join(',')}`, `wanted ${JSON.stringify(words)}`],
@@ -23508,7 +23534,7 @@ m.unmount();
         }
       }
       // Clearing leaves the list open, so it is closed before the next picker opens.
-      await closeList(page);
+      await closeBoxes(page);
     }
     page.unmount();
   }
