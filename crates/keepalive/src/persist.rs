@@ -1351,7 +1351,7 @@ impl Engine {
         })
     }
 
-    /// The shutdown's first step: the scheduler, the flusher and the probes in flight are cancelled, and the intake
+    /// The shutdown's first step: the scheduler, the flusher and the probes in flight are canceled, and the intake
     /// closes, so a request's event or a report that lands later is refused and counted rather than applied after the
     /// last save. Taking the lock is the drain: an update that already holds it finishes before the flag is set.
     pub fn quiesce(&self) {

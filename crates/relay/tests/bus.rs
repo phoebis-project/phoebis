@@ -640,7 +640,7 @@ async fn after_the_head_an_sse_error_fails_a_lost_upstream_reads_incomplete_and_
             complete.error_code.as_deref(),
             complete.status
         ),
-        (Outcome::Canceled, Some("account_cancelled"), 503)
+        (Outcome::Canceled, Some("account_canceled"), 503)
     );
     up.release();
     up.shutdown().await;
@@ -1008,7 +1008,7 @@ async fn a_request_whose_account_left_after_its_head_completes_with_the_legs_sou
         ),
         (
             Outcome::Canceled,
-            Some("account_cancelled"),
+            Some("account_canceled"),
             Some(DiagnosticsSource::Router)
         ),
         "the upstream compared the leg's body before the account left"

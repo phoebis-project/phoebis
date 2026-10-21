@@ -5,7 +5,7 @@
     "kind": "oauth",
     "label": "Business",
     "enabled": true,
-    "cancelled": false,
+    "canceled": false,
     "state": "ready",
     "funding_retry_at": null,
     "identity": {

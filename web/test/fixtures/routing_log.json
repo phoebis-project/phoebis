@@ -1579,7 +1579,7 @@
         "detail": {
           "ends_at": 1791807400000,
           "wind_down_minutes": 1440,
-          "end_source": "cancelled"
+          "end_source": "canceled"
         }
       },
       {

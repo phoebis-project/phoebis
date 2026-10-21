@@ -63,7 +63,7 @@ export interface Credential {
 
 export interface Subscription {
   billingType: string;
-  /** The operator's saved end, standing only while `Account.cancelled` is set; null otherwise. */
+  /** The operator's saved end, standing only while `Account.canceled` is set, and null otherwise. */
   endsAt: string | null;
   organizationType: string;
   /** `max` or `pro` from the profile's account flags; null when the document reports neither. */
@@ -105,7 +105,7 @@ export interface AccountSlowDown {
 
 export interface Account {
   /** Set only on an OAuth account; an api_key account always reads false. */
-  cancelled: boolean;
+  canceled: boolean;
   cooldowns: Cooldown[];
   credential: Credential;
   email: string | null;
@@ -1220,7 +1220,7 @@ export interface RecordCandidate {
   runwayMs: number | null;
   score: number | null;
   state: string;
-  term: { cancelled: boolean; ended: boolean; endsAt: string | null; since: string | null; trialEndsAt: string | null; windingDown: boolean } | null;
+  term: { canceled: boolean; ended: boolean; endsAt: string | null; since: string | null; trialEndsAt: string | null; windingDown: boolean } | null;
   tier: [number, number, number];
   verdict: string;
   /**

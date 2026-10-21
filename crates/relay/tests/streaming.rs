@@ -1143,7 +1143,7 @@ fn committed_then_gated() -> Respond {
 }
 
 #[tokio::test]
-async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_account_cancelled() {
+async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_account_canceled() {
     let captured = common::Captured::default();
     let _log = captured.install();
     let up = FakeUpstream::start(vec![Rule {
@@ -1168,12 +1168,12 @@ async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_accou
     let complete = completion(&mut sub).await;
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
-        (phoebis_bus::Outcome::Canceled, Some("account_cancelled"))
+        (phoebis_bus::Outcome::Canceled, Some("account_canceled"))
     );
     assert_cut_warned(
         &captured.text(),
         &complete,
-        "account_cancelled",
+        "account_canceled",
         "io: the bound account was disconnected",
     );
     up.release();

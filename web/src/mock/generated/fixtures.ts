@@ -14,7 +14,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "kind": "oauth",
       "label": "Business",
       "enabled": true,
-      "cancelled": false,
+      "canceled": false,
       "state": "ready",
       "funding_retry_at": null,
       "identity": {
@@ -298,7 +298,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "kind": "oauth",
           "label": "Business",
           "enabled": true,
-          "cancelled": false,
+          "canceled": false,
           "state": "ready",
           "funding_retry_at": null,
           "identity": {
@@ -441,7 +441,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "kind": "api_key",
           "label": "Direct",
           "enabled": true,
-          "cancelled": false,
+          "canceled": false,
           "state": "ready",
           "funding_retry_at": null,
           "identity": null,
@@ -474,7 +474,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "kind": "oauth",
           "label": "Seat",
           "enabled": true,
-          "cancelled": false,
+          "canceled": false,
           "state": "ready",
           "funding_retry_at": null,
           "identity": {
@@ -10674,7 +10674,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "term": {
             "since": 1773482400000,
             "trial_ends_at": null,
-            "cancelled": false,
+            "canceled": false,
             "ends_at": null,
             "winding_down": false,
             "ended": false
@@ -10757,7 +10757,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "term": {
             "since": null,
             "trial_ends_at": null,
-            "cancelled": false,
+            "canceled": false,
             "ends_at": null,
             "winding_down": false,
             "ended": false
@@ -16525,7 +16525,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "ends_at": 1791807400000,
             "wind_down_minutes": 1440,
-            "end_source": "cancelled"
+            "end_source": "canceled"
           }
         },
         {

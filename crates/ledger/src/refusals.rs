@@ -1,7 +1,7 @@
 //! The codes that flag a request row as refused, and the ledger's reading of a row against them. Each code names a
 //! refusal the router issues before it asks any account, for the client's or a policy's cause.
 //!
-//! The codes that stay in the figures and off the list are `account_cancelled`, `accounts_unavailable`,
+//! The codes that stay in the figures and off the list are `account_canceled`, `accounts_unavailable`,
 //! `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, since the router's own standing
 //! caused them, and `accounts_exhausted`, `model_rejected` and every upstream code, since an account was asked.
 

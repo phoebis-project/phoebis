@@ -535,8 +535,8 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       score: null,
       state: stateAt(a, at),
       term: a.kind === 'api_key' || !sub
-        ? { cancelled: false, ended: false, endsAt: null, since: null, trialEndsAt: null, windingDown: false }
-        : { cancelled: a.cancelled === true, ended: false, endsAt: sub.endsAt, since: sub.since, trialEndsAt: sub.trialEndsAt, windingDown: endsAt !== null && endsAt - at <= pool.windDownMinutes * MINUTE },
+        ? { canceled: false, ended: false, endsAt: null, since: null, trialEndsAt: null, windingDown: false }
+        : { canceled: a.canceled === true, ended: false, endsAt: sub.endsAt, since: sub.since, trialEndsAt: sub.trialEndsAt, windingDown: endsAt !== null && endsAt - at <= pool.windDownMinutes * MINUTE },
       tier: [pool.preferSubscription ? (a.kind === 'api_key' ? 2 : overage ? 1 : 0) : 0, m.priority, overage ? 1 : 0],
       verdict: obstacle ? 'out' : 'eligible',
       windows,

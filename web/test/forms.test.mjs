@@ -252,7 +252,7 @@ test('ticking cancelled leaves the end as typed, unticking clears it, and the fo
   assert.equal(d.subscriptionEndRefusal({ cancelled: false, endsAt: '2026-10-05T12:00' }), 'An end is saved only with Cancelled ticked.');
   assert.deepEqual(d.accountPatchOf(typed), { cancelled: true, subscriptionEndsAt: new Date('2026-10-05T12:00').toISOString() });
   assert.deepEqual(d.accountPatchOf({ cancelled: false, endsAt: '' }), { cancelled: false, subscriptionEndsAt: null });
-  const saved = d.decodeAccount({ ...body, cancelled: true, subscription: { ...body.subscription, ends_at: Date.parse('2026-10-05T12:00:00.000Z') } });
+  const saved = d.decodeAccount({ ...body, canceled: true, subscription: { ...body.subscription, ends_at: Date.parse('2026-10-05T12:00:00.000Z') } });
   const reopened = d.subscriptionEndFormOf(saved);
   assert.equal(reopened.cancelled, true);
   assert.equal(new Date(reopened.endsAt).toISOString(), '2026-10-05T12:00:00.000Z', 'a cancelled account opens with the end it was saved with');

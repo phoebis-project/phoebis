@@ -103,11 +103,11 @@ test('the accounts list carries the poll standing and no usage route is read', a
 
 test('updateAccount is one PATCH that carries the cancelled flag and the end in milliseconds', async () => {
   const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
-  const calls = stub(() => answer(200, { ...body, cancelled: true }));
+  const calls = stub(() => answer(200, { ...body, canceled: true }));
   const end = '2026-10-19T09:15:00.000Z';
   const account = await new HttpApi().updateAccount('business', { cancelled: true, subscriptionEndsAt: end });
-  assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['PATCH', '/admin/accounts/business', { cancelled: true, subscription_ends_at: Date.parse(end) }]);
-  assert.equal(account.cancelled, true, 'the answer decodes as the account');
+  assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['PATCH', '/admin/accounts/business', { canceled: true, subscription_ends_at: Date.parse(end) }]);
+  assert.equal(account.canceled, true, 'the answer decodes as the account');
 });
 
 test('an account edit sends the revision it read as expected_revision, and none for a save that read no row', async () => {
@@ -123,9 +123,9 @@ test('an account edit sends the revision it read as expected_revision, and none 
   assert.deepEqual(
     calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body)]),
     [
-      ['PATCH', '/admin/accounts/business', { cancelled: true, subscription_ends_at: Date.parse(end), expected_revision: 3 }],
+      ['PATCH', '/admin/accounts/business', { canceled: true, subscription_ends_at: Date.parse(end), expected_revision: 3 }],
       ['PATCH', '/admin/accounts/business', { label: 'x', expected_revision: 3 }],
-      ['PATCH', '/admin/accounts/business', { cancelled: true, subscription_ends_at: Date.parse(end) }],
+      ['PATCH', '/admin/accounts/business', { canceled: true, subscription_ends_at: Date.parse(end) }],
       ['PATCH', '/admin/accounts/business', { label: 'x' }],
     ],
   );

@@ -1089,13 +1089,13 @@ account in overage.
 
 ## Subscription end
 
-An operator can mark an OAuth account cancelled and save the end it stops serving at. The account form opens the end
-empty for a running plan, and the operator types the date the provider's billing page shows once the plan is cancelled.
-A trial end still ahead counts as an end the same way, even on an account nobody has cancelled.
+An operator can mark an OAuth account canceled and save the end it stops serving at. The account form opens the end
+empty for a running plan, and the operator types the date the provider's billing page shows once the plan is canceled.
+A trial end still ahead counts as an end the same way, even on an account nobody has canceled.
 
 Inside `wind_down_minutes` (default 30) of its end, an account is no destination for any move, leaves the set a fresh
 placement keeps for its fit, takes a fresh session only as the last resort, and a cold pin moves off it once another
 account can serve ([Moves](#moves)). A warm session stays (the **Drain** rule of [Moves](#moves)). With
-`wind_down_minutes` at 0 nothing happens before the end. Past the end, a cancelled account is the obstacle
+`wind_down_minutes` at 0 nothing happens before the end. Past the end, a canceled account is the obstacle
 `subscription_ended`, and the upstream refuses the dead credential, so the session's next request fails over to a
 sibling.

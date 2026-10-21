@@ -568,7 +568,7 @@ impl Publish {
             }
         }
         // The API answering under another snapshot is the alias moving; one refresh brings the listing up to it.
-        // A body that failed or was cancelled may have named a model from a partial or misleading answer.
+        // A body that failed or was canceled may have named a model from a partial or misleading answer.
         if matches!(end, BodyEnd::Complete) {
             if let (Some(resolved), Some(served)) = (
                 self.outcome.canonical_model.as_deref(),
@@ -588,7 +588,7 @@ impl Publish {
         // The error's own words for a body the upstream or the account's cancel ended short. A stream that carried an
         // `error` event ended in the upstream's own words, which its code already names.
         let words = match (end, &stream_error) {
-            (BodyEnd::Cancelled, _) => Some(cancelled().to_string()),
+            (BodyEnd::Canceled, _) => Some(canceled().to_string()),
             (BodyEnd::Failed { text, .. }, None) => Some(text.clone()),
             _ => None,
         };
@@ -598,7 +598,7 @@ impl Publish {
             }
             (BodyEnd::Complete, None) => None,
             (BodyEnd::Complete, Some(error)) => Some((Outcome::Failed, Some(error))),
-            (BodyEnd::Cancelled, _) => Some((Outcome::Canceled, Some("account_cancelled".into()))),
+            (BodyEnd::Canceled, _) => Some((Outcome::Canceled, Some("account_canceled".into()))),
             (BodyEnd::ClientGone, _) => Some((Outcome::Canceled, Some("client_gone".into()))),
             (BodyEnd::Failed { .. }, Some(error)) => Some((Outcome::Failed, Some(error))),
             (BodyEnd::Failed { cut, .. }, None) if committed => {
@@ -720,7 +720,7 @@ impl ReturnToPool for Conn {
 
 /// Everything the body task needs once the head has been forwarded.
 pub(crate) struct Relayed<C> {
-    /// Cancelled when the account this body belongs to is disconnected or deleted.
+    /// Canceled when the account this body belongs to is disconnected or deleted.
     pub cancel: CancellationToken,
     pub checkin: Checkin,
     pub decoder: Option<Box<dyn Decoder>>,
@@ -764,7 +764,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                         }
                         match send(&tx, &cancel, Ok(piece)).await {
                             Delivery::Delivered => {}
-                            Delivery::Cancelled => break 'body BodyEnd::Cancelled,
+                            Delivery::Canceled => break 'body BodyEnd::Canceled,
                             Delivery::Gone => break 'body BodyEnd::ClientGone,
                         }
                     }
@@ -783,7 +783,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     _ = tx.closed() => break 'body BodyEnd::ClientGone,
                     // The credential this stream was opened with is gone, so the body ends in an error and
                     // axum closes the caller's connection rather than letting a dead account keep streaming.
-                    _ = cancel.cancelled() => break 'body BodyEnd::Cancelled,
+                    _ = cancel.cancelled() => break 'body BodyEnd::Canceled,
                     read = tokio::time::timeout(idle_timeout, reader.next_chunk()) => read,
                 };
                 let next = match read {
@@ -826,7 +826,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 }
                 match send(&tx, &cancel, Ok(piece)).await {
                     Delivery::Delivered => {}
-                    Delivery::Cancelled => break 'body BodyEnd::Cancelled,
+                    Delivery::Canceled => break 'body BodyEnd::Canceled,
                     Delivery::Gone => break 'body BodyEnd::ClientGone,
                 }
             }
@@ -839,7 +839,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                         publish_piece(&mut publish, &[], &tail, &mut waiting).await;
                         match send(&tx, &cancel, Ok(tail)).await {
                             Delivery::Delivered => {}
-                            Delivery::Cancelled => break 'body BodyEnd::Cancelled,
+                            Delivery::Canceled => break 'body BodyEnd::Canceled,
                             Delivery::Gone => break 'body BodyEnd::ClientGone,
                         }
                     }
@@ -855,12 +855,12 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             BodyEnd::Complete
         };
         match end {
-            BodyEnd::Cancelled => {
+            BodyEnd::Canceled => {
                 // The upstream socket goes first. A caller that stopped reading leaves the channel full, so
                 // waiting for capacity to report the end would keep a dead account's connection open for as
                 // long as that caller cares to hold it.
                 drop(reader);
-                let _ = tx.try_send(Err(cancelled()));
+                let _ = tx.try_send(Err(canceled()));
             }
             BodyEnd::ClientGone | BodyEnd::Failed { .. } => {}
             // Checking in before the sender drops is what makes the connection available again by the time the
@@ -884,7 +884,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             Some(match end {
                 BodyEnd::Complete => REFUSED,
                 BodyEnd::Failed { .. } => TRANSPORT_ERROR,
-                BodyEnd::Cancelled | BodyEnd::ClientGone => CANCELED,
+                BodyEnd::Canceled | BodyEnd::ClientGone => CANCELED,
             })
         });
         if waiting.is_empty() {
@@ -908,7 +908,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
 
 /// How the relayed body stopped, which decides what happens to the upstream connection.
 enum BodyEnd {
-    Cancelled,
+    Canceled,
     /// The caller is no longer listening.
     ClientGone,
     Complete,
@@ -948,7 +948,7 @@ impl Cut {
 }
 
 enum Delivery {
-    Cancelled,
+    Canceled,
     Delivered,
     Gone,
 }
@@ -962,7 +962,7 @@ async fn send(
     item: Result<Bytes, TransportError>,
 ) -> Delivery {
     tokio::select! {
-        _ = cancel.cancelled() => Delivery::Cancelled,
+        _ = cancel.cancelled() => Delivery::Canceled,
         sent = tx.send(item) => match sent {
             Ok(()) => Delivery::Delivered,
             Err(_) => Delivery::Gone,
@@ -1025,7 +1025,7 @@ fn decode_piece(
     }
 }
 
-fn cancelled() -> TransportError {
+fn canceled() -> TransportError {
     TransportError::Io(io::Error::new(
         io::ErrorKind::ConnectionAborted,
         "the bound account was disconnected",

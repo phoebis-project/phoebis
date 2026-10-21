@@ -90,13 +90,13 @@ pub(crate) struct ProbeResult {
 
 pub(crate) enum Exchange {
     Answered(ProbeResult),
-    Cancelled,
+    Canceled,
     TimedOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProbeOutcome {
-    Cancelled,
+    Canceled,
     Exhausted,
     Failed,
     Held,
@@ -110,7 +110,7 @@ pub enum ProbeOutcome {
 impl ProbeOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
-            ProbeOutcome::Cancelled => "cancelled",
+            ProbeOutcome::Canceled => "canceled",
             ProbeOutcome::Exhausted => "exhausted",
             ProbeOutcome::Failed => "failed",
             ProbeOutcome::Held => "held",
@@ -131,7 +131,7 @@ pub(crate) fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'
         ProbeOutcome::Migrated | ProbeOutcome::Ok if cache_read => "landed",
         ProbeOutcome::Migrated | ProbeOutcome::Ok => "cold",
         ProbeOutcome::Held => "held",
-        ProbeOutcome::Cancelled
+        ProbeOutcome::Canceled
         | ProbeOutcome::Exhausted
         | ProbeOutcome::Failed
         | ProbeOutcome::RateLimited
@@ -329,7 +329,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             // it wherever it is, and a body that keeps coming never outlives either.
             tokio::select! {
                 result = answered => Exchange::Answered(result),
-                _ = engine.cancel.cancelled() => Exchange::Cancelled,
+                _ = engine.cancel.cancelled() => Exchange::Canceled,
                 _ = tokio::time::sleep(PROBE_DEADLINE) => Exchange::TimedOut,
             }
         }
@@ -340,7 +340,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     // start. The completion stays the clock the schedule reads.
     let at = match &exchange {
         Exchange::Answered(result) => result.received_at.unwrap_or(sent),
-        Exchange::Cancelled | Exchange::TimedOut => sent,
+        Exchange::Canceled | Exchange::TimedOut => sent,
     };
     let revisions = engine.parts.pricing.revisions();
     let table = revisions.in_force(at);
@@ -447,8 +447,8 @@ impl Inner {
             tier: None,
         };
         let result = match exchange {
-            Exchange::Cancelled => {
-                record.outcome = ProbeOutcome::Cancelled;
+            Exchange::Canceled => {
+                record.outcome = ProbeOutcome::Canceled;
                 return record;
             }
             Exchange::TimedOut => {
@@ -621,7 +621,7 @@ impl Inner {
             .unwrap();
         let cold_limit = agent.timing.cold_probe_limit;
         let result = match exchange {
-            Exchange::Cancelled | Exchange::TimedOut => {
+            Exchange::Canceled | Exchange::TimedOut => {
                 self.probe_error(
                     key,
                     agent_id,
@@ -820,7 +820,7 @@ impl Inner {
     /// leaves unknown, which the ledger's recovery clears without a real request; a pinned member a leg of the
     /// probe marked for re-authentication pauses under the authentication reason; the untimed exhaustion 503, when
     /// every account of the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from
-    /// upstream retries; any other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange
+    /// upstream retries; any other 4xx is a shape the upstream refuses; a canceled, timed-out, or lost exchange
     /// (status 0) is a transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
@@ -1546,7 +1546,7 @@ mod tests {
             );
         }
         for outcome in [
-            ProbeOutcome::Cancelled,
+            ProbeOutcome::Canceled,
             ProbeOutcome::Exhausted,
             ProbeOutcome::Failed,
             ProbeOutcome::RateLimited,

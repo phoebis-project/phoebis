@@ -1615,7 +1615,7 @@ mod tests {
             pool_id: "p".into(),
             ends_at: 9_000,
             wind_down_minutes: 30,
-            end_source: "cancelled",
+            end_source: "canceled",
             restored: false,
             at: 5_000,
         })
@@ -1635,7 +1635,7 @@ mod tests {
         );
         assert_eq!(
             detail_of(&row),
-            json!({"ends_at": 9_000, "wind_down_minutes": 30, "end_source": "cancelled"})
+            json!({"ends_at": 9_000, "wind_down_minutes": 30, "end_source": "canceled"})
         );
 
         let row = event_of(&RouterEvent::SlowDownStarted {

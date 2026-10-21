@@ -2503,7 +2503,7 @@ async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
         pool_id: "main".into(),
         ends_at: opened_at + 30 * 60_000,
         wind_down_minutes: 30,
-        end_source: "cancelled",
+        end_source: "canceled",
         restored: true,
         at: NOW,
     };
@@ -2543,7 +2543,7 @@ async fn a_wind_down_a_cancellation_after_the_start_opens_lands_whenever_its_win
     // Ten minutes out under the pool's thirty-minute wind-down: the window opened twenty minutes ago, before the
     // previous run's last row, and no run announced it.
     let ends_at = NOW + 10 * 60_000;
-    h.store.set_cancelled("a", true, Some(ends_at)).unwrap();
+    h.store.set_canceled("a", true, Some(ends_at)).unwrap();
     h.router.reload().await.unwrap();
     let wind_downs = || async {
         h.db.events(0, i64::MAX, 100)

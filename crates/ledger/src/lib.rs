@@ -115,8 +115,8 @@ pub enum LedgerError {
     /// The blocking worker running the read panicked, or was dropped before it answered. This falls on the one
     /// call it happened to: `LedgerDb::read_blocking` recovers a poisoned guard, so the next read on the same
     /// `LedgerDb` runs as if nothing happened.
-    #[error("the ledger read was cancelled before it ran")]
-    ReadCancelled,
+    #[error("the ledger read was canceled before it ran")]
+    ReadCanceled,
     /// A replay's bound passed before the writer took its turn, so nothing was replayed.
     #[error("the ledger writer is held, try again")]
     WriterHeld,

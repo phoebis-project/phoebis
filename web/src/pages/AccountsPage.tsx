@@ -294,7 +294,7 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
     };
   }, []);
   const endRefusal = endForm ? subscriptionEndRefusal(endForm) : null;
-  const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
+  const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
 
   const isOauth = account.kind === 'oauth';

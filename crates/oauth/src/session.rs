@@ -25,7 +25,7 @@ pub struct PairingSession {
     pub redirect_uri: String,
     pub deadline: i64,
     pub status: PairingStatus,
-    /// When the status moved to `Confirmed`, `Cancelled`, `Expired` or `Failed`; the sweep keeps an ended session
+    /// When the status moved to `Confirmed`, `Canceled`, `Expired` or `Failed`; the sweep keeps an ended session
     /// readable for one lifetime past it.
     pub ended_at: Option<i64>,
 }
@@ -45,7 +45,7 @@ pub enum PairingStatus {
         pending: PendingIdentity,
     },
     Confirmed,
-    Cancelled,
+    Canceled,
     Expired,
     Failed(String),
 }
@@ -69,7 +69,7 @@ impl std::fmt::Debug for PairingStatus {
                 .field("pending", pending)
                 .finish(),
             PairingStatus::Confirmed => write!(f, "Confirmed"),
-            PairingStatus::Cancelled => write!(f, "Cancelled"),
+            PairingStatus::Canceled => write!(f, "Canceled"),
             PairingStatus::Expired => write!(f, "Expired"),
             PairingStatus::Failed(reason) => f.debug_tuple("Failed").field(reason).finish(),
         }
@@ -127,7 +127,7 @@ pub enum PairingError {
 #[derive(Debug, Clone)]
 pub struct Started {
     pub session: PairingSession,
-    /// The id of the caller's own pairing this start cancelled, so the route can discard its vault record.
+    /// The id of the caller's own pairing this start canceled, so the route can discard its vault record.
     pub superseded: Option<String>,
 }
 
@@ -176,7 +176,7 @@ impl PairingSessions {
             {
                 return Err(PairingError::Busy);
             }
-            end(standing, PairingStatus::Cancelled, now);
+            end(standing, PairingStatus::Canceled, now);
             superseded = Some(standing.id.clone());
         }
         let session = PairingSession {
@@ -273,7 +273,7 @@ impl PairingSessions {
     /// Claims an exchanged session for the confirmation that is about to install its credential. The status
     /// moves under this lock, so the caller holds the session for the rest of the commit: anything else that
     /// would end it, a cancellation above all, is refused from here on and cannot leave an account paired
-    /// behind a session that says it was cancelled.
+    /// behind a session that says it was canceled.
     pub fn claim_confirm(
         &self,
         id: &str,
@@ -338,11 +338,11 @@ impl PairingSessions {
             return Err(PairingError::AlreadyConsumed);
         }
         // A confirmation already holds this session and may be part way through installing the credential.
-        // Cancelling it here is what used to leave an account paired behind a cancelled session.
+        // Cancelling it here is what used to leave an account paired behind a canceled session.
         if matches!(session.status, PairingStatus::Confirming { .. }) {
             return Err(PairingError::AlreadyConsumed);
         }
-        end(session, PairingStatus::Cancelled, now);
+        end(session, PairingStatus::Canceled, now);
         Ok(())
     }
 
@@ -435,15 +435,15 @@ mod tests {
         let sessions = PairingSessions::new();
         let redirect = "http://localhost:1/callback";
         let abandoned = sessions.start("a", "admin", redirect, 0).unwrap().session;
-        let cancelled = sessions.start("b", "admin", redirect, 0).unwrap().session;
-        sessions.cancel(&cancelled.id, "admin", 1_000).unwrap();
+        let canceled = sessions.start("b", "admin", redirect, 0).unwrap().session;
+        sessions.cancel(&canceled.id, "admin", 1_000).unwrap();
         assert_eq!(
             sessions.sweep(600_999),
             0,
-            "the cancelled one stays readable for ten minutes after it ended"
+            "the canceled one stays readable for ten minutes after it ended"
         );
         assert_eq!(sessions.sweep(601_000), 1);
-        assert!(sessions.get(&cancelled.id, "admin", 601_000).is_none());
+        assert!(sessions.get(&canceled.id, "admin", 601_000).is_none());
         assert_eq!(
             sessions.sweep(SESSION_TTL_MS * 2 - 1),
             0,

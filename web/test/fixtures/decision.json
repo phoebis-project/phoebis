@@ -170,7 +170,7 @@
         "term": {
           "since": 1773482400000,
           "trial_ends_at": null,
-          "cancelled": false,
+          "canceled": false,
           "ends_at": null,
           "winding_down": false,
           "ended": false
@@ -253,7 +253,7 @@
         "term": {
           "since": null,
           "trial_ends_at": null,
-          "cancelled": false,
+          "canceled": false,
           "ends_at": null,
           "winding_down": false,
           "ended": false

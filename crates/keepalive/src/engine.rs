@@ -3589,7 +3589,7 @@ impl Engine {
         }
     }
 
-    /// Quiesces, waits for the probes the quiesce cancelled, saves, and only then clears: the last save carries
+    /// Quiesces, waits for the probes the quiesce canceled, saves, and only then clears: the last save carries
     /// everything the engine held at the quiesce, and a flush already in flight finishes first under the flush lock.
     /// The caller drains the listeners after this, so a probe never outlives the relay it runs through.
     pub async fn shutdown(self: &Arc<Self>) {

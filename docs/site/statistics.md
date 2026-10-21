@@ -102,7 +102,7 @@ The ledger flags a request the router refused before any account was asked, for 
 missing, malformed or doubled key header, a refused key, a client outside Claude Code, a client drift or a missing
 header the contract requires, a guardrail block, a malformed, incomplete, late or oversized body, an unsupported
 encoding, an unknown route or method, and a model the key does not allow, one the body lacks or one that is not a usable
-model name, never a keepalive probe. The router's own refusals stay in the figures, `account_cancelled`,
+model name, never a keepalive probe. The router's own refusals stay in the figures, `account_canceled`,
 `accounts_unavailable`, `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, and so does
 every outcome after an account was asked. The hourly row counts a flagged request in a map by error code and in no
 request, outcome, cache, latency or error figure, nor in the slow-down's held count or held time, so every reader of the

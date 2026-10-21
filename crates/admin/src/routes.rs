@@ -930,7 +930,7 @@ pub(crate) struct PairingStartInput {
     #[schema(example = "claude_ai")]
     pub login: Option<String>,
     /// The router reserves the id for the session and writes the row at the confirm, so a session that is
-    /// cancelled, expires or fails leaves no account.
+    /// canceled, expires or fails leaves no account.
     #[serde(default, rename = "new")]
     pub new_account: Option<NewAccountInput>,
 }
@@ -974,9 +974,9 @@ pub(crate) struct PairingSessionView {
     pub account_id: String,
     pub expires_at: i64,
     pub id: String,
-    /// One of eight values: `cancelled`, `code_received`, `confirmed`, `confirming`, `exchanged`, `expired`,
+    /// One of eight values: `canceled`, `code_received`, `confirmed`, `confirming`, `exchanged`, `expired`,
     /// `failed`, `pending`.
-    #[schema(example = "cancelled")]
+    #[schema(example = "canceled")]
     pub status: String,
 }
 
@@ -1195,7 +1195,7 @@ async fn pairing_show(
     tag = "Pairing",
     params(("id" = String, Path, description = "The pairing session's id")),
     responses(
-        (status = 204, description = "The session is cancelled."),
+        (status = 204, description = "The session is canceled."),
         (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
         (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
     ),
@@ -2154,7 +2154,7 @@ pub(crate) struct Account {
     pub label: String,
     pub enabled: bool,
     /// Set only on an `oauth` account. An `api_key` account always reads false.
-    pub cancelled: bool,
+    pub canceled: bool,
     /// `disconnected`, `funding_required`, `reauth_required`, `ready` or `unpaired`.
     #[schema(example = "disconnected")]
     pub state: String,
@@ -2171,7 +2171,7 @@ pub(crate) struct Account {
     pub overage: Option<Overage>,
     pub profile: Option<AccountProfile>,
     /// The whole object null for an `api_key` account or an `oauth` account with no profile document yet and not
-    /// cancelled.
+    /// canceled.
     pub subscription: Option<AccountSubscription>,
     /// The account's quota windows: the router's reported sample first and the ledger's samples of the last day for
     /// the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
@@ -2268,7 +2268,7 @@ pub(crate) struct AccountSubscription {
     pub since: Option<i64>,
     /// Epoch milliseconds, null when the profile lacks it.
     pub trial_ends_at: Option<i64>,
-    /// The end the operator saved, standing only while `cancelled` is set.
+    /// The end the operator saved, standing only while `canceled` is set.
     pub ends_at: Option<i64>,
 }
 
@@ -2521,7 +2521,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             organization_type: p["organization"]["organization_type"].clone(),
             rate_limit_tier: p["organization"]["rate_limit_tier"].clone(),
         });
-    // The stored flag and end read through this alone, with no profile join, so a cancelled account answers
+    // The stored flag and end read through this alone, with no profile join, so a canceled account answers
     // them even before it ever pairs.
     let term = state
         .store
@@ -2531,9 +2531,9 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .unwrap_or_default();
     let now = (state.clock)();
     let end = phoebis_routing::term::end_of(&term, now);
-    // Null until the account has paired and a profile document exists, unless the operator has cancelled it:
-    // a cancelled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
-    let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.cancelled))
+    // Null until the account has paired and a profile document exists, unless the operator has canceled it:
+    // a canceled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
+    let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.canceled))
         .then(|| match state.store.subscription(&row.id) {
             Ok(subscription) => subscription.unwrap_or_default(),
             Err(error) => {
@@ -2655,7 +2655,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         kind: kind_name(row.kind).to_string(),
         label: row.label.clone(),
         enabled: row.enabled,
-        cancelled: term.cancelled,
+        canceled: term.canceled,
         state: state_name(row.state).to_string(),
         funding_retry_at,
         identity: row.identity.as_ref().map(|identity| AccountIdentity {
@@ -3014,7 +3014,7 @@ fn state_name(state: AccountState) -> &'static str {
 
 fn reported_status(session: &PairingSession) -> &'static str {
     match session.status {
-        PairingStatus::Cancelled => "cancelled",
+        PairingStatus::Canceled => "canceled",
         PairingStatus::CodeReceived { .. } => "code_received",
         PairingStatus::Confirmed => "confirmed",
         PairingStatus::Confirming { .. } => "confirming",

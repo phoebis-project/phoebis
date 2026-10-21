@@ -9742,7 +9742,7 @@ async fn a_member_entering_its_wind_down_emits_once() {
     let store = seeded(&["a"]);
     // Forty minutes out, ten more than the pool's thirty-minute wind-down.
     let end = 1_000 + 40 * 60_000;
-    store.set_cancelled("a", true, Some(end)).unwrap();
+    store.set_canceled("a", true, Some(end)).unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),
@@ -9777,11 +9777,88 @@ async fn a_member_entering_its_wind_down_emits_once() {
                 restored,
                 at
             ),
-            ("a", "p", end, 30, "cancelled", false, inside)
+            ("a", "p", end, 30, "canceled", false, inside)
         ),
         other => panic!("the wind-down's start, not {other:?}"),
     }
     no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_member_entering_its_wind_down_before_its_trial_ends_names_the_trial_as_the_end() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    // Forty minutes out, ten more than the pool's thirty-minute wind-down, with no flag set.
+    let end = 1_000 + 40 * 60_000;
+    store
+        .set_profile(
+            "a",
+            "{}",
+            &SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_5x".into()),
+                since: Some(1),
+                trial_ends_at: Some(end),
+            },
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    no_further_event(&mut events).await;
+    now.store(end - 20 * 60_000, Ordering::SeqCst);
+    match next_event(&mut events).await {
+        RouterEvent::WindDownStarted {
+            account_id,
+            ends_at,
+            end_source,
+            ..
+        } => assert_eq!(
+            (account_id.as_str(), ends_at, end_source),
+            ("a", end, "trial")
+        ),
+        other => panic!("the wind-down's start, not {other:?}"),
+    }
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_decision_records_a_canceled_members_term_under_the_canceled_key() {
+    let store = seeded(&["a"]);
+    // Ten minutes before the pool's thirty-minute wind-down opens, so the member stays the pick.
+    let end = 1_000 + 40 * 60_000;
+    store.set_canceled("a", true, Some(end)).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let (_, record) = next_decision(&mut events).await;
+    let record = serde_json::to_value(&record).unwrap();
+    let candidate = &record["candidates"][0];
+    assert_eq!(
+        (
+            &candidate["account_id"],
+            &candidate["term"]["canceled"],
+            &candidate["term"]["ends_at"]
+        ),
+        (
+            &serde_json::json!("a"),
+            &serde_json::json!(true),
+            &serde_json::json!(end)
+        ),
+        "the record names the operator's flag as the account view does: {candidate}"
+    );
 }
 
 #[tokio::test]
@@ -9790,7 +9867,7 @@ async fn the_first_purge_after_the_start_marks_the_wind_downs_it_finds_as_restor
     let store = seeded(&["a"]);
     // Ten minutes out under the pool's thirty-minute wind-down: inside the window before the router starts.
     let end = 1_000 + 10 * 60_000;
-    store.set_cancelled("a", true, Some(end)).unwrap();
+    store.set_canceled("a", true, Some(end)).unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
@@ -9809,10 +9886,10 @@ async fn the_first_purge_after_the_start_marks_the_wind_downs_it_finds_as_restor
 }
 
 #[tokio::test]
-async fn a_member_past_its_cancelled_end_emits_no_wind_down() {
+async fn a_member_past_its_canceled_end_emits_no_wind_down() {
     let store = seeded(&["a"]);
     // The subscription ended an hour before the router starts: past its end, not entering a wind-down.
-    store.set_cancelled("a", true, Some(1_000 - HOUR)).unwrap();
+    store.set_canceled("a", true, Some(1_000 - HOUR)).unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),

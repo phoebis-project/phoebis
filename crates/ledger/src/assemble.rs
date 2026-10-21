@@ -530,7 +530,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         if last.upstream_status.is_none()
             && matches!(
                 complete.error_code.as_deref(),
-                Some("account_cancelled" | "client_gone")
+                Some("account_canceled" | "client_gone")
             )
         {
             last.outcome = "canceled".into();
@@ -1286,7 +1286,7 @@ mod tests {
                 Some("a"),
                 Outcome::Canceled,
                 503,
-                Some("account_cancelled"),
+                Some("account_canceled"),
             ))
             .pop()
         else {
@@ -1366,7 +1366,7 @@ mod tests {
                 Some("a"),
                 Outcome::Canceled,
                 503,
-                Some("account_cancelled"),
+                Some("account_canceled"),
             ))
             .pop()
         else {
@@ -1375,7 +1375,7 @@ mod tests {
         assert_eq!(
             attempts[0].outcome.as_str(),
             "canceled",
-            "cancelled after the head"
+            "canceled after the head"
         );
     }
 

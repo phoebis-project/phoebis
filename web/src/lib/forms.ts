@@ -401,10 +401,10 @@ export interface SubscriptionEndForm {
 }
 
 export function subscriptionEndFormOf(
-  account: Pick<Account, 'cancelled' | 'revision' | 'subscription'>,
+  account: Pick<Account, 'canceled' | 'revision' | 'subscription'>,
 ): SubscriptionEndForm {
-  const end = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
-  return { cancelled: account.cancelled, endsAt: end ? toLocalInput(Date.parse(end)) : '', revision: account.revision };
+  const end = account.canceled ? (account.subscription?.endsAt ?? null) : null;
+  return { cancelled: account.canceled, endsAt: end ? toLocalInput(Date.parse(end)) : '', revision: account.revision };
 }
 
 /**

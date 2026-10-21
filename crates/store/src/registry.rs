@@ -685,7 +685,7 @@ pub struct SubscriptionTerm {
     pub account_id: String,
     pub since: Option<i64>,
     pub trial_ends_at: Option<i64>,
-    pub cancelled: bool,
+    pub canceled: bool,
     pub ends_at: Option<i64>,
     /// The profile's rate-limit tier, which prices the router's own use of the account's windows.
     pub tier: Option<String>,
@@ -876,7 +876,7 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             terms: tx
                 .prepare(
-                    "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
+                    "SELECT id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
                      subscription_tier, kind, profile_json FROM accounts ORDER BY id",
                 )?
                 .query_map([], |r| {
@@ -888,7 +888,7 @@ impl Store {
                         account_id: r.get(0)?,
                         since: r.get(1)?,
                         trial_ends_at: r.get(2)?,
-                        cancelled: r.get(3)?,
+                        canceled: r.get(3)?,
                         ends_at: r.get(4)?,
                         tier,
                         usage_based,
@@ -1622,14 +1622,14 @@ impl Store {
         let absent = || StoreError::AccountNotFound(u.id.to_string());
         let before = crate::accounts::account_in(&tx, u.id)?.ok_or_else(absent)?;
         let term = crate::accounts::subscription_term_in(&tx, u.id)?.ok_or_else(absent)?;
-        let cancelled = u.cancellation.map(|(cancelled, _)| cancelled);
+        let canceled = u.cancellation.map(|(canceled, _)| canceled);
         let ends_at = u.cancellation.and_then(|(_, ends_at)| ends_at);
         let (state, cause) = u.state.unzip();
-        // The end goes with the flag, as `set_cancelled` writes them: dropped the moment the flag is off.
+        // The end goes with the flag, as `set_canceled` writes them: dropped the moment the flag is off.
         let updated = tx.execute(
             "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), \
              state_cause = COALESCE(?11, state_cause), enabled = COALESCE(?7, enabled), \
-             cancelled = COALESCE(?8, cancelled), \
+             canceled = COALESCE(?8, canceled), \
              subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at WHEN ?8 THEN ?9 ELSE NULL END, \
              revision = revision + 1, updated_at = ?4 \
              WHERE id = ?1 AND incarnation = ?10 AND lifecycle_generation = ?5 AND revision = ?6",
@@ -1641,7 +1641,7 @@ impl Store {
                 u.lifecycle_generation as i64,
                 u.expected_revision as i64,
                 u.enabled,
-                cancelled,
+                canceled,
                 ends_at,
                 u.incarnation as i64,
                 cause,
@@ -2400,8 +2400,8 @@ fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
 /// row holds the label, the state and the switch, and the term row the flag and the end.
 fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &SubscriptionTerm) -> String {
     // As the update's `CASE` writes them: the end goes with the flag, dropped the moment the flag is off.
-    let (cancelled, ends_at) = match u.cancellation {
-        None => (term.cancelled, term.ends_at),
+    let (canceled, ends_at) = match u.cancellation {
+        None => (term.canceled, term.ends_at),
         Some((true, ends_at)) => (true, ends_at),
         Some((false, _)) => (false, None),
     };
@@ -2409,14 +2409,14 @@ fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &Subscription
         "label": before.label,
         "enabled": before.enabled,
         "state": before.state.as_str(),
-        "cancelled": term.cancelled,
+        "canceled": term.canceled,
         "subscription_ends_at": term.ends_at,
     });
     let new = serde_json::json!({
         "label": u.label,
         "enabled": u.enabled.unwrap_or(before.enabled),
         "state": u.state.map_or(before.state, |(state, _)| state).as_str(),
-        "cancelled": cancelled,
+        "canceled": canceled,
         "subscription_ends_at": ends_at,
     });
     let mut pairs = changed(&old, &new);

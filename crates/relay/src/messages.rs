@@ -58,10 +58,10 @@ use crate::classify::{
     classify, error_message, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict,
     MARGIN_MS,
 };
-use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
+use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
-    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
+    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, METHOD_NOT_ALLOWED,
     MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_CUT,
     UPSTREAM_STALLED, UPSTREAM_UNDECODABLE, UPSTREAM_UNREACHABLE,
 };
@@ -104,7 +104,7 @@ const HOLD_TICK: Duration = Duration::from_millis(250);
 /// How a wait on an account's backoff ended.
 enum Waited {
     /// The account left the router meanwhile.
-    Cancelled,
+    Canceled,
     Cleared,
     /// The request's deadline came before the backoff cleared.
     Deadline,
@@ -947,7 +947,7 @@ fn inflate_request(raw: &[u8], bound: usize) -> Result<Vec<u8>, RelayError> {
 /// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
-        Some("account_cancelled") => Outcome::Canceled,
+        Some("account_canceled") => Outcome::Canceled,
         // A probe answered on its pinned member's standing (`Exhaustion::Pinned`, the one untimed answer that
         // names an obstacle) is refused for the probe alone, whatever its siblings hold: conclusive, and no
         // exhaustion of the pool for the attention gauge or the rollups to count.
@@ -2916,7 +2916,7 @@ impl Relay {
                     retried = true;
                     continue;
                 }
-                Err(AttemptFailure::Cancelled) => {
+                Err(AttemptFailure::Canceled) => {
                     let outcome = self.outcome(
                         admitted.trace,
                         Some(admitted.key),
@@ -2928,7 +2928,7 @@ impl Relay {
                         None,
                         None,
                         admitted.client_version.clone(),
-                        Some("account_cancelled"),
+                        Some("account_canceled"),
                         pin_epoch,
                         None,
                         cache_ttl_ms(ttl),
@@ -2936,7 +2936,7 @@ impl Relay {
                     return Leg::Respond(
                         self.answer(
                             admitted.trace,
-                            ACCOUNT_CANCELLED.response(admitted.request_id),
+                            ACCOUNT_CANCELED.response(admitted.request_id),
                             outcome,
                             None,
                             ResponseFacts::default(),
@@ -3001,7 +3001,7 @@ impl Relay {
                 }
                 // The same account and the same credential once the throttle has passed.
                 Next::RetryInPlace(delay) => {
-                    if until_cancelled(tokio::time::sleep(delay), cancel)
+                    if until_canceled(tokio::time::sleep(delay), cancel)
                         .await
                         .is_none()
                     {
@@ -3016,7 +3016,7 @@ impl Relay {
                             None,
                             None,
                             admitted.client_version.clone(),
-                            Some("account_cancelled"),
+                            Some("account_canceled"),
                             pin_epoch,
                             None,
                             cache_ttl_ms(ttl),
@@ -3024,7 +3024,7 @@ impl Relay {
                         return Leg::Respond(
                             self.answer(
                                 admitted.trace,
-                                ACCOUNT_CANCELLED.response(admitted.request_id),
+                                ACCOUNT_CANCELED.response(admitted.request_id),
                                 outcome,
                                 None,
                                 ResponseFacts::default(),
@@ -3129,13 +3129,13 @@ impl Relay {
         // the prefix the drain read as if it were the whole body, and keeps its reader for the rest should the
         // verdict forward it; a body drained whole has already handed its connection back to the pool.
         let (buffered, mut reader, cut) = if matches!(head.status, 400 | 401 | 403 | 404 | 429) {
-            let Some(drained) = until_cancelled(
+            let Some(drained) = until_canceled(
                 drain_bounded(&mut reader, self.limits.idle_timeout),
                 ctx.cancel,
             )
             .await
             else {
-                return Next::Respond(self.cancelled(&ctx, &head, written_at).await);
+                return Next::Respond(self.canceled(&ctx, &head, written_at).await);
             };
             match drained {
                 Ok(Drained::Complete(buffered)) => {
@@ -3172,9 +3172,9 @@ impl Relay {
                 Err(_) => None,
             });
             let Some(result) =
-                until_cancelled(hold(reader, inspect, self.limits.hold_timeout), ctx.cancel).await
+                until_canceled(hold(reader, inspect, self.limits.hold_timeout), ctx.cancel).await
             else {
-                return Next::Respond(self.cancelled(&ctx, &head, written_at).await);
+                return Next::Respond(self.canceled(&ctx, &head, written_at).await);
             };
             match result {
                 Ok(h) => {
@@ -3345,9 +3345,9 @@ impl Relay {
                                 // The loop head answers the exhaustion past the deadline; this account is done.
                                 Waited::Deadline => break (None, None, true),
                                 // The 401's head is this attempt's, published before the verdict.
-                                Waited::Cancelled => {
+                                Waited::Canceled => {
                                     return Next::Respond(
-                                        self.cancelled_after_head(&ctx, head.status).await,
+                                        self.canceled_after_head(&ctx, head.status).await,
                                     )
                                 }
                             }
@@ -4270,19 +4270,19 @@ impl Relay {
                 // Any change wakes the waiter: the value moves to `true` at a leg's final answer alone, and a dropped
                 // sender means the request ended.
                 Some(head) => tokio::select! {
-                    slept = until_cancelled(tokio::time::sleep(slice), cancel) => slept,
+                    slept = until_canceled(tokio::time::sleep(slice), cancel) => slept,
                     _ = head.changed() => return Waited::Head,
                 },
-                None => until_cancelled(tokio::time::sleep(slice), cancel).await,
+                None => until_canceled(tokio::time::sleep(slice), cancel).await,
             };
             if slept.is_none() {
-                return Waited::Cancelled;
+                return Waited::Canceled;
             }
         }
     }
 
     /// The answer to a response that arrived for an account that is no longer there.
-    async fn cancelled(
+    async fn canceled(
         &self,
         ctx: &Responding<'_>,
         head: &ResponseHead,
@@ -4299,13 +4299,13 @@ impl Relay {
                 (self.clock)(),
             )
             .await;
-        self.cancelled_after_head(ctx, head.status).await
+        self.canceled_after_head(ctx, head.status).await
     }
 
     /// The caller's answer once the account left the router after this attempt's head was published: the request
     /// completes `canceled` and the attempt keeps the outcome its head recorded, since a second head for the same
     /// attempt would overwrite that outcome in the ledger.
-    async fn cancelled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
+    async fn canceled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
         let mut outcome = self.outcome(
             ctx.trace,
             Some(ctx.key),
@@ -4317,7 +4317,7 @@ impl Relay {
             None,
             None,
             ctx.client_version.clone(),
-            Some("account_cancelled"),
+            Some("account_canceled"),
             ctx.pin_epoch,
             None,
             ctx.cache_ttl_ms,
@@ -4328,7 +4328,7 @@ impl Relay {
         outcome.diagnostics_named = ctx.diagnostics_named;
         self.answer(
             ctx.trace,
-            ACCOUNT_CANCELLED.response(ctx.request_id),
+            ACCOUNT_CANCELED.response(ctx.request_id),
             outcome,
             None,
             ResponseFacts::default(),

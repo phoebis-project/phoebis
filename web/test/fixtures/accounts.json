@@ -7,7 +7,7 @@
         "kind": "oauth",
         "label": "Business",
         "enabled": true,
-        "cancelled": false,
+        "canceled": false,
         "state": "ready",
         "funding_retry_at": null,
         "identity": {
@@ -150,7 +150,7 @@
         "kind": "api_key",
         "label": "Direct",
         "enabled": true,
-        "cancelled": false,
+        "canceled": false,
         "state": "ready",
         "funding_retry_at": null,
         "identity": null,
@@ -183,7 +183,7 @@
         "kind": "oauth",
         "label": "Seat",
         "enabled": true,
-        "cancelled": false,
+        "canceled": false,
         "state": "ready",
         "funding_retry_at": null,
         "identity": {

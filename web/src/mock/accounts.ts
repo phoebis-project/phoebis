@@ -101,7 +101,7 @@ export const ACCOUNTS: Account[] = ([
     status: 'cooldown',
     routingEnabled: true,
     // Cancelled, with the end the operator saved before the trial's own, so the pace reads the saved one.
-    cancelled: true,
+    canceled: true,
     windows: [win('5h', 1, 25 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
     fableWindow: null,
     extraUsage: null,

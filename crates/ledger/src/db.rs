@@ -185,7 +185,7 @@ impl LedgerDb {
         let db = Arc::clone(self);
         tokio::task::spawn_blocking(move || db.read_blocking(f))
             .await
-            .map_err(|_| LedgerError::ReadCancelled)?
+            .map_err(|_| LedgerError::ReadCanceled)?
     }
 
     /// The same read on the calling thread, for the ledger task's own thread and for tests that hold no runtime
@@ -203,7 +203,7 @@ impl LedgerDb {
         // A read opens no transaction but a read one, such as `list_request_page`'s, which rolls back as it drops
         // while the panic unwinds, so a closure that panics mid-row leaves the connection as consistent as it was
         // before the call. Recovering the guard here, rather than propagating the poisoning, keeps one panicked read
-        // from turning every later read into a `ReadCancelled`.
+        // from turning every later read into a `ReadCanceled`.
         match &self.reader {
             Some(reader) => f(&reader.lock().unwrap_or_else(PoisonError::into_inner)),
             None => f(&self.writer.lock().unwrap_or_else(PoisonError::into_inner)),
@@ -1081,19 +1081,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_panicked_read_answers_read_cancelled_and_the_next_read_on_the_same_ledger_succeeds()
-    {
+    async fn a_panicked_read_answers_read_canceled_and_the_next_read_on_the_same_ledger_succeeds() {
         let db = Arc::new(LedgerDb::open_in_memory().unwrap());
         let panicked = db
             .read(|_conn| -> Result<(), LedgerError> {
                 panic!("a read closure that never means to answer");
             })
             .await;
-        assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
+        assert!(matches!(panicked, Err(LedgerError::ReadCanceled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
             43,
-            "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
+            "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
         );
     }
 

@@ -131,7 +131,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
 }
 
 /// As `snapshot_with`, but with a `SubscriptionTerm` per account, for a test over the end, the wind-down, or
-/// the cancelled obstacle.
+/// the canceled obstacle.
 fn snapshot_with_terms(pool: Pool, terms: Vec<SubscriptionTerm>) -> RegistrySnapshot {
     let mut load = load_of(pool, &[]);
     load.terms = terms;
@@ -4462,7 +4462,7 @@ fn a_probe_on_a_pin_whose_subscription_ended_answers_the_obstacle_and_moves_noth
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_500),
             tier: None,
             usage_based: false,
@@ -5586,7 +5586,7 @@ fn the_blocker_refuses_a_winding_down_account_for_the_static_tier() {
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
             usage_based: false,
@@ -6197,7 +6197,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         account_id: "a".into(),
         since: Some(0),
         trial_ends_at: None,
-        cancelled: true,
+        canceled: true,
         ends_at: Some(at),
         tier: None,
         usage_based: false,
@@ -8103,7 +8103,7 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
         account_id: account.into(),
         since: Some(0),
         trial_ends_at: None,
-        cancelled: true,
+        canceled: true,
         ends_at: Some(at),
         tier: None,
         usage_based: false,
@@ -8216,7 +8216,7 @@ fn an_unread_window_is_skipped_for_a_placement_and_reads_least_bad_for_a_move() 
     // a winds down toward its end with a cold pin the drain rule moves, b reads its 5-hour window alone, and c reads
     // both shared windows, every member on the tier.
     let mut terms = tier_terms(&["a", "b", "c"]);
-    terms[0].cancelled = true;
+    terms[0].canceled = true;
     terms[0].ends_at = Some(T + 10 * MINUTE);
     let s = snapshot_with_terms(gate_pool(), terms);
     let state = || {
@@ -8491,7 +8491,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
@@ -8537,7 +8537,7 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
             usage_based: false,
@@ -8584,7 +8584,7 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
 }
 
 #[test]
-fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_subscription_ended() {
+fn a_canceled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_subscription_ended() {
     let s = snapshot_with_terms(
         Pool {
             members: vec![("a", 0), ("b", 1)],
@@ -8603,7 +8603,7 @@ fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_su
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
@@ -8664,7 +8664,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: Some(1_000 + 10 * 60_000),
-            cancelled: false,
+            canceled: false,
             ends_at: None,
             tier: None,
             usage_based: false,
@@ -8683,7 +8683,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: Some(500),
-            cancelled: false,
+            canceled: false,
             ends_at: None,
             tier: None,
             usage_based: false,
@@ -11605,7 +11605,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(T + 10 * MINUTE),
             tier: None,
             usage_based: false,
@@ -11630,7 +11630,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
     // ending, while the drain's gate reads no candidate inside the wind-down, so its line names no list.
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms {
-        term.cancelled = true;
+        term.canceled = true;
         term.ends_at = Some(T + 2 * HOUR);
     }
     let s = snapshot_with_terms(wind_down_gate_pool(180), terms);
@@ -11780,7 +11780,7 @@ fn a_return_to_plan_move_prefers_a_fitting_sibling() {
 #[test]
 fn a_drain_move_prefers_a_fitting_sibling() {
     let mut terms = tier_terms(&["a", "b", "c"]);
-    terms[0].cancelled = true;
+    terms[0].canceled = true;
     terms[0].ends_at = Some(T + 10 * MINUTE);
     let s = snapshot_with_terms(b_outranks_c_pool(vec![]), terms);
     let mut st = priced(vec![PinRow {
@@ -14964,7 +14964,7 @@ fn a_source_ending_inside_the_weeks_horizon_projects_to_its_end_and_runs_no_roun
     // Both pins are warm, so the drain rule leaves the ending account's pins to the shed rule.
     let run = |a_ends: Option<i64>| {
         let mut terms = tier_terms(&["a", "b"]);
-        terms[0].cancelled = a_ends.is_some();
+        terms[0].canceled = a_ends.is_some();
         terms[0].ends_at = a_ends;
         let s = snapshot_with_terms(shedding_pool(Shedding::default()), terms);
         let mut st = rounding(vec![
@@ -16895,7 +16895,7 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
             account_id: (*id).into(),
             since: None,
             trial_ends_at: None,
-            cancelled: false,
+            canceled: false,
             ends_at: None,
             tier: Some(TIER.into()),
             usage_based: false,
@@ -17810,7 +17810,7 @@ fn tier_terms(ids: &[&str]) -> Vec<SubscriptionTerm> {
             account_id: (*id).into(),
             since: None,
             trial_ends_at: None,
-            cancelled: false,
+            canceled: false,
             ends_at: None,
             tier: Some(TIER.into()),
             usage_based: false,
@@ -18168,7 +18168,7 @@ fn a_candidate_inside_its_wind_down_is_no_destination_for_a_move() {
         let mut terms = tier_terms(&["a", "b", "c"]);
         for term in &mut terms {
             if ids.contains(&term.account_id.as_str()) {
-                term.cancelled = true;
+                term.canceled = true;
                 term.ends_at = Some(T + 2 * HOUR);
             }
         }
@@ -18239,7 +18239,7 @@ fn a_candidate_inside_its_wind_down_is_no_destination_for_a_move() {
 /// `wind_down_minutes`. By its figures `c` fits, its runway running far past its reset three hours out.
 fn spent_beside_an_end(wind_down_minutes: u32, end: i64, now: i64) -> Decided {
     let mut terms = tier_terms(&["a", "b", "c"]);
-    terms[2].cancelled = true;
+    terms[2].canceled = true;
     terms[2].ends_at = Some(end);
     let s = snapshot_with_terms(wind_down_gate_pool(wind_down_minutes), terms);
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
@@ -18299,7 +18299,7 @@ fn a_destination_inside_the_wind_down_is_out_of_every_order_and_the_spent_rule_d
     // b and c end six hours out, after their 5-hour resets and inside a ten-hour wind-down. By their figures both fit.
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms[1..] {
-        term.cancelled = true;
+        term.canceled = true;
         term.ends_at = Some(T + 6 * HOUR);
     }
     let s = snapshot_with_terms(wind_down_gate_pool(600), terms);
@@ -18621,7 +18621,7 @@ fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms {
         if term.account_id != "a" {
-            term.cancelled = true;
+            term.canceled = true;
             term.ends_at = Some(T + 2 * HOUR);
         }
     }
@@ -18662,7 +18662,7 @@ fn a_failed_over_landing_whose_candidates_all_end_lands_on_the_fourth_rung() {
     // short of the three hours to the reset.
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms[1..] {
-        term.cancelled = true;
+        term.canceled = true;
         term.ends_at = Some(T + 6 * HOUR);
     }
     let s = snapshot_with_terms(wind_down_gate_pool(600), terms);
@@ -18886,7 +18886,7 @@ fn an_api_key_candidate_fits_with_no_runway_under_a_full_bucket_and_reads_least_
 fn a_candidate_without_a_reading_on_a_drawn_window_or_without_a_tier_reads_least_bad() {
     // a winds down toward its end, so the drain rule moves its cold pin, and c carries no tier.
     let mut terms = tier_terms(&["a", "b"]);
-    terms[0].cancelled = true;
+    terms[0].canceled = true;
     terms[0].ends_at = Some(T + 10 * MINUTE);
     let s = snapshot_with_terms(gate_pool(), terms);
     let mut st = priced(vec![PinRow {
@@ -19379,7 +19379,7 @@ fn a_moved_row_reads_the_fired_rules_fit_step_when_an_earlier_rule_read_the_gate
     // b is inside its wind-down and c holds no reading: the spent rule's keep admits b alone, which the gate reads
     // ending, and the overage rule's keep admits both, where c reads least bad and takes the move.
     let mut terms = tier_terms(&["a", "b"]);
-    terms[1].cancelled = true;
+    terms[1].canceled = true;
     terms[1].ends_at = Some(T + 2 * HOUR);
     let s = snapshot_with_terms(wind_down_gate_pool(180), terms);
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
@@ -20570,7 +20570,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             account_id: id.into(),
             since: None,
             trial_ends_at: None,
-            cancelled: false,
+            canceled: false,
             ends_at,
             tier: Some(TIER.into()),
             usage_based: false,
@@ -24909,7 +24909,7 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
                     account_id: id.into(),
                     since: None,
                     trial_ends_at: None,
-                    cancelled: false,
+                    canceled: false,
                     ends_at: None,
                     tier: Some(tier.into()),
                     usage_based: false,
@@ -25220,7 +25220,7 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
             account_id: id.into(),
             since: None,
             trial_ends_at: None,
-            cancelled: false,
+            canceled: false,
             ends_at,
             tier: Some(TIER.into()),
             usage_based: false,
@@ -26994,7 +26994,7 @@ fn a_pin_released_past_its_saved_end_names_the_account_it_left() {
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,

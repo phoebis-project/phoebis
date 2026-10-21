@@ -577,7 +577,7 @@ async fn a_disconnect_during_a_stalled_pre_commit_read_closes_the_upstream_conne
         .unwrap();
     assert_eq!(
         resp.headers().get("x-phoebis-error-code").unwrap(),
-        "account_cancelled"
+        "account_canceled"
     );
     up.release();
     wait_for(Duration::from_secs(2), || {
@@ -744,7 +744,7 @@ async fn a_pre_write_retry_adds_one_submission_and_every_account_is_dialled_once
 }
 
 #[tokio::test]
-async fn a_cancelled_stream_releases_the_upstream_while_the_client_holds_the_body() {
+async fn a_canceled_stream_releases_the_upstream_while_the_client_holds_the_body() {
     // Past the relay's 64-deep channel, and far past what the relay's buffers and the socket's can hold
     // between them, so the fake is still writing when the account goes away.
     let filler = "x".repeat(8192);

@@ -150,7 +150,7 @@ export function decodeAccount(v: unknown): Account {
   const credential = rec(a.credential);
   const subscription = decodeSubscription(profile, sub);
   return {
-    cancelled: bool(a.cancelled),
+    canceled: bool(a.canceled),
     cooldowns: cooldowns.map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowId(str(c.window)) })),
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
@@ -619,7 +619,7 @@ function decodeRecordCandidate(v: unknown): RecordCandidate {
     partition: strOrNull(c.partition), planTier: strOrNull(c.plan_tier),
     prefix: { content: prefixEntryOf(prefix.content), contentMatch: prefixEntryOf(prefix.content_match), static: prefixEntryOf(prefix.static), staticMatch: prefixEntryOf(prefix.static_match), withMain: bool(prefix.with_main) },
     priority: num(c.priority), rank: numOrNull(c.rank), runwayMs: numOrNull(c.runway_ms), score: numOrNull(c.score), state: str(c.state),
-    term: orNull(c.term, (t) => ({ cancelled: bool(t.cancelled), ended: bool(t.ended), endsAt: isoOrNull(t.ends_at), since: isoOrNull(t.since), trialEndsAt: isoOrNull(t.trial_ends_at), windingDown: bool(t.winding_down) })),
+    term: orNull(c.term, (t) => ({ canceled: bool(t.canceled), ended: bool(t.ended), endsAt: isoOrNull(t.ends_at), since: isoOrNull(t.since), trialEndsAt: isoOrNull(t.trial_ends_at), windingDown: bool(t.winding_down) })),
     tier: tierOrZero(c.tier), verdict: str(c.verdict),
     windows: Object.fromEntries(
       Object.entries(rec(c.windows)).map(([name, w]) => {
@@ -1102,7 +1102,7 @@ export function decodeSettings(v: unknown): Settings {
 const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));
 const encodeTtlRules = (r: TtlRules) => ({ main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
 
-export const encodeAccountPatch = (p: AccountPatch) => ({ cancelled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
+export const encodeAccountPatch = (p: AccountPatch) => ({ canceled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
   auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),

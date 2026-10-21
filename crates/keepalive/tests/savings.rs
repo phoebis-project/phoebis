@@ -2049,7 +2049,7 @@ async fn a_session_holding_a_pending_probe_alone_settles_it_at_the_lapse_without
     );
 }
 
-/// A turn that ends with no answer from the upstream decides nothing about the pending probe it found: one cancelled
+/// A turn that ends with no answer from the upstream decides nothing about the pending probe it found: one canceled
 /// before its head and one a bus gap ended both hand the probe back to the lapse, which settles it under `idle_limit`
 /// at its entry's end.
 #[tokio::test]

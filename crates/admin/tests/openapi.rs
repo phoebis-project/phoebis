@@ -1167,6 +1167,45 @@ async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_n
 }
 
 #[tokio::test]
+async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_three_refusals() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let account = &schemas["Account"];
+    assert_eq!(
+        account["properties"]["canceled"]["type"], "boolean",
+        "{account}"
+    );
+    assert!(
+        account["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "canceled")),
+        "every account answer carries the flag: {account}"
+    );
+    let input = &schemas["PatchAccountInput"]["properties"]["canceled"];
+    assert!(
+        types_of(input).contains(&"boolean"),
+        "the edit takes the flag: {input}"
+    );
+    let (_, _, edit) = operations(&document)
+        .into_iter()
+        .find(|(_, _, operation)| operation["operationId"] == "account_patch")
+        .expect("the account edit");
+    let refusals = edit["responses"]["400"]["description"]
+        .as_str()
+        .unwrap_or_default();
+    for refusal in [
+        "only an oauth account is canceled",
+        "subscription_ends_at needs canceled",
+        "canceled needs subscription_ends_at",
+    ] {
+        assert!(
+            refusals.contains(&format!("`{refusal}`")),
+            "the edit's 400 lists {refusal}: {refusals}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_account_declares_its_spend_window_with_the_resets_two_sources_and_its_nullable_amounts(
 ) {
     let (_app, _up, document) = document().await;

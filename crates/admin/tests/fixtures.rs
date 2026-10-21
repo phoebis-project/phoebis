@@ -2609,7 +2609,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             pool_id: "main".into(),
             ends_at: now + 86_400_000,
             wind_down_minutes: 1_440,
-            end_source: "cancelled",
+            end_source: "canceled",
             restored: false,
             at: at(4),
         },

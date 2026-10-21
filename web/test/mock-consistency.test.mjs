@@ -121,7 +121,7 @@ const POOL_DIFF_MEMBERS = [
   'warm_sessions', 'wind_down_minutes', 'window_ceiling',
 ];
 /** The fields an account edit carries as pairs, beside the flag a staged secret sets. */
-const ACCOUNT_DIFF_MEMBERS = ['cancelled', 'enabled', 'label', 'state', 'subscription_ends_at'];
+const ACCOUNT_DIFF_MEMBERS = ['canceled', 'enabled', 'label', 'state', 'subscription_ends_at'];
 
 /** Whether one tier ranks before another, compared member by member as the engine orders them. */
 const tierBefore = (x, y) => {
@@ -1000,7 +1000,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         assert.equal(e.detail.diff.secret_replaced, true, `${e.id}: the edit staged a secret, which reads as the flag alone`);
         const account = s.accounts.find((x) => x.id === e.detail.target);
         assert.equal(account?.kind, 'api_key', `${e.id}: only an API-key account holds a secret`);
-        assert.ok(!('cancelled' in pairs) && !('subscription_ends_at' in pairs), `${e.id}: an API-key account has no end`);
+        assert.ok(!('canceled' in pairs) && !('subscription_ends_at' in pairs), `${e.id}: an API-key account has no end`);
         // The story's one edit of the account is its last, so each new value is the one the account holds.
         const held = { enabled: account.routingEnabled, label: account.label };
         for (const [field, change] of Object.entries(pairs)) if (field in held) assert.deepEqual(change.to, held[field], `${e.id}: ${field} reads the account's value`);

@@ -1351,7 +1351,7 @@ async fn a_member_past_its_saved_subscription_end_is_unavailable_and_its_pool_ex
             &parts.app,
             "/admin/accounts/business",
             &format!(
-                r#"{{"cancelled":true,"subscription_ends_at":{}}}"#,
+                r#"{{"canceled":true,"subscription_ends_at":{}}}"#,
                 common::NOW - 1
             ),
             Some(&cookie),

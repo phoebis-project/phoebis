@@ -198,7 +198,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const end = endOf(account, now);
   const plan = account.plan;
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
-  const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
+  const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
   // Windows the card holds are drawn whatever the last read said; the error takes their place only with none.
@@ -563,7 +563,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
             const period = w.periodHours * HOUR;
             const resetAt = Date.parse(w.resetsAt ?? '');
             // A cancelled account's saved end: no window opens after it, and the one that spans it stops there.
-            const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
+            const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
             const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
             const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / width) * 100 : null;
             const bars: { end: number; start: number; state: 'live' | 'next' | 'past'; stop: number }[] = [];

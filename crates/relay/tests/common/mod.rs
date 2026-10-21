@@ -191,7 +191,7 @@ pub struct Harness {
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     /// Aborts the periodic refresh loop on drop, ahead of `_stop` so no tick still due starts a fill after the
-    /// fills below are cancelled.
+    /// fills below are canceled.
     _refresh: RefreshGuard,
     /// Cancels `catalog`'s fills and retries on drop, so a retry sleeping its backoff never outlives the test.
     _stop: CatalogGuard,

@@ -89,11 +89,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (57, V57),
     (58, V58),
     (59, V59),
+    (60, V60),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 59;
+pub const SCHEMA_VERSION: u32 = 60;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -363,7 +364,7 @@ ALTER TABLE accounts ADD COLUMN trial_ends_at INTEGER;
 // on, so the sub-strategy that ordered the api_key tier under a strategy with no sample for it has nothing left to
 // order. The per-pin migration dwell gives way to the source account's dwell, so `migrated_at` leaves. A pin from
 // before the burn columns reads no burn and its last use as its last refresh; a key with no cap and an account
-// nobody cancelled read as such, and an end is stored only beside the flag. `plan_fits` is the live fit of a
+// nobody canceled read as such, and an end is stored only beside the flag. `plan_fits` is the live fit of a
 // window's size per account and window kind.
 const V25: &str = r#"
 UPDATE pools SET strategy = 'pace' WHERE strategy IN ('earliest_refresh', 'least_utilized');
@@ -850,3 +851,7 @@ ALTER TABLE pins ADD COLUMN last_classifier INTEGER NOT NULL DEFAULT 0;
 // Why the pin's stamp was written, beside its source and instant: a round's move or the failover's word. Nullable with
 // no backfill, since a stamped row from before reads as shed, the one word its readers had.
 const V59: &str = "ALTER TABLE pins ADD COLUMN shed_reason TEXT;";
+
+// The flag's column takes the spelling of the member it backs, `canceled`. A rename keeps every row's value, so no
+// row is rewritten.
+const V60: &str = "ALTER TABLE accounts RENAME COLUMN cancelled TO canceled;";

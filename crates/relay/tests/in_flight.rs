@@ -1228,7 +1228,7 @@ async fn a_client_disconnect_mid_stream_releases_both() {
 }
 
 #[tokio::test]
-async fn a_cancelled_leg_releases_its_ticket() {
+async fn a_canceled_leg_releases_its_ticket() {
     let up = FakeUpstream::start(messages(Respond::Gated(Box::new(json_200())))).await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let app = h.app.clone();
@@ -2865,7 +2865,7 @@ async fn a_probe_that_moved_the_pin_and_was_lost_before_its_commit_frees_the_pin
 }
 
 #[tokio::test]
-async fn a_cancelled_first_request_frees_the_waiter_at_once() {
+async fn a_canceled_first_request_frees_the_waiter_at_once() {
     let up = FakeUpstream::start(vec![]).await;
     up.add_credential_rule(B, "/v1/messages", json_200());
     up.push_credential_rule(B, "/v1/messages", stalled_stream());
@@ -2900,7 +2900,7 @@ async fn a_cancelled_first_request_frees_the_waiter_at_once() {
     let third = answered(sent(&h, request_for(KEY, MODEL, "s1"))).await;
     assert!(
         outcome(&third).held.is_none(),
-        "the cancelled leg's report cleared the mark"
+        "the canceled leg's report cleared the mark"
     );
     drain(third).await;
     up.release();

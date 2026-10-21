@@ -744,7 +744,7 @@ async fn the_accounts_route_answers_each_hour_s_last_window_sample_with_its_lead
 }
 
 #[tokio::test]
-async fn the_accounts_route_runs_a_cancelled_account_s_lead_to_its_end_inside_the_sampled_week() {
+async fn the_accounts_route_runs_a_canceled_account_s_lead_to_its_end_inside_the_sampled_week() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     // A day of the week gone at the sample and the end a day after it: half the span to the end has elapsed,
@@ -766,14 +766,14 @@ async fn the_accounts_route_runs_a_cancelled_account_s_lead_to_its_end_inside_th
             None,
         )
         .unwrap();
-    let cancelled = patch(
+    let canceled = patch(
         &parts.app,
         "/admin/accounts/business",
-        &format!(r#"{{"cancelled":true,"subscription_ends_at":{end}}}"#),
+        &format!(r#"{{"canceled":true,"subscription_ends_at":{end}}}"#),
         Some(&cookie),
     )
     .await;
-    assert_eq!(cancelled.status(), 200);
+    assert_eq!(canceled.status(), 200);
     let answer = json(
         get(
             &parts.app,

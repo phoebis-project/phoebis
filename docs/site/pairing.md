@@ -81,7 +81,7 @@ curl -sS -X POST http://127.0.0.1:8081/admin/oauth/sessions \
 ```
 
 The answer is `201` with the session's `id`, the `authorization_url` to open, the `redirect_uri` the session registered
-and `expires_at`. No row is written until the confirm, so a session started with `new` that is cancelled, expires or
+and `expires_at`. No row is written until the confirm, so a session started with `new` that is canceled, expires or
 fails leaves no account, and an id in use answers `409 an account with this id exists`. To pair an existing OAuth
 account, its first pairing or a re-pair, name it with `account_id` instead of `new`:
 
@@ -171,7 +171,7 @@ each calls its own route:
 | Clear cooldown | `DELETE /admin/accounts/{id}/cooldowns/{scope}` | Clears one scope of the cooling-down block: `account`, `fast` (the fast lane's rate limit), `fast_credits` (the fast lane's usage-credits refusal) or `model:{canonical}`. A scope with no row answers `404 no such cooldown`. |
 | Clear funding | `POST /admin/accounts/{id}/clear-funding` | Moves a `funding_required` account back to `ready` at once, ahead of the router's own retry after five minutes, or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter. Any other state answers `409 the account is not waiting on funding`. The console's button reads "Clear funding flag". |
 | Delete account | `DELETE /admin/accounts/{id}` | Removes the account from every pool and deletes it. Request history stays in the ledger. |
-| Disconnect | `DELETE /admin/accounts/{id}/credentials` | Deletes the credential and lands the account on `disconnected`, or on `unpaired` for an API-key account. Pool memberships and request history stay, and a pairing in flight for the account is cancelled. |
+| Disconnect | `DELETE /admin/accounts/{id}/credentials` | Deletes the credential and lands the account on `disconnected`, or on `unpaired` for an API-key account. Pool memberships and request history stay, and a pairing in flight for the account is canceled. |
 | Pair or Re-pair | `POST /admin/oauth/sessions` | Starts the pairing session described above, with `account_id` naming the account. |
 | Pause and Resume | `POST /admin/accounts/{id}/pause`, `POST /admin/accounts/{id}/resume` | Flips `enabled`. Selection skips a paused account, and its state stays as it was. |
 | Verify | `POST /admin/accounts/{id}/verify` | Sends a models request to the upstream with the stored key and answers `ok` with the upstream's `status`, `200` on success and `401` for a rejected key. It writes no state. An OAuth account answers `400 only an API-key account is verified this way`, and an API-key account without a key `409 account holds no API key`. |

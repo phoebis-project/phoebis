@@ -357,7 +357,7 @@ pub struct CreditsFacts {
 pub struct TermFacts {
     pub since: Option<i64>,
     pub trial_ends_at: Option<i64>,
-    pub cancelled: bool,
+    pub canceled: bool,
     pub ends_at: Option<i64>,
     pub winding_down: bool,
     pub ended: bool,

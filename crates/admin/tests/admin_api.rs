@@ -286,9 +286,9 @@ async fn a_pairing_started_under_a_kept_login_completes_under_each_renewed_cooki
     );
     let cookie = renewal_of(&shown, "the pairing's show");
     assert_eq!(json(shown).await["status"], "pending");
-    let cancelled = delete(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await;
-    assert_eq!(cancelled.status(), 204);
-    renewal_of(&cancelled, "the pairing's cancel");
+    let canceled = delete(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await;
+    assert_eq!(canceled.status(), 204);
+    renewal_of(&canceled, "the pairing's cancel");
 }
 
 #[tokio::test]
@@ -3978,7 +3978,7 @@ fn a_record_discarded_twice_leaves_one_lifetime_after_its_first_discard() {
         None,
     );
     vault.discard("pairing", common::NOW);
-    // A callback whose exchange returns after the owner cancelled discards the record a second time.
+    // A callback whose exchange returns after the owner canceled discards the record a second time.
     vault.discard("pairing", common::NOW + 300_000);
     assert_eq!(vault.sweep(common::NOW + 600_000 - 1), 0);
     assert_eq!(
@@ -4012,7 +4012,7 @@ async fn a_second_start_by_the_owning_session_replaces_its_standing_pairing() {
         .await,
     )
     .await;
-    assert_eq!(shown["status"], "cancelled");
+    assert_eq!(shown["status"], "canceled");
     let shown = json(
         get(
             &app,

@@ -32,7 +32,7 @@ pub(crate) struct Sent<C> {
 pub(crate) enum AttemptFailure {
     /// The account the request was bound to went away, so nothing about this attempt is actionable.
     #[error("the bound account was disconnected")]
-    Cancelled,
+    Canceled,
     /// The upstream may have received the whole request and acted on it, so it must not be sent again.
     #[error("the response was lost: {0}")]
     Lost(String),
@@ -43,7 +43,7 @@ pub(crate) enum AttemptFailure {
 
 /// `None` once the account is gone. A read that outlives a disconnect must not classify, refresh, or mark
 /// anything: the account it would act on no longer holds the credential the response was about.
-pub(crate) async fn until_cancelled<T>(
+pub(crate) async fn until_canceled<T>(
     work: impl Future<Output = T>,
     cancel: &CancellationToken,
 ) -> Option<T> {
@@ -110,7 +110,7 @@ async fn bounded<T>(
             )),
         },
         // The account was disconnected or deleted under this request; the connection goes with the future.
-        _ = cancel.cancelled() => Err(AttemptFailure::Cancelled),
+        _ = cancel.cancelled() => Err(AttemptFailure::Canceled),
     }
 }
 

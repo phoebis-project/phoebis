@@ -4822,7 +4822,7 @@ impl Task {
                 let Some(term) = snapshot.term(&member.account_id) else {
                     continue;
                 };
-                // A cancelled term past its end still reads as winding down. Its account has ended, which is no start.
+                // A canceled term past its end still reads as winding down. Its account has ended, which is no start.
                 let Some(ends_at) = term::end_of(term, now)
                     .filter(|_| term::winding_down(term, now, minutes) && !term::ended(term, now))
                 else {
@@ -4835,7 +4835,7 @@ impl Task {
                         pool_id: pool.id.clone(),
                         ends_at,
                         wind_down_minutes: minutes,
-                        end_source: if term.cancelled { "cancelled" } else { "trial" },
+                        end_source: if term.canceled { "canceled" } else { "trial" },
                         restored,
                         at: now,
                     });

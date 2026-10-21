@@ -324,7 +324,7 @@ pub(crate) struct AttemptResponse {
 #[serde(deny_unknown_fields)]
 pub(crate) struct StreamCut {
     pub at: i64,
-    /// One of `account_cancelled`, `stream_cut`, `stream_stalled` and `stream_undecodable`.
+    /// One of `account_canceled`, `stream_cut`, `stream_stalled` and `stream_undecodable`.
     #[schema(example = "stream_cut")]
     pub code: String,
     pub text: String,
@@ -417,12 +417,12 @@ pub(crate) struct Event {
     ///   with the read's `factor`, `stretch_ms`, `threshold_ms`, `demand` (share of the 5-hour window per hour) and
     ///   the window's `reset`.
     /// - `stream_interrupted`: the request's body ended short after the head, with the `code` its `error_code` carries
-    ///   (`account_cancelled`, `stream_cut`, `stream_stalled` or `stream_undecodable`), the error's own words as
+    ///   (`account_canceled`, `stream_cut`, `stream_stalled` or `stream_undecodable`), the error's own words as
     ///   `text`, `bytes_relayed`, the bytes the client received before the end, the head's `upstream_request_id`, null
     ///   where the head carried none, and the `attempt`.
     /// - `warm_prefix_expired`: the cache-map entries the purge removed for one conversation root on one account,
     ///   with the largest of them and the cause, `ttl` or `incarnation`.
-    /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `cancelled` or
+    /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `canceled` or
     ///   `trial`.
     /// - `window_cleared`: a plan window read under 1.0 after a reading at 1.0 under the same reset, with the
     ///   reading before and after and the unchanged reset, so the history no longer keeps the window spent.

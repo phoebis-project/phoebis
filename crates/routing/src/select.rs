@@ -611,7 +611,7 @@ enum Obstacle {
     Credits {
         reason: String,
     },
-    /// Cancelled and past the saved end.
+    /// Canceled and past the saved end.
     Ended,
     Operator,
 }
@@ -981,7 +981,7 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// (the account no longer serves the model for this key: it left the pool, the model was deselected, or the
 /// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
 /// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
-/// `subscription_ended` (cancelled and past its saved end), `cooldown` (a live row blocks the model on the
+/// `subscription_ended` (canceled and past its saved end), `cooldown` (a live row blocks the model on the
 /// account), `fast_rate_limit` or `fast_credits` for a fast request (one of the fast lane's two rows, or the
 /// poll's credits state, blocks it), `budget_unknown` (the member carries a budget while the ledger is degraded) or
 /// else `budget` (the member's spend is at or above its configured budget), `overage` (in overage under a policy
@@ -6500,7 +6500,7 @@ fn candidate_facts(
     let term = snapshot.term(id).map(|t| TermFacts {
         since: t.since,
         trial_ends_at: t.trial_ends_at,
-        cancelled: t.cancelled,
+        canceled: t.canceled,
         ends_at: t.ends_at,
         winding_down: term::winding_down(t, now, pool.failover.wind_down_minutes),
         ended: term::ended(t, now),
@@ -7445,7 +7445,7 @@ mod banded_tests {
                     account_id: "b".into(),
                     since: None,
                     trial_ends_at: None,
-                    cancelled: false,
+                    canceled: false,
                     ends_at: None,
                     tier: Some("default_claude_max_20x".into()),
                     usage_based: false,
@@ -7609,7 +7609,7 @@ mod banded_tests {
                     account_id: "b".into(),
                     since: None,
                     trial_ends_at: None,
-                    cancelled: true,
+                    canceled: true,
                     ends_at: Some(T - HOUR),
                     tier: Some(tier.into()),
                     usage_based: false,

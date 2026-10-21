@@ -256,7 +256,7 @@ with.
 <!-- refusal-codes: begin -->
 | Code | Status | Type | Messages | What to do |
 | --- | --- | --- | --- | --- |
-| `account_cancelled` | 503 | `api_error` | `the bound account was disconnected while the request was in flight` | Send the request again. It lands on another account. |
+| `account_canceled` | 503 | `api_error` | `the bound account was disconnected while the request was in flight` | Send the request again. It lands on another account. |
 | `accounts_at_cap` | 429 | `rate_limit_error` | `every account in this pool is at its in-flight cap` | Wait out the `Retry-After` (1 to 19 seconds) and send it again, or raise the cap ([in-flight caps](routing.md#in-flight-caps)). |
 | `accounts_exhausted` | 429 | `rate_limit_error` | `every account in this pool is rate limited` | Wait out the `Retry-After`, or add an account to the pool ([when nothing can serve](routing.md#when-nothing-can-serve)). |
 | `accounts_unavailable` | 503 | `api_error` | `no account in this pool can serve requests`, `the bound account cannot serve requests` | Read the pool's members on the Pools view ([when nothing can serve](routing.md#when-nothing-can-serve)). A key moved to another pool while the request was in flight gets the same answer with `Retry-After: 1`. Send the request again. |

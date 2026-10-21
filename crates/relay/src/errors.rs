@@ -416,10 +416,10 @@ pub fn key_refusal_response(refusal: &KeyRefusal, request_id: &str) -> Response 
 
 /// The account the request was bound to went away while it was in flight, so its credential is gone and no
 /// answer about it can be trusted.
-pub(crate) const ACCOUNT_CANCELLED: Failure = Failure {
+pub(crate) const ACCOUNT_CANCELED: Failure = Failure {
     status: StatusCode::SERVICE_UNAVAILABLE,
     error_type: "api_error",
-    code: "account_cancelled",
+    code: "account_canceled",
     message: Cow::Borrowed("the bound account was disconnected while the request was in flight"),
     retry_after: None,
     no_retry: false,
@@ -718,7 +718,7 @@ mod tests {
             RelayError::UnsupportedEncoding,
         ];
         let others = [
-            ACCOUNT_CANCELLED,
+            ACCOUNT_CANCELED,
             METHOD_NOT_ALLOWED,
             MODEL_NOT_ALLOWED,
             MODEL_REJECTED,

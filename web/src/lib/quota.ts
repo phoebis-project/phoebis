@@ -40,10 +40,10 @@ const HOUR = 3_600_000;
 const MINUTE = 60_000;
 
 /** The end the router's pace reads (`term::end_of`): the saved end while the account is cancelled, else a trial end still ahead. */
-export function endOf(account: Pick<Account, 'cancelled' | 'subscription'>, now: number): number | null {
+export function endOf(account: Pick<Account, 'canceled' | 'subscription'>, now: number): number | null {
   const term = account.subscription;
   if (!term) return null;
-  if (account.cancelled) return term.endsAt === null ? null : Date.parse(term.endsAt);
+  if (account.canceled) return term.endsAt === null ? null : Date.parse(term.endsAt);
   const trial = term.trialEndsAt === null ? Number.NaN : Date.parse(term.trialEndsAt);
   return trial > now ? trial : null;
 }
