@@ -89,3 +89,26 @@ test('the legend takes the focus as it opens and hands it back to its button on 
     container.remove();
   }
 });
+
+test('Escape closes the legend and leaves the focus on a control outside it', () => {
+  const container = document.body.appendChild(document.createElement('div'));
+  const outside = document.body.appendChild(document.createElement('button'));
+  const root = createRoot(container);
+  act(() => root.render(h(UnitLegend)));
+  try {
+    const button = container.querySelector('button[aria-label="What the units mean"]');
+    act(() => button.focus());
+    act(() => button.click());
+    assert.ok(container.querySelector('[role="dialog"]'), 'the button opens the legend');
+    // Tab moves the focus past the box to a later control, and the legend stays open behind it.
+    act(() => outside.focus());
+    act(() => document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })));
+    // Booleans, since a failed read of two jsdom elements hands the reporter the whole window to serialize.
+    assert.ok(container.querySelector('[role="dialog"]') === null, 'Escape closes the legend');
+    assert.ok(document.activeElement === outside, `the focus stays on the control outside the legend, not ${document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName}`);
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    outside.remove();
+  }
+});

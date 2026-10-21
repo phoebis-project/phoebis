@@ -40,7 +40,8 @@ export function UnitLegend() {
     boxRef.current?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      buttonRef.current?.focus({ preventScroll: true });
+      // Tab can leave the open box for a later control, which keeps the focus Escape finds there.
+      if (ref.current?.contains(document.activeElement)) buttonRef.current?.focus({ preventScroll: true });
       setOpen(false);
     };
     // The button sits inside the anchor too, so its own press toggles rather than closing and opening again.
