@@ -147,3 +147,16 @@ test('findHits matches a term with a space as plain text', () => {
 test('findHits answers no line for an empty term', () => {
   assert.deepEqual(d.findHits(['', 'a'], ''), []);
 });
+
+test('a cased letter outside the basic plane matches its lower case, each offset on the text as drawn', () => {
+  // Deseret's capitals U+10400 and U+10401 lower to U+10428 and U+10429, two code units each, and the dotted capital
+  // I before them lowers to two code units of its own.
+  const line = '\u0130 \u{10428}\u{10429} and \u{10428}';
+  assert.deepEqual(d.findHits(['plain', line], '\u{10400}\u{10401}'), [1]);
+  const starts = d.findOffsets(line, '\u{10400}');
+  assert.deepEqual(starts, [2, 11]);
+  assert.ok(
+    starts.every((at) => line.slice(at, at + 2) === '\u{10428}'),
+    'each offset starts the lower-case letter as drawn',
+  );
+});

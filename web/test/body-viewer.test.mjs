@@ -184,3 +184,38 @@ test("a find set while the box has no height scrolls once the box's observer rep
   assert.equal(box.top, 500 * 18 - 180 / 3, "the box's first height applies the held scroll");
   assert.deepEqual(activeAt(pre), [500], 'and the window read after it draws the hit');
 });
+
+test("a hit whose column lies past the box scrolls sideways to a third of the box's width, one inside it does not", (t) => {
+  const observed = [];
+  globalThis.ResizeObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+    }
+    observe(el) {
+      observed.push({ callback: this.callback, el });
+    }
+    unobserve() {}
+    disconnect() {}
+  };
+  t.after(() => delete globalThis.ResizeObserver);
+  // A hundred lines of 100 columns each, every one holding its own `hit{nn}` at column 60.
+  const lines = Array.from({ length: 100 }, (_, i) => `${'-'.repeat(60)}hit${String(i).padStart(2, '0')}`.padEnd(100, '-'));
+  const container = render(h(BodyViewer, { highlight: false, lines }));
+  const pre = container.querySelector('pre.body-block__pre');
+  const probe = container.querySelector('.body-rows > [aria-hidden="true"]');
+  pre.style.paddingLeft = '12px';
+  stubBox(pre, 180);
+  const lefts = [];
+  let left = 0;
+  Object.defineProperty(pre, 'clientWidth', { configurable: true, get: () => 300 });
+  Object.defineProperty(pre, 'scrollLeft', { configurable: true, get: () => left, set: (to) => { lefts.push(to); left = to; } });
+  // The copy of the widest line draws 1,000 px wide, 10 px a column, which the box's floor takes from the observer.
+  Object.defineProperty(probe, 'scrollWidth', { configurable: true, get: () => 1000 });
+  const floor = observed.find((o) => o.el === probe)?.callback;
+  assert.ok(floor !== undefined, 'the viewer observes its hidden copy');
+  act(() => floor([]));
+  rerender(h(BodyViewer, { find: { active: 50, term: 'hit50' }, highlight: false, lines }));
+  assert.deepEqual(lefts, [12 + 60 * 10 - 300 / 3], "the hit's left edge, past the padding, less a third of the box");
+  rerender(h(BodyViewer, { find: { active: 70, term: 'hit70' }, highlight: false, lines }));
+  assert.deepEqual(lefts, [12 + 60 * 10 - 300 / 3], 'a hit inside the box leaves it where it stands');
+});

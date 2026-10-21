@@ -733,10 +733,10 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
 - Captured bodies: the request and the response, each with Copy all and "Open wide", which draws a body of any size
   pretty-printed in a window of its lines and a streamed answer as its events, or "Not captured for this key. Enable
   body capture on the key to record the exchange." or "Bodies for this request have aged out of retention." A find field
-  under each body's head counts the lines that hold its term in any case, reading "3 of 12" or "No match". Enter,
-  Previous hit or Next hit opens the wide window on the current hit, where Enter and Shift+Enter walk the hits and wrap
-  at either end, every occurrence on the drawn rows is marked and the current hit's row is tinted. Escape or Clear find
-  empties the field. What capture stores and for how long is on [Body capture](statistics.md#body-capture).
+  under each body's head counts the lines that hold its term, whatever the letter case, reading "3 of 12" or "No match".
+  Enter, Previous hit or Next hit opens the wide window on the current hit, where Enter and Shift+Enter walk the hits
+  and wrap at either end, every occurrence on the drawn rows is marked and the current hit's row is tinted. Escape or
+  Clear find empties the field. What capture stores and for how long is on [Body capture](statistics.md#body-capture).
 
 The "Widen to" line under the request's time links this minute, this session and this account, each opening the list
 in place of the drawer over the clock minute that holds the request, its session an hour either side, or its account a

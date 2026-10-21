@@ -102,13 +102,18 @@ export function bodyLines(text: string): string[] {
 const NOT_ASCII = /[\u0080-\uffff]/;
 
 /**
- * The text lowered one code unit at a time, so an offset found in it is an offset in the text as drawn. A whole-string
- * lowering moves every offset after a character whose lower case is longer (U+0130 lowers to two code units).
+ * The text lowered one code point at a time, each to the first code point of its lower case, and kept as it is where
+ * that point is not as long, so an offset found in it is an offset in the text as drawn. A whole-string lowering moves
+ * every offset after a character whose lower case is longer (U+0130 lowers to two code points), and a lowering by code
+ * unit leaves a capital outside the basic plane (Deseret, Osage, Adlam) unmatched by its lower case.
  */
 function lowered(text: string): string {
   if (!NOT_ASCII.test(text)) return text.toLowerCase();
   let out = '';
-  for (let i = 0; i < text.length; i += 1) out += text[i].toLowerCase()[0];
+  for (const char of text) {
+    const [first] = char.toLowerCase();
+    out += first.length === char.length ? first : char;
+  }
   return out;
 }
 
