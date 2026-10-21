@@ -2072,6 +2072,19 @@ test('a session fold labels an earlier holder at generation 0 deleted, with no c
   );
 });
 
+test('a session fold labels the model grouping\'s empty key "no model", as the breakdown route does', () => {
+  const captured = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const rows = [captured, { ...captured, canonicalModel: '', id: 'r-modelless', model: '' }];
+  assert.deepEqual(
+    d.foldGroups(rows, 'model').map((g) => [g.key, g.label]).sort(),
+    [['', 'no model'], [captured.canonicalModel, captured.canonicalModel]],
+    'the group reads "no model" and keeps its empty key, as the route answers it',
+  );
+  const hourAfter = new Date(Date.parse(captured.at) + 3_600_000).toISOString();
+  const [bucket] = d.foldRequests(rows, 3_600_000, captured.at, hourAfter, 'model');
+  assert.deepEqual(bucket.groups.map((g) => g.label).sort(), [captured.canonicalModel, 'no model'], "the session view's series reads the same label");
+});
+
 test('a session view folds every page the cursor names', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const pages = [{ nextCursor: 'c1', requests: page.requests.slice(0, 2) }, { nextCursor: null, requests: page.requests.slice(2) }];

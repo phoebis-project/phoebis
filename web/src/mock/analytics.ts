@@ -418,6 +418,7 @@ const holderKeyOf = (key: string): { generation: number | null; id: string } => 
 /** The key dimension alone carries a generation in its group key; the reserved id reads out in every dimension. */
 const labelOf = (key: string, groupBy: AnalyticsGroupBy) => {
   if (key === '-') return 'unattributed';
+  if (groupBy === 'model' && key === '') return 'no model';
   const holder = holderKeyOf(key);
   if (groupBy !== 'key' || holder.generation === null) return key;
   return earlierHolderLabel(holder.id, holder.generation);

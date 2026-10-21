@@ -15248,8 +15248,8 @@ expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Ti
 await tab(m, 'Cache');
 expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
 {
-  // A request the router rejected before routing read no cache, so Cache by model lists it under no name, neither the
-  // empty label the route answers for it nor the name the breakdowns by model give it.
+  // A request the router rejected before routing read no cache, so Cache by model lists its group under neither its
+  // key nor its "no model" label, the route's word for it.
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache by model');
   const labels = [...(table?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length > 1).map((tr) => tr.children[0]?.textContent?.trim() ?? '');
   results.push({ name: '/analytics cache tab: Cache by model lists no row for the requests without a model', ok: labels.length > 0 && !labels.includes('') && !labels.includes('no model'), missing: labels.map((l) => JSON.stringify(l)) });

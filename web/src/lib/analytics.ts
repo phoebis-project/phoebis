@@ -206,21 +206,22 @@ export async function readBurn(
 }
 
 /**
- * A group's label under the page's grouping: "no model" for the model grouping's empty key (the requests the router
- * rejected before routing), else the label the route answered.
+ * A group's label: the route's under every grouping, the model grouping's empty key included, since the ledger labels
+ * that key itself.
  */
-export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>, groupBy: BurnGroup): string => (groupBy === 'model' && g.key === '' ? 'no model' : g.label);
+export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>, _groupBy: BurnGroup): string => g.label;
 
 /** An earlier holder of a key id groups under `<id>@<generation>`, which the breakdown labels by its creation. */
 const EARLIER_HOLDER = /^(.+)@(\d+)$/;
 /**
- * A burn group's label: the breakdown's for an earlier key holder and for the group without a model, `unattributed` for
- * what the router never attributed.
+ * A burn group's label. A burn point carries no label of its own, so the words are the breakdown's: an earlier key
+ * holder's, `no model` for the model grouping's empty key and `unattributed` for what the router never attributed.
  */
 function burnLabelOf(groupBy: BurnGroup, key: string): string {
   if (key === '-') return 'unattributed';
+  if (groupBy === 'model' && key === '') return 'no model';
   const holder = groupBy === 'key' ? EARLIER_HOLDER.exec(key) : null;
-  return holder === null ? modelGroupLabel({ key, label: key }, groupBy) : earlierHolderLabel(holder[1], Number(holder[2]));
+  return holder === null ? key : earlierHolderLabel(holder[1], Number(holder[2]));
 }
 
 /**
@@ -304,9 +305,9 @@ export const errorRateOf = (g: Pick<AnalyticsGroup, 'errors' | 'requests' | 'suc
  */
 export const probesRequired = (g: Pick<AnalyticsGroup, 'probes'>): boolean => g.probes.planOk > 0;
 /**
- * The probes that reached the upstream, the answered and the failed ones, the count a side's probe cost latches on: a
- * held or skipped probe never ran, so a group whose probes were all held or skipped spent nothing on probes and its
- * saving stands.
+ * The answered and the failed probes, the count a side's probe cost latches on. The wire's `failed` count also holds
+ * the exhausted and rejected probes the relay refuses itself. A held or skipped probe never ran, so a group whose
+ * probes were all held or skipped spent nothing on probes and its saving stands.
  */
 export const upstreamProbes = (g: Pick<AnalyticsGroup, 'probes'>): number => g.probes.ok + g.probes.failed;
 /**
