@@ -88,7 +88,7 @@ test('a page chunk that fails again after the reload draws its error inside the 
   assert.equal(env.reloads, 1, 'the second failure reloads nothing on its own');
   navigations.splice(0);
   act(() => failed?.querySelector('button')?.click());
-  assert.deepEqual(navigations, ['Not implemented: navigation (except hash changes)'], 'Reload asks the tab to reload');
+  assert.deepEqual(navigations.map((m) => m.startsWith('Not implemented: navigation')), [true], 'Reload asks the tab to reload');
 });
 
 const outlet = (container) => {
@@ -111,7 +111,7 @@ test('a page that throws while drawing reads as an error of its own inside the s
   assert.equal(env.reloads, 0, 'a render error reloads nothing on its own');
   navigations.splice(0);
   act(() => drawn.querySelector('[data-shell] .empty--error button')?.click());
-  assert.deepEqual(navigations, ['Not implemented: navigation (except hash changes)'], 'Reload asks the tab to reload');
+  assert.deepEqual(navigations.map((m) => m.startsWith('Not implemented: navigation')), [true], 'Reload asks the tab to reload');
 });
 
 test("a page chunk that fails with WebKit's import error reads as a failed chunk too", async () => {

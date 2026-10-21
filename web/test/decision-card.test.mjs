@@ -9,6 +9,9 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 }
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+// Node 26's own `localStorage` global prints an experimental warning on its first read, so the getter hands the
+// bundle the window's storage, which throws on a window without an origin and leaves every mock switch off.
+Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: () => window.localStorage });
 after(() => window.close());
 const { act, api, createElement: h, createRoot, DecisionCard, Descriptions, MemoryRouter } = await import('./dist/ui.js');
 const { formatFact, MockApi, rankCandidates, stationModel } = await import('./dist/api.js');
