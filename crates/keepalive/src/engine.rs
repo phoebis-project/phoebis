@@ -614,9 +614,10 @@ pub(crate) struct Agent {
     /// the probes it took the same way.
     pub kept: Vec<Kept>,
     pub last_real_at: Option<i64>,
-    /// The arrival of the last request whose completion succeeded with a 2xx status. The kept-warm gap is measured
-    /// from it rather than from `last_real_at`, so a failed turn, which stays no evidence about the cache, leaves the
-    /// retry after it the gap from the last turn that answered.
+    /// The arrival of the last request whose completion succeeded with a 2xx status, or of a turn whose completion the
+    /// engine missed, which the next arrival or a bus gap ends with none observed. The kept-warm gap is measured from
+    /// it rather than from `last_real_at`, so a failed turn, which stays no evidence about the cache, leaves the retry
+    /// after it the gap from the last turn that answered.
     pub last_answered_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
@@ -739,7 +740,8 @@ impl Agent {
         moved
     }
 
-    /// The names `follow_resolutions` reads, which an arrival looks up in the catalog's acknowledged resolution.
+    /// The names `follow_resolutions` reads on an agent with no compaction open, as an arrival leaves it once
+    /// `end_compaction` ran: the ones the arrival looks up in the catalog's acknowledged resolution.
     pub(crate) fn held_models(&self) -> BTreeSet<String> {
         let mut models = BTreeSet::from([self.canonical_model.clone()]);
         models.extend(
@@ -748,10 +750,6 @@ impl Agent {
                 .and_then(|o| o.prior.as_ref())
                 .map(|prior| prior.model.clone()),
         );
-        if let Some(compaction) = &self.compaction {
-            models.insert(compaction.canonical_model.clone());
-            models.extend(compaction.prior.as_ref().map(|prior| prior.model.clone()));
-        }
         models.extend(self.kept.iter().map(|kept| kept.canonical_model.clone()));
         models.extend(self.unanswered.iter().map(|probe| probe.model.clone()));
         models
@@ -2498,24 +2496,6 @@ impl Engine {
         if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;
         }
-        // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
-        // ends the observation. It counts as the turn that answered, or the gap this arrival's coverage reads would run
-        // from a turn before it.
-        let missed = inner.sessions[&key].agents[&agent_id]
-            .current
-            .as_ref()
-            .filter(|observation| inner.pending.contains_key(&observation.id))
-            .map(|observation| observation.started);
-        if let Some(started) = missed {
-            inner
-                .sessions
-                .get_mut(&key)
-                .unwrap()
-                .agents
-                .get_mut(&agent_id)
-                .unwrap()
-                .last_answered_at = Some(started);
-        }
         // A turn or a second compaction moves the agent past the context an open compaction was reading, so that one
         // ends as a failed one and leaves the recipe to this request's own path.
         inner.end_compaction(&key, &agent_id);
@@ -2595,6 +2575,25 @@ impl Engine {
                 .static_hash
                 .clone()
                 .zip(observed.boundaries.last().cloned());
+        }
+        // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
+        // ends the observation, and the discard below ends it without one. It counts as the turn that answered, or the
+        // gap this arrival's coverage reads would run from a turn before it. A compaction ends no turn, so it returned
+        // above and leaves the open one to its own completion.
+        let missed = inner.sessions[&key].agents[&agent_id]
+            .current
+            .as_ref()
+            .filter(|observation| inner.pending.contains_key(&observation.id))
+            .map(|observation| observation.started);
+        if let Some(started) = missed {
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .last_answered_at = Some(started);
         }
         // Taken before anything below overwrites it and consumed with the observation.
         let prior = prior_coverage(&inner.sessions[&key].agents[&agent_id], now);

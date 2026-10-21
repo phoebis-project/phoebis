@@ -2683,6 +2683,43 @@ async fn a_turn_whose_completion_the_engine_missed_starts_the_next_kept_warm_gap
     }
 }
 
+/// A compaction that arrives while a turn is open ends no turn: the turn stays pending for its own completion to
+/// decide, so the compaction moves no answered instant, and a failure of that turn the engine then observes leaves the
+/// gap to the turn that answered before it.
+#[tokio::test]
+async fn a_compaction_over_an_open_turn_moves_no_answered_instant_and_that_turns_failure_keeps_it()
+{
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let first_at = r.now();
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(200_000);
+    open_request(&r, "second", 2_000, 0);
+    r.advance_attended(10_000);
+    r.engine
+        .observe(compaction_named(&r, "compaction", "claude-sonnet-4-5"));
+    let answered_at = |r: &Rig| {
+        let (_, agents) = r.engine.persist_rows();
+        let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+        payload["last_answered_at"].as_i64()
+    };
+    assert_eq!(
+        answered_at(&r),
+        Some(first_at),
+        "the compaction left the open turn to its own completion"
+    );
+    r.engine.observe(failed(&r, "second", Some(40)));
+    assert_eq!(
+        answered_at(&r),
+        Some(first_at),
+        "the open turn's failure kept the gap on the turn that answered"
+    );
+}
+
 /// Every rollup row the rig wrote, read once the ledger has landed everything the test sent it.
 async fn final_rollups(r: &Rig) -> Vec<RollupRow> {
     r.ledger.clone().shutdown().await.unwrap();
