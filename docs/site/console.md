@@ -745,7 +745,8 @@ offers Account, Classifier, Client, Key, Effort, Kind, Model, Pool, Request clas
 only)", the last the Burn section's own grouping. While it reads User agent, "Groups (N)" opens the "User agent groups"
 box with one pattern per line, N the patterns it holds, where each pattern names a group and every other agent groups
 under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first
-product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`.
+product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`. The classifier grouping lists the requests
+with no classifier call under `none`, as the Requests view's Classifier filter names them.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
 out of the page's address. At each interval it reads the account list again and, once a new bucket of the range has

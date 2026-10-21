@@ -114,7 +114,8 @@ Dashboard's Refused tile, the Analytics view's Refused column and "Refusals by c
 block, the Requests view and a session's request list, and in `phoebis_refusals_total` ([Metrics](#metrics)). The first
 start after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the
 map, in pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old
-counts.
+counts. With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
+`stats.rollup_retention_days` keeps, so a refusal in an hour the rollup purge removed writes no row into it.
 
 ## Quota samples
 

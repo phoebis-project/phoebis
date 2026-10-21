@@ -656,6 +656,92 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
     );
 }
 
+#[test]
+fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_series_while_the_key_grouping_keeps_unattributed(
+) {
+    const HOUR_MS: i64 = 3_600_000;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, key: Option<&str>, classifier: Option<&str>| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: 1_000,
+            key_id: key.map(String::from),
+            model: "claude-sonnet-5-5".into(),
+            canonical_model: "claude-sonnet-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            classifier: classifier.map(String::from),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[], None).unwrap();
+    };
+    plant("classified", Some("k"), Some("client"));
+    // No classifier call, and no key the router attributed the request to.
+    plant("plain", None, None);
+    let live = LiveKeys::default();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let labels = |groups: &[GroupRow]| -> Vec<(String, String)> {
+        groups
+            .iter()
+            .map(|g| (g.key.clone(), g.label.clone()))
+            .collect()
+    };
+    let grouped = |group_by: &str| {
+        breakdown(
+            &apply_filter(rows.clone(), &RollupFilter::default()),
+            group_by,
+            true,
+            &live,
+            &[],
+            None,
+            &PRICES,
+            &COSTS,
+        )
+    };
+    let want = vec![
+        ("client".to_string(), "client".to_string()),
+        (UNATTRIBUTED.to_string(), "none".to_string()),
+    ];
+    assert_eq!(
+        labels(&grouped("classifier")),
+        want,
+        "the reserved id keeps its key, so a filter on it works, and reads none, as the Requests facet names it"
+    );
+    let points = series(
+        &apply_filter(rows.clone(), &RollupFilter::default()),
+        0,
+        HOUR_MS,
+        3_600,
+        "classifier",
+        true,
+        &live,
+        &[],
+        None,
+        &PRICES,
+        &COSTS,
+    )
+    .unwrap();
+    assert_eq!(
+        points.iter().map(|p| labels(&p.groups)).collect::<Vec<_>>(),
+        vec![want],
+        "the series labels its groups by the same function"
+    );
+    for group_by in ["key", "account"] {
+        let reserved = labels(&grouped(group_by))
+            .into_iter()
+            .find(|(key, _)| key == UNATTRIBUTED)
+            .map(|(_, label)| label);
+        assert_eq!(
+            reserved.as_deref(),
+            Some("unattributed"),
+            "the {group_by} grouping keeps its label for the reserved id"
+        );
+    }
+}
+
 /// The fixed filters as the analytics applied them in memory before the read took them into SQL: a key selector
 /// through `LiveKeys::selects`, and the models compared lowercased.
 fn selected_in_memory(row: &RollupRow, f: &RollupFilter, live: &LiveKeys) -> bool {
@@ -1311,7 +1397,7 @@ fn the_start_time_pass_moves_the_stored_refusals_and_leaves_a_request_after_an_a
     .unwrap();
     let now = 3_700_000 + DAY_MS;
     assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 0, now).unwrap(),
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, 0, now).unwrap(),
         1,
         "the one flagged request moved"
     );
@@ -1353,7 +1439,7 @@ fn the_start_time_pass_moves_the_stored_refusals_and_leaves_a_request_after_an_a
         .expect("the pass wrote its mark");
     assert_eq!(mark["done_at"].as_i64(), Some(now));
     assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 0, now + DAY_MS).unwrap(),
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, 0, now + DAY_MS).unwrap(),
         0,
         "the mark stands, so a second start moves nothing"
     );
@@ -1405,7 +1491,7 @@ fn the_start_time_pass_takes_a_refusal_out_of_the_row_an_older_fold_keyed_it_und
         .expect("the served request's row");
     let now = 3_700_000 + DAY_MS;
     assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 0, now).unwrap(),
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, 0, now).unwrap(),
         1
     );
     let after = all_rows(&db);
@@ -1465,7 +1551,7 @@ fn the_start_time_pass_leaves_a_refusal_older_than_the_retention_and_moves_one_i
     })
     .unwrap();
     assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 90, now).unwrap(),
+        refold_refusals(&db, &PriceRevisions::shipped(), 90, 0, now).unwrap(),
         1,
         "the request inside the window alone"
     );

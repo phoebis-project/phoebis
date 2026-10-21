@@ -2017,16 +2017,16 @@ pub fn group_of(
     }
 }
 
-/// The label of a group under any dimension but the key: the group key itself, `unattributed` for the reserved id,
-/// and "no model" for the model grouping's empty key, the requests the router rejected before routing, whose key
-/// stays empty so a filter on it keeps working.
+/// The label of a group under any dimension but the key: the group key itself, `none` for the classifier grouping's
+/// reserved id, the requests with no classifier call, as the Requests facet names them, `unattributed` for the
+/// reserved id under every other dimension, and "no model" for the model grouping's empty key, the requests the router
+/// rejected before routing. Each of these groups keeps its key, so a filter on it keeps working.
 fn label_of(key: &str, group_by: &str) -> String {
-    if key == UNATTRIBUTED {
-        "unattributed".into()
-    } else if key.is_empty() && group_by == "model" {
-        "no model".into()
-    } else {
-        key.into()
+    match (key, group_by) {
+        (UNATTRIBUTED, "classifier") => "none".into(),
+        (UNATTRIBUTED, _) => "unattributed".into(),
+        ("", "model") => "no model".into(),
+        _ => key.into(),
     }
 }
 
@@ -2741,14 +2741,20 @@ impl GroupSums {
                 entry.dollars.billed.add(&usd);
             }
         }
+        // Keyed as `priced` keys the row, since the group's shares come from `ShareSums::add` and a tier would price
+        // share windows nothing reads.
+        let price_key = RowKey {
+            tier: None,
+            ..row_key(row)
+        };
         if tokens_of(row.wasted_usage()) > 0 {
-            let wasted = price_row(prices, costs, &row_key(row), row.wasted_usage());
+            let wasted = price_row(prices, costs, &price_key, row.wasted_usage());
             entry.dollars.wasted_usd += wasted.usd.map_or(0.0, |usd| usd.total());
             entry.plan.estimated |= plan && wasted.estimated;
             entry.plan.probe_estimated |= plan_probe && wasted.estimated;
         }
         if tokens_of(row.kept_warm_usage()) > 0 {
-            let kept = price_row(prices, costs, &row_key(row), row.kept_warm_usage());
+            let kept = price_row(prices, costs, &price_key, row.kept_warm_usage());
             entry.dollars.saving_usd += kept
                 .usd
                 .map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);

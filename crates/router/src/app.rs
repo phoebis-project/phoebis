@@ -255,6 +255,7 @@ pub async fn run_until(
         &ledger_db,
         &pricing.revisions(),
         config.stats.retention_days,
+        config.stats.rollup_retention_days,
         clock(),
     )
     .context("moving the stored refusals out of their hours' counts")?;
