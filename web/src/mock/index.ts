@@ -677,6 +677,10 @@ export class MockApi implements Api {
     // Deleted either way: the router fails the session on a refused confirm.
     this.pairings.delete(pairingId);
     if (pairing === undefined) throw new ApiError(404, PAIRING_NOT_FOUND, null);
+    // The story seals legacy's stored credential under an earlier storage key, so the route refuses a re-pair's confirm
+    // until a disconnect deletes that credential.
+    const held = pairing.label === undefined ? this.accounts.find((a) => a.id === pairing.accountId) : undefined;
+    if (held?.id === 'legacy' && held.credential.refreshTokenExpiresAt !== null) throw new ApiError(409, `${held.label} holds a credential sealed under another storage key, so disconnect it before pairing again`, 'sealed_under_another_key');
     if (pairing.label !== undefined) {
       // The backstop for a create that landed between the start and the confirm.
       if (this.accounts.some((a) => a.id === pairing.accountId)) throw new ApiError(409, ACCOUNT_TAKEN, null);

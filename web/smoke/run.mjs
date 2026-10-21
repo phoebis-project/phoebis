@@ -2909,6 +2909,129 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
   results.push({ name: '/accounts/legacy greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
+{
+  // The mock seals legacy's stored credential under another storage key, so its re-pair's confirm meets the router's
+  // refusal until a disconnect deletes the credential. One mock instance backs every mount, so the row goes back as the
+  // story holds it, credential and all, and the case runs on a frozen mount of its own, where no auto reload reads the
+  // disconnected row.
+  const legacy = (await api.listAccounts()).find((a) => a.id === 'legacy');
+  const page = await mount('/accounts/legacy', { now: CLOCK_ORIGIN });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const SEALED = 'legacy holds a credential sealed under another storage key, so disconnect it before pairing again';
+  // Every pairing the dialog starts, in order, so the refused pairing and the fresh one are both known by id.
+  const sessions = [];
+  const start = api.startPairing;
+  api.startPairing = (...args) =>
+    start.apply(api, args).then((s) => {
+      sessions.push(s.id);
+      return s;
+    });
+  const link = (dlg) => dlg?.querySelector('.pairing__url')?.textContent ?? '';
+  // A closed dialog keeps its last step in the DOM, so every read below asks for an open one first.
+  const shown = (dlg) => dlg?.hasAttribute('open') === true;
+  const refusal = (dlg) => dlg?.querySelector('.callout--critical')?.textContent?.trim() ?? '';
+  const footer = (dlg) => [...(dlg?.querySelectorAll('.dialog__foot button') ?? [])].map((b) => b.textContent?.trim() ?? '');
+  const stepNow = (dlg) => {
+    const li = dlg?.querySelector('.steps [aria-current="step"]');
+    return li ? `${li.querySelector('.steps__num')?.textContent} ${li.lastChild?.textContent}` : '';
+  };
+  const openRepair = async () => {
+    [...(page.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair')?.click();
+    await page.settle(500);
+    return openDialogs(page).pop() ?? null;
+  };
+  /** Pastes the callback the dialog's link names and submits it, answering whether Confirm came up. */
+  const pasteAndSubmit = async (dlg) => {
+    const state = new URLSearchParams(link(dlg).split('?')[1] ?? '').get('state');
+    const input = dlg?.querySelector('input[placeholder^="http://localhost"]');
+    if (input) {
+      setter.call(input, `http://localhost:54545/callback?code=abc123&state=${state}`);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await page.settle(120);
+    }
+    buttonIn(dlg, 'Submit')?.click();
+    return until(page, () => buttonIn(dlg, 'Confirm')?.disabled === false);
+  };
+
+  // Any other refusal reads as before: a pairing the mock no longer holds answers its 404, and Confirm stays.
+  const gone = await openRepair();
+  const goneSubmitted = await pasteAndSubmit(gone);
+  await api.cancelPairing(sessions.at(-1));
+  buttonIn(gone, 'Confirm')?.click();
+  const goneRead = await until(page, () => refusal(gone) !== '');
+  results.push({
+    name: '/accounts/legacy a confirm refused for another reason reads its message and keeps Confirm',
+    ok: goneSubmitted && goneRead && shown(gone) && refusal(gone) === 'pairing session not found' && JSON.stringify(footer(gone)) === JSON.stringify(['Cancel', 'Confirm']),
+    missing: [`Confirm enabled ${goneSubmitted}`, `open ${shown(gone)}`, refusal(gone) || 'no refusal', footer(gone).join(', ')],
+  });
+  buttonIn(gone, 'Cancel')?.click();
+  await page.settle(200);
+
+  const dlg = await openRepair();
+  const sealedSubmitted = await pasteAndSubmit(dlg);
+  buttonIn(dlg, 'Confirm')?.click();
+  const sealedRead = await until(page, () => buttonIn(dlg, 'Disconnect') !== undefined);
+  results.push({
+    name: "/accounts/legacy a confirm that meets a credential sealed under another storage key reads the router's sentence and offers Disconnect beside Cancel",
+    ok: sealedSubmitted && sealedRead && shown(dlg) && refusal(dlg) === SEALED && JSON.stringify(footer(dlg)) === JSON.stringify(['Cancel', 'Disconnect']) && buttonIn(dlg, 'Disconnect')?.classList.contains('btn--danger') === true,
+    missing: [`Confirm enabled ${sealedSubmitted}`, `open ${shown(dlg)}`, refusal(dlg) || 'no refusal', footer(dlg).join(', '), buttonIn(dlg, 'Disconnect')?.className ?? 'no Disconnect'],
+  });
+  // A Cancel on the sealed answer gives the dialog back, and a Re-pair opens it afresh with Confirm on its second step.
+  buttonIn(dlg, 'Cancel')?.click();
+  await page.settle(200);
+  const again = await openRepair();
+  const refusedLink = link(again);
+  const againSubmitted = await pasteAndSubmit(again);
+  results.push({
+    name: '/accounts/legacy a Re-pair opened again after a Cancel on the sealed answer offers Confirm',
+    ok: againSubmitted && shown(again) && refusal(again) === '' && JSON.stringify(footer(again)) === JSON.stringify(['Cancel', 'Confirm']),
+    missing: [`Confirm enabled ${againSubmitted}`, `open ${shown(again)}`, refusal(again) || 'no refusal', footer(again).join(', ')],
+  });
+
+  buttonIn(again, 'Confirm')?.click();
+  await until(page, () => buttonIn(again, 'Disconnect') !== undefined);
+  const refused = sessions.at(-1);
+  const started = sessions.length;
+  const spy = countCalls('disconnectAccount');
+  buttonIn(again, 'Disconnect')?.click();
+  const restarted = await until(page, () => sessions.length === started + 1 && link(again) !== '');
+  spy.restore();
+  const field = again?.querySelector('input[placeholder^="http://localhost"]');
+  results.push({
+    name: '/accounts/legacy Disconnect disconnects the account the dialog pairs and starts a fresh pairing at the first step',
+    ok:
+      restarted &&
+      shown(again) &&
+      JSON.stringify(spy.calls) === JSON.stringify([['legacy']]) &&
+      stepNow(again) === '1 Log in and paste the address' &&
+      sessions.at(-1) !== refused &&
+      link(again) !== refusedLink &&
+      refusal(again) === '' &&
+      field?.value === '' &&
+      JSON.stringify(footer(again)) === JSON.stringify(['Cancel', 'Submit']),
+    missing: [`restarted ${restarted}`, `open ${shown(again)}`, `disconnectAccount ${JSON.stringify(spy.calls)}`, stepNow(again) || 'no step', `${sessions.length} pairings`, refusal(again) || 'no refusal', `field ${field?.value ?? 'absent'}`, footer(again).join(', ')],
+  });
+  // The router failed the refused pairing, so only the fresh one confirms.
+  const refusedAnswer = await api.confirmPairing(refused).then(
+    () => 'confirmed',
+    (e) => e?.status ?? String(e),
+  );
+  const fresh = sessions.at(-1);
+  const freshSubmitted = await pasteAndSubmit(again);
+  const openAtConfirm = shown(again);
+  const confirms = countCalls('confirmPairing');
+  buttonIn(again, 'Confirm')?.click();
+  const closed = await until(page, () => openDialogs(page).length === 0);
+  confirms.restore();
+  results.push({
+    name: "/accounts/legacy after the Disconnect the refused pairing's confirm answers 404 and the fresh pairing's confirm closes the dialog",
+    ok: refusedAnswer === 404 && fresh !== refused && freshSubmitted && openAtConfirm && JSON.stringify(confirms.calls) === JSON.stringify([[fresh]]) && closed,
+    missing: [`the refused pairing's confirm ${refusedAnswer}`, `fresh pairing ${fresh === refused ? 'none' : 'started'}`, `Confirm enabled ${freshSubmitted}`, `open at the confirm ${openAtConfirm}`, `confirmPairing ${confirms.calls.length} calls`, `${openDialogs(page).length} open`],
+  });
+  delete api.startPairing;
+  page.unmount();
+  api.putAccount(legacy);
+}
 await m.navigate('/accounts/secondary');
 expect('/accounts/secondary', m.text(), [
   'Cooling down',

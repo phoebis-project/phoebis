@@ -290,8 +290,12 @@ approve the router. The browser then lands on a callback address that will not l
 port. Paste the URL from the address bar, or the code alone.", with the link beside "Copy" and "Open in browser", the
 field "Paste the URL your browser landed on, or the code", `Registered redirect: {uri}`, the session's expiry and
 Submit. "Confirm" reads "Confirm the identity below to store the refresh token for this account." over the Email and
-Organization the upstream reported, and Confirm stores it. The toasts read "API key added" and `Paired {email}`. The
-flow, the states and the `curl` form are on [Pairing an account](pairing.md).
+Organization the upstream reported, and Confirm stores it. Where the router refuses the confirm because the account
+holds a credential sealed under another storage key, the step reads `{label} holds a credential sealed under another
+storage key, so disconnect it before pairing again` and offers Disconnect beside Cancel in Confirm's place. Disconnect
+deletes the sealed credential and starts a fresh pairing at the first step, "Log in and paste the address". The toasts
+read "API key added" and `Paired {email}`. The flow, the states and the `curl` form are on [Pairing an
+account](pairing.md).
 
 ## Pools
 

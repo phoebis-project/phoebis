@@ -964,6 +964,9 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<PairingPreview | null>(null);
+  // A credential sealed under another storage key refuses every confirm until a disconnect deletes it, so the footer
+  // offers Disconnect in Confirm's place.
+  const [sealed, setSealed] = useState(false);
   const now = useNow(1_000);
 
   // The start by value, so the placeholder the page rebuilds for the closed dialog every render restarts nothing. An
@@ -979,26 +982,30 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
       setCallback('');
       setError(null);
       setPreview(null);
+      setSealed(false);
     }
   }
+  // The start effect's run while the dialog stays open, which the Disconnect's fresh start reads as its close guard.
+  const live = useRef({ alive: false });
   useEffect(() => {
     if (!open) return;
     // Read back from the key the effect runs on, so the start it pairs is the one that key names.
     const target = JSON.parse(startKey) as PairingTarget;
     if ('session' in target) return;
-    let alive = true;
+    const run = { alive: true };
+    live.current = run;
     api.startPairing(target).then(
       (s) => {
         // A pairing that lands after the dialog closed would hold the account until its own deadline.
-        if (alive) setSession(s);
+        if (run.alive) setSession(s);
         else void api.cancelPairing(s.id).catch(() => undefined);
       },
       (e: unknown) => {
-        if (alive) setError(e instanceof Error ? e.message : String(e));
+        if (run.alive) setError(e instanceof Error ? e.message : String(e));
       },
     );
     return () => {
-      alive = false;
+      run.alive = false;
     };
   }, [open, startKey]);
 
@@ -1037,6 +1044,35 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
       onPaired(preview, confirmed);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof ApiError && e.code === 'sealed_under_another_key') setSealed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The router failed this pairing on the sealed answer and cancels the account's pairings on the disconnect, so the
+  // way on is a fresh pairing. The sealed answer comes on an existing slot alone, which the page opens by its id.
+  const disconnect = async () => {
+    if (!('accountId' in start)) return;
+    const { accountId } = start;
+    const run = live.current;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.disconnectAccount(accountId);
+      if (!run.alive) return;
+      const s = await api.startPairing({ accountId });
+      if (!run.alive) {
+        void api.cancelPairing(s.id).catch(() => undefined);
+        return;
+      }
+      setSession(s);
+      setStep(1);
+      setCallback('');
+      setPreview(null);
+      setSealed(false);
+    } catch (e) {
+      if (run.alive) setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -1058,6 +1094,15 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
             </Button>
             <Button variant="primary" disabled={!session || !callback.trim() || busy || expired} onClick={submit}>
               {busy ? 'Checking…' : 'Submit'}
+            </Button>
+          </>
+        ) : sealed ? (
+          <>
+            <Button variant="ghost" onClick={dismiss}>
+              Cancel
+            </Button>
+            <Button variant="danger" disabled={busy} onClick={disconnect}>
+              Disconnect
             </Button>
           </>
         ) : (
