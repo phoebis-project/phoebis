@@ -13481,8 +13481,7 @@ m.unmount();
     });
   }
   {
-    // The request refused before it resolved a model records an empty one, which the row still draws as a model link.
-    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/routing-log\?models=[^&]*&range=24h$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions$/ };
+    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/routing-log\?models=[^&]+&range=24h$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions$/ };
     const wrong = [];
     const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
     const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
@@ -13510,6 +13509,19 @@ m.unmount();
       name: '/routing-log every entity in a row is a link with the route of its kind',
       ok: wrong.length === 0 && links.length > 50 && links.every((h) => Object.values(ROUTE).some((r) => r.test(h))) && factLinks.length > 0,
       missing: [`${links.length} links`, ...wrong.slice(0, 8), ...factLinks.slice(0, 3)],
+    });
+    // The router records an empty model for the request it refused before it resolved one, `req_6c3a9e27-5b1` in
+    // `web/src/mock/requests.ts`.
+    const refused = trs(m).find((tr) => tr.getAttribute('data-row') === 'req_6c3a9e27-5b1/1');
+    const refusedRead = {
+      dash: cell(refused, 'model')?.querySelector('.muted')?.textContent ?? null,
+      modelLinks: [...(refused?.querySelectorAll('a') ?? [])].filter((a) => (a.getAttribute('href') ?? '').startsWith('/routing-log?models=')).length,
+      under: refused?.querySelector('.routing-log__model-under') ? 1 : 0,
+    };
+    results.push({
+      name: '/routing-log a request refused before it resolved a model reads a dash in its Model cell and draws no model link',
+      ok: refused !== undefined && JSON.stringify(refusedRead) === JSON.stringify({ dash: '-', modelLinks: 0, under: 0 }),
+      missing: [refused ? JSON.stringify(refusedRead) : 'no row for req_6c3a9e27-5b1'],
     });
   }
   {

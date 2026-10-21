@@ -299,7 +299,9 @@ function AccountCell({ row }: { row: RoutingLogRow }) {
 
 /** A catalog change that names one model draws it as the row's model. */
 const modelOf = (row: RoutingLogRow) => {
-  if (row.model !== null || row.type !== 'event' || row.kind !== 'catalog_changed') return row.model;
+  // The router records an empty model for a request it refused before it resolved one, which names no model to draw.
+  const model = row.model === '' ? null : row.model;
+  if (model !== null || row.type !== 'event' || row.kind !== 'catalog_changed') return model;
   const named = [row.detail.added, row.detail.removed].flatMap((v) => (Array.isArray(v) ? v : []));
   return named.length === 1 && typeof named[0] === 'string' ? named[0] : null;
 };

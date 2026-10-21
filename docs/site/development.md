@@ -73,8 +73,8 @@ runner's temporary directory, and locally the directory has to lie outside the r
 
 `web/e2e/views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs
 in, then per theme visits the thirteen views `VIEWS` lists (the dashboard, quota, the quota windows section, accounts,
-pools, keys, models, requests, analytics, the analytics cache warming tab, sessions, settings and the routing log, two
-of them in the mock pass alone), waits for one element per view, asserts the document title, records every console
+pools, keys, guardrails, requests, analytics, the analytics cache warming tab, sessions, settings and the routing log,
+two of them in the mock pass alone), waits for one element per view, asserts the document title, records every console
 error and page error, writes a full-page screenshot to `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`, and runs the layout
 assertions its README lists, one function each, exiting non-zero with the list of failures. The README beside the
 script, [web/e2e/README.md](https://github.com/daystrom-labs/phoebis/blob/main/web/e2e/README.md), lists every assertion
