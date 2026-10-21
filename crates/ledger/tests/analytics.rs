@@ -4053,11 +4053,13 @@ fn a_classifier_row_reads_zero_in_the_totals_and_session_series_and_its_price_na
         "the classifier row's price names its reason: {marked:?}"
     );
     assert!(
-        marked
-            .shares
-            .as_ref()
-            .is_some_and(|shares| shares.values().all(|share| *share == Some(0.0))),
-        "the classifier row's price shares nothing: {marked:?}"
+        marked.shares.as_ref().is_some_and(|shares| {
+            [FIVE_HOUR, SEVEN_DAY]
+                .iter()
+                .all(|window| shares.get(window) == Some(&Some(0.0)))
+                && shares.values().all(|share| *share == Some(0.0))
+        }),
+        "the classifier row's price shares nothing on either window: {marked:?}"
     );
     let plain = priced("b");
     assert_eq!(
