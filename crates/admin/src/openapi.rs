@@ -1159,4 +1159,14 @@ mod tests {
             wasted: Some(0.4),
         });
     }
+
+    #[test]
+    fn a_build_holding_a_byte_no_header_carries_answers_unknown_in_the_build_header() {
+        assert_eq!(super::build_value("0123abc\n4567def"), "unknown");
+        assert_eq!(
+            super::build_value("0123abc4567def"),
+            "0123abc4567def",
+            "a build every header carries is its own value"
+        );
+    }
 }
