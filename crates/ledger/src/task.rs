@@ -560,8 +560,9 @@ async fn land_all(ledger: &Ledger, records: Vec<Record>) {
     }
 }
 
-/// `ms` as the UTC time a log line names, or the raw milliseconds for one out of range.
-pub(crate) fn utc_stamp(ms: i64) -> String {
+/// `ms` as `YYYY-MM-DD HH:MM:SS UTC`, the one spelling the ledger's and the keepalive's log lines print, or the raw
+/// milliseconds for one out of range.
+pub fn utc_stamp(ms: i64) -> String {
     jiff::Timestamp::from_millisecond(ms)
         .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|_| ms.to_string())

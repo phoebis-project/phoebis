@@ -1496,13 +1496,6 @@ impl Engine {
     }
 }
 
-/// `ms` as the UTC time a log line names, or the raw milliseconds for one out of range.
-pub(crate) fn utc_stamp(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|_| ms.to_string())
-}
-
 impl Inner {
     /// A fresh engine's own state, and the fixture a unit test builds one agent onto: the one place every field
     /// is named, so a field this struct gains needs no second literal to keep in step.
@@ -1867,7 +1860,7 @@ impl Inner {
             tracing::info!(
                 key = %key.0,
                 agent = %agent_id,
-                expires = %utc_stamp(expires),
+                expires = %phoebis_ledger::utc_stamp(expires),
                 late_ms = now - expires,
                 "a paused keepalive recipe's entry expired, so its prompt was dropped"
             );
@@ -1877,7 +1870,7 @@ impl Inner {
         tracing::info!(
             key = %key.0,
             agent = %agent_id,
-            expires = %utc_stamp(expires),
+            expires = %phoebis_ledger::utc_stamp(expires),
             late_ms = now - expires,
             "a keepalive recipe lapsed before its probe, so the probe was skipped"
         );
@@ -2522,10 +2515,10 @@ impl Engine {
         // A turn or a second compaction moves the agent past the context an open compaction was reading, so that one
         // ends as a failed one and leaves the recipe to this request's own path.
         inner.end_compaction(&key, &agent_id);
-        // A tick asks the router only about the models of retained recipes, so a probe an agent keeps past its
-        // recipe's end can miss a resolution: the catalog's acknowledged resolution dates the held probes' spellings
-        // here, the request's own pair first, before the credit compares its model with the request's, a compaction's
-        // as a turn's.
+        // A tick asks the router only about the models of retained recipes and of open compactions, so a probe an
+        // agent keeps past its recipe's end can miss a resolution: the catalog's acknowledged resolution dates the held
+        // probes' spellings here, the request's own pair first, before the credit compares its model with the
+        // request's, a compaction's as a turn's.
         let mut resolved = HashMap::new();
         if observed.wire_model != observed.canonical_model {
             resolved.insert(
@@ -3962,12 +3955,6 @@ pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_log_lines_instant_prints_in_utc_with_the_zone_named_or_raw_when_out_of_range() {
-        assert_eq!(utc_stamp(1_760_961_787_123), "2025-10-20 12:03:07 UTC");
-        assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
-    }
 
     /// `ALL` is kept by hand. The cycle below names every variant with no wildcard, so a variant the enum gains stops
     /// this test compiling until it joins the cycle, and the walk then wants it in `ALL`.
