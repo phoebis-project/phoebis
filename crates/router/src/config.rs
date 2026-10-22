@@ -313,8 +313,8 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-/// Reads, parses and validates the bootstrap file and leaves the admin secret unresolved, for `check-config`, `health`
-/// and `status`, which must run without the environment the service gets from its unit.
+/// Reads, parses and validates the bootstrap file and leaves the admin secret unresolved, for a command that reads the
+/// file without the environment the service gets from its unit.
 pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
         path: path.to_path_buf(),
