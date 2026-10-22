@@ -15707,7 +15707,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '4', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '209 requests, 16.3% errors',
+      line === '211 requests, 16.6% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -19432,10 +19432,10 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   });
   retries[0]?.click();
   await page.settle();
-  // At the story's instant the default filters hide seven of its 27 rows (the two finished sessions, the earlier holder
-  // 20 hours back, the ci key's three rows and the row idle for two hours), so the Sessions and Agents tiles carry the
-  // hidden count on their hover.
-  const away = '7 sessions hidden by the filters';
+  // At the story's instant the default filters hide eight of its 28 rows (the two finished sessions, the earlier holder
+  // 20 hours back, the ci key's three rows, the row idle for two hours and the refusal-only row), so the Sessions and
+  // Agents tiles carry the hidden count on their hover.
+  const away = '8 sessions hidden by the filters';
   results.push({
     name: '/sessions Try again under the tiles reads the overview again, the Sessions and Agents tiles titled with the rows the filters hide',
     ok: retries.length === 1 && tiles().every((t) => t.value !== '-' && t.value !== '' && t.title === (['Sessions', 'Agents'].includes(t.label) ? away : null)) && page.container.querySelector('.sessions__notice') === null,
@@ -20388,14 +20388,14 @@ const CARD_VIEWS = [
     page.unmount();
     return got;
   };
-  // The story's 27 rows at its instant: the two finished sessions (the one the mod released whole and the one it
-  // ended), twelve rows a companion reports or went silent on, the registration-only row among them, and thirteen no
+  // The story's 28 rows at its instant: the two finished sessions (the one the mod released whole and the one it
+  // ended), twelve rows a companion reports or went silent on, the registration-only row among them, and fourteen no
   // companion reports: the laptop row the ledger never saw, with no last use, and by their last use the pinless fork 16
-  // minutes back, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook rows 25 to 42, the ci
-  // content row 109, the ci rows 118 and 240, the row idle for two hours 120 and the earlier holder 20 hours back. The
-  // one hour keeps 20 and hides 7.
+  // minutes back, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook rows 25 to 42, the
+  // refusal-only row 98 by its newest refusal, the ci content row 109, the ci rows 118 and 240, the row idle for two
+  // hours 120 and the earlier holder 20 hours back. The one hour keeps 20 and hides 8.
   const bare = await read('');
-  const AWAY = '7 sessions hidden by the filters';
+  const AWAY = '8 sessions hidden by the filters';
   const drawnOf = (got) => got.drawn.map((id) => listed.find((s) => idOfRow(s) === id)).filter(Boolean);
   results.push({
     name: '/sessions the bare address keeps the rows the default filters keep, with no chip, the finished session and the row idle for two hours hidden',
@@ -20437,18 +20437,18 @@ const CARD_VIEWS = [
     });
     results.push({
       name: '/sessions ?age=6h keeps the rows no companion reports last used inside six hours and hides the older, under the chip age: 6 h',
-      ok: JSON.stringify(sixHours.chips) === JSON.stringify(['age: 6 h']) && sixHours.drawn.length === 24 && holder !== undefined && !sixHours.drawn.includes(idOfRow(holder)) && ages['?age=none'].drawn.includes(idOfRow(holder)),
+      ok: JSON.stringify(sixHours.chips) === JSON.stringify(['age: 6 h']) && sixHours.drawn.length === 25 && holder !== undefined && !sixHours.drawn.includes(idOfRow(holder)) && ages['?age=none'].drawn.includes(idOfRow(holder)),
       missing: [JSON.stringify(sixHours.chips), `${sixHours.drawn.length} rows`, holder === undefined ? 'no earlier holder' : 'the holder read'],
     });
     results.push({
       name: '/sessions the row idle for two hours is hidden on the bare address and under ?age=15m, and listed under ?age=6h and ?age=none',
-      ok: !bare.twoHours && !minutes.twoHours && sixHours.twoHours && ages['?age=none'].twoHours && ages['?age=none'].drawn.length === 25,
+      ok: !bare.twoHours && !minutes.twoHours && sixHours.twoHours && ages['?age=none'].twoHours && ages['?age=none'].drawn.length === 26,
       missing: [JSON.stringify(Object.fromEntries(Object.entries(ages).map(([q, a]) => [q, a.twoHours]))), `${ages['?age=none'].drawn.length} rows with no limit`],
     });
   }
   {
     // While the filters hide every row the router lists, the card says so with the hidden count and no expiry sentence:
-    // the story's thirteen rows no companion reports, read under Companion only.
+    // the story's fourteen rows no companion reports, read under Companion only.
     const { listSessions } = api;
     api.listSessions = async (...args) => (await listSessions.apply(api, args)).filter((s) => s.companion === 'none');
     const page = await mount('/sessions?companion=1', { now: CLOCK_ORIGIN });
@@ -20458,7 +20458,7 @@ const CARD_VIEWS = [
     api.listSessions = listSessions;
     results.push({
       name: '/sessions with every row hidden by the filters the card reads No sessions kept by the filters with the hidden count',
-      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('13 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
+      ok: got.rows === 0 && (got.body ?? '').includes('No sessions kept by the filters') && (got.body ?? '').includes('14 sessions hidden by the filters.') && !(got.body ?? '').includes('session expiry') && !(got.body ?? '').includes('No live sessions'),
       missing: [JSON.stringify(got)],
     });
   }
@@ -20772,14 +20772,14 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok:
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         JSON.stringify([ov.agents.busy, ov.agents.idle, ov.agents.parked]) === JSON.stringify([9, 9, 4]) &&
-        agentsTitle === 'The rows shown hold 31 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. 7 sessions hidden by the filters.' &&
+        agentsTitle === 'The rows shown hold 31 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. 8 sessions hidden by the filters.' &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `overview ${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`, agentsTitle || 'no Agents title'],
     });
   }
   {
     // With no line hidden the title's second sentence would count none, so it draws the records' sentence alone. The
-    // view shows every row, so no row is hidden either and the title carries no hidden count. The story's 27 rows hold
+    // view shows every row, so no row is hidden either and the title carries no hidden count. The story's 28 rows hold
     // 42 agent records.
     const { listKeepaliveRecipes } = api;
     api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => !(r.agentState === 'released' && r.cause === 'agent_released'));
@@ -21063,8 +21063,9 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       missing: epochLines,
     });
     const lasts = rows().map((r) => cell(r, 'Last request')?.textContent?.trim() ?? '');
-    // The same 21 rows under no age limit carry a request, the other four none.
-    results.push({ name: '/sessions last request is relative or none', ok: lasts.filter((v) => v === 'none').length === 4 && lasts.filter((v) => /ago$|^now$/.test(v)).length === 21, missing: lasts });
+    // The 21 rows under no age limit that hold ledgered requests and the refusal-only row read a last request, the
+    // other four none.
+    results.push({ name: '/sessions last request is relative or none', ok: lasts.filter((v) => v === 'none').length === 4 && lasts.filter((v) => /ago$|^now$/.test(v)).length === 22, missing: lasts });
     const silentRows = rows().filter((r) => (cell(r, 'Companion')?.textContent?.trim() ?? '').startsWith('silent'));
     const silentWarming = silentRows.map((r) => cell(r, 'Cache warming')?.textContent?.trim() ?? '');
     results.push({
