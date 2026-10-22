@@ -375,6 +375,13 @@ pub(crate) struct Event {
     /// - `pin_expired`: a pin left its account, with the facts that released it.
     /// - `pin_migrated`: a pin moved to another account, with the move's reason.
     /// - `pin_released`: an operator released the session.
+    /// - `plan_ended`: a profile read found the account's organization holding no plan, which flags the account
+    ///   plan ended, with the read's `source` (`profile`, or `usage_403` where a usage 403 naming the organization's
+    ///   refusal made the read due) and the profile's `organization_type`, `rate_limit_tier` and
+    ///   `subscription_status`.
+    /// - `plan_restored`: the account's plan-ended flag cleared, with its `source` (`profile` for a profile read that
+    ///   found a plan, `pairing` for a pairing confirm) and the profile's `organization_type`, `rate_limit_tier` and
+    ///   `subscription_status`.
     /// - `poll_backoff_ended`: the usage poll's backoff on an account ended with a clean answer, with
     ///   `duration_ms`.
     /// - `poll_backoff_started`: the usage or the profile endpoint (`endpoint`) rate-limited an account, starting

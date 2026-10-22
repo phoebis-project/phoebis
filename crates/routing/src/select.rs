@@ -7490,6 +7490,7 @@ mod banded_tests {
                     ends_at: None,
                     tier: Some("default_claude_max_20x".into()),
                     usage_based: false,
+                    plan_ended_at: None,
                 }],
                 ..RegistryLoad::default()
             },
@@ -7654,6 +7655,7 @@ mod banded_tests {
                     ends_at: Some(T - HOUR),
                     tier: Some(tier.into()),
                     usage_based: false,
+                    plan_ended_at: None,
                 }],
                 ..RegistryLoad::default()
             },

@@ -1454,6 +1454,62 @@ mod service {
         up.shutdown().await;
     }
 
+    /// The usage endpoint's 403 for an organization that holds no plan, as the live read of an ended plan answered it.
+    const PLAN_REFUSED_BODY: &[u8] = br#"{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization.","details":{"error_code":"oauth_not_allowed_for_organization","error_visibility":"user_facing"}}}"#;
+
+    #[tokio::test]
+    async fn a_usage_403_naming_the_organizations_refusal_answers_its_own_issue_and_any_other_403_a_fault(
+    ) {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 403,
+                headers: vec![("x-should-retry".into(), "false".into())],
+                body: PLAN_REFUSED_BODY.to_vec(),
+            },
+        }])
+        .await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let fault = PollFault {
+            endpoint: "usage",
+            status: Some(403),
+            transport: false,
+            text: "usage request rejected with status 403".into(),
+        };
+        let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
+        assert_eq!(
+            issue,
+            Some(PollIssue::PlanRefused {
+                fault: fault.clone(),
+                code: "oauth_not_allowed_for_organization".into(),
+            }),
+            "the code the organization's refusal names rides the issue"
+        );
+        assert_eq!(snapshot.error.as_deref(), Some(fault.text.as_str()));
+        assert_eq!(
+            service.poll_status("a").unwrap().next_attempt_at,
+            None,
+            "the refusal arms no hold"
+        );
+        up.set_rule_after(
+            0,
+            "/api/oauth/usage",
+            Respond::Json {
+                status: 403,
+                headers: vec![],
+                body: br#"{"type":"error","error":{"type":"permission_error","message":"no"}}"#
+                    .to_vec(),
+            },
+        );
+        assert_eq!(
+            service.poll_reporting("a").await.unwrap().1,
+            Some(PollIssue::Fault(fault)),
+            "a 403 without the code is a passing fault"
+        );
+        up.shutdown().await;
+    }
+
     #[tokio::test]
     async fn a_caller_joined_to_another_callers_fetch_reads_its_snapshot_and_no_issue() {
         let now = Arc::new(AtomicI64::new(1_000_000));

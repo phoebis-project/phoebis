@@ -4466,6 +4466,7 @@ fn a_probe_on_a_pin_whose_subscription_ended_answers_the_obstacle_and_moves_noth
             ends_at: Some(1_500),
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let (result, writes, pinned) = probe_after_a_pin_on_a(&snapshot(a_before_b()), &ended, &[]);
@@ -5590,6 +5591,7 @@ fn the_blocker_refuses_a_winding_down_account_for_the_static_tier() {
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -6201,6 +6203,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         ends_at: Some(at),
         tier: None,
         usage_based: false,
+        plan_ended_at: None,
     };
     // No runway: b outranks a, so only the bypass can land the request there.
     scenario(
@@ -8107,6 +8110,7 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
         ends_at: Some(at),
         tier: None,
         usage_based: false,
+        plan_ended_at: None,
     };
     let pool = || Pool {
         members: vec![("a", 0), ("b", 1)],
@@ -8495,6 +8499,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8541,6 +8546,7 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }];
         let failover = Failover {
             wind_down_minutes: 30,
@@ -8607,6 +8613,7 @@ fn a_canceled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_sub
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8649,6 +8656,64 @@ fn a_canceled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_sub
 }
 
 #[test]
+fn an_account_flagged_plan_ended_is_the_obstacle_subscription_ended_as_one_past_its_saved_end_is() {
+    let pool = || Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            wind_down_minutes: 0,
+            ..Failover::default()
+        },
+        affinity: 86_400,
+        ..Pool::default()
+    };
+    // A running plan with no saved end, flagged by the profile read at 1 500.
+    let term = |plan_ended_at: Option<i64>| SubscriptionTerm {
+        account_id: "a".into(),
+        since: Some(0),
+        trial_ends_at: None,
+        canceled: false,
+        ends_at: None,
+        tier: None,
+        usage_based: false,
+        plan_ended_at,
+    };
+    let running = snapshot_with_terms(pool(), vec![term(None)]);
+    let flagged = snapshot_with_terms(pool(), vec![term(Some(1_500))]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &running,
+                &request(&running, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "a"
+    );
+    let pin = st
+        .pin(&pin_key("s1"))
+        .cloned()
+        .expect("the first select pinned a");
+    let after_flag = request(&flagged, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    assert!(
+        release_reasons(&st, &flagged, &pin, &after_flag).contains(&"subscription_ended"),
+        "the flag reads as an end that has passed"
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &flagged, &after_flag, &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(sel.account.id, "b", "the pin moves off the flagged account");
+    let fresh = request(&flagged, Some("s2"), "claude-sonnet-5", true, &[], 2_000);
+    assert_eq!(
+        picked(&select(&mut st, &flagged, &fresh, &mut rng()).0),
+        "b",
+        "a fresh session places nothing on the flagged account"
+    );
+}
+
+#[test]
 fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone() {
     let pool = || Pool {
         members: vec![("a", 0), ("b", 1)],
@@ -8668,6 +8733,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             ends_at: None,
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8687,6 +8753,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             ends_at: None,
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st2 = RoutingState::from_load(RoutingLoad::default());
@@ -11684,6 +11751,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
             ends_at: Some(T + 10 * MINUTE),
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = loaded(vec![
@@ -17028,6 +17096,7 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
             ends_at: None,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan_ended_at: None,
         })
         .collect();
     snapshot_with_terms(pool, terms)
@@ -18034,6 +18103,7 @@ fn tier_terms(ids: &[&str]) -> Vec<SubscriptionTerm> {
             ends_at: None,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan_ended_at: None,
         })
         .collect()
 }
@@ -20773,6 +20843,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             ends_at,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan_ended_at: None,
         })
         .to_vec();
         RegistrySnapshot::from_load(load, [0; 32], 0, 1)
@@ -25112,6 +25183,7 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
                     ends_at: None,
                     tier: Some(tier.into()),
                     usage_based: false,
+                    plan_ended_at: None,
                 })
                 .collect(),
         );
@@ -25423,6 +25495,7 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
             ends_at,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan_ended_at: None,
         })
         .to_vec();
         RegistrySnapshot::from_load(load, [0; 32], 0, 1)
@@ -27197,6 +27270,7 @@ fn a_pin_released_past_its_saved_end_names_the_account_it_left() {
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());

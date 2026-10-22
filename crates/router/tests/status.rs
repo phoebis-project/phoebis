@@ -665,6 +665,52 @@ fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_mark
     }
 }
 
+#[test]
+fn an_account_flagged_plan_ended_prints_plan_ended_beside_its_state_word() {
+    use serde_json::json;
+    let account = |id: &str, plan_ended_at: serde_json::Value, pool: serde_json::Value| {
+        json!({
+            "id": id, "label": id, "enabled": true, "state": "ready", "windows": [], "cooldowns": [],
+            "pool": pool, "usage_based": false, "spend": null, "plan_ended_at": plan_ended_at
+        })
+    };
+    let member = json!({"pool_id": "main", "priority": 0});
+    let reads = status::Reads {
+        accounts: Ok(json!({ "accounts": [
+            account("ended", json!(OCT_31_NOON), member.clone()),
+            account("plan", serde_json::Value::Null, json!({"pool_id": "main", "priority": 1})),
+            account("loose", json!(OCT_31_NOON), serde_json::Value::Null),
+        ]})),
+        attention: Ok(json!({"items": []})),
+        health: None,
+        pools: Ok(json!({"pools": [{
+            "id": "main", "status": "ok", "keys": [], "active_pins": 0, "requests_24h": 0,
+            "members": [
+                {"account_id": "ended", "priority": 0, "eligible": "eligible"},
+                {"account_id": "plan", "priority": 1, "eligible": "eligible"}
+            ]
+        }]})),
+        sessions: Ok(json!({"sessions": []})),
+        system: Ok(json!({"ready": true})),
+    };
+    let screen = render_at(&reads, OCT_31_NOON);
+    assert_eq!(
+        member_row(&screen, "ended")[..3],
+        ["ended", "ready, plan ended", "eligible"],
+        "{screen}"
+    );
+    assert_eq!(
+        member_row(&screen, "plan")[..3],
+        ["plan", "ready", "eligible"],
+        "{screen}"
+    );
+    assert_eq!(
+        member_row(&screen, "loose"),
+        ["loose", "ready, plan ended"],
+        "an account in no pool prints the word on its state line: {screen}"
+    );
+}
+
 /// `reads` rendered at `at_ms` in UTC.
 fn render_at(reads: &status::Reads, at_ms: i64) -> String {
     let listeners = status::Listeners {

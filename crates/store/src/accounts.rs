@@ -614,6 +614,44 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         subscription_term_in(&conn, id)
     }
+
+    /// Flags the account's plan as ended at `at` unless a flag already stands, and answers whether this write set it.
+    /// Bumps `revision` so the next reload publishes it, as the operator's end does.
+    pub fn set_plan_ended(&self, id: &str, at: i64) -> Result<bool, StoreError> {
+        self.write_plan_ended(
+            id,
+            "UPDATE accounts SET plan_ended_at = ?2, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1 AND plan_ended_at IS NULL",
+            Some(at),
+        )
+    }
+
+    /// Clears the account's plan-ended flag and answers whether one stood, bumping `revision` as setting it does.
+    pub fn clear_plan_ended(&self, id: &str) -> Result<bool, StoreError> {
+        self.write_plan_ended(
+            id,
+            "UPDATE accounts SET plan_ended_at = ?2, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1 AND plan_ended_at IS NOT NULL",
+            None,
+        )
+    }
+
+    /// One conditional write of the flag, telling an unknown id from a row whose flag already read as asked.
+    fn write_plan_ended(
+        &self,
+        id: &str,
+        statement: &str,
+        at: Option<i64>,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        if conn.execute(statement, params![id, at, self.now_ms()])? == 1 {
+            return Ok(true);
+        }
+        match account_in(&conn, id)? {
+            Some(_) => Ok(false),
+            None => Err(StoreError::AccountNotFound(id.to_string())),
+        }
+    }
 }
 
 /// Shared by `Store::subscription_term` and the account edit, which reads the flag and the end it changes inside its
@@ -624,7 +662,7 @@ pub(crate) fn subscription_term_in(
 ) -> Result<Option<SubscriptionTerm>, StoreError> {
     conn.query_row(
         "SELECT id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
-         subscription_tier, kind, profile_json FROM accounts WHERE id = ?1",
+         subscription_tier, kind, profile_json, plan_ended_at FROM accounts WHERE id = ?1",
         params![id],
         |row| {
             let tier: Option<String> = row.get(5)?;
@@ -639,6 +677,7 @@ pub(crate) fn subscription_term_in(
                 ends_at: row.get(4)?,
                 tier,
                 usage_based,
+                plan_ended_at: row.get(8)?,
             })
         },
     )

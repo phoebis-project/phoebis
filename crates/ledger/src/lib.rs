@@ -31,7 +31,8 @@ pub use bodies::{
 };
 pub use db::LedgerDb;
 pub use events::{
-    catalog_changed, event_of, poll_backoff, poll_failed, spawn_event_mirror, MirrorBaseline,
+    catalog_changed, event_of, plan_ended, plan_restored, poll_backoff, poll_failed,
+    spawn_event_mirror, MirrorBaseline,
 };
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};

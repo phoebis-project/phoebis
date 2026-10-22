@@ -867,6 +867,8 @@ pub const EVENT_KINDS: &[&str] = &[
     "pin_expired",
     "pin_migrated",
     "pin_released",
+    "plan_ended",
+    "plan_restored",
     "poll_backoff_ended",
     "poll_backoff_started",
     "poll_failed",

@@ -693,6 +693,9 @@ pub struct SubscriptionTerm {
     /// `organization.seat_tier` `enterprise_usage_based`. Derived at every load from the stored tier and document,
     /// never stored, false for an `api_key` account and for a seat that keeps plan windows.
     pub usage_based: bool,
+    /// When a profile read found the account's organization holding no plan, epoch milliseconds, `None` while a plan
+    /// stands. The engine reads it as an end that has passed.
+    pub plan_ended_at: Option<i64>,
 }
 
 /// The one derivation of the class, shared by the registry load and `Store::subscription_term`.
@@ -877,7 +880,7 @@ impl Store {
             terms: tx
                 .prepare(
                     "SELECT id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
-                     subscription_tier, kind, profile_json FROM accounts ORDER BY id",
+                     subscription_tier, kind, profile_json, plan_ended_at FROM accounts ORDER BY id",
                 )?
                 .query_map([], |r| {
                     let tier: Option<String> = r.get(5)?;
@@ -892,6 +895,7 @@ impl Store {
                         ends_at: r.get(4)?,
                         tier,
                         usage_based,
+                        plan_ended_at: r.get(8)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,

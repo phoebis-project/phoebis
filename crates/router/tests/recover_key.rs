@@ -1018,8 +1018,12 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }
 
-/// The reverse of the registry's newest migration, the flag's column back under its old name, as `crates/store/tests`
-/// replays it. The marker last, since it restores an old name, and the trailing `\n` ends the marker's comment.
+/// The reverse of the registry's newest migration, the plan-ended column gone, as `crates/store/tests` replays it.
+const UNDO_V61: &str = "ALTER TABLE accounts DROP COLUMN plan_ended_at; \
+     UPDATE meta SET value = '60' WHERE key = 'schema_version';";
+
+/// The reverse of the step before it, the flag's column back under its old name. The marker last, since it restores an
+/// old name, and the trailing `\n` ends the marker's comment.
 const UNDO_V60: &str = "ALTER TABLE accounts RENAME COLUMN canceled TO cancelled; \
      UPDATE meta SET value = '59' WHERE key = 'schema_version'; -- rollback\n";
 
@@ -1063,7 +1067,7 @@ fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_f
     rusqlite::Connection::open(registry(dir.path()))
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55}"
+            "{UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55}"
         ))
         .unwrap();
     std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();

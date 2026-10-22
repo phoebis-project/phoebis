@@ -283,7 +283,7 @@ pub fn render(
 
     match &reads.accounts {
         Ok(answer) => {
-            let mut unpooled: Vec<(String, &str)> = answer["accounts"]
+            let mut unpooled: Vec<(String, String)> = answer["accounts"]
                 .as_array()
                 .into_iter()
                 .flatten()
@@ -296,7 +296,7 @@ pub fn render(
                 screen.push("accounts in no pool");
                 let mut rows: Vec<Vec<String>> = unpooled
                     .into_iter()
-                    .map(|(label, state)| vec![label, state.to_owned()])
+                    .map(|(label, state)| vec![label, state])
                     .collect();
                 fit_column(&mut rows, 0, 2, 2, 0);
                 screen.capped(table("  ", rows), all);
@@ -411,7 +411,7 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
                 let account = accounts.get(id);
                 let mut row = vec![
                     accounts.label(id),
-                    account.map_or("-", state_word).to_owned(),
+                    account.map_or_else(|| "-".to_owned(), state_word),
                     text(&member["eligible"]).to_owned(),
                 ];
                 let cells = account.map(|account| windows_cells(account, clock, fable));
@@ -818,12 +818,18 @@ impl<'a> Accounts<'a> {
     }
 }
 
-/// `paused` for an account routing is turned off on, else the account's `state`.
-fn state_word(account: &Value) -> &str {
-    if account["enabled"] == false {
+/// `paused` for an account routing is turned off on, else the account's `state`, with `plan ended` beside it while the
+/// account's plan-ended flag stands, since that account keeps its state.
+fn state_word(account: &Value) -> String {
+    let word = if account["enabled"] == false {
         "paused"
     } else {
         text(&account["state"])
+    };
+    if account["plan_ended_at"].is_number() {
+        format!("{word}, plan ended")
+    } else {
+        word.to_owned()
     }
 }
 

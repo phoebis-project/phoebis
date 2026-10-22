@@ -8,6 +8,7 @@
         "label": "Business",
         "enabled": true,
         "canceled": false,
+        "plan_ended_at": null,
         "state": "ready",
         "funding_retry_at": null,
         "identity": {
@@ -151,6 +152,7 @@
         "label": "Direct",
         "enabled": true,
         "canceled": false,
+        "plan_ended_at": null,
         "state": "ready",
         "funding_retry_at": null,
         "identity": null,
@@ -184,6 +186,7 @@
         "label": "Seat",
         "enabled": true,
         "canceled": false,
+        "plan_ended_at": null,
         "state": "ready",
         "funding_retry_at": null,
         "identity": {

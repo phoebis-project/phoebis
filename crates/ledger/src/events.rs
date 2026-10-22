@@ -542,6 +542,49 @@ pub fn poll_failed(account_id: &str, at: i64, fault: &PollFault) -> Record {
     })
 }
 
+/// `plan_ended` on the account whose profile reports no plan, detail {source, organization_type, rate_limit_tier,
+/// subscription_status}: `source` is `profile` for a profile read and `usage_403` for one a usage 403 made due, and the
+/// other three are the profile document's words.
+pub fn plan_ended(account_id: &str, at: i64, source: &str, profile: &serde_json::Value) -> Record {
+    plan_event("plan_ended", account_id, at, source, profile)
+}
+
+/// `plan_restored` on the account whose plan-ended flag a profile with a plan or a pairing confirm cleared, detail
+/// {source, organization_type, rate_limit_tier, subscription_status}: `source` is `profile` or `pairing`.
+pub fn plan_restored(
+    account_id: &str,
+    at: i64,
+    source: &str,
+    profile: &serde_json::Value,
+) -> Record {
+    plan_event("plan_restored", account_id, at, source, profile)
+}
+
+fn plan_event(
+    kind: &str,
+    account_id: &str,
+    at: i64,
+    source: &str,
+    profile: &serde_json::Value,
+) -> Record {
+    let organization = &profile["organization"];
+    Record::Event(EventRecord {
+        at,
+        kind: kind.into(),
+        account_id: Some(account_id.to_string()),
+        detail: Some(
+            json!({
+                "source": source,
+                "organization_type": organization["organization_type"],
+                "rate_limit_tier": organization["rate_limit_tier"],
+                "subscription_status": organization["subscription_status"],
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    })
+}
+
 /// `catalog_changed` on the account whose listing moved. The ids travel in the detail, since one row names many
 /// models.
 pub fn catalog_changed(change: &CatalogChange) -> Record {

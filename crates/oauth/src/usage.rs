@@ -39,6 +39,12 @@ const USAGE_ENDPOINT: &str = "usage";
 /// The snapshot's error text for a usage 401, worded as every other status the endpoint refuses with.
 const USAGE_UNAUTHORIZED: &str = "usage request rejected with status 401";
 
+/// The error code of the usage endpoint's 403 to an organization that holds no plan.
+const PLAN_REFUSED_CODE: &str = "oauth_not_allowed_for_organization";
+
+/// The standing's last error while the poll sends an account whose plan ended no usage request.
+const PLAN_ENDED: &str = "plan ended";
+
 /// Top-level keys the 2.1.270 binary and the Management Center source use for the Fable weekly window,
 /// read only when `limits[]` is absent from the response.
 const FABLE_KEY_ALIASES: &[&str] = &["cinder_cove", "iguana_necktie"];
@@ -199,6 +205,12 @@ pub struct Refused {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PollIssue {
     Fault(PollFault),
+    /// A usage 403 whose `error.details.error_code` is `code`, the refusal an organization without a plan answers: the
+    /// profile decides whether the plan ended, and the fault stands for a profile that reports one.
+    PlanRefused {
+        fault: PollFault,
+        code: String,
+    },
     Unauthorized(Refused),
 }
 
@@ -352,6 +364,10 @@ enum FetchFailure {
         retry_after: Option<i64>,
     },
     Fault(PollFault),
+    PlanRefused {
+        fault: PollFault,
+        code: String,
+    },
     /// The usage endpoint's 401. `fetch` fills the fence's credential generation and `fetch_and_cache` its lineage.
     Unauthorized(Refused),
 }
@@ -485,17 +501,29 @@ fn transport_fault(endpoint: &'static str, error: &str) -> PollFault {
 }
 
 /// A usage status other than 200 and 429: the 401 that sends the account to the re-pair, its fence for `fetch` and
-/// `fetch_and_cache` to fill, and every other status a passing fault.
-fn usage_refusal(status: u16) -> FetchFailure {
+/// `fetch_and_cache` to fill, the 403 that names an organization's refusal, and every other status a passing fault.
+fn usage_refusal(status: u16, body: &[u8]) -> FetchFailure {
     if status == 401 {
         return FetchFailure::Unauthorized(Refused::default());
     }
-    FetchFailure::Fault(PollFault {
+    let fault = PollFault {
         endpoint: USAGE_ENDPOINT,
         status: Some(status),
         transport: false,
         text: format!("usage request rejected with status {status}"),
-    })
+    };
+    match error_code(body) {
+        Some(code) if status == 403 && code == PLAN_REFUSED_CODE => {
+            FetchFailure::PlanRefused { fault, code }
+        }
+        _ => FetchFailure::Fault(fault),
+    }
+}
+
+/// An error body's `error.details.error_code`, `None` for a body that is no JSON or names none.
+fn error_code(body: &[u8]) -> Option<String> {
+    let body: Value = serde_json::from_slice(body).ok()?;
+    Some(body["error"]["details"]["error_code"].as_str()?.to_string())
 }
 
 /// The ladder's wait for the `in_a_row`-th 429 in a row, counted from 1.
@@ -600,6 +628,53 @@ impl UsageService {
     /// The service's clock, which stamps its attempts, for a caller that records what an attempt found.
     pub fn now(&self) -> i64 {
         (self.inner.clock)()
+    }
+
+    /// Records that the account's profile reports no plan, so the poll sends it no usage request: the standing's last
+    /// error names the pause, and the snapshot keeps the windows it last read.
+    pub fn plan_ended(&self, account_id: &str) {
+        let mut cache = self.inner.cache.lock().expect(LOCK_POISONED);
+        if let Some(entry) = cache.get_mut(account_id) {
+            entry.last_error = Some(PLAN_ENDED.into());
+            return;
+        }
+        // A start reads the profile before any usage request, so the pause has no entry to name it on yet.
+        let at = (self.inner.clock)();
+        let identity = self.inner.identity(account_id).unwrap_or_default();
+        cache.insert(
+            account_id.to_string(),
+            CachedEntry {
+                fetched_at: at,
+                identity,
+                not_before: at,
+                snapshot: empty_snapshot(
+                    account_id,
+                    Some(identity.lifecycle_generation),
+                    at,
+                    PLAN_ENDED.into(),
+                ),
+                held_by: USAGE_ENDPOINT,
+                backoff_since: None,
+                last_clean_at: None,
+                last_error: Some(PLAN_ENDED.into()),
+                last_outcome: PollOutcome::Failed,
+                rate_limited_in_a_row: 0,
+            },
+        );
+    }
+
+    /// Ends the pause `plan_ended` recorded, for a profile that reports a plan again: the ladder starts over, so a 429
+    /// after the pause waits the ladder's first step rather than the step a run before it reached.
+    pub fn plan_restored(&self, account_id: &str) {
+        let mut cache = self.inner.cache.lock().expect(LOCK_POISONED);
+        let Some(entry) = cache.get_mut(account_id) else {
+            return;
+        };
+        if entry.last_error.as_deref() == Some(PLAN_ENDED) {
+            entry.last_error = None;
+        }
+        entry.backoff_since = None;
+        entry.rate_limited_in_a_row = 0;
     }
 
     /// How much longer the account waits out its backoff at the service's clock; `None` when it may be asked now.
@@ -876,7 +951,7 @@ impl Inner {
             });
         }
         if head.status != 200 {
-            return Err(usage_refusal(head.status));
+            return Err(usage_refusal(head.status, &body));
         }
         let (windows, fable_window, extra_usage, spend, raw_keys) =
             parse_usage(&body).map_err(|error| FetchFailure::Message(format!("parse: {error}")))?;
@@ -1017,6 +1092,11 @@ impl Inner {
                     FetchFailure::Fault(fault) => {
                         (fault.text.clone(), None, Some(PollIssue::Fault(fault)))
                     }
+                    FetchFailure::PlanRefused { fault, code } => (
+                        fault.text.clone(),
+                        None,
+                        Some(PollIssue::PlanRefused { fault, code }),
+                    ),
                     FetchFailure::Unauthorized(refused) => (
                         USAGE_UNAUTHORIZED.to_string(),
                         None,

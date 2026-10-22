@@ -2686,6 +2686,25 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             text: "usage request rejected with status 503".into(),
         },
     ));
+    let profile = |organization_type: &str, rate_limit_tier: &str, subscription_status: &str| {
+        j!({ "organization": {
+            "organization_type": organization_type,
+            "rate_limit_tier": rate_limit_tier,
+            "subscription_status": subscription_status,
+        }})
+    };
+    parts.ledger.record(phoebis_ledger::plan_ended(
+        "business",
+        at(2),
+        "usage_403",
+        &profile("claude_free", "default_claude_ai", "canceled"),
+    ));
+    parts.ledger.record(phoebis_ledger::plan_restored(
+        "business",
+        at(3),
+        "profile",
+        &profile("claude_max", "default_claude_max_5x", "active"),
+    ));
     parts.ledger.record(phoebis_ledger::catalog_changed(
         &phoebis_relay::CatalogChange {
             account_id: "business".into(),

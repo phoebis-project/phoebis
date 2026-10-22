@@ -847,6 +847,10 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
 /// reading is recorded to the ledger and handed to the router, so the account's windows change on it, and the Quota
 /// view's timeline when the reading's five-minute bucket holds no sample yet. The hold, the concurrency cap and the
 /// coalescing bound the read, so a held-down refresh makes one request per account per fetch.
+///
+/// While the account's `plan_ended_at` is set, the profile is read first: a profile with a plan clears the flag and
+/// the usage endpoint is read as above, and with no plan no usage request goes out and the answer is the `GET`'s,
+/// `poll.last_error` reading `plan ended`.
 #[utoipa::path(
     post,
     path = "/admin/accounts/{id}/usage/refresh",
@@ -869,7 +873,30 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    match QuotaPoll::poll_account(&state.usage, &state.ledger, Some(&state.router), &row).await {
+    // An account whose plan ended sends no usage request until a profile read finds a plan, so the button reads the
+    // profile first and, with no plan back, answers the standing as the `GET` does.
+    if QuotaPoll::plan_paused(&state.store, &id) {
+        QuotaPoll::refresh_profile(
+            &state.store,
+            &state.usage,
+            &state.ledger,
+            &state.router,
+            &row,
+        )
+        .await;
+        if QuotaPoll::plan_paused(&state.store, &id) {
+            return usage_latest(State(state), Path(id)).await;
+        }
+    }
+    match QuotaPoll::poll_account(
+        &state.store,
+        &state.usage,
+        &state.ledger,
+        Some(&state.router),
+        &row,
+    )
+    .await
+    {
         Ok(snapshot) => {
             let poll = state.usage.poll_status(&id);
             Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
@@ -1520,6 +1547,20 @@ async fn pairing_confirm(
             return unstored(&state, error);
         }
     }
+    // The confirmed pairing names the plan its profile holds, so a flag an ended plan left goes with it, published by
+    // the reload below.
+    if !created {
+        match state.store.clear_plan_ended(&row.id) {
+            Ok(true) => state.ledger.record(phoebis_ledger::plan_restored(
+                &row.id,
+                now,
+                "pairing",
+                &pending.profile.raw,
+            )),
+            Ok(false) => {}
+            Err(error) => return unstored(&state, error),
+        }
+    }
     state.usage.invalidate(&row.id);
     state.vault.mark_confirmed(&id, now);
     // The credential just committed replaces whatever a slot under this id answered before, so the cached
@@ -1545,6 +1586,7 @@ async fn pairing_confirm(
                 match polled.store.account(&account_id) {
                     Ok(Some(committed)) => {
                         let _ = QuotaPoll::poll_account(
+                            &polled.store,
                             &polled.usage,
                             &polled.ledger,
                             Some(&polled.router),
@@ -2155,6 +2197,11 @@ pub(crate) struct Account {
     pub enabled: bool,
     /// Set only on an `oauth` account. An `api_key` account always reads false.
     pub canceled: bool,
+    /// Epoch milliseconds: when a profile read found the account's organization holding no plan, null while a plan
+    /// stands. While it is set the usage poll sends the account no usage request and reads its profile hourly, the
+    /// routing reads the account as past its end, and a profile read that finds a plan, or a pairing confirm, clears
+    /// it.
+    pub plan_ended_at: Option<i64>,
     /// `disconnected`, `funding_required`, `reauth_required`, `ready` or `unpaired`.
     #[schema(example = "disconnected")]
     pub state: String,
@@ -2656,6 +2703,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         label: row.label.clone(),
         enabled: row.enabled,
         canceled: term.canceled,
+        plan_ended_at: term.plan_ended_at,
         state: state_name(row.state).to_string(),
         funding_retry_at,
         identity: row.identity.as_ref().map(|identity| AccountIdentity {

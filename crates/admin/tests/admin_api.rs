@@ -1148,6 +1148,171 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
 }
 
 #[tokio::test]
+async fn a_pairing_confirm_clears_the_plan_ended_flag_and_writes_plan_restored_from_the_pairing() {
+    use common::{json, login, post};
+    let h = common::admin_parts_full().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    assert!(h
+        .store
+        .set_plan_ended("business", common::NOW - 60_000)
+        .unwrap());
+    let id = common::exchanged_session_for(&h.app, &cookie, "business").await;
+    let confirmed = post(
+        &h.app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 200, "{}", json(confirmed).await);
+    assert_eq!(
+        h.store
+            .subscription_term("business")
+            .unwrap()
+            .unwrap()
+            .plan_ended_at,
+        None,
+        "the confirm's write clears the flag"
+    );
+    let restored = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "plan_restored")
+    })
+    .await;
+    let detail: serde_json::Value =
+        serde_json::from_str(restored.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (
+            restored.account_id.as_deref(),
+            detail["source"].as_str(),
+            detail["organization_type"].as_str()
+        ),
+        (Some("business"), Some("pairing"), Some("claude_max")),
+        "the row names the pairing and the profile it confirmed"
+    );
+}
+
+#[tokio::test]
+async fn the_account_row_answers_the_plan_ended_flag_as_an_instant_or_null() {
+    use common::{get, json, login};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let flag = |answer: &serde_json::Value| answer["plan_ended_at"].clone();
+    let listed = |list: &serde_json::Value| {
+        list["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "business")
+            .cloned()
+            .unwrap()
+    };
+    let list = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    assert_eq!(
+        flag(&listed(&list)),
+        serde_json::Value::Null,
+        "a plan stands"
+    );
+    assert!(store.set_plan_ended("business", 1_234_567).unwrap());
+    let list = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let one = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        (flag(&listed(&list)), flag(&one)),
+        (serde_json::json!(1_234_567), serde_json::json!(1_234_567)),
+        "the list row and the single account answer the flag's instant"
+    );
+}
+
+#[tokio::test]
+async fn the_refresh_reads_the_profile_first_while_the_plan_ended_flag_stands() {
+    use common::{json, login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let refresh = "/admin/accounts/business/usage/refresh";
+    let asked = |path: &str| {
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with(&format!("GET {path}")))
+            .count()
+    };
+    let flag = || {
+        h.store
+            .subscription_term("business")
+            .unwrap()
+            .unwrap()
+            .plan_ended_at
+    };
+    assert!(h
+        .store
+        .set_plan_ended("business", common::NOW - 60_000)
+        .unwrap());
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid","has_claude_max":false,"has_claude_pro":false},"organization":{"uuid":"o","organization_type":"claude_free","rate_limit_tier":"default_claude_ai","subscription_status":"canceled","billing_type":"none"}}"#
+                .to_vec(),
+        },
+    );
+    let paused = post(&h.app, refresh, "", Some(&cookie)).await;
+    assert_eq!(paused.status(), 200);
+    let paused = json(paused).await;
+    assert_eq!(
+        (
+            asked("/api/oauth/profile"),
+            asked("/api/oauth/usage"),
+            paused["poll"]["last_error"].as_str(),
+            flag()
+        ),
+        (1, 0, Some("plan ended"), Some(common::NOW - 60_000)),
+        "a profile with no plan sends no usage request and the answer names the pause: {paused}"
+    );
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: phoebis_profile::fixtures::control_response(
+                phoebis_profile::fixtures::ControlFixture::Profile,
+            )
+            .to_vec(),
+        },
+    );
+    let resumed = json(post(&h.app, refresh, "", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            asked("/api/oauth/profile"),
+            asked("/api/oauth/usage"),
+            resumed["error"].as_str(),
+            flag()
+        ),
+        (2, 1, None, None),
+        "a profile with a plan clears the flag and the usage poll answers its reading: {resumed}"
+    );
+    let restored = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "plan_restored")
+    })
+    .await;
+    assert!(
+        restored
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains(r#""source":"profile""#)),
+        "{restored:?}"
+    );
+}
+
+#[tokio::test]
 async fn the_account_view_reads_the_extra_usage_flag_from_the_organization_alone() {
     use common::{get, json, login};
     let (app, _up, store, _router) = common::admin_parts().await;

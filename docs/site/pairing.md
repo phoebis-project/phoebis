@@ -165,6 +165,16 @@ stops reading a marked account until a pairing is confirmed on it. Any other fai
 endpoint, or a read that fails in transport, leaves the state as it is: the poll logs one warning and writes one
 `poll_failed` event per poll that failed, while a `429` backs the poll off.
 
+An OAuth account whose subscription ended keeps its credential and its state, and its profile reports the organization
+holding no plan. A profile read that finds no plan, the hourly one, the start's or the Refresh button's, flags the
+account plan ended, and a usage `403` whose error code is `oauth_not_allowed_for_organization` makes that read due at
+once. While the flag stands the state stays as it was, the usage poll sends the account no usage request and reads its
+profile hourly, the stored tier stays the last plan's, the router places nothing on the account, reading it as past
+its end, and Refresh reads the profile before any usage request. A profile read that finds a plan again, or a pairing
+confirmed on the account, clears the flag, and the usage poll reads the account from its next slot. A disconnect leaves
+the flag standing until the pairing after it. `GET /admin/accounts` answers the flag as `plan_ended_at`, and the
+routing log records `plan_ended` and `plan_restored`.
+
 The Accounts view offers these actions, each through a control that [The console](console.md#accounts) describes, and
 each calls its own route:
 

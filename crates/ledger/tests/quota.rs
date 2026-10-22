@@ -1113,10 +1113,15 @@ async fn a_poll_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once(
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     due_for_refresh(&h.store, "a");
     let row = h.store.account("a").unwrap().unwrap();
-    let answer =
-        QuotaPoll::poll_account(h.usage.as_ref().unwrap(), &h.ledger, Some(&h.router), &row)
-            .await
-            .unwrap();
+    let answer = QuotaPoll::poll_account(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        Some(&h.router),
+        &row,
+    )
+    .await
+    .unwrap();
     assert!(answer.error.is_some(), "the poll read nothing");
     assert_eq!(
         h.store.account("a").unwrap().unwrap().state,
@@ -1836,10 +1841,15 @@ async fn a_usage_transport_failure_writes_poll_failed_with_transport_set_and_no_
     up.add_credential_rule(A, "/api/oauth/usage", Respond::CloseAfterRequest);
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let row = h.store.account("a").unwrap().unwrap();
-    let answer =
-        QuotaPoll::poll_account(h.usage.as_ref().unwrap(), &h.ledger, Some(&h.router), &row)
-            .await
-            .unwrap();
+    let answer = QuotaPoll::poll_account(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        Some(&h.router),
+        &row,
+    )
+    .await
+    .unwrap();
     let text = answer.error.expect("the poll read nothing");
     assert!(text.starts_with("transport: "), "{text}");
     let rows = wait_for_async(Duration::from_secs(5), || async {
@@ -1862,6 +1872,298 @@ async fn a_usage_transport_failure_writes_poll_failed_with_transport_set_and_no_
         )],
         "the snapshot's text, no status, and the transport flag"
     );
+    up.shutdown().await;
+}
+
+/// The profile of an organization whose plan ended, as the live read answered it.
+const NO_PLAN_PROFILE: &[u8] = br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid","has_claude_max":false,"has_claude_pro":false},"organization":{"uuid":"o","organization_type":"claude_free","rate_limit_tier":"default_claude_ai","subscription_status":"canceled","billing_type":"none"}}"#;
+
+/// The usage endpoint's 403 for an organization that holds no plan.
+const PLAN_REFUSED_BODY: &[u8] = br#"{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization.","details":{"error_code":"oauth_not_allowed_for_organization","error_visibility":"user_facing"}}}"#;
+
+fn no_plan_profile() -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: NO_PLAN_PROFILE.to_vec(),
+    }
+}
+
+fn plan_refused() -> Respond {
+    Respond::Json {
+        status: 403,
+        headers: vec![("x-should-retry".into(), "false".into())],
+        body: PLAN_REFUSED_BODY.to_vec(),
+    }
+}
+
+/// Stores the Max 20x tier as the account's plan, the tier a profile read before the end left.
+fn store_max_20x(store: &Store, id: &str) {
+    store
+        .set_profile(
+            id,
+            r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#,
+            &SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_20x".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+}
+
+fn profile_asked(up: &FakeUpstream, secret: &str) -> usize {
+    asked(up, "/api/oauth/profile", secret)
+}
+
+fn plan_ended_at(h: &Harness, id: &str) -> Option<i64> {
+    h.store
+        .subscription_term(id)
+        .unwrap()
+        .unwrap()
+        .plan_ended_at
+}
+
+#[tokio::test]
+async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_profile_hourly_and_no_usage(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_max_20x(&h.store, "a");
+    h.router.reload().await.unwrap();
+    let (lines, _sink) = capture_tracing();
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    assert_eq!(plan_ended_at(&h, "a"), Some(NOW), "the read's instant");
+    let term = h.store.subscription_term("a").unwrap().unwrap();
+    assert_eq!(
+        (
+            term.tier.as_deref(),
+            h.store.account("a").unwrap().unwrap().state
+        ),
+        (Some("default_claude_max_20x"), AccountState::Ready),
+        "the last plan's tier keeps pricing the windows and the state stands"
+    );
+    assert_eq!(
+        h.router.snapshot().term("a").and_then(|t| t.plan_ended_at),
+        Some(NOW),
+        "the router reloads the flag"
+    );
+    let ended = wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "plan_ended").await.pop()
+    })
+    .await;
+    assert_eq!(
+        (ended.0.as_deref(), ended.1, ended.2),
+        (
+            Some("a"),
+            NOW,
+            serde_json::json!({
+                "source": "profile",
+                "organization_type": "claude_free",
+                "rate_limit_tier": "default_claude_ai",
+                "subscription_status": "canceled",
+            })
+        )
+    );
+    let warnings = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("account=a") && l.contains("claude_free"))
+        .count();
+    assert_eq!(
+        warnings, 1,
+        "one line names the account and the profile's words"
+    );
+    assert_eq!(
+        h.usage
+            .as_ref()
+            .unwrap()
+            .poll_status("a")
+            .and_then(|s| s.last_error),
+        Some("plan ended".to_string())
+    );
+
+    let paused = start_polling(&h, &up).await;
+    step_to(&h, &up, &paused, secs(3_599)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (0, 1),
+        "no usage request while the flag stands, and no profile read before the hour"
+    );
+    step_to(&h, &up, &paused, secs(3_602)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (0, 2),
+        "the hourly slot reads the profile alone"
+    );
+    assert_eq!(
+        resumed(rows_of(&h, "plan_ended")).await.len(),
+        1,
+        "a flag that stands writes no second row"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_403_naming_the_refusal_reads_the_profile_in_the_same_poll_and_flags_a_no_plan_account(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::poll_account(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        Some(&h.router),
+        &row,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (1, 1),
+        "the 403 made the profile due in the same poll"
+    );
+    assert_eq!(plan_ended_at(&h, "a"), Some(NOW));
+    let ended = wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "plan_ended").await.pop()
+    })
+    .await;
+    assert_eq!(ended.2["source"], "usage_403");
+    assert!(
+        rows_of(&h, "poll_failed").await.is_empty(),
+        "the ended plan explains the 403, so no passing fault is written"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_403_naming_the_refusal_on_an_account_whose_profile_reports_a_plan_writes_poll_failed(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::poll_account(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        Some(&h.router),
+        &row,
+    )
+    .await
+    .unwrap();
+    assert_eq!(profile_asked(&up, A), 1, "the profile was read");
+    assert_eq!(plan_ended_at(&h, "a"), None, "a plan stands");
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows_of(&h, "poll_failed").await;
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|(_, _, detail)| (detail["endpoint"].clone(), detail["status"].clone()))
+            .collect::<Vec<_>>(),
+        [(serde_json::json!("usage"), serde_json::json!(403))],
+        "the 403 stays a passing fault"
+    );
+    assert!(rows_of(&h, "plan_ended").await.is_empty());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_profile_with_a_plan_clears_the_flag_stores_its_tier_and_the_next_slot_reads_usage() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_max_20x(&h.store, "a");
+    assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
+    h.router.reload().await.unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    assert_eq!(plan_ended_at(&h, "a"), None, "the plan is back");
+    assert_eq!(
+        h.store
+            .subscription_term("a")
+            .unwrap()
+            .unwrap()
+            .tier
+            .as_deref(),
+        Some("default_claude_max_5x"),
+        "the tier the profile names is stored"
+    );
+    assert_eq!(
+        h.router.snapshot().term("a").map(|t| t.plan_ended_at),
+        Some(None),
+        "the router reloads the cleared flag"
+    );
+    let restored = wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "plan_restored").await.pop()
+    })
+    .await;
+    assert_eq!(
+        (restored.0.as_deref(), restored.2["source"].as_str()),
+        (Some("a"), Some("profile"))
+    );
+    assert_eq!(restored.2["organization_type"], "claude_max");
+
+    let paused = start_polling(&h, &up).await;
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        1,
+        "the usage poll resumes at the account's next slot"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_run_of_usage_429s_flags_nothing_and_writes_no_poll_failed_row() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", rate_limited_for("3600"));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let usage = h.usage.as_ref().unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    for step in 0..3 {
+        h.clock.store(NOW + step * 900_000, Ordering::SeqCst);
+        QuotaPoll::poll_account(&h.store, usage, &h.ledger, Some(&h.router), &row)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        usage_asked(&up, A),
+        3,
+        "each poll past the capped hold asked"
+    );
+    assert_eq!(
+        (
+            plan_ended_at(&h, "a"),
+            h.store.account("a").unwrap().unwrap().state
+        ),
+        (None, AccountState::Ready),
+        "a 429 marks nothing"
+    );
+    for kind in ["plan_ended", "poll_failed"] {
+        assert!(rows_of(&h, kind).await.is_empty(), "{kind}");
+    }
     up.shutdown().await;
 }
 

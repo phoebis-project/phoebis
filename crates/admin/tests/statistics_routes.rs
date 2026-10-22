@@ -4867,6 +4867,66 @@ async fn the_routing_log_filters_on_the_stream_interrupted_kind() {
 }
 
 #[tokio::test]
+async fn the_routing_log_filters_on_the_plan_ended_kind() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let free = serde_json::json!({"organization": {
+        "organization_type": "claude_free",
+        "rate_limit_tier": "default_claude_ai",
+        "subscription_status": "canceled",
+    }});
+    parts.ledger.record(phoebis_ledger::plan_ended(
+        "direct",
+        now - 3_000,
+        "usage_403",
+        &free,
+    ));
+    parts.ledger.record(phoebis_ledger::plan_restored(
+        "direct",
+        now - 2_000,
+        "pairing",
+        &free,
+    ));
+    let route = |kinds: &str| {
+        format!(
+            "/admin/routing-log?from={}&to={}&kinds={kinds}",
+            now - 10_000,
+            now - 1
+        )
+    };
+    let first = get(&parts.app, &route("plan_ended"), Some(&cookie)).await;
+    let status = first.status();
+    assert_eq!(status, 200, "{}", json(first).await);
+    // Both rows landed before the filtered read, so the restore's absence is the filter's.
+    wait_json(
+        &parts.app,
+        &route("plan_ended,plan_restored"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let page = json(get(&parts.app, &route("plan_ended"), Some(&cookie)).await).await;
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row["kind"].as_str(), row["detail"]["source"].as_str()))
+            .collect::<Vec<_>>(),
+        [(Some("plan_ended"), Some("usage_403"))],
+        "the flag's row alone, the restore left out"
+    );
+    assert_eq!(
+        rows[0]["detail"],
+        serde_json::json!({
+            "source": "usage_403",
+            "organization_type": "claude_free",
+            "rate_limit_tier": "default_claude_ai",
+            "subscription_status": "canceled",
+        })
+    );
+}
+
+#[tokio::test]
 async fn the_routing_log_filters_on_the_poll_failed_kind() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

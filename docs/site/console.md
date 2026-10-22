@@ -260,7 +260,10 @@ it." The actions, with the dialog each opens:
 {date}`), Rate-limit tier, Ends and Trial ends where known, Organization and Billing type, and "Edit end" opens the end
 editor: the checkbox "Cancelled", the field "Ends" with the hint "The date the plan's billing settings show as its end.
 An annual plan is marked cancelled in its final month only.", Save and Cancel, and "Reload" where the row changed under
-the editor. The card closes on "Renewal date is not reported by the provider." For an API-key account it lists Type
+the editor. Beside the saved end the row answers `plan_ended_at`, the instant a profile read found the account's
+organization holding no plan, which the router reads as an end that has passed until a profile read or a pairing finds
+a plan again ([Account states](pairing.md#account-states)).
+The card closes on "Renewal date is not reported by the provider." For an API-key account it lists Type
 ("API key") and Windows ("None reported, billed per token"). "Usage" ("Remaining share of each window") draws the three
 windows as the Quota view does, the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this
 month" with its spend meter and an "in use" badge, the reason the provider gave for disabling extra usage, and a "Fast
@@ -1177,6 +1180,8 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | pin expired | A pin was released, idle past the pin window or for the reasons it lists. |
 | pin moved | A rule or a failover moved a session's pin to another account, with the destination's fit and runway where a rule's gate read it and the failover's cause. |
 | pin released | An operator released a session's pin by hand. |
+| plan ended | A profile read found the account's organization holding no plan, so the account is flagged plan ended, with the read's source (the profile read, or the usage 403 that made it due) and the profile's organization type, rate-limit tier and subscription status. |
+| plan restored | The account's plan-ended flag cleared, with its source (a profile read that found a plan, or a pairing confirm) and the profile's organization type, rate-limit tier and subscription status. |
 | poll backoff ended | The usage poll answered cleanly again after backing off. |
 | poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
 | poll failed | The usage or the profile endpoint answered a passing fault, with the endpoint, the status or the transport failure and the text. |
