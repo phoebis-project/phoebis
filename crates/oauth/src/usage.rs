@@ -663,8 +663,9 @@ impl UsageService {
         );
     }
 
-    /// Ends the pause `plan_ended` recorded, for a profile that reports a plan again: the ladder starts over, so a 429
-    /// after the pause waits the ladder's first step rather than the step a run before it reached.
+    /// Ends the pause `plan_ended` recorded, for a profile that reports a plan again: the ladder's count starts over, so
+    /// a 429 after the pause waits the ladder's first step rather than the step a run before it reached, while a
+    /// backoff run still open closes at the next clean poll, which writes its end as every run's.
     pub fn plan_restored(&self, account_id: &str) {
         let mut cache = self.inner.cache.lock().expect(LOCK_POISONED);
         let Some(entry) = cache.get_mut(account_id) else {
@@ -673,7 +674,6 @@ impl UsageService {
         if entry.last_error.as_deref() == Some(PLAN_ENDED) {
             entry.last_error = None;
         }
-        entry.backoff_since = None;
         entry.rate_limited_in_a_row = 0;
     }
 

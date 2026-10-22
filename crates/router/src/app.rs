@@ -471,6 +471,7 @@ pub async fn run_until(
         samples_reported = sampled.reported,
         samples_failed = sampled.failed,
         samples_pending = sampled.pending,
+        samples_paused = sampled.paused,
         bound_seconds = config.routing.startup_fetch_seconds,
         "startup fetch finished"
     );

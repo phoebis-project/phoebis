@@ -1244,7 +1244,8 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
         Sampled {
             reported: 2,
             failed: 0,
-            pending: 0
+            pending: 0,
+            paused: 0
         }
     );
     let samples = h.router.samples().await.unwrap();
@@ -1324,7 +1325,8 @@ async fn a_usage_endpoint_that_hangs_ends_the_startup_step_at_its_bound() {
         Sampled {
             reported: 0,
             failed: 0,
-            pending: 1
+            pending: 1,
+            paused: 0
         }
     );
     up.release();
@@ -1384,7 +1386,8 @@ async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
         Sampled {
             reported: 1,
             failed: 0,
-            pending: 0
+            pending: 0,
+            paused: 0
         }
     );
     let samples = h.router.samples().await.unwrap();
@@ -1416,7 +1419,8 @@ async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_furt
         Sampled {
             reported: 0,
             failed: 0,
-            pending: 1
+            pending: 1,
+            paused: 0
         }
     );
     h.ledger.clone().shutdown().await.unwrap();
@@ -1699,6 +1703,18 @@ async fn a_usage_401_lands_reauth_required_under_auth_failed_and_the_poll_stops_
 
     step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(usage_asked(&up, A), 1, "the first slot meets the 401");
+    let usage = h.usage.as_ref().unwrap();
+    assert_eq!(
+        (
+            usage.poll_status("a").and_then(|s| s.last_error),
+            usage.latest("a").and_then(|s| s.error)
+        ),
+        (
+            Some("usage request rejected with status 401".to_string()),
+            Some("usage request rejected with status 401".to_string())
+        ),
+        "the standing and the snapshot keep the text every refused status writes"
+    );
     let row = h.store.account("a").unwrap().unwrap();
     assert_eq!(
         (row.state, row.state_cause),
@@ -2164,6 +2180,129 @@ async fn a_run_of_usage_429s_flags_nothing_and_writes_no_poll_failed_row() {
     for kind in ["plan_ended", "poll_failed"] {
         assert!(rows_of(&h, kind).await.is_empty(), "{kind}");
     }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_backoff_run_open_when_the_plan_ended_closes_at_the_first_clean_poll_after_the_restore() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", usage_rule().respond);
+    up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    // The first slot at 300 s opens the run, and the profile read that follows finds the plan ended.
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(usage_asked(&up, A), 1);
+    assert!(h.store.set_plan_ended("a", NOW + 302_000).unwrap());
+    step_to(&h, &up, &paused, secs(600)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        1,
+        "the flag holds the slot after the hold"
+    );
+    let row = h.store.account("a").unwrap().unwrap();
+    resumed(QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    ))
+    .await;
+    assert_eq!(plan_ended_at(&h, "a"), None, "the profile reports the plan");
+    assert_eq!(
+        h.usage
+            .as_ref()
+            .unwrap()
+            .poll_status("a")
+            .map(|s| s.rate_limited_in_a_row),
+        Some(0),
+        "the restore starts the ladder over"
+    );
+
+    step_to(&h, &up, &paused, secs(725)).await;
+    assert_eq!(usage_asked(&up, A), 2, "the next slot reads the usage");
+    let rows = resumed(wait_for_async(Duration::from_secs(5), || async {
+        let rows = backoff_rows(&h).await;
+        (rows.len() == 2).then_some(rows)
+    }))
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.0.as_str(), row.1.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("poll_backoff_started", Some("a")),
+            ("poll_backoff_ended", Some("a"))
+        ],
+        "the run the 429 opened closes at the first clean poll"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_startup_step_reads_a_flagged_accounts_profile_alone_and_counts_it_paused() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(
+        &up,
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage.clone().unwrap(),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(
+        sampled,
+        Sampled {
+            reported: 1,
+            failed: 0,
+            pending: 0,
+            paused: 1
+        },
+        "the flagged account counts as paused beside the one reported"
+    );
+    wait_for(Duration::from_secs(5), || {
+        (profile_asked(&up, A) == 1).then_some(())
+    })
+    .await;
+    assert_eq!(
+        usage_asked(&up, A),
+        0,
+        "no usage request for the flagged account"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_poll_whose_403_read_the_profile_reads_it_no_second_time() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The startup step reads every account's profile, which is due as the 403 makes it due.
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage.clone().unwrap(),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(sampled.failed, 1);
+    wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "poll_failed").await.pop()
+    })
+    .await;
+    stays_for(Duration::from_millis(500), || profile_asked(&up, A) == 1).await;
     up.shutdown().await;
 }
 

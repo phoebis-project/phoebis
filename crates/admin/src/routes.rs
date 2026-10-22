@@ -2199,8 +2199,9 @@ pub(crate) struct Account {
     pub canceled: bool,
     /// Epoch milliseconds: when a profile read found the account's organization holding no plan, null while a plan
     /// stands. While it is set the usage poll sends the account no usage request and reads its profile hourly, the
-    /// routing reads the account as past its end, and a profile read that finds a plan, or a pairing confirm, clears
-    /// it.
+    /// routing reads the account as past its end, the row keeps the last plan's `profile.organization_type`,
+    /// `profile.billing_type` and `subscription.tier`, and a profile read that finds a plan, or a pairing confirm,
+    /// clears it.
     pub plan_ended_at: Option<i64>,
     /// `disconnected`, `funding_required`, `reauth_required`, `ready` or `unpaired`.
     #[schema(example = "disconnected")]

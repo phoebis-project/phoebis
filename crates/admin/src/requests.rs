@@ -390,7 +390,8 @@ pub(crate) struct Event {
     /// - `poll_failed`: the usage poll's read of the usage or the profile endpoint (`endpoint`) answered a status
     ///   other than 200 and 429 or failed in transport, once per poll, with the `status`, null on a transport
     ///   failure, the `error` text the poll recorded and `transport`. A usage 401 writes none, since it moves the
-    ///   account to `reauth_required`.
+    ///   account to `reauth_required`, and a usage 403 naming the organization's refusal whose profile reports no plan
+    ///   writes `plan_ended` instead.
     /// - `refresh_failed`: an OAuth token refresh failed, with the `error` the refresh recorded and its `cause`:
     ///   the token endpoint's error code (`invalid_grant`), else the status it answered (`503`), else the words
     ///   before the colon of an error that carries its detail after one (`transport`), else the error's own words
