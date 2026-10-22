@@ -3337,7 +3337,7 @@ const VERSION_41_REQUESTS: &str =
 
 /// What migration 43 adds, dropped over a file the current schema built so a replay from an earlier version adds it
 /// again: the attempt's class, and the extra-usage samples table laid back under its old key without the five `spend`
-/// columns, its rows copied over.
+/// columns, its rows copied over with the poll rows laid back on the percent the step rescales from.
 const VERSION_42_TABLES: &str = "ALTER TABLE attempts DROP COLUMN usage_based; \
      CREATE TABLE extra_usage_samples_prev (account_id TEXT NOT NULL, bucket INTEGER NOT NULL, \
      is_enabled INTEGER NOT NULL, in_use INTEGER, monthly_limit INTEGER, used_credits INTEGER, utilization REAL, \
@@ -3345,7 +3345,8 @@ const VERSION_42_TABLES: &str = "ALTER TABLE attempts DROP COLUMN usage_based; \
      PRIMARY KEY (account_id, bucket)); \
      INSERT INTO extra_usage_samples_prev (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, \
      utilization, currency, disabled_reason, overage_reset, source) SELECT account_id, bucket, is_enabled, in_use, \
-     monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source \
+     monthly_limit, used_credits, CASE WHEN source = 'poll' THEN utilization * 100.0 ELSE utilization END, currency, \
+     disabled_reason, overage_reset, source \
      FROM extra_usage_samples; \
      DROP TABLE extra_usage_samples; \
      ALTER TABLE extra_usage_samples_prev RENAME TO extra_usage_samples;";
@@ -4342,6 +4343,45 @@ async fn the_ledger_step_adds_the_attempt_class_and_widens_the_samples_key_and_a
         db.extra_usage_samples("a", 0, i64::MAX).await.unwrap(),
         [polled_before_the_spend_columns()],
         "the rebuild carries the row over with its values and no spend"
+    );
+}
+
+/// The rows are written into the old table after the undo, on the scales the version before the step stored: a
+/// poll's share on the percent and a head's on the fraction.
+#[tokio::test]
+async fn the_ledger_step_rescales_a_poll_row_from_before_it_to_the_fraction_and_keeps_a_head_rows_share(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.write(|c| {
+            c.execute_batch(VERSION_42_TABLES)?;
+            c.execute_batch("UPDATE meta SET value = '42' WHERE key = 'schema_version';")?;
+            c.execute_batch(
+                "INSERT INTO extra_usage_samples (account_id, bucket, is_enabled, utilization, source) \
+                 VALUES ('a', 3600, 1, 25.0, 'poll'), ('a', 3900, 1, 0.4, 'head');",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 43);
+    let shares = db
+        .extra_usage_samples("a", 0, i64::MAX)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.source, row.utilization))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shares,
+        [
+            ("poll".to_string(), Some(0.25)),
+            ("head".to_string(), Some(0.4))
+        ],
+        "the poll's percent reaches the fraction and the head's fraction stands"
     );
 }
 

@@ -1095,7 +1095,8 @@ CREATE TABLE extra_usage_samples_next (
 );
 INSERT INTO extra_usage_samples_next (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits,
   utilization, currency, disabled_reason, overage_reset, source)
-SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason,
+SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits,
+  CASE WHEN source = 'poll' THEN utilization / 100.0 ELSE utilization END, currency, disabled_reason,
   overage_reset, source
 FROM extra_usage_samples;
 DROP TABLE extra_usage_samples;
