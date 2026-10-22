@@ -927,11 +927,14 @@ function routingLogCells(kinds) {
       if (held === null || need > held[0]) held = [round(need), text];
     };
     if (first && name === 'time') {
-      // Under the cell's tabular figures the month's name is the one part whose width varies, so every month is held.
+      // Under the cell's tabular figures the month's name and the period are the parts whose width varies, so every
+      // month is held in both halves of the day.
       for (let month = 0; month < 12; month += 1) {
-        const at = new Date(2026, month, 28, 21, 12, 5);
-        const text = `${at.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${at.toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit', second: '2-digit' })}`;
-        hold(probe(first, [document.createTextNode(text)]) + padding(first), text);
+        for (const hour of [9, 21]) {
+          const at = new Date(2026, month, 28, hour, 12, 5);
+          const text = `${at.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${at.toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit', second: '2-digit' })}`;
+          hold(probe(first, [document.createTextNode(text)]) + padding(first), text);
+        }
       }
     }
     if (first && name === 'kind') {
@@ -4692,23 +4695,26 @@ async function readRequestsTable() {
     const timeAt = ths.findIndex((th) => th.textContent?.trim() === 'Time');
     const timeCells = timeAt < 0 ? [] : [...table.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === ths.length).map((tr) => tr.children[timeAt]);
     const first = timeCells[0] ?? null;
-    // The widest time the clock setting draws is the dated form, probed for every month in the first cell's font,
-    // since under its tabular figures the month's name is the one part whose width varies.
-    const hourCycle = localStorage.getItem('phoebis.timeFormat') === '12h' ? 'h12' : 'h23';
+    // The widest time the table's clock draws is the dated form, probed for every month and both halves of the day in
+    // the first cell's font: under its tabular figures the month's name and the 12-hour period are the parts whose
+    // width varies.
+    const hourCycle = table.classList.contains('requests__table--12h') ? 'h12' : 'h23';
     let widest = null;
     if (first) {
       const style = getComputedStyle(first);
       const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
       for (let month = 0; month < 12; month += 1) {
-        const at = new Date(2026, month, 28, 21, 12, 5);
-        const text = `${at.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${at.toLocaleTimeString('en-US', { hour: '2-digit', hourCycle, minute: '2-digit', second: '2-digit' })}`;
-        const probe = document.createElement('span');
-        probe.style.cssText = 'position:absolute;left:0;top:0;width:max-content;white-space:nowrap;visibility:hidden';
-        probe.textContent = text;
-        first.appendChild(probe);
-        const need = probe.getBoundingClientRect().width + padding;
-        probe.remove();
-        if (widest === null || need > widest.need) widest = { need: hundredths(need), text };
+        for (const hour of [9, 21]) {
+          const at = new Date(2026, month, 28, hour, 12, 5);
+          const text = `${at.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${at.toLocaleTimeString('en-US', { hour: '2-digit', hourCycle, minute: '2-digit', second: '2-digit' })}`;
+          const probe = document.createElement('span');
+          probe.style.cssText = 'position:absolute;left:0;top:0;width:max-content;white-space:nowrap;visibility:hidden';
+          probe.textContent = text;
+          first.appendChild(probe);
+          const need = probe.getBoundingClientRect().width + padding;
+          probe.remove();
+          if (widest === null || need > widest.need) widest = { need: hundredths(need), text };
+        }
       }
     }
     const timeColumn =
@@ -4790,7 +4796,8 @@ function timeFill(read, say) {
   const time = read.timeColumn;
   if (time === null) say('no Time column to measure');
   else {
-    if (time.widest !== null && (time.floor ?? 0) + 0.5 < time.widest.need) say(`the Time cells' floor is ${time.floor}px, under the widest time "${time.widest.text}" with its padding at ${time.widest.need}px`);
+    // Strict: the cell's ellipsis cuts a time at any fraction of a pixel short.
+    if (time.widest !== null && (time.floor ?? 0) < time.widest.need) say(`the Time cells' floor is ${time.floor}px, under the widest time "${time.widest.text}" with its padding at ${time.widest.need}px`);
     if (read.scroll <= read.client && Math.abs(time.width - time.rest) > 1) say(`the Time column is ${time.width}px against the ${time.rest}px the wrap leaves past the other columns`);
   }
   for (const id of read.ids.filter((i) => i.text !== i.title)) say(`the id line prints "${id.text}", not the whole id "${id.title}"`);
@@ -4838,8 +4845,8 @@ async function requestsTableFits(theme, range = null) {
  * The default set under the 12-hour setting, read on the 7-day range a day and an hour on (`datedRead`), where every
  * Time cell prints its date: the table carries its 12-hour class and holds the column rule (`timeFill`), its Time
  * cells' floor taking the widest dated time of that setting with the cell's padding, so no time cuts. Whether the set
- * runs past the card at 1280 by 800, scrolling inside its wrap, is recorded. The setting leaves after, and the view
- * loop loads the bare list again.
+ * runs past the card at 1280 by 800 is recorded, since the router's seed fits it. Where it does, the wrap scrolls and
+ * Time sits at its floor within 1 px. The setting leaves after, and the view loop loads the bare list again.
  */
 async function requestsTableTwelveHour(theme) {
   const say = (what) => failures.push(`${theme} /requests under the 12-hour setting: ${what}`);
@@ -4856,6 +4863,10 @@ async function requestsTableTwelveHour(theme) {
     if (!read.twelve) say('the table does not carry requests__table--12h');
     if (read.time.dated.length === 0) say('no Time cell prints its date, so the dated form is not measured');
     timeFill(read, say);
+    if (read.scroll > read.client) {
+      if (read.wrapScroll <= read.client) say(`the table needs ${read.scroll}px of its ${read.client}px wrap, which does not scroll`);
+      if (read.timeColumn !== null && Math.abs(read.timeColumn.width - (read.timeColumn.floor ?? 0)) > 1) say(`the Time column is ${read.timeColumn.width}px, not at its ${read.timeColumn.floor}px floor`);
+    }
   } finally {
     await page.evaluate((key) => localStorage.removeItem(key), TIME_FORMAT_KEY);
   }

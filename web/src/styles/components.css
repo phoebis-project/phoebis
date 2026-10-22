@@ -1689,11 +1689,11 @@ textarea.input {
 /* A column is either fit (as wide as its widest cell) or fill (the width the fit columns leave, cut with an ellipsis,
    the whole value on the cell's title). A table that takes the classes marks every column one or the other, so no
    column is left to the browser's content spread. A column with a fixed width of its own takes neither, since
-   `width: 1%` here would outrank it. A table gives its fill to the row's identity, the value that reads best whole, so
-   a wide card gives its room there, and where a table draws two or more fills they share the free width. The zero
-   max-width leaves a fill no width of its own, so a table whose fill needs a floor sets it on the fill's cells in its
-   own rules, and a set wider than the card scrolls inside `.table-wrap`. A table whose visible columns hold no fill
-   takes its content width (`table--no-fill`), and the card keeps the rest empty. */
+   `width: 1%` here would outrank it. The rule gives a table one fill, the row's identity, the value that reads best
+   whole, so a wide card gives its room there, and where a table draws two or more fills they share the free width.
+   The zero max-width leaves a fill no width of its own, so a table whose fill needs a floor sets it on the fill's
+   cells in its own rules, and a set wider than the card scrolls inside `.table-wrap`. A table whose visible columns
+   hold no fill takes its content width (`table--no-fill`), and the card keeps the rest empty. */
 .table .col-fit {
   width: 1%;
   white-space: nowrap;

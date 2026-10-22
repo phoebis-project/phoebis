@@ -1985,7 +1985,7 @@
 }
 
 /* Under 1360 px the drawer narrows to 400 px, so the list beside it keeps 572 px at 1280 by 800: the compact set's
-   floor of 436 px and the rest for the request ids under the Time column. */
+   floor of 436 px (460 px under the 12-hour clock) and the rest for the request ids under the Time column. */
 @media (max-width: 1359px) {
   .requests.has-drawer {
     grid-template-columns: minmax(0, 1fr) 400px;
@@ -2155,13 +2155,13 @@
    floor on the text's box alone widens nothing (the cell's zero max-width clamps the column) and clips the text behind
    the cell without its ellipsis. It holds the widest time the clock setting draws with the cell's 16 px of padding
    (12 px at the row's edge, 4 px inside), the dated "May 28 21:12:05" (126.1 px) and under the 12-hour setting "May 28
-   09:12:05 PM" (149.3 px), so a time never cuts, and a set wider than the card scrolls inside `.table-wrap`. */
+   09:12:05 AM" (150.3 px), so a time never cuts, and a set wider than the card scrolls inside `.table-wrap`. */
 .requests__table td.requests__time {
   min-width: 127px;
 }
 
 .requests__table--12h td.requests__time {
-  min-width: 150px;
+  min-width: 151px;
 }
 
 /* A sub that wrapped would set the height of its whole row, and a log a third taller costs more
@@ -2224,8 +2224,9 @@
    and Account 179 px under 1420 px and 147 px from it, above the longest account id's 67.8 px, cutting a longer line.
    Time, the row's identity, takes what the others leave, so a wide card gives its room to the request id under the
    time. The table's minimum width holds Time at the dated form under the 12-hour setting, the widest it draws ("May
-   28 09:12:05 PM", 145.3 px): with the chevron and Time at 146 px the columns take 990 px, the 1280 by 800 card, and
-   with Model 1150 px, the 1440 by 900 card, and a narrower card scrolls inside `.table-wrap`. */
+   28 09:12:05 AM", 146.3 px, its last 0.3 px in the cell's padding, which no clip cuts): with the chevron and Time at
+   146 px the columns take 990 px, the 1280 by 800 card, and with Model 1150 px, the 1440 by 900 card, and a narrower
+   card scrolls inside `.table-wrap`. */
 .routing-log__table {
   table-layout: fixed;
 }
