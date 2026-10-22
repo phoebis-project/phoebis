@@ -12262,6 +12262,72 @@ async fn a_wall_that_outlives_its_reset_is_held_for_the_windows_length_from_the_
     }
 }
 
+/// A wall with no reset that a restart restores from its row keeps the anchor the row's instant gives it: hourly heads
+/// within the margin after the restart are held for the window's length from that instant, and the first past it lands
+/// as read and clears the wall once.
+#[tokio::test]
+async fn a_restored_wall_keeps_its_anchor_across_a_restart_so_heads_within_the_margin_are_held_for_the_windows_length(
+) {
+    let store = seeded_oauth(&["a"]);
+    let t0 = 2_000;
+    let now = Arc::new(AtomicI64::new(t0));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .report(observed("a", sample_with(t0, FIVE_HOUR, 1.0, None)))
+        .await;
+    let rows = wait_for(WRITTEN, || {
+        let windows = store.load_routing().unwrap().windows;
+        (!windows.is_empty()).then_some(windows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.window.as_str(), r.utilization, r.reset, r.observed_at))
+            .collect::<Vec<_>>(),
+        vec![(FIVE_HOUR, 1.0, None, t0)],
+        "the wall's row is on disk"
+    );
+    handle.shutdown().await.unwrap();
+    let again = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = again.subscribe_events();
+    for hour in 1..=5 {
+        let at = t0 + hour * HOUR;
+        now.store(at, Ordering::SeqCst);
+        again
+            .report(head_reading(at, 0.99, None, &format!("r-{hour}")))
+            .await;
+        assert_eq!(
+            predicted_reading(&again, FIVE_HOUR).await.utilization,
+            1.0,
+            "a head {hour} hours after the restored wall's instant is held at the wall"
+        );
+    }
+    no_further_event(&mut events).await;
+    let past = t0 + 6 * HOUR;
+    now.store(past, Ordering::SeqCst);
+    again.report(head_reading(past, 0.99, None, "r-6")).await;
+    assert_eq!(
+        predicted_reading(&again, FIVE_HOUR).await.utilization,
+        0.99,
+        "a head past the window's length from the restored wall's instant lands as read"
+    );
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.99,
+            None,
+            WindowSource::Head,
+            Some("r-6")
+        )),
+        "{event:?}"
+    );
+    no_further_event(&mut events).await;
+}
+
 /// A head within the margin of a wall a poll announced with its reset, taken inside the slack past that reset and
 /// naming none: it is held at the wall, reads the reset passed, and re-bases the wall's announcement on its own reset
 /// and instant, so later heads within the margin are held for the window's length from that instant and the first past

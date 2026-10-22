@@ -415,7 +415,9 @@ holds once an account has backed off for thirty minutes.
 poll or the router's own prediction took it there. A window read under its limit again in the same reset cycle emits
 `window_cleared`, after a reading at the limit and after a predicted spent edge alike, and the clear ends the
 `destination_spent` condition the spent event built ([Conditions and gauges](statistics.md#conditions-and-gauges)). The
-reset's passing emits `window_reset`, by the clock walk or by the first reading after it, and no clear.
+reset's passing emits `window_reset`, by the clock walk or by the first reading after it, and no clear. A wall the
+router restored from the registry at a start keeps the anchor its stored reading gave it, so a head inside the margin
+after the restart neither moves the anchor nor holds the account past the window's length.
 
 **The projection** Every move and placement reads where each plan window of a subscription account is headed: its
 prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier,
