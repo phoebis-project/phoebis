@@ -209,19 +209,21 @@ the router replaces the session's agents, the next requests arm recipes again, a
 `took over session <id> from a silent instance`. Claude Code puts the plugin's name in front of both lines.
 
 On the router's side, a request whose owner header names another owner than the session's registration is foreign
-traffic while the holder's lease is live, and a session the router restored at a restart reads as live for one lease
-length. The router leaves the session's recipes as they were, counts the mismatch, and at the session's first mismatch
-writes one WARN line, `a request named another owner than the session's registration`, naming the session id and never
-an owner id. Once the lease has lapsed, such a request takes the session over: the router records the request's owner as
-the session's, keeps it across a restart and arms the recipe as it does for the registered owner. The new instance's
-start still meets the silent holder and takes over as above, which replaces the agents those requests armed.
+traffic while the holder's lease is live, and a session saved attended reads as live for one lease length after a router
+restart, until its registration arrives. The router leaves the session's recipes as they were, counts the mismatch, and
+at the session's first mismatch writes one WARN line, `a request named another owner than the session's registration`,
+naming the session id and never an owner id. Once the lease has lapsed, such a request takes the session over: the
+router records the request's owner as the session's, keeps it across a restart and arms the recipe as it does for the
+registered owner. The new instance's start still meets the silent holder and takes over as above, which replaces the
+agents those requests armed.
 
 ### What the mod leaves alone
 
 The mod runs one shell command at load, `echo $PPID`, to read the client process's identity, and no other. It hooks two
 settings-hook events, `classic.Stop` and `classic.SubagentStop`, for the background list they carry, and reads no
-transcript, no background command's output and no conversation text. The one file it reads is the key file that
-`token_file` names.
+transcript, no background command's output and no conversation text. Beside the key file that `token_file` names, the
+one file it reads, it keeps the key `identities` in its own store, which Claude Code holds as a file under the user's
+configuration directory.
 
 ## Where it runs
 

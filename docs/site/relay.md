@@ -488,8 +488,9 @@ out before a registration has been acknowledged. What each answer makes the mod 
 - `agent_exists`: the mod drops the report, counts the agent as announced and registers again.
 - `agent_released` with a generation: the mod drops the report and adopts the generation, and the agent's next report
   starts it again with `agent_start`. Without a generation the mod drops the report and registers again.
-- `instance_conflict` naming the holding instance: the mod retries the registration once with `previous_instance_id`.
-  A second conflict, or one that names no instance, stops reporting for that session id.
+- `instance_conflict` naming the holding instance: the mod retries the registration with `previous_instance_id`, and
+  again with each newly named holder. One that names no instance keeps the session: the start goes back to the head of
+  the queue and is retried along the same backoff until the router names the holder.
 - `instance_ended`, `stale_sequence` and `unknown_instance`: the report goes back behind one `session_start` with the
   same instance. A registration refused again with the same code waits along the same backoff before it goes out
   again, rather than going out at once round after round.

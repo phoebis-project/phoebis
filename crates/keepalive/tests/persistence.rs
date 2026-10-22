@@ -274,6 +274,58 @@ async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_insta
     );
 }
 
+/// A request on main naming `owner` in its owner header, of the class `request_class` when one is named.
+fn owned_request(r: &Rig, id: &str, request_class: Option<&str>, owner: &str) -> BusEvent {
+    let mut event = r.observed_with(
+        id,
+        "main",
+        request_class,
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    );
+    if let BusEvent::RequestObserved(observed) = &mut event {
+        observed.owner_id = Some(owner.into());
+    }
+    event
+}
+
+#[tokio::test]
+async fn an_auxiliary_requests_takeover_of_a_lapsed_session_saves_its_owner_across_the_restart() {
+    let mut r = rig(on_disk()).await;
+    r.event(Event {
+        event: "session_start".into(),
+        owner_id: Some("owner-1".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.advance(LEASE_MS);
+    // The lapse is swept and saved first, so the one session write the takeover's flush can carry is the takeover's.
+    r.engine.expire();
+    r.engine.flush_persisted().await;
+    // A title request is not refreshing, so it leaves at the guard before a turn's own session write.
+    r.engine
+        .observe(owned_request(&r, "r-title", Some("title"), "owner-2"));
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        None,
+        "a request past the lease takes the session over"
+    );
+    r.engine.flush_persisted().await;
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
+    // The re-registration renews the lease and names no owner, so the fence compares against the owner the load read.
+    r.reregister();
+    r.engine
+        .observe(owned_request(&r, "r-first-owner", None, "owner-1"));
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        Some(1),
+        "the saved owner is the one the takeover recorded"
+    );
+}
+
 #[tokio::test]
 async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
     let mut r = rig(on_disk()).await;

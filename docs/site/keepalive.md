@@ -75,7 +75,8 @@ lapsed, with the time the mod stopped reporting, and `none` for a session the ro
 the router still pins and whose requests it still sees. The router reads the owner header the mod has the client send on
 every model request of its process, `X-Keepalive-Owner-Id`, to tell that process's requests from another process's on
 the same session id, leaving the session's recipes as they were and counting the mismatch when the header names another
-owner, and strips the header before a request leaves.
+owner, and strips the header before a request leaves. Once the holder's lease has lapsed, a real request naming another
+owner takes the session over for that owner.
 
 ## Turning it on
 

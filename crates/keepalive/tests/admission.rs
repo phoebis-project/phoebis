@@ -420,8 +420,8 @@ async fn a_request_naming_another_owner_after_the_holders_lease_lapsed_takes_the
         None,
         "a takeover counts no mismatch"
     );
-    // The holder re-adopts the session within a live lease, so the owner the takeover recorded is the one its
-    // fence now compares against, and the first owner's request is the foreign one.
+    // The re-registration renews the lease and names no owner, so the owner the takeover recorded stands and is the
+    // one the fence compares against, and the first owner's request is the foreign one.
     r.reregister();
     r.engine
         .observe(owned(&r, "r-first-owner", "session", "owner-1"));
