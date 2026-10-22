@@ -12411,6 +12411,89 @@ fn a_usage_based_seat_at_a_share_of_one_is_held_out_on_the_window_spend_until_th
 }
 
 #[test]
+fn a_usage_based_seats_plan_week_read_before_the_class_holds_no_request_and_refuses_no_placement() {
+    // The week a plan seat read at its cap before it converted, which the routing state keeps across the class.
+    let spent_week = sample(0.1, 1.0, T - 500).with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: 1.0,
+            reset: Some(T + 5 * 24 * HOUR),
+            observed_at: T - 500,
+            source: WindowSource::Poll,
+        },
+    );
+    let lone = snapshot_with_terms(
+        Pool {
+            policy: OveragePolicy::PreferPlan,
+            members: vec![("b", 0)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(0.2), T - 500));
+    st.record_sample("b", spent_week.clone());
+    let d = decide(
+        &mut st,
+        &lone,
+        &request(&lone, None, "claude-fable-5-1", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&d.result),
+        "b",
+        "the seat under its spend cap serves a model with a week of its own"
+    );
+
+    let pair = snapshot_with_terms(
+        Pool {
+            policy: OveragePolicy::PreferPlan,
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(0.2), T - 500));
+    st.record_sample("b", spent_week);
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &pair,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "b",
+            T - 1_000,
+            HOUR,
+            800,
+            "root",
+        )],
+    );
+    let req = placement_req(
+        request(&pair, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &["m1"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &pair, &req, &mut rng()).0 else {
+        panic!("the request is placed")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.placement),
+        (
+            "b",
+            Some(Placement {
+                rung: "content",
+                depth: 1,
+                prefix_tokens: 800,
+            })
+        ),
+        "the entry's seat admits the placement, the old week holding nothing"
+    );
+}
+
+#[test]
 fn a_usage_based_seats_spend_hold_lifts_once_the_clock_passes_its_reset_and_once_a_head_reads_the_share_under_one(
 ) {
     let reset = T + HOUR;

@@ -874,7 +874,8 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
 /// that never read the window, counts as allowance (an api_key account, whose sample carries no plan window of
 /// its own, always holds it here). A reading past its reset, or one a newer head lowered, no longer excludes. A
 /// usage-based account at its spend cap (`spend_spent`) has none whatever the request's window, since the spend funds
-/// every model.
+/// every model, and below it holds allowance whatever its plan-window readings say: the spend is its one hold, and a
+/// reading it kept from before the class, or a head's family it still records, stops no request.
 fn holds_allowance(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -884,6 +885,9 @@ fn holds_allowance(
 ) -> bool {
     if spend_spent(state, snapshot, account_id, now).is_some() {
         return false;
+    }
+    if snapshot.usage_based(account_id) {
+        return true;
     }
     let spent = |name: &str| {
         state
@@ -898,7 +902,8 @@ fn holds_allowance(
 }
 
 /// The spent windows `holds_allowance` reads for `window`, each with its reset, `None` for one that names none, and
-/// the window `spend` at its reset where `spend_spent` holds the account out.
+/// the window `spend` at its reset where `spend_spent` holds the account out. A usage-based account lists no plan
+/// window, as `holds_allowance` reads none for it.
 fn spent_windows<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -906,8 +911,10 @@ fn spent_windows<'a>(
     window: &'a str,
     now: i64,
 ) -> Vec<(Option<i64>, &'a str)> {
+    let usage_based = snapshot.usage_based(account_id);
     [window, FIVE_HOUR, SEVEN_DAY]
         .into_iter()
+        .filter(|_| !usage_based)
         .filter_map(|name| {
             state
                 .predicted(account_id, name, now)
