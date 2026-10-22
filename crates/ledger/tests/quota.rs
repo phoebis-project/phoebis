@@ -2211,15 +2211,13 @@ async fn a_backoff_run_open_when_the_plan_ended_closes_at_the_first_clean_poll_a
     ))
     .await;
     assert_eq!(plan_ended_at(&h, "a"), None, "the profile reports the plan");
-    assert_eq!(
-        h.usage
-            .as_ref()
-            .unwrap()
-            .poll_status("a")
-            .map(|s| s.rate_limited_in_a_row),
-        Some(0),
-        "the restore starts the ladder over"
-    );
+    // Read now and asserted with the end row, so one run shows both halves of the rule.
+    let after_restore = h
+        .usage
+        .as_ref()
+        .unwrap()
+        .poll_status("a")
+        .map(|s| (s.rate_limited_in_a_row, s.backoff_since.is_some()));
 
     step_to(&h, &up, &paused, secs(725)).await;
     assert_eq!(usage_asked(&up, A), 2, "the next slot reads the usage");
@@ -2237,6 +2235,11 @@ async fn a_backoff_run_open_when_the_plan_ended_closes_at_the_first_clean_poll_a
             ("poll_backoff_ended", Some("a"))
         ],
         "the run the 429 opened closes at the first clean poll"
+    );
+    assert_eq!(
+        (after_restore, rows[1].3["attempts"].as_u64()),
+        (Some((1, true)), Some(1)),
+        "the restore leaves the run's count and start to the clean poll, whose end row counts the run's 429s"
     );
     up.shutdown().await;
 }
