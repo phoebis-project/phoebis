@@ -183,7 +183,7 @@ subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` th
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then stops within 35 seconds. |
 | `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
-| `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary: exit 0 once the accounts are marked ([The storage key](operations.md#the-storage-key)). |
+| `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary, or seals the canary of a registry that has none when the key opens its rows: exit 0 once the accounts are marked or the canary is sealed ([The storage key](operations.md#the-storage-key)). |
 | `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |

@@ -949,8 +949,11 @@ pub struct RecoveryStore {
 /// How the configured key meets the registry a recovery opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyMatch {
-    /// The canary opens under the key, or the registry has no canary and a sealed row does.
+    /// The canary opens under the key.
     Matches,
+    /// The registry has no canary and `readable_rows` sealed rows open under the key: the recovery seals the canary
+    /// and discards nothing.
+    OpensWithoutCanary { readable_rows: u64 },
     /// The canary does not open, but `readable_rows` sealed rows do: the canary is the corrupt part, and a backup
     /// restores it.
     CorruptCanary { readable_rows: u64 },
@@ -990,8 +993,9 @@ impl Store {
 impl RecoveryStore {
     /// How `key` meets the registry. A canary that does not open proves nothing about the rows a discard would
     /// erase, so every sealed row is tried before the answer licenses one, never a sample: a canary that fails while
-    /// rows open is corrupt. Without a canary the same scan proves the key, and a registry holding nothing sealed
-    /// differs, so its recovery discards nothing and seals its canary.
+    /// rows open is corrupt. Without a canary the same scan proves the key, and the recovery seals the canary rather
+    /// than discarding the rows it opens. A registry holding nothing sealed differs, so its recovery discards nothing
+    /// and seals its canary.
     pub fn key_matches(&self, key: &StorageKey) -> Result<KeyMatch, StoreError> {
         let canary = if has_table(&self.conn, "meta")? {
             stored_canary(&self.conn)?
@@ -1007,8 +1011,22 @@ impl RecoveryStore {
         Ok(match (canary, readable_sealed_rows(&self.conn, key)?) {
             (_, 0) => KeyMatch::Differs,
             (Some(_), readable_rows) => KeyMatch::CorruptCanary { readable_rows },
-            (None, _) => KeyMatch::Matches,
+            (None, readable_rows) => KeyMatch::OpensWithoutCanary { readable_rows },
         })
+    }
+
+    /// Seals the canary under `key` in one transaction, for a registry `key_matches` read as opening without one.
+    pub fn seal_canary(&mut self, key: &StorageKey) -> Result<(), StoreError> {
+        let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('storage_key_canary', ?1) ON CONFLICT(key) DO NOTHING",
+            params![encode_canary(&nonce, &sealed)],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn sealed_counts(&self) -> Result<SealedCounts, StoreError> {
@@ -1161,11 +1179,11 @@ impl SealedRow {
 /// stop a start whose key the rows behind it inside the bound prove, and a wrong key, which opens none, costs a
 /// bounded read rather than every row of a large registry at each start and each `check-config`.
 ///
-/// The proof leaves a dead end in two shapes. A registry without a canary whose readable credential or API-key rows
-/// all sit past the 32nd of their kind refuses the right key at the start, and so does one whose readable rows sit
-/// only among the keepalive bodies, which this proof never reads, beside credential or API-key rows that do not open.
-/// `recover-key` scans every sealed row, so it reads the right key as matching and refuses to discard, and it seals no
-/// canary, so no command leads out of either shape with the rows kept.
+/// The bound leaves two shapes of a registry without a canary refusing the right key at the start: one whose readable
+/// credential or API-key rows all sit past the 32nd of their kind, and one whose readable rows sit only among the
+/// keepalive bodies, which this proof never reads, beside credential or API-key rows that do not open. `recover-key`
+/// scans every sealed row, so on such a registry it seals the canary under the key it opens and discards nothing, the
+/// way out of both shapes.
 const PROOF_ROWS_PER_KIND: i64 = 32;
 
 /// Whether the key opens any of the sealed rows `leading_sealed_rows` reads, or `None` when the registry holds
@@ -1811,6 +1829,56 @@ mod tests {
             .expect("read_canary answered while the store was open");
         assert_eq!(answer.unwrap(), CanaryRead::Matches);
         conn.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn a_registry_without_a_canary_reads_the_count_of_the_rows_the_key_opens_until_its_canary_is_sealed(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("router.sqlite");
+        let key = StorageKey::generate();
+        let store = Store::open(&db, &key).unwrap();
+        with_a_credential_on(&store, "a");
+        with_a_credential_on(&store, "b");
+        store.debug_corrupt_credentials("a").unwrap();
+        store
+            .insert_account(&account("vendor", AccountKind::ApiKey))
+            .unwrap();
+        store
+            .set_api_key_secret("vendor", &Secret::new("sk-ant-test-not-a-key"))
+            .unwrap();
+        store.debug_drop_canary().unwrap();
+        // Dropped first, since the recovery's open takes the process lock the store holds.
+        drop(store);
+        let mut recovery = Store::open_for_recovery(&db).unwrap();
+        assert_eq!(
+            recovery.key_matches(&key).unwrap(),
+            KeyMatch::OpensWithoutCanary { readable_rows: 2 },
+            "the bundle of b and the secret open, the corrupt bundle of a does not"
+        );
+        recovery.seal_canary(&key).unwrap();
+        assert_eq!(recovery.key_matches(&key).unwrap(), KeyMatch::Matches);
+        drop(recovery);
+        assert_eq!(Store::read_canary(&db, &key).unwrap(), CanaryRead::Matches);
+    }
+
+    #[test]
+    fn a_key_that_opens_the_canary_matches_and_a_key_that_opens_nothing_differs_with_or_without_a_canary(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("router.sqlite");
+        let key = StorageKey::generate();
+        let other = StorageKey::generate();
+        let store = Store::open(&db, &key).unwrap();
+        with_a_credential(&store);
+        drop(store);
+        let recovery = Store::open_for_recovery(&db).unwrap();
+        assert_eq!(recovery.key_matches(&key).unwrap(), KeyMatch::Matches);
+        assert_eq!(recovery.key_matches(&other).unwrap(), KeyMatch::Differs);
+        drop(recovery);
+        Store::open(&db, &key).unwrap().debug_drop_canary().unwrap();
+        let recovery = Store::open_for_recovery(&db).unwrap();
+        assert_eq!(recovery.key_matches(&other).unwrap(), KeyMatch::Differs);
     }
 
     /// On disk: `synchronous` on an in-memory registry syncs nothing, so only a file proves the setting.

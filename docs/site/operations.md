@@ -134,9 +134,9 @@ one`. The proof's scope, the first 32 credential bundles and the first 32 API-ke
 shapes: a registry without a canary whose readable credential or API-key rows all sit past the 32nd of their kind
 refuses the right key at the start, and so does one whose readable rows sit only among the keepalive recipe bodies,
 which the proof never reads, beside credential or API-key rows that do not open. `phoebis recover-key` scans every
-sealed row, so it reads the right key as matching and refuses to discard, and it seals no canary, so no command leads
-out of either shape with the rows kept: a registry in one needs a backup taken after its canary was sealed, or a
-recovery under a new key, which discards every sealed row.
+sealed row, so on a registry in either shape it seals the canary under the key that opens the rows and exits 0 with `the
+storage key opens {readable_rows} sealed {rows} and the registry has no canary, so a canary was sealed under it and
+nothing was discarded`, keeping every row, and the next start passes through the canary.
 
 `init` refuses a key file that exists with `{path} already exists, and init never replaces a key, since every stored
 credential is sealed under it`, and refuses a data directory that already holds a registry, so a lost key is never
@@ -168,24 +168,27 @@ service layout, as root:
    question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with `the storage
-key matches the registry, nothing to recover` when the key file still opens the registry's canary (or, without one, any
-of its sealed rows), with `the storage key opens {readable_rows} sealed {rows} but not the corrupt canary, so nothing
-was discarded: restore the canary from a backup` (`{rows}` reading `row` or `rows`) when the canary alone does not open,
-since the canary is then the corrupt part and a backup restores it, and with `no registry at {path}, nothing to recover`
-when the registry does not exist. Before it discards anything it tries every sealed row, never a sample. Each refusal
-exits 1. Past them it prepares the registry's schema, running every migration above the stored version, and a
-preparation that fails prints `the registry's schema could not be prepared for the recovery, so nothing was discarded:
-{error}` and exits 1. A run that stops before the preparation leaves the registry at the schema version it found, and
-one whose preparation fails leaves it at the step it reached, since each migration step commits alone. A run that exits
-1 or 2 removes the key file it wrote, with any directory it created for it, and names it in the line `removed the key
-file {path} this run created`, with a line after it for each it could not remove. Every run keeps the registry's lock
-file, a refused open included, since a start that opened the file while the run held it goes on to lock that same file,
-and a file created again in its place would let a later start lock a second one beside it. Then it runs the sequence
-under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
-prints the counts again under `discarded what the old key sealed:` and `and marked the accounts:`, then `sealed a new
-canary under the key at {path}`, then `start the service, then:` over the three steps that remain, and exits 0 once the
-accounts are marked, keeping the key file and the lock file for the service's next start. It prints counts and paths,
-never a key. Then start the service, and:
+key matches the registry, nothing to recover` when the key file still opens the registry's canary, with `the storage key
+opens {readable_rows} sealed {rows} but not the corrupt canary, so nothing was discarded: restore the canary from a
+backup` (`{rows}` reading `row` or `rows`) when the canary alone does not open, since the canary is then the corrupt
+part and a backup restores it, and with `no registry at {path}, nothing to recover` when the registry does not exist.
+Before it discards anything it tries every sealed row, never a sample. Each refusal exits 1. A key file that opens the
+sealed rows of a registry without a canary is no refusal: the run seals the canary under its key in one transaction,
+prints `the storage key opens {readable_rows} sealed {rows} and the registry has no canary, so a canary was sealed under
+it and nothing was discarded` and exits 0, without the summary, the prompt or the discard. Otherwise it prepares the
+registry's schema, running every migration above the stored version, and a preparation that fails prints `the registry's
+schema could not be prepared for the recovery, so nothing was discarded: {error}` and exits 1. A run that stops before
+the preparation leaves the registry at the schema version it found, and one whose preparation fails leaves it at the
+step it reached, since each migration step commits alone. A run that exits 1 or 2 removes the key file it wrote, with
+any directory it created for it, and names it in the line `removed the key file {path} this run created`, with a line
+after it for each it could not remove. Every run keeps the registry's lock file, a refused open included, since a start
+that opened the file while the run held it goes on to lock that same file, and a file created again in its place would
+let a later start lock a second one beside it. Then it runs the sequence under [What it runs](#what-it-runs) as one
+transaction, seals a new canary under the new key in that same transaction, prints the counts again under `discarded
+what the old key sealed:` and `and marked the accounts:`, then `sealed a new canary under the key at {path}`, then
+`start the service, then:` over the three steps that remain, and exits 0 once the accounts are marked, keeping the key
+file and the lock file for the service's next start. It prints counts and paths, never a key. Then start the service,
+and:
 
 - Re-enter every API-key secret in the console.
 - Pair every OAuth account again in the console.

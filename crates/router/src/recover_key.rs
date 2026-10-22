@@ -1,8 +1,9 @@
 //! `phoebis recover-key`: the recovery after a lost storage key, on a stopped registry. It takes the registry's lock,
 //! reads the key file the configuration names or generates a key in memory, refuses a key that still opens the
-//! registry, prints what it discards and asks, then writes a generated key's file as `init` does, prepares the
-//! schema, and discards every row sealed under the old key and seals a new canary in one transaction. It prints
-//! counts and paths, never a key.
+//! registry's canary, and seals the canary under a key that opens the sealed rows of a registry without one. Past
+//! those it prints what it discards and asks, then writes a generated key's file as `init` does, prepares the schema,
+//! and discards every row sealed under the old key and seals a new canary in one transaction. It prints counts and
+//! paths, never a key.
 
 use std::io::{BufRead, ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -31,12 +32,13 @@ const FOLLOW_UPS: [&str; 3] = [
     "rotate every downstream key",
 ];
 
-/// Exit 0 once the accounts are marked, 1 on a refusal or a failure, 2 when the operator answered anything but
-/// `yes`. The lines it prints: the lock refusal "the registry is locked, stop the service first", the matching
-/// key "the storage key matches the registry, nothing to recover", the corrupt canary over rows the key still opens,
-/// the discard summary (one line per count), the prompt, the generated key file's path, the preparation's failure,
-/// the discard's failure, and the three follow-up steps. A run that exits 1 or 2 removes the key file it wrote, with
-/// the directories it created for it, in one line naming them, and keeps the registry's lock file.
+/// Exit 0 once the accounts are marked or the canary of a registry without one is sealed, 1 on a refusal or a
+/// failure, 2 when the operator answered anything but `yes`. The lines it prints: the lock refusal "the registry is
+/// locked, stop the service first", the matching key "the storage key matches the registry, nothing to recover", the
+/// corrupt canary over rows the key still opens, the canary sealed over the rows the key opens in a registry without
+/// one, the seal's failure, the discard summary (one line per count), the prompt, the generated key file's path, the
+/// preparation's failure, the discard's failure, and the three follow-up steps. A run that exits 1 or 2 removes the key
+/// file it wrote, with the directories it created for it, in one line naming them, and keeps the registry's lock file.
 pub fn run(
     config_path: &Path,
     args: &RecoverKeyArgs,
@@ -165,9 +167,9 @@ fn key_of(key_file: &Path, owner: Option<(u32, u32)>) -> Result<(StorageKey, Key
     }
 }
 
-/// The run past the key: the refusal of a key that opens the registry, the summary, the prompt, the file of a
-/// generated key, the preparation and the transaction. `written` names the key file once it is on disk, so the run
-/// removes it again after an exit of 1 or 2.
+/// The run past the key: the refusal of a key that opens the canary, the seal of the canary for a registry without one
+/// whose rows the key opens, the summary, the prompt, the file of a generated key, the preparation and the
+/// transaction. `written` names the key file once it is on disk, so the run removes it again after an exit of 1 or 2.
 #[allow(clippy::too_many_arguments)]
 fn discard(
     store: &mut RecoveryStore,
@@ -185,6 +187,23 @@ fn discard(
     match store.key_matches(key).map_err(registry_error)? {
         KeyMatch::Matches => {
             return Err("the storage key matches the registry, nothing to recover".to_string())
+        }
+        // The key is the right one, so the seal keeps every row it opens and lets the next start pass through the
+        // canary rather than the bounded proof of the sealed rows.
+        KeyMatch::OpensWithoutCanary { readable_rows } => {
+            store.seal_canary(key).map_err(|error| {
+                format!("sealing the canary at {}: {error}", registry.display())
+            })?;
+            let rows = if readable_rows == 1 { "row" } else { "rows" };
+            // The seal has landed, and a reader that went away does not undo it.
+            let _ = say(
+                out,
+                &format!(
+                    "the storage key opens {readable_rows} sealed {rows} and the registry has no canary, so a \
+                     canary was sealed under it and nothing was discarded"
+                ),
+            );
+            return Ok(0);
         }
         // The key is the right one and the discard would erase what it still opens.
         KeyMatch::CorruptCanary { readable_rows } => {
