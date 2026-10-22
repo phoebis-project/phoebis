@@ -472,7 +472,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const edge = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) === startOfHour(from));
     assert.ok(from > startOfHour(from) && edge.length > 0, 'the range starts inside an hour that holds a request');
     const [all] = await s.api.getAnalyticsBreakdown({ from: iso(from), groupBy: 'all', to: iso(s.now) });
-    const kept = s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, s.now));
+    const kept = s.asked(s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, s.now)));
     assert.equal(all.requests, kept.length, `the range counts ${edge.map((r) => r.id).join(', ')}`);
   });
 
@@ -483,7 +483,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const current = s.requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= to);
     assert.ok(current.length > 0, 'the hour the end starts holds requests');
     const [all] = await s.api.getAnalyticsBreakdown({ from: iso(from), groupBy: 'all', to: iso(to) });
-    const kept = s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, to));
+    const kept = s.asked(s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, to)));
     assert.equal(all.requests, kept.length, `the range leaves out the ${current.length} requests from ${iso(to)} on`);
   });
 
