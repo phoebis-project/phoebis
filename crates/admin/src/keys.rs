@@ -220,7 +220,7 @@ fn new_secret() -> String {
     format!("phoebis-{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<(), Response> {

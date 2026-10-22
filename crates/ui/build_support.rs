@@ -21,8 +21,8 @@ pub(crate) fn bundle_stale(
         }
 }
 
-/// The floor the console's `engines` field declares.
-pub(crate) const NODE_RANGES: &str = ">=26.0.0";
+/// The floor the console's `engines` field declares, the major alone.
+pub(crate) const NODE_FLOOR: &str = ">=26.0.0";
 
 /// Reads the `vMAJOR.MINOR.PATCH` that `node --version` answers.
 pub(crate) fn parse_node_version(answer: &str) -> Option<(u32, u32, u32)> {
@@ -32,7 +32,7 @@ pub(crate) fn parse_node_version(answer: &str) -> Option<(u32, u32, u32)> {
     parts.next().is_none().then_some(version)
 }
 
-/// Whether a version falls inside [`NODE_RANGES`].
+/// Whether a version stands at or above [`NODE_FLOOR`].
 pub(crate) fn node_supported((major, _, _): (u32, u32, u32)) -> bool {
     major >= 26
 }
@@ -87,8 +87,8 @@ mod tests {
     }
 
     #[test]
-    fn the_ranges_match_the_web_packages_engines_field() {
-        let field = format!(r#""node": "{NODE_RANGES}""#);
+    fn the_floor_matches_the_web_packages_engines_field() {
+        let field = format!(r#""node": "{NODE_FLOOR}""#);
         assert!(web_file("package.json").contains(&field), "{field}");
     }
 

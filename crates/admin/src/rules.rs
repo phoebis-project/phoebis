@@ -23,7 +23,7 @@ pub(crate) struct RuleInput {
 pub(crate) const MAX_RULES: usize = 256;
 
 /// Every pattern through `check`; the refusal names the entry and carries the error's own text.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn parse_rules(input: &[RuleInput]) -> Result<Vec<ModelRule>, Response> {

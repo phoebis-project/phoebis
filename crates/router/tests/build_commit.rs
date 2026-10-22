@@ -239,3 +239,24 @@ fn the_variable_names_the_build_ahead_of_git_and_a_tree_without_git_names_unknow
         ("unknown".to_owned(), Vec::new())
     );
 }
+
+#[test]
+fn a_variable_set_by_hand_names_the_build_trimmed_and_lowercased_and_a_blank_one_falls_to_git() {
+    let root = tempfile::tempdir().unwrap();
+    let (checkout, _worktree) = repository(root.path());
+    assert_eq!(
+        (
+            build_commit(
+                &checkout,
+                Some(" ABCDEF0123456789abcdef0123456789abcdef01\n")
+            )
+            .0,
+            build_commit(&checkout, Some(" \n")).0,
+        ),
+        (
+            "abcdef0123456789abcdef0123456789abcdef01".to_owned(),
+            git(&checkout, &["rev-parse", "HEAD"]),
+        ),
+        "a value set by hand names the build trimmed and lowercased, and a blank one reads as unset"
+    );
+}

@@ -1932,7 +1932,7 @@ async fn control_send(
         .map_err(|error| format!("control request failed: {error}"))
 }
 
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
@@ -3137,7 +3137,7 @@ pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
 /// refused when it is not a non-negative integer, and answered `409 stale_edit` with `stale` when it names another
 /// incarnation than the row's. A token of the row's incarnation answers the stamp it carries, which the route
 /// compares with its own read.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn fence_token(
@@ -3169,7 +3169,7 @@ pub(crate) fn fence_token(
 /// The edit token an account edit's body names, `None` when it sent none, refused when it is not a non-negative integer.
 /// The route answers 409 when it names another incarnation or revision than its own read, so the store fences on the
 /// read alone.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn fence_revision(sent: Option<&serde_json::Value>) -> Result<Option<u64>, Response> {

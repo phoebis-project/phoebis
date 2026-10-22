@@ -4132,7 +4132,7 @@ fn names_of(db: &phoebis_ledger::LedgerDb, sql: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn the_ledger_step_adds_the_classifier_and_the_contract_item_and_a_ledger_left_at_39_is_carried_to_40(
+async fn the_ledger_step_adds_the_classifier_and_the_contract_item_and_a_ledger_left_at_39_is_carried_to_43(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
@@ -4176,7 +4176,7 @@ async fn the_ledger_step_adds_the_classifier_and_the_contract_item_and_a_ledger_
 /// The backfill reads a stored row's own facts as the landing does: a refusal at the reselect, a refusal whose
 /// stored count outlived its lost selection, the router's own standing and a refused probe all stay unflagged.
 #[tokio::test]
-async fn the_ledger_step_flags_the_stored_refusals_and_a_ledger_left_at_41_is_carried_to_42() {
+async fn the_ledger_step_flags_the_stored_refusals_and_a_ledger_left_at_41_is_carried_to_43() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
     ledger_left_at_41(&path);

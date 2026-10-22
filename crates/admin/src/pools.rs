@@ -58,7 +58,7 @@ pub(crate) struct MembersInput {
 /// Turns the wire members into store writes, refusing an account named twice and a non-positive budget before any
 /// write lands; a member list replaces the pool's whole membership, so an absent budget clears it. A subscription
 /// member's budgets bound its metered spend, the only spend of its that costs money.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 fn member_writes(members: &[MemberInput]) -> Result<Vec<MemberWrite>, Response> {
@@ -355,7 +355,7 @@ pub(crate) fn valid_slug(id: &str) -> bool {
 }
 
 /// Applies `input` over `row`, refusing every value the spec's pool table rules out.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(), Response> {

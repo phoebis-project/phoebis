@@ -12,7 +12,7 @@ mod build_support;
 #[path = "../router/build_commit.rs"]
 mod build_commit;
 
-use build_support::{bundle_stale, node_supported, parse_node_version, NODE_RANGES};
+use build_support::{bundle_stale, node_supported, parse_node_version, NODE_FLOOR};
 
 const PLACEHOLDER_MARKER: &str = "<!-- phoebis-ui placeholder -->";
 
@@ -64,9 +64,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PHOEBIS_SKIP_UI_BUILD");
     // The router's build script names the same commit from the same inputs, so the binary and the bundle it embeds
     // name one commit, and a commit that changes no file under `web/` still rebuilds the bundle.
-    let forced = std::env::var("PHOEBIS_BUILD_COMMIT")
-        .ok()
-        .filter(|value| !value.is_empty());
+    let forced = std::env::var("PHOEBIS_BUILD_COMMIT").ok();
     let (commit, git_inputs) = build_commit::build_commit(&web, forced.as_deref());
     println!("cargo:rerun-if-env-changed=PHOEBIS_BUILD_COMMIT");
     for input in git_inputs {
@@ -101,7 +99,7 @@ fn main() {
             _ => false,
         };
         // Another Node fails deep inside the bundler with a message that names nothing an operator can act on, so
-        // the ranges are checked and named before npm runs.
+        // the floor is checked and named before npm runs.
         let version = Command::new("node")
             .arg("--version")
             .output()
@@ -116,7 +114,7 @@ fn main() {
         };
         assert!(
             parse_node_version(&version).is_some_and(node_supported),
-            "the console build needs Node {NODE_RANGES}, and {found} was found"
+            "the console build needs Node {NODE_FLOOR}, and {found} was found"
         );
         // `npm ci` needs the network only when the lockfile's packages are not in the npm cache.
         let modules = from_this_lockfile || {

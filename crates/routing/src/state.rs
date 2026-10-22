@@ -321,7 +321,7 @@ impl UtilizationSample {
     }
 }
 
-// A pin write goes out on nearly every placement and moves once into the writer's batch; boxing it would put an
+// A pin write goes out on nearly every placement and moves once into the writer's batch. Boxing it would put an
 // allocation on that path to shrink the rarer writes queued beside it.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]

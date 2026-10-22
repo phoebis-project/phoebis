@@ -81,7 +81,7 @@ pub(crate) struct PatchAccountInput {
 const TEXT_MAX_BYTES: usize = 256;
 
 /// Refuses `value` past `TEXT_MAX_BYTES`, naming `field`, before anything is written.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn within_text_bound(field: &str, value: Option<&str>) -> Result<(), Response> {

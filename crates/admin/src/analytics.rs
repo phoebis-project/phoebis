@@ -105,7 +105,7 @@ fn kinds(state: &AdminState) -> Result<HashMap<String, AccountKind>, Response> {
 }
 
 /// Every analytics route starts here.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {

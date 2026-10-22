@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # The checker has to fail on what it exists to catch: a dangling link, a fragment its page lacks, a route the
 # client page skipped, a row the proxy listener does not serve, and a handler call it cannot consume. Every
-# checker case runs against a throwaway tree, never the real site. The four content checks run against throwaway
+# checker case runs against a throwaway tree, never the real site. The five content checks run against throwaway
 # files in the same way: a page list short a line the binary prints, a code with no row, a quoted example that
-# drifted, and prose that breaks a rule. The favicon case at the end reads the real tree.
+# drifted, a quoted unit that drifted, and prose that breaks a rule. The favicon case and the unit case at the end
+# read the real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -293,6 +294,26 @@ echo "$out" | grep -q "2 fenced blocks titled deploy/config.example.yaml" || fai
 out=$(python3 "$check" example "$tmp/example/gone.yaml" "$tmp/example/page.md" 2>&1) && fail "an example file that does not exist passed"
 echo "$out" | grep -q "gone.yaml is missing" || fail "the missing example file did not report: $out"
 
+# The quoted unit: equal passes, a drifted line names both line numbers, and a page without the block fails.
+mkdir -p "$tmp/unit"
+printf '[Service]\n# a comment\nUMask=0077\n' > "$tmp/unit/phoebis.service"
+cat > "$tmp/unit/page.md" <<'MD'
+# Page
+
+```ini title="deploy/phoebis.service"
+[Service]
+# a comment
+UMask=0077
+```
+MD
+python3 "$check" unit "$tmp/unit/phoebis.service" "$tmp/unit/page.md" >/dev/null || fail "an equal unit block was refused"
+sed -i 's/^UMask=0077$/UMask=0022/' "$tmp/unit/page.md"
+out=$(python3 "$check" unit "$tmp/unit/phoebis.service" "$tmp/unit/page.md" 2>&1) && fail "a drifted unit line passed"
+echo "$out" | grep -q "page.md:6: differs from phoebis.service:3" || fail "the drifted line did not name both line numbers: $out"
+printf '# Page\n\nno block\n' > "$tmp/unit/page.md"
+out=$(python3 "$check" unit "$tmp/unit/phoebis.service" "$tmp/unit/page.md" 2>&1) && fail "a page without the unit block passed"
+echo "$out" | grep -q "0 fenced blocks titled deploy/phoebis.service" || fail "the missing unit block did not report: $out"
+
 # The check-config list: the arm's lines read statically, the unconditional ones in order, a conditional one later.
 mkdir -p "$tmp/check-config"
 cat > "$tmp/check-config/main.rs" <<'RS'
@@ -495,5 +516,7 @@ echo "$out" | grep -q 'inner-fence.md:5: semicolon:' || fail "prose did not repo
 # Unlike the cases above this reads the real tree: the site's favicon is a copy of the console's, and nothing else
 # keeps the two equal.
 cmp -s "$here/web/public/favicon.svg" "$here/docs/site/assets/favicon.svg" || fail "docs/site/assets/favicon.svg differs from web/public/favicon.svg"
+# The real tree too: the installation page quotes the shipped unit whole.
+out=$(python3 "$check" unit 2>&1) || fail "the installation page's unit block differs from deploy/phoebis.service: $out"
 
 echo "check-docs: ok"

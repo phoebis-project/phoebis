@@ -196,7 +196,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     }
 }
 
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, Response> {
