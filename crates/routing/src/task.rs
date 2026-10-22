@@ -1799,6 +1799,25 @@ pub fn spawn(
     );
     let mut state = RoutingState::from_load(load);
     state.drop_usage_based_overage(&snapshot.read().expect("snapshot lock poisoned"));
+    // A restored wall keeps the anchor its stored pair gives it: without the seed every within-margin head after a
+    // restart would move the clamp's anchor onto its own instant and hold the account spent past the window's length.
+    let spent_announced: HashMap<(String, String), (Option<i64>, i64)> = state
+        .samples()
+        .into_iter()
+        .flat_map(|(account_id, sample)| {
+            sample
+                .windows
+                .into_iter()
+                .filter_map(move |(window, reading)| {
+                    (is_plan_window(&window) && reading.utilization >= 1.0).then(|| {
+                        (
+                            (account_id.clone(), window),
+                            (reading.reset, reading.observed_at),
+                        )
+                    })
+                })
+        })
+        .collect();
     // One table, shared by the handle (the relay's synchronous permits and tickets) and the state (the
     // selector's cap partition), so a count is exact wherever it is read.
     let in_flight = InFlight::default();
@@ -1901,7 +1920,7 @@ pub fn spawn(
         reset_announced: HashMap::new(),
         revision: 1,
         snapshot,
-        spent_announced: HashMap::new(),
+        spent_announced,
         state,
         store,
         touched_at: HashMap::new(),
