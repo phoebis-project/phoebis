@@ -5140,7 +5140,8 @@ async function barRow(theme, view) {
       else {
         if (narrow.bar.scroll > narrow.bar.client) say(`950 by 800: the bar runs ${narrow.bar.scroll} px in ${narrow.bar.client}`);
         if (narrow.row.scroll > narrow.row.client) say(`950 by 800: the row runs ${narrow.row.scroll} px in ${narrow.row.client}`);
-        if (narrow.edge === null || narrow.edge > narrow.window) say(`950 by 800: the right edge ends at ${narrow.edge ?? 'none'} px, past the ${narrow.window} px window`);
+        if (narrow.edge === null) say('950 by 800: the bar draws no right edge');
+        else if (narrow.edge > narrow.window) say(`950 by 800: the right edge ends at ${narrow.edge} px, past the ${narrow.window} px window`);
         if (view === '/requests' && (narrow.count === null || narrow.count > narrow.window)) say(`950 by 800: the count ends at ${narrow.count ?? 'none'} px, past the ${narrow.window} px window`);
       }
     }
@@ -5163,7 +5164,10 @@ async function barRow(theme, view) {
     else {
       if (phone.bar.scroll > phone.bar.client) say(`400 by 800: the bar runs ${phone.bar.scroll} px in ${phone.bar.client}`);
       if (phone.row.scroll > phone.row.client) say(`400 by 800: the row runs ${phone.row.scroll} px in ${phone.row.client}`);
-      if (phone.refresh === null || phone.refresh > phone.window) say(`400 by 800: the Refresh button ends at ${phone.refresh ?? 'none'} px, past the ${phone.window} px window`);
+      if (phone.refresh === null) say('400 by 800: the bar draws no Refresh control');
+      else if (phone.refresh > phone.window) say(`400 by 800: the Refresh button ends at ${phone.refresh} px, past the ${phone.window} px window`);
+      // Analytics alone draws its bar without a count.
+      if (phone.count === null && view !== '/analytics') say('400 by 800: the bar draws no count');
       if (phone.count !== null && phone.count > phone.window) say(`400 by 800: the count ends at ${phone.count} px, past the ${phone.window} px window`);
     }
   } finally {
