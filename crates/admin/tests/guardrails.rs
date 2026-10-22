@@ -5,6 +5,7 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
@@ -2012,6 +2013,17 @@ async fn the_dry_run_reads_full_pages_until_the_last_whatever_room_the_sample_ha
                 None,
             );
         }
+    }
+    // The counter counts every `read` on the handle, and the one this harness runs beside a dry run is the ledger
+    // writer's start read, since no member carries a budget for its spend refresh to read. Waiting for it keeps it
+    // out of the difference.
+    let give_up = tokio::time::Instant::now() + Duration::from_secs(5);
+    while parts.db.debug_page_reads() < 1 {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the ledger writer's start read did not land within 5 s"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     let before = parts.db.debug_page_reads();
     let (status, answer) = dry_run(
