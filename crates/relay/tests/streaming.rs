@@ -510,28 +510,110 @@ async fn keep_alive_reuses_the_upstream_connection() {
     up.shutdown().await;
 }
 
-/// The body the fake serves compressed in both tests below.
+/// A body the fake serves compressed.
 const COMPRESSIBLE: &[u8] =
     br#"{"id":"msg_1","type":"message","content":[{"type":"text","text":"aaaaaaaaaaaaaaaaaaaa"}]}"#;
 
+/// A committed answer with its usage block, which the relay reads whatever coding carried it.
+const ANSWER_WITH_USAGE: &[u8] = br#"{"id":"msg_coded","type":"message","content":[{"type":"text","text":"aaaaaaaaaaaaaaaaaaaa"}],"usage":{"input_tokens":5,"output_tokens":7}}"#;
+
 #[tokio::test]
-async fn a_gzipped_response_stays_compressed_for_a_caller_that_reads_gzip() {
-    let gzipped = gzip(COMPRESSIBLE);
-    let up = gzip_upstream(gzipped.clone()).await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-    let resp = app
-        .oneshot(common::stream_request("phoebis-testkey"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
+async fn a_gzipped_response_arrives_as_identity_with_its_usage_read_whatever_the_caller_accepts() {
+    let (coding, body, complete, attempt) = one_coded_answer("gzip", gzip(ANSWER_WITH_USAGE)).await;
     assert_eq!(
-        body.as_ref(),
-        gzipped.as_slice(),
-        "a caller that reads gzip gets the upstream payload untouched"
+        coding, None,
+        "a caller that reads gzip still gets the answer decoded"
     );
+    assert_eq!(body.as_ref(), ANSWER_WITH_USAGE);
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.interruption
+        ),
+        (phoebis_bus::Outcome::Succeeded, None, None)
+    );
+    assert_eq!(
+        (attempt.input_tokens, attempt.output_tokens),
+        (Some(5), Some(7)),
+        "the attempt's row carries the usage the decoded answer named"
+    );
+}
+
+#[tokio::test]
+async fn a_deflated_response_arrives_as_identity_with_its_usage_read_whatever_the_caller_accepts() {
+    let (coding, body, complete, attempt) =
+        one_coded_answer("deflate", deflate(ANSWER_WITH_USAGE)).await;
+    assert_eq!(
+        coding, None,
+        "a caller that reads deflate still gets the answer decoded"
+    );
+    assert_eq!(body.as_ref(), ANSWER_WITH_USAGE);
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.interruption
+        ),
+        (phoebis_bus::Outcome::Succeeded, None, None)
+    );
+    assert_eq!(
+        (attempt.input_tokens, attempt.output_tokens),
+        (Some(5), Some(7)),
+        "the attempt's row carries the usage the decoded answer named"
+    );
+}
+
+/// A committed JSON answer served as `body` under `coding` to a caller whose `Accept-Encoding` names that coding: the
+/// coding the client was answered in, the body it read, the completion the bus carried and the attempt row the ledger
+/// files from the request's events.
+async fn one_coded_answer(
+    coding: &str,
+    body: Vec<u8>,
+) -> (
+    Option<String>,
+    Bytes,
+    phoebis_bus::RequestComplete,
+    phoebis_ledger::AttemptRecord,
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![("Content-Encoding".into(), coding.into())],
+            body,
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let mut request = common::stream_request(common::KEY);
+    common::set_header(&mut request, "accept-encoding", coding);
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let answered_in = resp
+        .headers()
+        .get("content-encoding")
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let events = common::drain_until_complete(&mut sub).await;
+    let complete = events
+        .iter()
+        .find_map(|e| match e {
+            phoebis_bus::Event::RequestComplete(complete) => Some(complete.clone()),
+            _ => None,
+        })
+        .expect("the request completed");
+    let mut assembler = phoebis_ledger::Assembler::new(std::sync::Arc::new(|| 0));
+    let attempt = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .find_map(|record| match record {
+            phoebis_ledger::Record::Request { mut attempts, .. } => attempts.pop(),
+            _ => None,
+        })
+        .expect("the request's ledger row with its attempt");
     up.shutdown().await;
+    (answered_in, body, complete, attempt)
 }
 
 #[tokio::test]
@@ -570,6 +652,16 @@ async fn gzip_upstream(body: Vec<u8>) -> FakeUpstream {
 fn gzip(payload: &[u8]) -> Vec<u8> {
     use std::io::Write;
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(payload)
+        .expect("a Vec never fails a write");
+    encoder.finish().expect("the encoder flushes into the Vec")
+}
+
+/// `payload` under the HTTP `deflate` coding, which is the zlib format.
+fn deflate(payload: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     encoder
         .write_all(payload)
         .expect("a Vec never fails a write");
@@ -891,58 +983,6 @@ async fn the_upstreams_request_id_rides_on_the_outcome_of_the_committed_attempt(
     assert_eq!(
         common::outcome(&resp).upstream_request_id.as_deref(),
         Some("req_up_0001")
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn an_explicit_refusal_beats_the_wildcard_whatever_the_order_or_the_line() {
-    for accept in ["gzip;q=0, *;q=1", "*;q=1, gzip;q=0"] {
-        let up = gzip_upstream(gzip(COMPRESSIBLE)).await;
-        let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-        let mut request = common::stream_request("phoebis-testkey");
-        common::set_header(&mut request, "accept-encoding", accept);
-        let resp = app.oneshot(request).await.unwrap();
-        assert!(
-            resp.headers().get("content-encoding").is_none(),
-            "{accept}: decoded for the caller"
-        );
-        assert_eq!(
-            resp.into_body()
-                .collect()
-                .await
-                .unwrap()
-                .to_bytes()
-                .as_ref(),
-            COMPRESSIBLE
-        );
-        up.shutdown().await;
-    }
-    // Two header lines, the browser's and a proxy's, combined before the rule applies.
-    let up = gzip_upstream(gzip(COMPRESSIBLE)).await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-    let mut request = common::stream_request("phoebis-testkey");
-    request.headers_mut().append(
-        axum::http::header::ACCEPT_ENCODING,
-        axum::http::HeaderValue::from_static("*"),
-    );
-    request.headers_mut().append(
-        axum::http::header::ACCEPT_ENCODING,
-        axum::http::HeaderValue::from_static("gzip;q=0"),
-    );
-    let resp = app.oneshot(request).await.unwrap();
-    assert!(
-        resp.headers().get("content-encoding").is_none(),
-        "two lines: decoded for the caller"
-    );
-    assert_eq!(
-        resp.into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes()
-            .as_ref(),
-        COMPRESSIBLE
     );
     up.shutdown().await;
 }
@@ -1676,59 +1716,6 @@ async fn a_stream_whose_oversized_event_is_skipped_keeps_its_later_events() {
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_skip_the_bus_copy_counted_before_its_decoder_failed_still_reaches_the_completion() {
-    // The client takes the coding as sent, so only the bus copy decodes: its parser skips the event past the bound,
-    // and a final block of the reserved type 3 then fails the copy's decoder, which drops the parser. The letters do
-    // not compress, so the stream spans many wire chunks, and the event after the skipped one keeps the broken block
-    // out of the chunk that ends the skipped event.
-    let mut state: u32 = 0x9e37_79b9;
-    let mut letters = |len: usize| -> String {
-        (0..len)
-            .map(|_| {
-                state ^= state << 13;
-                state ^= state >> 17;
-                state ^= state << 5;
-                char::from(b'a' + (state % 26) as u8)
-            })
-            .collect()
-    };
-    let events = [
-        message_start_event(),
-        text_delta_event(&letters(phoebis_relay::INSPECT_BUFFER + 64 * 1024)),
-        text_delta_event(&letters(256 * 1024)),
-    ];
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    std::io::Write::write_all(&mut encoder, rendered(&events).as_bytes()).unwrap();
-    // A sync flush, so every event above inflates before the broken block that follows.
-    std::io::Write::flush(&mut encoder).unwrap();
-    let mut wire = encoder.get_ref().clone();
-    wire.push(0xff);
-    let (coding, body, complete) = one_coded_stream(
-        Respond::Chunked {
-            status: 200,
-            headers: vec![
-                ("Content-Type".into(), "text/event-stream".into()),
-                ("Content-Encoding".into(), "gzip".into()),
-            ],
-            body: wire.clone(),
-        },
-        common::stream_request(common::KEY),
-    )
-    .await;
-    assert_eq!(coding.as_deref(), Some("gzip"));
-    // Compared without `assert_eq!`, whose failure would print both bodies.
-    assert!(
-        body.as_ref() == wire.as_slice(),
-        "the client reads the bytes as sent"
-    );
-    assert_eq!(
-        (complete.outcome, complete.skipped_events),
-        (phoebis_bus::Outcome::Succeeded, 1),
-        "the client's answer stands, and the completion names the event the dropped parser skipped"
-    );
-}
-
 fn gzipped_stream(events: &[SseEvent]) -> Respond {
     Respond::Chunked {
         status: 200,
@@ -1741,9 +1728,9 @@ fn gzipped_stream(events: &[SseEvent]) -> Respond {
 }
 
 #[tokio::test]
-async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_the_bus_copy() {
-    // The caller takes the upstream's coding, so the bus decodes a copy of its own; that decoder flushes every
-    // piece it is fed, so a message_stop cannot sit unread in its tail at the end.
+async fn a_gzipped_stream_decoded_for_the_client_is_read_for_its_message_stop_on_the_bus_copy() {
+    // The bus copy reads the pieces the forward decoded, and that decoder flushes every piece it is fed, so a
+    // message_stop cannot sit unread in its tail at the end.
     let events = [
         message_start_event(),
         text_delta_event("hi"),
@@ -1761,8 +1748,12 @@ async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_t
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
-    resp.into_body().collect().await.unwrap();
+    assert!(
+        resp.headers().get("content-encoding").is_none(),
+        "the fixture's caller reads gzip and still gets the stream decoded"
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(String::from_utf8(body.to_vec()).unwrap(), rendered(&events));
     let complete = completion(&mut sub).await;
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
@@ -1775,7 +1766,7 @@ async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_t
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    assert!(resp.headers().get("content-encoding").is_none());
     resp.into_body().collect().await.unwrap();
     let complete = completion(&mut sub).await;
     assert_eq!(
@@ -1784,104 +1775,6 @@ async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_t
         "the same stream without its stop"
     );
     up.shutdown().await;
-}
-
-/// One streamed `200` answered by `respond` to `request`: the coding the client was answered in, the body it read to
-/// the end, and the completion the bus carried.
-async fn one_coded_stream(
-    respond: Respond,
-    request: Request<Body>,
-) -> (Option<String>, Bytes, phoebis_bus::RequestComplete) {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond,
-    }])
-    .await;
-    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
-    let resp = h.app.clone().oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), 200);
-    let coding = resp
-        .headers()
-        .get("content-encoding")
-        .map(|value| value.to_str().unwrap().to_string());
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let complete = completion(&mut sub).await;
-    up.shutdown().await;
-    (coding, body, complete)
-}
-
-#[tokio::test]
-async fn a_gzip_stream_passed_through_whose_copy_does_not_decode_records_as_succeeded_naming_its_coding(
-) {
-    // The client takes the coding, so it reads the bytes as sent: only the router's own copy fails to inflate
-    // them, which says nothing of the answer the client received.
-    let events = [
-        message_start_event(),
-        text_delta_event("hi"),
-        message_stop_event(),
-    ];
-    let wire = corrupt_gzip(rendered(&events).as_bytes());
-    let (coding, body, complete) = one_coded_stream(
-        Respond::Chunked {
-            status: 200,
-            headers: vec![
-                ("Content-Type".into(), "text/event-stream".into()),
-                ("Content-Encoding".into(), "gzip".into()),
-            ],
-            body: wire.clone(),
-        },
-        common::stream_request(common::KEY),
-    )
-    .await;
-    assert_eq!(coding.as_deref(), Some("gzip"));
-    assert_eq!(
-        body.as_ref(),
-        wire.as_slice(),
-        "the client reads the bytes as sent"
-    );
-    assert_eq!(
-        (complete.outcome, complete.error_code.as_deref()),
-        (phoebis_bus::Outcome::Succeeded, None)
-    );
-    assert_eq!(
-        (complete.passthrough.as_deref(), complete.interruption),
-        (Some("gzip"), None),
-        "the completion names the coding and no cut"
-    );
-}
-
-#[tokio::test]
-async fn a_gzip_stream_passed_through_whose_copy_decodes_names_its_coding_on_the_completion() {
-    let events = [
-        message_start_event(),
-        text_delta_event("hi"),
-        message_stop_event(),
-    ];
-    let (coding, _, complete) =
-        one_coded_stream(gzipped_stream(&events), common::stream_request(common::KEY)).await;
-    assert_eq!(coding.as_deref(), Some("gzip"));
-    assert_eq!(
-        (complete.outcome, complete.passthrough.as_deref()),
-        (phoebis_bus::Outcome::Succeeded, Some("gzip")),
-        "the hold's decoder carries the copy, and the client still took the coding as sent"
-    );
-}
-
-#[tokio::test]
-async fn a_gzip_stream_the_relay_decodes_for_the_caller_names_no_pass_through() {
-    let events = [
-        message_start_event(),
-        text_delta_event("hi"),
-        message_stop_event(),
-    ];
-    let (coding, body, complete) =
-        one_coded_stream(gzipped_stream(&events), identity_request()).await;
-    assert_eq!(coding, None, "the relay drops the coding it decoded");
-    assert_eq!(String::from_utf8(body.to_vec()).unwrap(), rendered(&events));
-    assert_eq!(
-        (complete.outcome, complete.passthrough),
-        (phoebis_bus::Outcome::Succeeded, None)
-    );
 }
 
 #[tokio::test]
@@ -1971,23 +1864,50 @@ const UNDECODABLE: &str = "the upstream response could not be decoded after its 
 async fn an_answer_in_a_coding_the_relay_cannot_read_answers_502_upstream_undecodable_and_files_stream_undecodable(
 ) {
     // `compress` is a registered coding outside the five the relay decodes.
-    let (status, code, message, complete) = one_refusal(
-        Respond::Json {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
             status: 200,
             headers: vec![("Content-Encoding".into(), "compress".into())],
             body: COMPRESSIBLE.to_vec(),
         },
-        common::stream_request(common::KEY),
-    )
+    }])
     .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let code = resp
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let refusal: serde_json::Value =
+        serde_json::from_slice(&body).expect("the body is the relay's own error document");
     assert_eq!(
-        (status, code.as_deref(), message.as_deref()),
+        (
+            status,
+            code.as_deref(),
+            refusal["error"]["message"].as_str()
+        ),
         (502, Some("upstream_undecodable"), Some(UNDECODABLE))
     );
+    assert!(
+        !body
+            .windows(COMPRESSIBLE.len())
+            .any(|window| window == COMPRESSIBLE),
+        "no byte of the upstream's body reaches the client"
+    );
+    let complete = completion(&mut sub).await;
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
         (phoebis_bus::Outcome::Failed, Some("stream_undecodable"))
     );
+    up.shutdown().await;
 }
 
 #[tokio::test]
@@ -2215,7 +2135,8 @@ async fn a_stall_after_the_head_answers_502_upstream_stalled() {
 }
 
 #[tokio::test]
-async fn a_gzip_stream_the_client_takes_as_it_is_is_decoded_once_and_keeps_its_message_start() {
+async fn a_gzip_stream_decoded_for_the_client_builds_the_holds_decoder_alone_and_keeps_its_message_start(
+) {
     let message_start = SseEvent {
         event: "message_start".into(),
         data: r#"{"type":"message_start","message":{"id":"msg_gz","usage":{"input_tokens":5,"cache_read_input_tokens":2}}}"#.into(),
@@ -2234,13 +2155,14 @@ async fn a_gzip_stream_the_client_takes_as_it_is_is_decoded_once_and_keeps_its_m
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
-    resp.into_body().collect().await.unwrap();
+    assert!(resp.headers().get("content-encoding").is_none());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(String::from_utf8(body.to_vec()).unwrap(), rendered(&events));
     let complete = completion(&mut sub).await;
     assert_eq!(
         h.relay.decoders_built() - before,
         1,
-        "the hold's decoder reads the stream to its end for the bus copy"
+        "the hold's decoder alone: past the commit the bus copy reads the pieces the forward decoded"
     );
     assert_eq!(
         (complete.outcome, complete.message_id.as_deref()),
@@ -2257,8 +2179,8 @@ async fn a_gzip_stream_the_client_takes_as_it_is_is_decoded_once_and_keeps_its_m
 
 #[tokio::test]
 async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
-    // A non-portable request's 429 past the bound, forwarded as it came: no bus, no pin, no hook and no
-    // conversation report read its body, so nothing decodes a copy of it.
+    // A non-portable request's 429 past the bound, decoded for the client as it is forwarded: no bus, no pin, no
+    // hook and no conversation report read its body, so no copy of it is decoded beside the forward.
     let mut state: u32 = 0x9e37_79b9;
     let noise: String = (0..160 * 1024)
         .map(|_| {
@@ -2268,10 +2190,9 @@ async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
             char::from(b'a' + (state % 26) as u8)
         })
         .collect();
-    let body = gzip(
-        format!(r#"{{"type":"error","error":{{"type":"rate_limit_error","message":"{noise}"}}}}"#)
-            .as_bytes(),
-    );
+    let rejection =
+        format!(r#"{{"type":"error","error":{{"type":"rate_limit_error","message":"{noise}"}}}}"#);
+    let body = gzip(rejection.as_bytes());
     assert!(body.len() > 64 * 1024, "past the bound on the wire");
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -2296,21 +2217,22 @@ async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 429);
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    assert!(resp.headers().get("content-encoding").is_none());
     let forwarded = resp.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        forwarded.as_ref(),
-        body.as_slice(),
-        "the prefix, then the rest"
+    // Compared without `assert_eq!`, whose failure would print both 160 KiB bodies.
+    assert!(
+        forwarded.as_ref() == rejection.as_bytes(),
+        "the prefix, then the rest, both decoded"
     );
     assert_eq!(h.relay.decoders_built() - before, 0);
     up.shutdown().await;
 }
 
 #[tokio::test]
-async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus() {
+async fn a_held_stream_whose_hold_copy_overflowed_reaches_the_bus_whole_from_the_forwards_decode() {
     // The first event decodes past the hold's inspection bound in one wire chunk, so the hold commits on its
-    // overflow with a copy that no longer follows the stream; the bus copy reads the stream from its start.
+    // overflow with a copy that no longer follows the stream, and the bus copy reads the stream from its start in
+    // the pieces the forward decoded.
     let message_start = SseEvent {
         event: "message_start".into(),
         data: r#"{"type":"message_start","message":{"id":"msg_ov","usage":{"input_tokens":5}}}"#
@@ -2319,14 +2241,13 @@ async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus(
     let events = [
         SseEvent {
             event: "weird_future_event".into(),
-            // Past `INSPECT_BUFFER`, and under the 1 MiB the bus copy decodes of one wire chunk.
+            // Past `INSPECT_BUFFER`, and under the 1 MiB a decoder hands back for one wire chunk.
             data: "y".repeat(600 * 1024),
         },
         message_start,
         text_delta_event("hi"),
         message_stop_event(),
     ];
-    let wire = gzip(rendered(&events).as_bytes());
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: gzipped_stream(&events),
@@ -2340,12 +2261,12 @@ async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus(
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    assert!(resp.headers().get("content-encoding").is_none());
     let client = resp.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        client.as_ref(),
-        wire.as_slice(),
-        "the client reads the upstream's bytes"
+    // Compared without `assert_eq!`, whose failure would print both 600 KiB bodies.
+    assert!(
+        client.as_ref() == rendered(&events).as_bytes(),
+        "the client reads the stream decoded"
     );
     let published = common::drain_until_complete(&mut sub).await;
     let chunks: Vec<u8> = published
@@ -2374,8 +2295,8 @@ async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus(
     );
     assert_eq!(
         h.relay.decoders_built() - before,
-        2,
-        "the hold's decoder and the bus copy's own"
+        1,
+        "the hold's decoder alone: the bus copy builds none of its own"
     );
     up.shutdown().await;
 }

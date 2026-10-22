@@ -47,9 +47,8 @@ pub const STREAM_UNDECODABLE: &str = "stream_undecodable";
 /// Per-chunk bound on what a decoder may hand back for one upstream chunk: an 8 KiB compressed chunk can
 /// expand into hundreds of MiB in a single call without this, whatever the caller does with the result after.
 /// It is a budget against the 8 KiB reads the transport fills at a time, not against a whole body: at
-/// deflate's compression ceiling one wire chunk can still decode past it, and the decode-for-caller path ends
-/// the body with an error there rather than a cut. The native client passes bytes through undecoded and is
-/// unaffected.
+/// deflate's compression ceiling one wire chunk can still decode past it, and the body ends with an error there
+/// rather than a cut.
 pub(crate) const STREAM_DECODED_CHUNK_MAX: usize = 1 << 20;
 
 /// Reports what a post-commit error event means for routing, through the body's `Waiting`, so a report the full
@@ -120,24 +119,11 @@ pub(crate) struct Publish {
     /// Notified once the answer's model is known, so a snapshot the router did not resolve to triggers a
     /// bounded refresh of the account that served it.
     pub catalog: Arc<CatalogService>,
-    /// Decodes the raw chunk for the bus when the caller receives the upstream's coding as it is; `None`
-    /// when the relay already decodes for the caller and the piece is text. A held stream's is the hold's own,
-    /// already past the held bytes.
-    pub decoder: Option<Box<dyn Decoder>>,
-    /// Set once the decoder above rejected a piece, and never cleared: what follows it is no more readable
-    /// than the piece that failed.
-    pub decode_failed: bool,
-    /// The coding the client was handed as the upstream sent it, named on the completion whatever the decoder above
-    /// makes of the bytes. `None` where the relay decodes for the caller or the body carries no coding.
-    pub passthrough: Option<String>,
     /// Parses the decoded copy for phases on an event stream, and is `None` for any other body. It skips an event
     /// past its bound and keeps parsing, so an oversized event costs a bounded buffer and its own phase while the
     /// events after it still reach the completion. A held stream's is the hold's own, already past the held events.
     pub parser: Option<SseParser>,
-    /// The parser's skipped count and largest size, kept at its drop on a decode failure, so the warn line at the end
-    /// and the completion still name the events that parser skipped.
-    pub skipped: (u32, usize),
-    /// The held bytes' text and events when the hold handed its decoder and parser over, taken by the prefix.
+    /// The held bytes' text and events when the hold handed its parser over, taken by the prefix.
     pub held: Option<HeldText>,
     /// Fired once, on the first `error` event after the commit; `None` for a stream nothing watches.
     pub on_error: Option<OnError>,
@@ -389,9 +375,9 @@ fn pin_usage(usage: &Usage) -> PinUsage {
 
 impl Publish {
     /// The bytes the body starts with: a held stream's as the hold read them, any other prefix as a chunk.
-    async fn prefix(&mut self, raw: &[u8], piece: &Bytes, waiting: &mut Waiting) {
+    async fn prefix(&mut self, piece: &Bytes, waiting: &mut Waiting) {
         let Some(held) = self.held.take() else {
-            return self.chunk(raw, piece, waiting).await;
+            return self.chunk(piece, waiting).await;
         };
         self.bytes += piece.len() as u64;
         // The held events were the verdict's to read, the committing one among them; only what follows them is
@@ -408,29 +394,10 @@ impl Publish {
         self.fire_pending_hook().await;
     }
 
-    /// `raw` is the wire chunk and `piece` what the caller is sent; one of the two is the text.
-    async fn chunk(&mut self, raw: &[u8], piece: &Bytes, waiting: &mut Waiting) {
-        // The size is what the caller received, which stands whether or not the bus could read it.
+    /// `piece` is what the caller is sent, the decoded text.
+    async fn chunk(&mut self, piece: &Bytes, waiting: &mut Waiting) {
         self.bytes += piece.len() as u64;
-        if self.decode_failed {
-            return;
-        }
-        let text = match self.decoder.as_mut() {
-            None => piece.clone(),
-            Some(decoder) => match decoder.feed_bounded(raw, STREAM_DECODED_CHUNK_MAX) {
-                Ok(out) => Bytes::from(out),
-                // A consumer of a chunk was promised text, so nothing is better than bytes that are not.
-                Err(_) => {
-                    self.decode_failed = true;
-                    self.decoder = None;
-                    if let Some(parser) = self.parser.take() {
-                        self.skipped = parser.skipped();
-                    }
-                    self.json = None;
-                    return;
-                }
-            },
-        };
+        let text = piece.clone();
         if let Some(json) = self.json.as_mut() {
             if json.len() + text.len() > self.json_bound {
                 // Past the bound nothing is read; the usage stays unknown rather than half parsed.
@@ -554,10 +521,7 @@ impl Publish {
                 self.emit(Bytes::new(), Some(phase));
             }
         }
-        let (skipped, largest) = self
-            .parser
-            .as_ref()
-            .map_or(self.skipped, SseParser::skipped);
+        let (skipped, largest) = self.parser.as_ref().map_or((0, 0), SseParser::skipped);
         if skipped > 0 {
             tracing::warn!(
                 request_id = %self.trace.request_id,
@@ -671,7 +635,6 @@ impl Publish {
                 self.message_id.clone(),
                 skipped,
                 interruption,
-                self.passthrough.take(),
                 (self.clock)(),
             )
             .await;
@@ -768,10 +731,10 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
         let mut waiting = Waiting::default();
         let end = 'body: {
             if !prefix.is_empty() {
-                match decode_piece(decoder.as_mut(), prefix.clone()) {
+                match decode_piece(decoder.as_mut(), prefix) {
                     Ok(piece) => {
                         if let Some(publish) = publish.as_mut() {
-                            publish.prefix(&prefix, &piece, &mut waiting).await;
+                            publish.prefix(&piece, &mut waiting).await;
                         }
                         match send(&tx, &cancel, Ok(piece)).await {
                             Delivery::Delivered => {}
@@ -819,7 +782,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 let Some(chunk) = next else {
                     break;
                 };
-                let piece = match decode_piece(decoder.as_mut(), chunk.clone()) {
+                let piece = match decode_piece(decoder.as_mut(), chunk) {
                     Ok(piece) => piece,
                     Err(error) => {
                         let cut = Cut::of_decode(&error);
@@ -831,7 +794,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 // Published before the piece goes out, so a late rate-limit error is acted on no later than the
                 // client sees it. That holds while the router's mailbox has room; a full one makes the cooldown
                 // wait until after the body's end, behind the client's answer.
-                publish_piece(&mut publish, &chunk, &piece, &mut waiting).await;
+                publish_piece(&mut publish, &piece, &mut waiting).await;
                 if piece.is_empty() {
                     continue;
                 }
@@ -847,7 +810,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                         let tail = Bytes::from(tail);
                         // The tail is the rest of the decoded body, so the chunks a consumer joins are the
                         // whole of what the caller received.
-                        publish_piece(&mut publish, &[], &tail, &mut waiting).await;
+                        publish_piece(&mut publish, &tail, &mut waiting).await;
                         match send(&tx, &cancel, Ok(tail)).await {
                             Delivery::Delivered => {}
                             Delivery::Canceled => break 'body BodyEnd::Canceled,
@@ -981,15 +944,10 @@ async fn send(
     }
 }
 
-/// Hands a forwarded piece to the bus: the wire chunk and what the caller is sent, one of which is the text.
-async fn publish_piece(
-    publish: &mut Option<Publish>,
-    raw: &[u8],
-    piece: &Bytes,
-    waiting: &mut Waiting,
-) {
+/// Hands a forwarded piece, the decoded text the caller is sent, to the bus.
+async fn publish_piece(publish: &mut Option<Publish>, piece: &Bytes, waiting: &mut Waiting) {
     if let Some(publish) = publish.as_mut() {
-        publish.chunk(raw, piece, waiting).await;
+        publish.chunk(piece, waiting).await;
     }
 }
 

@@ -323,10 +323,6 @@ behind.
 | `403` `permission_error` | `FailOver` | Another account, the model cooled on this one for an hour, reason `permission` |
 | Anything else (a `2xx`, any other `4xx` or `5xx`) | `Commit` | The upstream's answer reaches the client as sent |
 
-A coded `200` the client accepts passes through as sent and records as succeeded even where the router's own copy of the
-bytes does not decode, with no `stream_interrupted` event and the coding named among the attempt's stored facts as
-`passthrough`.
-
 The cooldown tables, the windows and the reasons are on [Cooldowns and failover](routing.md#cooldowns-and-failover).
 The rate-limit families the router reads off a head are `anthropic-ratelimit-unified-*`, `anthropic-ratelimit-*` and
 `anthropic-fast-*`. A connection that fails before the whole request was written is retried once on a fresh connection,
@@ -342,10 +338,11 @@ connection and framing headers describe the upstream hop, and the framing does n
 while the upstream's own identity and cookies name the account behind the key, never the key holder. It hides the
 `anthropic-ratelimit-` and `anthropic-fast-` families on every answer that is not a `429` or a `200` whose first event
 is a `rate_limit_error`, so an organization's standing never reads as the key holder's own, and a rate limit keeps them
-so the client's continue arms on the reset the upstream named. When the client does not accept the upstream's coding,
-read from every `Accept-Encoding` line it sent, the router decodes the body and drops `content-encoding`. Everything
-else in the head reaches the client as the upstream wrote it. A refusal the router answers itself is in Anthropic's
-error shape with the header `x-phoebis-error-code` naming the code ([refusal codes](client.md#refusal-codes)).
+so the client's continue arms on the reset the upstream named. The router decodes every coded body (gzip, deflate,
+brotli and zstd), forwards it as identity and drops `content-encoding`, whatever the client's `Accept-Encoding`, and
+answers any other coding with a `502` `upstream_undecodable` before any byte reaches the client. Everything else in the
+head reaches the client as the upstream wrote it. A refusal the router answers itself is in Anthropic's error shape
+with the header `x-phoebis-error-code` naming the code ([refusal codes](client.md#refusal-codes)).
 
 ## Headers and transport
 

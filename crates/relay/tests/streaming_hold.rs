@@ -477,7 +477,7 @@ async fn a_usage_based_seats_head_moves_its_spend_share_and_records_no_overage_e
 }
 
 #[tokio::test]
-async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_with_the_client_bytes_unchanged(
+async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_and_reaches_the_client_decoded(
 ) {
     let up = FakeUpstream::start(vec![]).await;
     let text = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}\n\n";
@@ -512,11 +512,15 @@ async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_with_the
         (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
         (200, "a")
     );
+    assert!(
+        resp.headers().get("content-encoding").is_none(),
+        "decoded although the caller reads gzip"
+    );
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
         body.as_ref(),
-        gz.as_slice(),
-        "the client gets the compressed bytes as they came"
+        text.as_bytes(),
+        "the client gets the stream decoded, the error event in it"
     );
     assert_eq!(
         credentials_seen(&up),
@@ -526,7 +530,7 @@ async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_with_the
     assert_eq!(
         first_cooldown(&h).await.account_id,
         "a",
-        "the observer read the decoded copy"
+        "the observer read the decoded stream"
     );
     assert_eq!(
         outcome(

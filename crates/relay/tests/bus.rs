@@ -421,7 +421,8 @@ async fn a_failover_publishes_a_head_per_attempt_and_the_completion_names_the_se
 }
 
 #[tokio::test]
-async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_one_past_64_kib() {
+async fn a_gzipped_json_200_the_caller_accepts_arrives_decoded_with_its_usage_and_so_does_one_past_64_kib(
+) {
     use std::io::Write;
     let small = br#"{"id":"msg_3","type":"message","usage":{"input_tokens":11,"output_tokens":2},"diagnostics":{"cache_miss_reason":{"type":"tools_changed"}}}"#;
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -446,10 +447,11 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_on
         resp.headers()
             .get("content-encoding")
             .map(|v| v.to_str().unwrap()),
-        Some("gzip"),
-        "passed through as the caller asked"
+        None,
+        "decoded although the caller reads gzip"
     );
-    let _ = resp.into_body().collect().await.unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.as_ref(), small);
     let (events, _) = drain_until_complete(&mut sub).await;
     let Some(Event::RequestComplete(complete)) = events.last() else {
         panic!()
@@ -457,7 +459,7 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_on
     let usage = complete
         .usage
         .as_ref()
-        .expect("decoded for the bus although forwarded as gzip");
+        .expect("read off the answer the caller received");
     assert_eq!(
         (
             usage.input_tokens,
@@ -1485,9 +1487,10 @@ async fn a_relay_without_a_bus_publishes_nothing_and_still_answers() {
 }
 
 #[tokio::test]
-async fn a_buffered_body_the_bus_cannot_decode_publishes_no_chunk_and_no_usage() {
-    // A rejection that names a coding its body does not use. The caller takes that coding as it is, so the
-    // relay never decodes and only the bus copy would be wrong.
+async fn a_buffered_body_that_does_not_decode_answers_502_upstream_undecodable_and_publishes_no_chunk(
+) {
+    // A rejection that names a coding its body does not use, to a caller that reads that coding: the relay decodes
+    // every coded answer, so the body fails before any byte of it reaches the caller.
     let rejection = br#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#;
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -1505,12 +1508,19 @@ async fn a_buffered_body_the_bus_cannot_decode_publishes_no_chunk_and_no_usage()
     let mut req = non_portable_request(KEY, "s1");
     set_header(&mut req, "accept-encoding", "gzip");
     let resp = h.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 429);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
-        body.as_ref(),
-        rejection,
-        "the caller got the bytes unchanged"
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (502, "upstream_undecodable")
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        !body
+            .windows(rejection.len())
+            .any(|window| window == rejection),
+        "the rejection's bytes never reach the caller"
     );
     let (events, chunks) = drain_until_complete(&mut sub).await;
     let kinds: Vec<&str> = events
@@ -1526,18 +1536,28 @@ async fn a_buffered_body_the_bus_cannot_decode_publishes_no_chunk_and_no_usage()
     assert_eq!(kinds, ["observed", "selected", "head", "complete"]);
     assert!(
         chunks.is_empty(),
-        "a copy that will not decode is published as nothing"
+        "a body that will not decode is published as nothing"
     );
     let Some(Event::RequestComplete(complete)) = events.last() else {
         panic!()
     };
     assert!(complete.usage.is_none());
-    assert_eq!(complete.response_bytes, Some(body.len() as u64));
+    assert_eq!(
+        (
+            complete.status,
+            complete.outcome,
+            complete.error_code.as_deref()
+        ),
+        (502, Outcome::Failed, Some("stream_undecodable"))
+    );
     up.shutdown().await;
 }
 
 #[tokio::test]
-async fn a_stream_the_bus_cannot_decode_publishes_no_chunk_and_still_completes() {
+async fn a_stream_that_does_not_decode_ends_the_callers_body_in_an_error_publishes_no_chunk_and_still_completes(
+) {
+    // The head names a coding the body does not use, and the caller reads that coding: the relay decodes every coded
+    // answer, so the body fails at its first piece with no byte forwarded.
     let sse = vec![
         ev(
             "message_start",
@@ -1566,15 +1586,9 @@ async fn a_stream_the_bus_cannot_decode_publishes_no_chunk_and_still_completes()
     set_header(&mut req, "accept-encoding", "gzip");
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 200);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let expected: String = sse
-        .iter()
-        .map(|e| format!("event: {}\ndata: {}\n\n", e.event, e.data))
-        .collect();
-    assert_eq!(
-        body.as_ref(),
-        expected.as_bytes(),
-        "the caller got every byte"
+    assert!(
+        resp.into_body().collect().await.is_err(),
+        "the body ends in an error at the piece that does not decode"
     );
     let (events, chunks) = drain_until_complete(&mut sub).await;
     let kinds: Vec<&str> = events
@@ -1597,15 +1611,19 @@ async fn a_stream_the_bus_cannot_decode_publishes_no_chunk_and_still_completes()
     };
     assert!(complete.usage.is_none());
     assert_eq!(
-        complete.response_bytes,
-        Some(body.len() as u64),
-        "every piece the caller got still counts toward the size"
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.response_bytes
+        ),
+        (Outcome::Incomplete, Some("stream_undecodable"), Some(0)),
+        "the committed answer ended short, and the caller received no byte of it"
     );
     up.shutdown().await;
 }
 
 #[tokio::test]
-async fn a_pass_through_chunk_past_the_decoded_bound_reaches_the_caller_and_leaves_no_chunk_on_the_bus(
+async fn a_coded_chunk_past_the_decoded_bound_ends_the_callers_body_in_an_error_and_leaves_no_chunk_on_the_bus(
 ) {
     use std::io::Write;
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -1634,13 +1652,12 @@ async fn a_pass_through_chunk_past_the_decoded_bound_reaches_the_caller_and_leav
         resp.headers()
             .get("content-encoding")
             .map(|v| v.to_str().unwrap()),
-        Some("gzip")
+        None,
+        "decoded although the caller reads gzip"
     );
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        body.as_ref(),
-        bomb.as_slice(),
-        "the caller gets the wire bytes untouched"
+    assert!(
+        resp.into_body().collect().await.is_err(),
+        "the body ended in an error rather than a multi-megabyte chunk"
     );
     let (events, chunks) = drain_until_complete(&mut sub).await;
     assert!(
@@ -1650,7 +1667,10 @@ async fn a_pass_through_chunk_past_the_decoded_bound_reaches_the_caller_and_leav
     let Some(Event::RequestComplete(complete)) = events.last() else {
         panic!()
     };
-    assert_eq!(complete.response_bytes, Some(bomb.len() as u64));
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (Outcome::Incomplete, Some("stream_cut"))
+    );
     up.shutdown().await;
 }
 

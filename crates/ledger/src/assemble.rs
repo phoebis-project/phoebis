@@ -501,16 +501,6 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 }
             }
         }
-        // Apart from the usage block: a pass-through whose copy the router could not decode read no usage, and its
-        // trace still names the coding the client took.
-        if let (Some(coding), Some(trace)) = (&complete.passthrough, &last.selection) {
-            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trace) {
-                if let Some(obj) = value.as_object_mut() {
-                    obj.insert("passthrough".into(), json!(coding));
-                    last.selection = Some(value.to_string());
-                }
-            }
-        }
         let response = &complete.response;
         last.stop_reason = response.stop_reason.clone();
         last.stop_sequence = response.stop_sequence.clone();
@@ -599,9 +589,8 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
     for attempt in &mut attempts {
         attempt.client_drift = complete.client_drift.clone();
     }
-    // Completeness is the terminal chunk count alone: `response_bytes` counts what the caller received
-    // (compressed on a pass-through) while the chunks it is compared against are decoded, so the two cannot
-    // be compared for length across every encoding the relay forwards.
+    // Completeness is the terminal chunk count alone: a chunk can carry a phase and no bytes, so a dropped one
+    // need not shorten any length the count could be compared with.
     let short = complete
         .response_chunks
         .is_some_and(|published| next_index < published);
@@ -930,7 +919,6 @@ mod tests {
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: 1_500,
         })
     }
@@ -974,7 +962,6 @@ mod tests {
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: 1_500,
         }
     }

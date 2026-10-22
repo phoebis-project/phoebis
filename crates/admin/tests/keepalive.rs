@@ -451,7 +451,6 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: now,
         },
     ));
@@ -802,7 +801,6 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: now,
         },
     ));
@@ -1145,7 +1143,6 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: now,
         },
     ));

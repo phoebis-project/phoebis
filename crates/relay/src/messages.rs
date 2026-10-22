@@ -261,7 +261,7 @@ pub struct Relay {
     /// The connections the pool opened for this relay's checkouts, as against the idle ones it reused.
     #[cfg(feature = "debug-hooks")]
     connections_opened: std::sync::atomic::AtomicUsize,
-    /// The decoders built for the hold's and the bus copy's reads of a response.
+    /// The decoders built for the hold's reads of a response.
     #[cfg(feature = "debug-hooks")]
     pub(crate) decoders_built: Arc<std::sync::atomic::AtomicU64>,
     drift: DriftGuard,
@@ -397,7 +397,7 @@ impl Relay {
         self.connections_opened.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A decoder for the relay's own read of a response body: the hold's inspection copy or the bus copy.
+    /// A decoder for the relay's own read of a response body, the hold's inspection copy.
     fn copy_decoder(&self, coding: Encoding) -> Box<dyn Decoder> {
         #[cfg(feature = "debug-hooks")]
         self.decoders_built.fetch_add(1, Ordering::Relaxed);
@@ -782,7 +782,6 @@ impl Trace {
         message_id: Option<String>,
         skipped_events: u32,
         interruption: Option<Interruption>,
-        passthrough: Option<String>,
         finished_at: i64,
     ) {
         // Held by value across the publish: a handler dropped while a durable slot is full drops the guard still
@@ -816,7 +815,6 @@ impl Trace {
             message_id,
             skipped_events,
             interruption,
-            passthrough,
             finished_at,
         }))
         .await;
@@ -889,7 +887,6 @@ impl Drop for CompletionGuard {
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: (self.trace.clock)(),
         });
         // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
@@ -3583,8 +3580,7 @@ impl Relay {
                     (Some(buffered), None) => {
                         let guards = ctx.guards();
                         self.forward_buffered(
-                            ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
-                            guards,
+                            ctx.trace, &head, buffered, outcome, renewal, affinity, guards,
                         )
                         .await
                     }
@@ -3594,7 +3590,6 @@ impl Relay {
                         let guards = ctx.guards();
                         self.stream(Forward {
                             affinity,
-                            caller: ctx.caller,
                             cancel: ctx.cancel.clone(),
                             checkin,
                             guards,
@@ -3658,7 +3653,6 @@ impl Relay {
             return Next::Respond(
                 self.stream(Forward {
                     affinity: None,
-                    caller: ctx.caller,
                     cancel: ctx.cancel.clone(),
                     checkin,
                     guards,
@@ -3707,7 +3701,6 @@ impl Relay {
                     ctx.trace,
                     &head,
                     buffered,
-                    ctx.caller,
                     outcome,
                     None,
                     None,
@@ -3721,7 +3714,6 @@ impl Relay {
         Next::Respond(
             self.stream(Forward {
                 affinity: None,
-                caller: ctx.caller,
                 cancel: ctx.cancel.clone(),
                 checkin,
                 guards,
@@ -4271,7 +4263,6 @@ impl Relay {
                 None,
                 0,
                 None,
-                None,
                 (self.clock)(),
             )
             .await;
@@ -4543,7 +4534,6 @@ impl Relay {
     ) -> Response {
         let Forward {
             affinity,
-            caller,
             cancel,
             checkin,
             mut guards,
@@ -4559,7 +4549,7 @@ impl Relay {
             renewal,
             trace,
         } = forward;
-        let (builder, decoder) = match forward_head(head, caller, rate_limit_event) {
+        let (builder, decoder) = match forward_head(head, rate_limit_event) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -4570,18 +4560,8 @@ impl Relay {
         let event_stream = head
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
-        let caller_decodes = decoder.is_some();
-        // The client reads the upstream's coding as sent, so the completion names it whichever decoder the bus copy
-        // ends up with, and a copy the router cannot read says nothing of the answer the client received.
-        let passthrough = match encoding(head) {
-            Ok(Encoding::Identity) | Err(_) => None,
-            Ok(_) if caller_decodes => None,
-            Ok(_) => head
-                .get("content-encoding")
-                .map(|coding| coding.trim().to_ascii_lowercase()),
-        };
         // A held stream was decoded and parsed up to its commit by the hold, so the bus copy goes on from there
-        // with the hold's decoder and parser.
+        // with the hold's parser.
         let handover = match held {
             Some(Inspect {
                 decoder: hold_decoder,
@@ -4593,7 +4573,6 @@ impl Relay {
                     None => prefix.clone(),
                 };
                 Some((
-                    hold_decoder.filter(|_| !caller_decodes),
                     parser,
                     HeldText {
                         text,
@@ -4618,21 +4597,12 @@ impl Relay {
             || affinity.is_some())
         .then(|| {
             // A copy that stopped following the stream, and a body no hold read, are read afresh.
-            let (bus_decoder, parser, held) = match handover {
-                Some((bus_decoder, parser, held)) => (
-                    bus_decoder,
+            let (parser, held) = match handover {
+                Some((parser, held)) => (
                     event_stream.then_some(parser.into_skipping(INSPECT_BUFFER)),
                     Some(held),
                 ),
                 None => (
-                    (!caller_decodes)
-                        .then(|| {
-                            encoding(head)
-                                .ok()
-                                .filter(|e| !matches!(e, Encoding::Identity))
-                                .map(|coding| self.copy_decoder(coding))
-                        })
-                        .flatten(),
                     event_stream.then(|| SseParser::skipping(INSPECT_BUFFER)),
                     None,
                 ),
@@ -4642,11 +4612,7 @@ impl Relay {
                 clock: self.clock.clone(),
                 outcome: outcome.clone(),
                 catalog: self.catalog.clone(),
-                decoder: bus_decoder,
-                decode_failed: false,
-                passthrough,
                 parser,
-                skipped: (0, 0),
                 held,
                 on_error,
                 // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
@@ -4693,14 +4659,13 @@ impl Relay {
         trace: &Trace,
         head: &ResponseHead,
         raw: Bytes,
-        caller: &HeaderMap,
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
         mut guards: Guards,
     ) -> Response {
         // A buffered answer is never an event stream, so its status alone says whether it is a rate limit.
-        let (builder, decoder) = match forward_head(head, caller, false) {
+        let (builder, decoder) = match forward_head(head, false) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -4719,9 +4684,7 @@ impl Relay {
                 }
             },
         };
-        // The chunk is the decoded body whatever the caller accepts; a coding the caller takes as it is still
-        // reaches the bus as text. A body that will not decode reaches it as nothing, because a consumer of a
-        // chunk was promised text and coded bytes are worse than none.
+        // The chunk is the decoded body the caller receives, since a consumer of a chunk was promised text.
         let mut chunk_published = false;
         let answer = match inspectable_copy(head, &raw, false).map(Bytes::from) {
             None => None,
@@ -4787,7 +4750,6 @@ impl Relay {
                 None,
                 0,
                 None,
-                None,
                 (self.clock)(),
             )
             .await;
@@ -4809,13 +4771,12 @@ fn unreachable_outcome(outcome: RelayOutcome, code: &str) -> RelayOutcome {
 struct Forward<'a, C> {
     /// The conversation report a committed answer sends, beside the renewal; `None` for a rejection.
     affinity: Option<AffinityFacts>,
-    caller: &'a HeaderMap,
     cancel: CancellationToken,
     checkin: Checkin,
     /// The response's in-flight counts, which ride the body to its end.
     guards: Guards,
     head: &'a ResponseHead,
-    /// The pre-commit hold's read of a held stream, whose decoder and parser the bus copy goes on with.
+    /// The pre-commit hold's read of a held stream, whose parser the bus copy goes on with.
     held: Option<Inspect>,
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
@@ -5435,17 +5396,14 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportE
     Ok(Bytes::from(out))
 }
 
-/// Builds the caller's response head from the upstream's and decides whether the payload can be passed through
-/// as it came. Returns the decoder to run over the body when it cannot. `rate_limit_event` marks a 200 whose
+/// Every coded body is decoded for the forward and `content-encoding` dropped, whatever the caller accepts, so the
+/// relay's parser reads every answer and the client always receives identity. `rate_limit_event` marks a 200 whose
 /// first event is a `rate_limit_error`, which keeps the rate-limit families as a 429 does.
 fn forward_head(
     head: &ResponseHead,
-    caller: &HeaderMap,
     rate_limit_event: bool,
 ) -> Result<(Builder, Option<Box<dyn Decoder>>), TransportError> {
     let upstream = encoding(head)?;
-    let coding = head.get("content-encoding").unwrap_or("identity");
-    let passthrough = matches!(upstream, Encoding::Identity) || caller_accepts(caller, coding);
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY));
     // The relay's own read of the families (`ratelimit.rs`) already ran on the upstream head; hiding them
@@ -5463,7 +5421,7 @@ fn forward_head(
         {
             continue;
         }
-        if !passthrough && name.eq_ignore_ascii_case("content-encoding") {
+        if name.eq_ignore_ascii_case("content-encoding") {
             continue;
         }
         let (Ok(name), Ok(value)) = (
@@ -5474,7 +5432,8 @@ fn forward_head(
         };
         builder = builder.header(name, value);
     }
-    Ok((builder, (!passthrough).then(|| decoder(upstream))))
+    let identity = matches!(upstream, Encoding::Identity);
+    Ok((builder, (!identity).then(|| decoder(upstream))))
 }
 
 fn built(builder: Builder, body: Body) -> Response {
@@ -5482,35 +5441,6 @@ fn built(builder: Builder, body: Body) -> Response {
         .body(body)
         // The status is a validated `StatusCode` and every header was parsed before it was added.
         .expect("a forwarded response head is always well formed")
-}
-
-/// Whether the caller said it can read this content coding. An explicit entry for the coding decides, the last
-/// one written winning, and only when none names it does a wildcard speak; every `Accept-Encoding` line is read,
-/// since a proxy may add one beside the client's. `q=0` on the deciding entry is a refusal.
-fn caller_accepts(caller: &HeaderMap, coding: &str) -> bool {
-    let mut explicit = None;
-    let mut wildcard = None;
-    for line in caller
-        .get_all(header::ACCEPT_ENCODING)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-    {
-        for entry in line.split(',') {
-            let (name, params) = entry.split_once(';').unwrap_or((entry, ""));
-            let refused = params
-                .split(';')
-                .filter_map(|p| p.trim().strip_prefix("q="))
-                .any(|w| w.trim().parse::<f32>().is_ok_and(|w| w <= 0.0));
-            let accepted = !refused;
-            let name = name.trim();
-            if name.eq_ignore_ascii_case(coding) {
-                explicit = Some(accepted);
-            } else if name == "*" {
-                wildcard = Some(accepted);
-            }
-        }
-    }
-    explicit.or(wildcard).unwrap_or(false)
 }
 
 /// The caller's own `User-Agent`, the only handle an operator has on which client drifted.
@@ -5526,10 +5456,9 @@ fn user_agent(headers: &HeaderMap) -> &str {
 const DECODE_PIECE: usize = 4096;
 
 /// The decoded copy the classification table reads. A compressed body is decoded because the table reads JSON,
-/// and the copy is inspection only: what the caller receives is the upstream's own bytes under the upstream's
-/// own headers. `None` means the payload does not decode or does not fit. `cut` is a body the drain stopped
-/// reading at the bound: its coded stream ends early and its text may run past the bound, so the copy is what
-/// decoded up to there, as far as the bound.
+/// and the copy is inspection only: the forward decodes the caller's body on its own. `None` means the payload does not
+/// decode or does not fit. `cut` is a body the drain stopped reading at the bound: its coded stream ends early and its
+/// text may run past the bound, so the copy is what decoded up to there, as far as the bound.
 fn inspectable_copy(head: &ResponseHead, raw: &[u8], cut: bool) -> Option<Vec<u8>> {
     match encoding(head) {
         Ok(Encoding::Identity) => Some(raw.to_vec()),
@@ -5579,15 +5508,6 @@ fn with_outcome(mut response: Response, outcome: RelayOutcome) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_refused_coding_is_not_passed_through() {
-        let mut caller = HeaderMap::new();
-        caller.insert(header::ACCEPT_ENCODING, "gzip;q=0, br".parse().unwrap());
-        assert!(!caller_accepts(&caller, "gzip"));
-        assert!(caller_accepts(&caller, "br"));
-        assert!(!caller_accepts(&HeaderMap::new(), "gzip"));
-    }
 
     #[test]
     fn a_usage_based_seat_pays_for_every_cache_write_as_an_api_key_account_does() {
