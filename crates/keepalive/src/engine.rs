@@ -507,6 +507,9 @@ pub(crate) struct Session {
     /// this instant or until the mod registers it again, whichever is first: the mod re-adopts a restored session
     /// within its lease, and a parked recipe must not be discarded as idle before it can.
     pub restored_until: Option<i64>,
+    /// The requests that named another owner than the registration while the holder's lease was live, so the
+    /// warning goes out once per session rather than once per request.
+    pub owner_mismatches: u64,
     pub agents: BTreeMap<String, Agent>,
 }
 
@@ -2446,14 +2449,34 @@ impl Engine {
             return;
         }
         // The header is an optional hardening on top of the registration rule: when both sides name an owner,
-        // they must agree. Foreign traffic proves nothing about this agent, so its status, its recipe, and
-        // its schedule are left as they were; only the mismatch itself is counted.
+        // they must agree while the holder's lease is live. Foreign traffic proves nothing about this agent, so its
+        // status, its recipe and its schedule are left as they were, and only the mismatch itself is counted.
         if let (Some(registered), Some(sent)) = (&session.owner_id, &observed.owner_id) {
             if registered != sent {
-                *inner.reasons.entry(Reason::OwnerMismatch).or_default() += 1;
-                return;
+                // A restored session's window reads as live, since the mod re-adopts the session within it. Past the
+                // lease the registered owner reports nothing, and a process that reloaded under a new owner would
+                // otherwise arm nothing until the idle limit ended the session.
+                if session.attended_at(now) {
+                    *inner.reasons.entry(Reason::OwnerMismatch).or_default() += 1;
+                    let session = inner.sessions.get_mut(&key).unwrap();
+                    session.owner_mismatches += 1;
+                    if session.owner_mismatches == 1 {
+                        tracing::warn!(
+                            session = %key.1,
+                            "a request named another owner than the session's registration"
+                        );
+                    }
+                    return;
+                }
+                // A request carries no instance, so the takeover records the owner alone. The touch saves it
+                // whichever way the request leaves below.
+                let sent = sent.clone();
+                inner.sessions.get_mut(&key).unwrap().owner_id = Some(sent);
+                inner.touch_session(&key);
             }
         }
+        // Read again past the takeover's write.
+        let agent = &inner.sessions[&key].agents[&agent_id];
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
         // unanswered probes a re-arming request's credit depends on. `reason` stays the recipe's gating
         // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held

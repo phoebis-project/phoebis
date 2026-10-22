@@ -361,6 +361,7 @@ impl PersistedSession {
             last_report_at: self.last_report_at,
             last_real_at: self.last_real_at,
             restored_until: self.attended.then_some(now + LEASE_MS),
+            owner_mismatches: 0,
             agents: BTreeMap::new(),
         }
     }

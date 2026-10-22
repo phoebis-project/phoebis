@@ -668,6 +668,7 @@ impl Inner {
                 last_report_at: now,
                 last_real_at,
                 restored_until: None,
+                owner_mismatches: 0,
                 agents,
             },
         );

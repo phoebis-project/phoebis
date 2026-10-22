@@ -1056,6 +1056,7 @@ mod tests {
                 last_report_at: 0,
                 last_real_at: Some(0),
                 restored_until: None,
+                owner_mismatches: 0,
                 agents,
             },
         );
