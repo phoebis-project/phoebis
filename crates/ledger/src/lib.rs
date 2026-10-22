@@ -30,7 +30,10 @@ pub use bodies::{
     PURGE_SLICE_BYTES,
 };
 pub use db::LedgerDb;
-pub use events::{catalog_changed, event_of, poll_backoff, spawn_event_mirror, MirrorBaseline};
+pub use events::{
+    catalog_changed, event_of, plan_ended, plan_restored, poll_backoff, poll_failed,
+    spawn_event_mirror, MirrorBaseline,
+};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use metrics::{
@@ -59,12 +62,12 @@ pub mod test_tables;
 pub use query::{
     breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard,
     decision_record, group_of, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
-    key_request_totals, latest_extra_usage, latest_quota, list_requests, list_routing_log,
-    literal_like, member_spends, moves_by_reason, moves_by_reason_and_fit, names_one_account,
-    parked_count, parked_summary, parse_range, pin_migrations_by_reason, placements, pool_traffic,
-    recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,
-    revision_spans, rewrite_series, routing_conditions,
-    series_paged, session_activity, session_burn_series, session_identities,
+    key_request_totals, latest_extra_usage, latest_extra_usage_polled, latest_extra_usage_share,
+    latest_quota, list_requests, list_routing_log, literal_like, member_spends, moves_by_reason,
+    moves_by_reason_and_fit, names_one_account, parked_count, parked_summary, parse_range,
+    pin_migrations_by_reason, placements, pool_traffic, recent_events_of_kind, recent_gaps,
+    request_by_id, request_events, request_totals, revision_spans, rewrite_series,
+    routing_conditions, series_paged, session_activity, session_burn_series, session_identities,
     BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, CacheShare, Dashboard, DecisionListRow,
     Equivalent, EventListRow, FundingFilter, GroupRow, GuardrailCountRow, HourlyWindowSample,
     LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, ProbeEquivalent, ProbeShare, RequestFilter,
@@ -98,11 +101,11 @@ pub use rollup::{
     read_rollups, read_rollups_paged, AccountRollupRow, CostSplit, KeySelector, RollupRow,
     RollupSelect, BILLED_FUNDING, DIMENSION_MAX_BYTES, EFFORTS, FAST_FUNDING, KEY_RANGE_PREDICATE,
     LONG_BAND, NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, STANDARD_BAND,
-    UNATTRIBUTED,
+    UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 pub use task::{
-    spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, UnweightedModel,
-    BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,
+    spawn, utc_stamp, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed,
+    UnweightedModel, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,
 };
 pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};
 
@@ -115,8 +118,8 @@ pub enum LedgerError {
     /// The blocking worker running the read panicked, or was dropped before it answered. This falls on the one
     /// call it happened to: `LedgerDb::read_blocking` recovers a poisoned guard, so the next read on the same
     /// `LedgerDb` runs as if nothing happened.
-    #[error("the ledger read was cancelled before it ran")]
-    ReadCancelled,
+    #[error("the ledger read was canceled before it ran")]
+    ReadCanceled,
     /// A replay's bound passed before the writer took its turn, so nothing was replayed.
     #[error("the ledger writer is held, try again")]
     WriterHeld,

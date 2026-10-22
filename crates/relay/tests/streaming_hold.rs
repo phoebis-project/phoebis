@@ -386,7 +386,98 @@ async fn overage_evidence_moves_forward_only() {
 }
 
 #[tokio::test]
-async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_with_the_client_bytes_unchanged(
+async fn a_usage_based_seats_head_moves_its_spend_share_and_records_no_overage_evidence() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![
+                ("Date".into(), "Wed, 21 Oct 2015 07:28:00 GMT".into()),
+                (
+                    "anthropic-ratelimit-unified-5h-status".into(),
+                    "allowed".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-overage-in-use".into(),
+                    "true".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-overage-utilization".into(),
+                    "0.4".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-overage-reset".into(),
+                    "1445472000".into(),
+                ),
+            ],
+            body: b"{}".to_vec(),
+        },
+    );
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(outcome(&resp).usage_based, "the leg reads the seat's class");
+    let credits = wait_for(Duration::from_secs(2), || {
+        h.store
+            .load_routing()
+            .unwrap()
+            .credits
+            .into_iter()
+            .find(|row| row.account_id == "a")
+    })
+    .await;
+    assert_eq!(
+        (credits.utilization, credits.observed_at, credits.enabled),
+        (Some(0.4), 1_445_412_480_000, true),
+        "the head's overage utilization is the seat's spend share, observed at the head's date"
+    );
+    assert_eq!(
+        h.router.overage("a").await.unwrap(),
+        None,
+        "the head's overage family records no evidence"
+    );
+    assert!(
+        h.router.overages().await.unwrap().is_empty(),
+        "the map `in_overage` reads holds nothing for the seat"
+    );
+    assert_eq!(
+        h.router
+            .spend_windows()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(id, window)| (id, window.reset, window.reset_source))
+            .collect::<Vec<_>>(),
+        [(
+            "a".to_string(),
+            1_445_472_000_000,
+            phoebis_routing::SpendResetSource::Head
+        )],
+        "the head's overage reset is the seat's spend reset while it is ahead"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_and_reaches_the_client_decoded(
 ) {
     let up = FakeUpstream::start(vec![]).await;
     let text = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}\n\n";
@@ -421,11 +512,15 @@ async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_with_the
         (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
         (200, "a")
     );
+    assert!(
+        resp.headers().get("content-encoding").is_none(),
+        "decoded although the caller reads gzip"
+    );
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
         body.as_ref(),
-        gz.as_slice(),
-        "the client gets the compressed bytes as they came"
+        text.as_bytes(),
+        "the client gets the stream decoded, the error event in it"
     );
     assert_eq!(
         credentials_seen(&up),
@@ -435,7 +530,7 @@ async fn a_compressed_post_commit_rate_limit_error_records_the_cooldown_with_the
     assert_eq!(
         first_cooldown(&h).await.account_id,
         "a",
-        "the observer read the decoded copy"
+        "the observer read the decoded stream"
     );
     assert_eq!(
         outcome(
@@ -486,7 +581,7 @@ async fn a_disconnect_during_a_stalled_pre_commit_read_closes_the_upstream_conne
         .unwrap();
     assert_eq!(
         resp.headers().get("x-phoebis-error-code").unwrap(),
-        "account_cancelled"
+        "account_canceled"
     );
     up.release();
     wait_for(Duration::from_secs(2), || {
@@ -653,7 +748,7 @@ async fn a_pre_write_retry_adds_one_submission_and_every_account_is_dialled_once
 }
 
 #[tokio::test]
-async fn a_cancelled_stream_releases_the_upstream_while_the_client_holds_the_body() {
+async fn a_canceled_stream_releases_the_upstream_while_the_client_holds_the_body() {
     // Past the relay's 64-deep channel, and far past what the relay's buffers and the socket's can hold
     // between them, so the fake is still writing when the account goes away.
     let filler = "x".repeat(8192);

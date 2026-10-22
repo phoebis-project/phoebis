@@ -1283,7 +1283,7 @@ fn funding_mark(h: &Harness, id: &str) -> phoebis_routing::Report {
         credential_generation: snapshot.credential_generation(id).unwrap_or(1),
         cause: StateCause::FundingRefused,
         detail: None,
-        dispatched_at: None,
+        dispatched_ordinal: None,
     }
 }
 
@@ -1853,7 +1853,7 @@ async fn an_account_deleted_between_admission_and_selection_is_never_selected() 
 }
 
 #[tokio::test]
-async fn deleting_the_account_holding_an_in_flight_request_answers_account_cancelled_and_closes_the_upstream(
+async fn deleting_the_account_holding_an_in_flight_request_answers_account_canceled_and_closes_the_upstream(
 ) {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -1879,14 +1879,14 @@ async fn deleting_the_account_holding_an_in_flight_request_answers_account_cance
     assert_eq!(resp.status(), 503);
     assert_eq!(
         resp.headers().get("x-phoebis-error-code").unwrap(),
-        "account_cancelled"
+        "account_canceled"
     );
     assert_eq!(
         credentials_seen(&up),
         [A],
         "an answer about a credential that is gone is nothing to fail over from"
     );
-    // The attempt's future owns the upstream connection, so cancelling it takes the socket with it.
+    // The attempt's future owns the upstream connection, so canceling it takes the socket with it.
     wait_for(Duration::from_secs(2), || {
         (up.open_connections() == 0).then_some(())
     })
@@ -2827,7 +2827,7 @@ async fn a_hold_the_accounts_removal_cancels_keeps_one_head_and_completes_cancel
             resp.status().as_u16(),
             resp.headers()["x-phoebis-error-code"].to_str().unwrap()
         ),
-        (503, "account_cancelled")
+        (503, "account_canceled")
     );
     resp.into_body().collect().await.unwrap();
     let events = drain_until_complete(&mut sub).await;

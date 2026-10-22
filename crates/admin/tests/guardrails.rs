@@ -5,6 +5,7 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
@@ -19,6 +20,10 @@ const STALE_EDIT: &str = "the guardrail changed while it was being edited, so re
 
 /// The preset the binary ships first.
 const SUMMARY: &str = "subagent-status-summary";
+
+/// A version of the first preset the table does not ship, read by every case that needs a stamp the table cannot
+/// answer, so the guard beside each use fails at once when a build ships it.
+const UNSHIPPED_VERSION: u32 = 2;
 
 /// A condition on a fact the step reads without the body or a header.
 fn condition() -> Value {
@@ -234,6 +239,31 @@ async fn a_guardrail_is_created_with_every_member_and_read_back_on_the_show_and_
             StatusCode::CONFLICT,
             "a guardrail with this id exists".to_string()
         )
+    );
+}
+
+#[tokio::test]
+async fn a_show_reads_the_guardrail_and_its_attachments_off_one_take_of_the_store() {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let answer = created(
+        app,
+        &cookie,
+        "g1",
+        j!({"pools": ["main"], "keys": ["desktop"]}),
+    )
+    .await;
+    // The fewest takes over three shows, so a background task that takes the store during one of them cannot pass
+    // for a read the show made.
+    let mut fewest = u64::MAX;
+    for _ in 0..3 {
+        let before = parts.store.debug_lock_count();
+        assert_eq!(show(app, &cookie, "/admin/guardrails/g1").await, answer);
+        fewest = fewest.min(parts.store.debug_lock_count() - before);
+    }
+    assert_eq!(
+        fewest, 1,
+        "the row and its attachments come off the one registry load"
     );
 }
 
@@ -1338,6 +1368,49 @@ async fn a_create_from_the_preset_copies_the_conditions_and_stamps_the_row_and_t
 }
 
 #[tokio::test]
+async fn a_create_from_the_preset_with_the_bodys_own_conditions_and_description_keeps_both_under_the_presets_stamp(
+) {
+    let (parts, cookie) = seeded().await;
+    let app = &parts.app;
+    let summary = summary();
+    let response = post(
+        app,
+        "/admin/guardrails",
+        &j!({
+            "id": "mine",
+            "preset": SUMMARY,
+            "conditions": [condition()],
+            "description": "Forks of one team",
+        })
+        .to_string(),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let answer = json(response).await;
+    assert_eq!(
+        answer["conditions"],
+        j!([condition()]),
+        "the body's conditions win"
+    );
+    assert_eq!(
+        answer["description"], "Forks of one team",
+        "the body's description wins"
+    );
+    assert_eq!(
+        answer["preset"],
+        j!({
+            "id": SUMMARY,
+            "version": summary.version,
+            "current_version": summary.version,
+            "customized": true,
+        }),
+        "the stamp is the preset's, and customized says the conditions left it"
+    );
+    assert_eq!(show(app, &cookie, "/admin/guardrails/mine").await, answer);
+}
+
+#[tokio::test]
 async fn an_unknown_preset_is_refused() {
     let (parts, cookie) = seeded().await;
     let app = &parts.app;
@@ -1392,15 +1465,15 @@ async fn a_patch_with_a_version_the_table_lacks_is_refused_and_one_without_a_sta
     let (parts, cookie) = seeded().await;
     let app = &parts.app;
     assert!(
-        Preset::at(SUMMARY, 7).is_none(),
-        "the table lacks version 7"
+        Preset::at(SUMMARY, UNSHIPPED_VERSION).is_none(),
+        "the table lacks version {UNSHIPPED_VERSION}"
     );
     let stamped = from_preset(app, &cookie, "summary").await;
     let plain = created(app, &cookie, "g1", j!({})).await;
     let patches = [
         (
             "/admin/guardrails/summary",
-            j!({"preset_version": 7}),
+            j!({"preset_version": UNSHIPPED_VERSION}),
             format!("preset_version is not a shipped version of {SUMMARY}"),
         ),
         (
@@ -1469,12 +1542,17 @@ async fn a_patch_with_the_shipped_version_and_its_conditions_reads_customized_fa
 
     // A row stamped at a version the table lacks shows the stamp move whatever versions the table ships.
     assert!(
-        Preset::at(SUMMARY, 2).is_none(),
-        "the table lacks version 2"
+        Preset::at(SUMMARY, UNSHIPPED_VERSION).is_none(),
+        "the table lacks version {UNSHIPPED_VERSION}"
     );
     parts
         .store
-        .insert_guardrail(&stamped_row("newer", SUMMARY, 2), &[], &[], "admin")
+        .insert_guardrail(
+            &stamped_row("newer", SUMMARY, UNSHIPPED_VERSION),
+            &[],
+            &[],
+            "admin",
+        )
         .unwrap();
     assert_eq!(
         show(app, &cookie, "/admin/guardrails/newer").await["preset"]["customized"],
@@ -1521,12 +1599,12 @@ async fn a_stamp_the_table_cannot_answer_reads_customized_with_the_tables_curren
     let app = &parts.app;
     let current = summary();
     assert!(
-        Preset::at(SUMMARY, 2).is_none(),
-        "the table lacks version 2"
+        Preset::at(SUMMARY, UNSHIPPED_VERSION).is_none(),
+        "the table lacks version {UNSHIPPED_VERSION}"
     );
     assert!(Preset::current("ghost").is_none(), "the table lacks the id");
     for row in [
-        stamped_row("newer", SUMMARY, 2),
+        stamped_row("newer", SUMMARY, UNSHIPPED_VERSION),
         stamped_row("orphan", "ghost", 1),
     ] {
         parts
@@ -1536,7 +1614,7 @@ async fn a_stamp_the_table_cannot_answer_reads_customized_with_the_tables_curren
     }
     assert_eq!(
         show(app, &cookie, "/admin/guardrails/newer").await["preset"],
-        j!({"id": SUMMARY, "version": 2, "current_version": current.version, "customized": true}),
+        j!({"id": SUMMARY, "version": UNSHIPPED_VERSION, "current_version": current.version, "customized": true}),
         "a version the table lacks cannot be compared"
     );
     assert_eq!(
@@ -1704,6 +1782,13 @@ fn verdict(id: &str, word: &str, condition: Value) -> (String, String, Value) {
     (id.to_string(), word.to_string(), condition)
 }
 
+/// Adds `id` as a key of the pool `main`, so a key sample reads the case's own rows apart from the seeded ones.
+async fn sample_key(app: &Router, cookie: &str, id: &str) {
+    let body = j!({"id": id, "label": id, "pool_id": "main"}).to_string();
+    let response = post(app, "/admin/keys", &body, Some(cookie)).await;
+    assert_eq!(response.status(), StatusCode::CREATED, "{body}");
+}
+
 #[tokio::test]
 async fn the_pool_sample_walks_both_keys_newest_first_and_the_key_sample_one_key() {
     let (parts, cookie) = seeded_sample().await;
@@ -1784,6 +1869,30 @@ async fn the_limit_and_the_window_hold() {
     assert_eq!(whole["sample"]["limit"], 200, "the default limit");
     // The admin harness builds its state with `BODY_CAPTURE_MAX_HOURS`, 72, as the longest capture a key may ask for.
     assert_eq!(whole["sample"]["window_hours"], 72);
+}
+
+#[tokio::test]
+async fn a_key_with_no_captured_row_inside_the_window_answers_an_empty_sample_with_its_figures() {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    sample_key(app, &cookie, "ci").await;
+    // Captured, and older than the window, so the key holds a row and its window none.
+    write_row(&parts, fork_row("ci-old", 1_000 * 60, "ci"), Some(FORK));
+    let (status, answer) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "key_id": "ci", "limit": 5}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        answer,
+        j!({
+            "sample": {"key_id": "ci", "limit": 5, "window_hours": 72},
+            "totals": {"sampled": 0, "matched": 0, "unmatched": 0, "indeterminate": 0},
+            "requests": [],
+        })
+    );
 }
 
 #[tokio::test]
@@ -1878,6 +1987,95 @@ async fn a_sample_one_short_of_its_limit_answers_its_bodied_rows_in_order() {
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(sample_ids(&answer), [id(1), id(2), id(rows)]);
     assert_eq!(answer["totals"]["sampled"], 3);
+}
+
+#[tokio::test]
+async fn the_dry_run_reads_full_pages_until_the_last_whatever_room_the_sample_has_left() {
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    sample_key(app, &cookie, "ci").await;
+    // Two full pages and one row past them, with a body on the two newest rows and on the last alone, so the sample
+    // sits one short of its limit from the first page on and pages sized to the room left would take one read per
+    // bodiless row.
+    let rows = 2 * phoebis_admin::SAMPLE_PAGE + 1;
+    let id = |n: usize| format!("ci-{n:03}");
+    for n in 1..=rows {
+        let row = fork_row(&id(n), n as i64, "ci");
+        if n <= 2 || n == rows {
+            write_row(&parts, row, Some(FORK));
+        } else {
+            write_row(
+                &parts,
+                RequestRecord {
+                    bodies_captured: true,
+                    ..row
+                },
+                None,
+            );
+        }
+    }
+    // The counter counts every `read` on the handle, and the one this harness runs beside a dry run is the ledger
+    // writer's start read, since no member carries a budget for its spend refresh to read. The writer answers a
+    // replay only once its loop runs, after that start read, so the start read and the replay's own count read both
+    // land before `before`. The harness parks nothing, so the replay lands no row. The replay's own bound runs on the
+    // harness's frozen clock and never expires, so a wall-clock bound turns a writer stuck on a batch into a failure.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        parts
+            .ledger
+            .replay_parked(common::NOW, Duration::from_secs(1)),
+    )
+    .await
+    .expect("the ledger writer answered no replay within five seconds")
+    .unwrap();
+    let before = parts.db.debug_page_reads();
+    let (status, answer) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "key_id": "ci", "limit": 3}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(sample_ids(&answer), [id(1), id(2), id(rows)]);
+    assert_eq!(
+        parts.db.debug_page_reads() - before,
+        3,
+        "two full pages and the last"
+    );
+}
+
+#[tokio::test]
+async fn two_rows_at_one_instant_on_a_page_boundary_are_sampled_in_id_order_with_neither_left_out()
+{
+    let (parts, cookie) = seeded_sample().await;
+    let app = &parts.app;
+    sample_key(app, &cookie, "ci").await;
+    // The first page's last row and the second page's first share their instant, so the second page reads past the
+    // cursor by id alone.
+    let page = phoebis_admin::SAMPLE_PAGE;
+    let rows = page + 1;
+    let id = |n: usize| format!("ci-{n:02}");
+    for n in 1..=rows {
+        write_row(
+            &parts,
+            fork_row(&id(n), n.min(page) as i64, "ci"),
+            Some(FORK),
+        );
+    }
+    let (status, answer) = dry_run(
+        app,
+        &cookie,
+        j!({"conditions": [condition()], "key_id": "ci"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let mut expected: Vec<String> = (1..page).map(id).collect();
+    expected.extend([id(rows), id(page)]);
+    assert_eq!(
+        sample_ids(&answer),
+        expected,
+        "the higher id first at the shared instant"
+    );
 }
 
 #[tokio::test]

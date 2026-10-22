@@ -155,19 +155,20 @@ impl Engine {
             record.fast,
         );
         d.account_kind = record.kind;
+        d.usage_based = record.usage_based;
         d.overage_in_use = Some(record.in_overage);
         d.probe_migrated = 1;
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
     /// One request the previous recipe kept warm. The caller reads every part of the key off the agent under
-    /// the lock and hands them over, so nothing here needs the lock back. `kind` and `in_overage` are the credited
-    /// request's serving attempt's, so the credit files under the funding word its request row took, and `tier` and
-    /// `band` its request row's, so the credit prices at the cells and the windows that row does. `at` is the request's
-    /// receipt, the instant its row files under, so the credit sits in that row's hour and revision whenever the
-    /// answer completes. `ttl_ms` is the TTL the request's observation settled on, the TTL its own write would have
-    /// taken. `client` is the request's client label as the relay observed it, so the credit prices under that
-    /// client's regime as its request row does.
+    /// the lock and hands them over, so nothing here needs the lock back. `kind`, `usage_based` and `in_overage` are
+    /// the credited request's serving attempt's, so the credit files under the funding word its request row took, and
+    /// `tier` and `band` its request row's, so the credit prices at the cells and the windows that row does. `at` is
+    /// the request's receipt, the instant its row files under, so the credit sits in that row's hour and revision
+    /// whenever the answer completes. `ttl_ms` is the TTL the request's observation settled on, the TTL its own write
+    /// would have taken. `client` is the request's client label as the relay observed it, so the credit prices under
+    /// that client's regime as its request row does.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_kept_warm(
         &self,
@@ -184,6 +185,7 @@ impl Engine {
         band: Band,
         fast: bool,
         kind: Option<AccountKind>,
+        usage_based: bool,
         in_overage: bool,
         client: Option<&str>,
     ) {
@@ -210,14 +212,15 @@ impl Engine {
         d.tier = tier;
         d.band = Some(band);
         d.account_kind = kind;
+        d.usage_based = usage_based;
         d.overage_in_use = Some(in_overage);
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
-    /// One wasted probe, filed under the funding its own cost row took: the kind it was served under and its answer's
-    /// overage and speed. The row keys the probe's own exchange (its instant, its band and the account tier it ran
-    /// under) rather than the settlement's clock, so a settlement filed hours or a day later prices its counts at the
-    /// cells and the revision the probe ran at.
+    /// One wasted probe, filed under the funding its own cost row took: the kind and the class it was served under and
+    /// its answer's overage and speed. The row keys the probe's own exchange (its instant, its band and the account
+    /// tier it ran under) rather than the settlement's clock, so a settlement filed hours or a day later prices its
+    /// counts at the cells and the revision the probe ran at.
     pub(crate) fn record_settlement(&self, settlement: Settlement) {
         let mut d = delta(
             settlement.at,
@@ -240,6 +243,7 @@ impl Engine {
         d.tier = settlement.tier;
         d.band = Some(settlement.band);
         d.account_kind = settlement.kind;
+        d.usage_based = settlement.usage_based;
         d.overage_in_use = Some(settlement.in_overage);
         self.parts.ledger.record(Record::Keepalive(d));
     }
@@ -257,6 +261,7 @@ impl Engine {
         );
         d.probes_skipped = 1;
         d.account_kind = skip.kind;
+        d.usage_based = skip.usage_based;
         d.overage_in_use = Some(skip.in_overage);
         self.parts.ledger.record(Record::Keepalive(d));
         self.parts

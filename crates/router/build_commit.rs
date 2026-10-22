@@ -5,13 +5,19 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The commit to name and the paths cargo reruns the script on: `forced` (`PHOEBIS_BUILD_COMMIT`) where set, else
-/// `git rev-parse HEAD` in `dir`, else `unknown`, with `HEAD`, the current branch's ref (its loose file, or its
-/// directory where the ref is packed) and `packed-refs`, each resolved through `git rev-parse --git-path`, so a linked
-/// worktree names its own `HEAD` and the common directory's refs.
+/// The commit to name and the paths cargo reruns the script on: `forced` (`PHOEBIS_BUILD_COMMIT`) trimmed and
+/// lowercased where it is set and not blank, else `git rev-parse HEAD` in `dir`, else `unknown`, with `HEAD`, the
+/// current branch's ref (its loose file, or its directory where the ref is packed) and `packed-refs`, each resolved
+/// through `git rev-parse --git-path`, so a linked worktree names its own `HEAD` and the common directory's refs.
 pub fn build_commit(dir: &Path, forced: Option<&str>) -> (String, Vec<PathBuf>) {
+    // The ui crate's build script calls this helper and hands the bundle build the value it answers, so the header,
+    // the `build` members and the bundle's commit read one value. A blank value reads as unset, so a workflow that
+    // exports it empty still falls to git.
+    let forced = forced
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
     if let Some(commit) = forced {
-        return (commit.to_owned(), Vec::new());
+        return (commit, Vec::new());
     }
     let Some(commit) = git(dir, &["rev-parse", "HEAD"]) else {
         return ("unknown".to_owned(), Vec::new());

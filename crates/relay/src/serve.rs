@@ -6,6 +6,7 @@
 
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -23,20 +24,25 @@ use tokio::task::JoinSet;
 use tokio_boring::SslStream;
 
 use crate::casing::{head_queue, HeadQueue, HeadRecorder};
-use crate::messages::{router, Relay};
+use crate::messages::{router, Relay, ShutdownMark};
 
 /// How long the loop waits out a listener error. An accept that fails for a reason the process cannot fix,
 /// such as a descriptor limit, fails again immediately, so the pause is what keeps the loop off the CPU.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
 /// What bounds a connection before a request exists on it: the wait for its head, how many the listener holds
-/// at once, and how long a graceful shutdown waits before it cuts what is still running. All compiled in; the
-/// router names the values.
-#[derive(Clone, Copy, Debug)]
+/// at once, and how long a graceful shutdown waits before it cuts what is still running. The bounds are compiled
+/// in and the router names the values. The shutdown mark beside them bounds nothing, and the proxy listener alone
+/// reads it.
+#[derive(Clone, Debug)]
 pub struct Limits {
     pub drain_timeout: Duration,
     pub header_read_timeout: Duration,
     pub max_connections: usize,
+    /// The relay's shutdown mark, set before the drain deadline's cut so the ends it causes book the router's own
+    /// shutdown. Only the proxy listener's `serve` reads it, so a `Some` handed to the admin or the metrics listener
+    /// sets nothing, as `None` does.
+    pub shutdown_mark: Option<ShutdownMark>,
 }
 
 /// A TLS listener's acceptor, replaceable while the router runs. Each accepted connection takes the current one
@@ -254,6 +260,13 @@ pub async fn serve(
             seconds = limits.drain_timeout.as_secs(),
             "connections still open at the drain deadline were cut"
         );
+        // The router's own abort can come after this deadline, so this cut sets the mark too, ahead of the abort, and
+        // every end it causes books the router's shutdown rather than a caller's leaving.
+        if !tasks.is_empty() {
+            if let Some(mark) = &limits.shutdown_mark {
+                mark.store(true, Ordering::SeqCst);
+            }
+        }
         tasks.abort_all();
     }
     while tasks.join_next().await.is_some() {}

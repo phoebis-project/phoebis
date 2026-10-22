@@ -27,8 +27,8 @@ pub(crate) struct Dashboard {
     pub tokens_cached_24h: u64,
     /// The window's estimated cost in dollars.
     pub cost_24h: f64,
-    /// The dollars of the window's billed rows alone (fast mode, overage and API key accounts), a part of
-    /// `cost_24h`.
+    /// The dollars of the window's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a
+    /// part of `cost_24h`.
     pub billed_24h: f64,
     /// The window's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served
     /// them.
@@ -106,15 +106,21 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let mut accounts: std::collections::BTreeMap<String, Vec<DashboardWindow>> =
         std::collections::BTreeMap::new();
     for q in quota {
-        accounts
-            .entry(q.account_id.clone())
-            .or_default()
-            .push(DashboardWindow {
-                id: q.window,
-                utilization: q.utilization,
-                resets_at: q.reset_at,
-                bucket: q.bucket * 1_000,
-            });
+        let window = DashboardWindow {
+            id: crate::routes::account_window_id(&q.window).to_string(),
+            utilization: q.utilization,
+            resets_at: q.reset_at,
+            bucket: q.bucket * 1_000,
+        };
+        let windows = accounts.entry(q.account_id.clone()).or_default();
+        // The Fable week arrives under the poll's key and the head's, so one row stands per id, the newest bucket's.
+        // The rows come by window name, the head's spelling after the poll's, so a bucket both share answers the
+        // head's, as the ledger ranks a head the newest truth of its bucket.
+        match windows.iter_mut().find(|kept| kept.id == window.id) {
+            Some(kept) if kept.bucket <= window.bucket => *kept = window,
+            Some(_) => {}
+            None => windows.push(window),
+        }
     }
     let pins = state.router.pins().await.map(|p| p.len()).unwrap_or(0);
     Json(Dashboard {

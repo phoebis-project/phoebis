@@ -17,6 +17,11 @@ answers `400 credential rejected by the upstream`, and a models endpoint that an
 colon. Neither creates the account. A new key for an existing account goes through `PATCH /admin/accounts/{id}` as
 `secret` and is verified the same way, and a check that does not succeed refuses the edit whole.
 
+A usage-based Enterprise seat is an OAuth account the router places as a paid source beside the API-key accounts. The
+router classes it from the stored profile: the rate-limit tier `default_claude_zero`, or the seat tier
+`enterprise_usage_based`. Such a seat has a spend window against its monthly cap in place of the plan windows and is
+billed in dollars at the API rates. A Team or seat-based Enterprise seat keeps its plan windows.
+
 An id matches `[a-z0-9][a-z0-9-]{0,63}`, a label is at most 256 bytes, and an id in use answers
 `409 an account with this id exists`. The create route takes `"kind": "oauth"` too, with no secret, for a script that
 makes the account ahead of its pairing: the account reads `unpaired` until a pairing confirms, and an `oauth` create
@@ -76,7 +81,7 @@ curl -sS -X POST http://127.0.0.1:8081/admin/oauth/sessions \
 ```
 
 The answer is `201` with the session's `id`, the `authorization_url` to open, the `redirect_uri` the session registered
-and `expires_at`. No row is written until the confirm, so a session started with `new` that is cancelled, expires or
+and `expires_at`. No row is written until the confirm, so a session started with `new` that is canceled, expires or
 fails leaves no account, and an id in use answers `409 an account with this id exists`. To pair an existing OAuth
 account, its first pairing or a re-pair, name it with `account_id` instead of `new`:
 
@@ -152,10 +157,25 @@ in transport, arms a backoff and tries again, and only a definitive failure, lis
 
 `reauth_required` follows one definitive failure, never a retry count. An API-key account is marked on a `401`, or a
 `403` whose error type is `authentication_error`, from the upstream. An OAuth account is marked when a refresh finds no
-refresh token in the stored bundle, when the token endpoint answers `401` or `400` with `invalid_grant`, when the
-refreshed token names an identity other than the account's, when a request replayed with a freshly refreshed token is
-refused again, or when a refresh was in flight as the process stopped, which the next start cannot settle and so
-quarantines.
+refresh token in the stored bundle, when the token endpoint answers `401` or `400` with `invalid_grant`, when the usage
+poll's read of the usage endpoint answers `401` on the account's current credential, when the refreshed token names an
+identity other than the account's, when a request replayed with a freshly refreshed token is refused again, or when a
+refresh was in flight as the process stopped, which the next start cannot settle and so quarantines. The usage poll
+stops reading a marked account until a pairing is confirmed on it. Any other failed answer of the usage or the profile
+endpoint, or a read that fails in transport, leaves the state as it is: the poll logs one warning and writes one
+`poll_failed` event per poll that failed, while a `429` backs the poll off, and a usage `403` whose error code is
+`oauth_not_allowed_for_organization` writes `plan_ended` in its place where the profile it makes due reports no plan, as
+the next paragraph describes.
+
+An OAuth account whose subscription ended keeps its credential and its state, and its profile reports the organization
+holding no plan. A profile read that finds no plan, the hourly one or the start's, flags the account plan ended, and a
+usage `403` whose error code is `oauth_not_allowed_for_organization` makes that read due at once. While the flag stands
+the state stays as it was, the usage poll sends the account no usage request and reads its profile hourly, the stored
+tier stays the last plan's, the router places nothing on the account, reading it as past its end, and Refresh reads the
+profile before any usage request. A profile read that finds a plan again, or a pairing confirmed on the account, clears
+the flag, and the usage poll reads the account from its next slot. A disconnect leaves the flag standing until the
+pairing after it. `GET /admin/accounts` answers the flag as `plan_ended_at`, and the routing log records `plan_ended`
+and `plan_restored`.
 
 The Accounts view offers these actions, each through a control that [The console](console.md#accounts) describes, and
 each calls its own route:
@@ -166,7 +186,7 @@ each calls its own route:
 | Clear cooldown | `DELETE /admin/accounts/{id}/cooldowns/{scope}` | Clears one scope of the cooling-down block: `account`, `fast` (the fast lane's rate limit), `fast_credits` (the fast lane's usage-credits refusal) or `model:{canonical}`. A scope with no row answers `404 no such cooldown`. |
 | Clear funding | `POST /admin/accounts/{id}/clear-funding` | Moves a `funding_required` account back to `ready` at once, ahead of the router's own retry after five minutes, or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter. Any other state answers `409 the account is not waiting on funding`. The console's button reads "Clear funding flag". |
 | Delete account | `DELETE /admin/accounts/{id}` | Removes the account from every pool and deletes it. Request history stays in the ledger. |
-| Disconnect | `DELETE /admin/accounts/{id}/credentials` | Deletes the credential and lands the account on `disconnected`, or on `unpaired` for an API-key account. Pool memberships and request history stay, and a pairing in flight for the account is cancelled. |
+| Disconnect | `DELETE /admin/accounts/{id}/credentials` | Deletes the credential and lands the account on `disconnected`, or on `unpaired` for an API-key account. Pool memberships and request history stay, and a pairing in flight for the account is canceled. |
 | Pair or Re-pair | `POST /admin/oauth/sessions` | Starts the pairing session described above, with `account_id` naming the account. |
 | Pause and Resume | `POST /admin/accounts/{id}/pause`, `POST /admin/accounts/{id}/resume` | Flips `enabled`. Selection skips a paused account, and its state stays as it was. |
 | Verify | `POST /admin/accounts/{id}/verify` | Sends a models request to the upstream with the stored key and answers `ok` with the upstream's `status`, `200` on success and `401` for a rejected key. It writes no state. An OAuth account answers `400 only an API-key account is verified this way`, and an API-key account without a key `409 account holds no API key`. |

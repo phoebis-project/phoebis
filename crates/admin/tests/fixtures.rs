@@ -16,7 +16,9 @@ use phoebis_ledger::{
     QuotaSampleRecord, Record, RequestRecord,
 };
 use phoebis_routing::{lane_key, ClientClass};
-use phoebis_store::{AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow,
+};
 use serde_json::{json as j, Value};
 
 fn dir() -> PathBuf {
@@ -440,7 +442,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .unwrap();
     parts.store.set_profile(
         "business",
-        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_20x","subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
+        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_20x","has_extra_usage_enabled":true,"subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
         &SubscriptionRow {
             plan: Some("max".into()),
             tier: Some("default_claude_max_20x".into()),
@@ -448,8 +450,58 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
+    // A usage-based Enterprise seat beside the plan account, paired and classed from its stored profile, so the
+    // account and pool fixtures carry the class on a row that holds it. It shares the seed's two bound tokens, which
+    // the no-secret guard already reads.
+    parts
+        .store
+        .insert_account(&AccountRow {
+            id: "usage-seat".into(),
+            kind: AccountKind::Oauth,
+            label: "Seat".into(),
+            enabled: true,
+            identity: Some(Identity {
+                account_uuid: "00000000-0000-4000-8000-000000000003".into(),
+                email: "seat@example.invalid".into(),
+                organization_uuid: Some("00000000-0000-4000-8000-000000000004".into()),
+            }),
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Paired,
+        })
+        .unwrap();
+    parts
+        .store
+        .commit_credentials(
+            "usage-seat",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new(access_token),
+                refresh_token: Some(Secret::new(refresh_token)),
+                issued_at: now,
+                expires_at: now + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    parts.store.set_profile(
+        "usage-seat",
+        r#"{"account":{"uuid":"s","email":"seat@example.invalid","display_name":"Seat"},"organization":{"uuid":"e","name":"Enterprise Org","organization_type":"claude_enterprise","rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based","has_extra_usage_enabled":true}}"#,
+        &SubscriptionRow {
+            plan: None,
+            tier: Some("default_claude_zero".into()),
+            since: None,
+            trial_ends_at: None,
+        },
+    ).unwrap();
     // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]
         .as_str()
@@ -702,9 +754,56 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 disabled_reason: None,
                 overage_reset: None,
                 source: "poll".into(),
+                spend_limit_minor: None,
+                spend_used_minor: None,
+                spend_percent: None,
+                spend_currency: None,
+                spend_exponent: None,
             }),
         )
         .unwrap();
+    // The seat's poll with its body's `spend` object, then a head in a later bucket that moves the share and names the
+    // reset, so the account row draws its spend window from both.
+    for extra in [
+        ExtraUsageSampleRecord {
+            account_id: "usage-seat".into(),
+            bucket: phoebis_ledger::bucket_of(now - 600_000),
+            is_enabled: true,
+            in_use: None,
+            monthly_limit: Some(250_000),
+            used_credits: Some(102_500),
+            utilization: Some(0.41),
+            currency: Some("USD".into()),
+            disabled_reason: None,
+            overage_reset: None,
+            source: "poll".into(),
+            spend_limit_minor: Some(250_000),
+            spend_used_minor: Some(102_500),
+            spend_percent: Some(41.0),
+            spend_currency: Some("USD".into()),
+            spend_exponent: Some(2),
+        },
+        ExtraUsageSampleRecord {
+            account_id: "usage-seat".into(),
+            bucket,
+            is_enabled: true,
+            in_use: None,
+            monthly_limit: None,
+            used_credits: None,
+            utilization: Some(0.4),
+            currency: None,
+            disabled_reason: None,
+            overage_reset: Some(common::month_end()),
+            source: "head".into(),
+            spend_limit_minor: None,
+            spend_used_minor: None,
+            spend_percent: None,
+            spend_currency: None,
+            spend_exponent: None,
+        },
+    ] {
+        parts.db.insert_samples(&[], Some(&extra)).unwrap();
+    }
     let hour_ago = now - 3_600_000;
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -1102,6 +1201,31 @@ async fn every_route_is_captured_and_holds_its_shape() {
         attempts: Vec::new(),
         bodies: None,
     });
+    // A request the usage-based seat served, billed in dollars under the seat's own funding word, so the request rows
+    // carry the attempt's class with one true. The oldest row and in no session, so the list's first rows keep their
+    // places and the session rows their counts. The seat has no plan window, so its attempt carries no 5-hour reading.
+    let seat_at = refused_at - 600;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            session_id: None,
+            ..request(
+                key_generation,
+                "r-usage-seat",
+                seat_at,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![AttemptRecord {
+            usage_based: true,
+            ratelimit_5h_utilization: None,
+            ratelimit_5h_reset: None,
+            ..attempt("r-usage-seat", 1, "usage-seat", 200, "succeeded", seat_at)
+        }],
+        bodies: None,
+    });
     parts
         .keepalive
         .apply_event(
@@ -1260,6 +1384,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                     "oauth"
                 }
                 .into(),
+                usage_based: false,
                 pin_epoch: Some(1),
                 started_at: now,
                 cache_ttl_ms: None,
@@ -1291,7 +1416,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 message_id: Some(format!("msg_{request_id}_1")),
                 skipped_events: 0,
                 interruption: None,
-                passthrough: None,
                 finished_at: now,
             }));
     }
@@ -1303,6 +1427,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             attempt: 1,
             account_id: "direct".into(),
             account_kind: "api_key".into(),
+            usage_based: false,
             pin_epoch: Some(1),
             started_at: now,
             cache_ttl_ms: None,
@@ -1334,11 +1459,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
             message_id: Some("msg_k1_1".into()),
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 9
+        v["requests"].as_array().unwrap().len() == 10
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
@@ -1439,7 +1563,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: now,
         }));
     // The replay's counts while the parked table is still empty.
@@ -2036,6 +2159,16 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         let response = patch(app, "/admin/pools/main", body, Some(cookie)).await;
         assert_eq!(response.status(), 200, "{body}");
     };
+    // The stories run on the pool's two serving members, so the usage-based seat the earlier captures read leaves
+    // the pool first.
+    let response = common::put(
+        app,
+        "/admin/pools/main/members",
+        r#"{"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0}]}"#,
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(response.status(), 200, "the seat leaves the pool");
 
     // Placed by the static prefix: a session warms the shared static chain on business, and a fresh session lands
     // there by it. The pool places a main conversation by its warm prefix for this.
@@ -2473,7 +2606,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             pool_id: "main".into(),
             ends_at: now + 86_400_000,
             wind_down_minutes: 1_440,
-            end_source: "cancelled",
+            end_source: "canceled",
             restored: false,
             at: at(4),
         },
@@ -2542,6 +2675,35 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             attempts: 2,
             resumed_at: at(8),
         },
+    ));
+    parts.ledger.record(phoebis_ledger::poll_failed(
+        "business",
+        at(4),
+        &phoebis_oauth::PollFault {
+            endpoint: "usage",
+            status: Some(503),
+            transport: false,
+            text: "usage request rejected with status 503".into(),
+        },
+    ));
+    let profile = |organization_type: &str, rate_limit_tier: &str, subscription_status: &str| {
+        j!({ "organization": {
+            "organization_type": organization_type,
+            "rate_limit_tier": rate_limit_tier,
+            "subscription_status": subscription_status,
+        }})
+    };
+    parts.ledger.record(phoebis_ledger::plan_ended(
+        "business",
+        at(2),
+        "usage_403",
+        &profile("claude_free", "default_claude_ai", "canceled"),
+    ));
+    parts.ledger.record(phoebis_ledger::plan_restored(
+        "business",
+        at(3),
+        "profile",
+        &profile("claude_max", "default_claude_max_5x", "active"),
     ));
     parts.ledger.record(phoebis_ledger::catalog_changed(
         &phoebis_relay::CatalogChange {

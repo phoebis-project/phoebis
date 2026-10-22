@@ -20,6 +20,7 @@ use tracing::Instrument;
 
 use crate::exchange::{control_request, parse_token_response, refresh_body, ControlKind};
 use crate::identity::{identity_matches, IdentityClaims};
+use crate::usage::Refused;
 
 // A poisoned manager mutex means a prior panic happened while the refresh map was being mutated, so the
 // in-flight bookkeeping can no longer be trusted.
@@ -182,6 +183,15 @@ struct Lineage {
 }
 
 impl Lineage {
+    /// The row's holder and slot at the bundle generation `generation`.
+    fn of(account: &AccountRow, generation: u64) -> Lineage {
+        Lineage {
+            incarnation: account.incarnation,
+            lifecycle_generation: account.lifecycle_generation,
+            generation,
+        }
+    }
+
     /// Whether the lineage is the row's holder and slot, at whatever generation.
     fn of_row(&self, account: &AccountRow) -> bool {
         self.incarnation == account.incarnation
@@ -411,8 +421,11 @@ impl CredentialManager {
                 })
             });
         if !superseded {
-            self.inner
-                .refuse(account, credential_generation, Some(epoch));
+            self.inner.refuse(
+                &account.id,
+                Lineage::of(account, credential_generation),
+                Some(epoch),
+            );
         }
     }
 
@@ -535,6 +548,20 @@ impl CredentialManager {
     /// a token-endpoint 5xx or an uncertain attempt armed, as `backoff` reads it.
     pub fn backoff_until(&self, account_id: &str) -> Option<i64> {
         self.backoff(account_id).map(|backoff| backoff.until)
+    }
+
+    /// `mark_reauth`'s conditional write under `StateCause::AuthFailed`, fenced on `refused`: a refresh or a re-pair
+    /// that moved a generation since the fetch lands nothing.
+    pub fn mark_auth_failed(&self, account_id: &str, refused: Refused) -> Option<LandedMark> {
+        self.inner.mark_reauth(
+            account_id,
+            StateCause::AuthFailed,
+            Lineage {
+                incarnation: refused.incarnation,
+                lifecycle_generation: refused.lifecycle_generation,
+                generation: refused.credential_generation,
+            },
+        )
     }
 
     /// Exposes the store so services built on top of the manager, like the usage cache, can read lifecycle
@@ -869,7 +896,11 @@ impl Inner {
                 account.incarnation,
                 AttemptOutcome::Failed("no refresh token".into()),
             );
-            let mark = self.mark_reauth(&account, bundle.generation);
+            let mark = self.mark_reauth(
+                &account.id,
+                StateCause::RefreshFailed,
+                Lineage::of(&account, bundle.generation),
+            );
             return Err(RefreshFailure::ReauthRequired(mark));
         };
         let scopes = if bundle.scopes.is_empty() {
@@ -925,7 +956,11 @@ impl Inner {
                 || (head.status == 400 && code.as_deref() == Some("invalid_grant"))
             {
                 self.resolve(attempt, account.incarnation, AttemptOutcome::Failed(detail));
-                let mark = self.mark_reauth(&account, bundle.generation);
+                let mark = self.mark_reauth(
+                    &account.id,
+                    StateCause::RefreshFailed,
+                    Lineage::of(&account, bundle.generation),
+                );
                 return Err(RefreshFailure::ReauthRequired(mark));
             }
             // A rejected request never got far enough to rotate anything, so the stored refresh token is
@@ -976,7 +1011,11 @@ impl Inner {
                     account.incarnation,
                     AttemptOutcome::Failed("identity mismatch".into()),
                 );
-                let mark = self.mark_reauth(&account, bundle.generation);
+                let mark = self.mark_reauth(
+                    &account.id,
+                    StateCause::RefreshFailed,
+                    Lineage::of(&account, bundle.generation),
+                );
                 return Err(RefreshFailure::ReauthRequired(mark));
             }
         }
@@ -1128,47 +1167,48 @@ impl Inner {
     /// rows the legs carry read `ready` until the next reload, and a miss that read the store would find the bundle
     /// the mark is about and serve it to its expiry. The landed mark is answered for the caller to report, since the
     /// store write alone starts no reload.
-    fn mark_reauth(&self, account: &AccountRow, credential_generation: u64) -> Option<LandedMark> {
+    fn mark_reauth(
+        &self,
+        account_id: &str,
+        cause: StateCause,
+        fence: Lineage,
+    ) -> Option<LandedMark> {
         let landed = self
             .store
             .set_state_if_generations(
-                &account.id,
+                account_id,
                 AccountState::ReauthRequired,
-                StateCause::RefreshFailed,
-                account.incarnation,
-                account.lifecycle_generation,
-                credential_generation,
+                cause,
+                fence.incarnation,
+                fence.lifecycle_generation,
+                fence.generation,
             )
             .is_ok_and(|landed| landed.is_some());
         if !landed {
             return None;
         }
-        self.refuse(account, credential_generation, None);
+        self.refuse(account_id, fence, None);
         Some(LandedMark {
-            account_id: account.id.clone(),
+            account_id: account_id.to_string(),
             state: AccountState::ReauthRequired,
-            cause: StateCause::RefreshFailed,
-            incarnation: account.incarnation,
-            lifecycle_generation: account.lifecycle_generation,
-            credential_generation,
+            cause,
+            incarnation: fence.incarnation,
+            lifecycle_generation: fence.lifecycle_generation,
+            credential_generation: fence.generation,
         })
     }
 
-    /// Drops the account's cached bundle and refuses its lineage at `credential_generation`, so a miss on it answers
-    /// the refusal rather than reading the refused bundle back from the store. With `since`, the epoch a caller read
-    /// before its own store read, an invalidation that moved the epoch meanwhile leaves the slot as it is.
-    fn refuse(&self, account: &AccountRow, credential_generation: u64, since: Option<u64>) {
+    /// Drops the account's cached bundle and refuses `lineage`, so a miss on it answers the refusal rather than reading
+    /// the refused bundle back from the store. With `since`, the epoch a caller read before its own store read, an
+    /// invalidation that moved the epoch meanwhile leaves the slot as it is.
+    fn refuse(&self, account_id: &str, lineage: Lineage, since: Option<u64>) {
         let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
-        let slot = bundles.entry(account.id.clone()).or_default();
+        let slot = bundles.entry(account_id.to_string()).or_default();
         if since.is_some_and(|epoch| epoch != slot.epoch) {
             return;
         }
         slot.outrun();
-        slot.refused = Some(Lineage {
-            incarnation: account.incarnation,
-            lifecycle_generation: account.lifecycle_generation,
-            generation: credential_generation,
-        });
+        slot.refused = Some(lineage);
     }
 }
 

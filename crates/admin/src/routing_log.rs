@@ -385,7 +385,7 @@ pub(crate) struct DecisionRecord {
     /// hour), under Pace alone), `budget` (each `period`, `budget_usd`, `spent_usd`, `period_start`,
     /// `period_end`, `observed_at`), `cooldowns` (each `scope`, `reason`, `window`, `until`, `blocking`),
     /// `credits` (`enabled`, `disabled_reason`, `utilization`, `observed_at`, `blocked`), `term` (`since`,
-    /// `trial_ends_at`, `cancelled`, `ends_at`, `winding_down`, `ended`), `prefix` (per rung the deepest entry the
+    /// `trial_ends_at`, `canceled`, `ends_at`, `winding_down`, `ended`), `prefix` (per rung the deepest entry the
     /// walk visited, `content` and `static`, and apart from it the entry the rung accepted, `content_match` and
     /// `static_match`, each `hash` (64 lowercase hex characters, the boundary as the cache map keys it), `depth`,
     /// `prefix_tokens`, `written_at`, `ttl_ms`, `live`, `refused_by`, the gate that refused it, and beside the

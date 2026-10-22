@@ -1292,9 +1292,9 @@ export class MockApi implements Api {
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
   async updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account> {
     const a = this.account(accountId);
-    if (patch.cancelled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is cancelled', null);
-    if (!patch.cancelled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs cancelled', null);
-    if (patch.cancelled && patch.subscriptionEndsAt === null) throw new ApiError(400, 'cancelled needs subscription_ends_at', null);
+    if (patch.cancelled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is canceled', null);
+    if (!patch.cancelled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs canceled', null);
+    if (patch.cancelled && patch.subscriptionEndsAt === null) throw new ApiError(400, 'canceled needs subscription_ends_at', null);
     if (revision !== undefined && revision !== a.revision) {
       return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
     }
@@ -1302,7 +1302,7 @@ export class MockApi implements Api {
     const blank: Subscription = { billingType: '', endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
     const base = a.subscription ?? (patch.cancelled ? blank : null);
     const subscription = base ? { ...base, endsAt: patch.cancelled ? patch.subscriptionEndsAt : null } : null;
-    return latency(this.withPool(this.putAccount(revised({ ...a, cancelled: patch.cancelled, subscription }))), 250);
+    return latency(this.withPool(this.putAccount(revised({ ...a, canceled: patch.cancelled, subscription }))), 250);
   }
 
   /**

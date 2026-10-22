@@ -2508,8 +2508,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     const primary = (await api.listAccounts()).find((a) => a.id === 'primary');
     results.push({
       name: '/accounts/primary saving the box unticked clears the flag and its end',
-      ok: !labels().includes('Ends') && primary?.cancelled === false && primary?.subscription?.endsAt === null,
-      missing: [...labels(), String(primary?.cancelled), String(primary?.subscription?.endsAt)],
+      ok: !labels().includes('Ends') && primary?.canceled === false && primary?.subscription?.endsAt === null,
+      missing: [...labels(), String(primary?.canceled), String(primary?.subscription?.endsAt)],
     });
   }
   const pair = m.container.querySelector('.detail__pair');
@@ -3494,8 +3494,8 @@ m.unmount();
   const stored = (await api.listAccounts()).find((a) => a.id === 'primary');
   results.push({
     name: "/accounts a refused end edit keeps the form with the typed date and the sentence in the editor's callout, in no toast",
-    ok: kept.checked === true && kept.ends === '2027-03-01T10:00' && endCalloutText === 'the store is unavailable' && ended.shell === '' && ended.own === '' && stored?.cancelled === false,
-    missing: [kept.checked === null ? 'the form closed' : `ticked ${kept.checked}, ends ${kept.ends}`, endCalloutText ?? 'no callout', ended.shell || 'no first toast', ended.own || 'no second toast', `stored cancelled ${stored?.cancelled}`],
+    ok: kept.checked === true && kept.ends === '2027-03-01T10:00' && endCalloutText === 'the store is unavailable' && ended.shell === '' && ended.own === '' && stored?.canceled === false,
+    missing: [kept.checked === null ? 'the form closed' : `ticked ${kept.checked}, ends ${kept.ends}`, endCalloutText ?? 'no callout', ended.shell || 'no first toast', ended.own || 'no second toast', `stored canceled ${stored?.canceled}`],
   });
   results.push({
     name: '/accounts the label and end editors take no typing and no Cancel while their save runs',
@@ -3570,7 +3570,7 @@ m.unmount();
   await page.settle(600);
   const endCallout = identity()?.querySelector('[role="alert"]');
   const endReload = reloadIn(endCallout);
-  const endRefused = { callout: endCallout?.textContent ?? '', field: field() !== null, stored: (await primary())?.cancelled, toast: toast() };
+  const endRefused = { callout: endCallout?.textContent ?? '', field: field() !== null, stored: (await primary())?.canceled, toast: toast() };
   results.push({
     name: '/accounts a save over an account written since the end editor opened is refused as stale with a Reload in the callout',
     ok: written === opened + 1 && endRefused.field && endRefused.callout === `${sentence} Reload` && !!endReload && endRefused.toast === '' && endRefused.stored === false,
@@ -3593,8 +3593,8 @@ m.unmount();
   const endSaved = { field: field() !== null, toast: toast() };
   results.push({
     name: '/accounts an end edit opened after Reload saves over the fresh row',
-    ok: !endSaved.field && endSaved.toast === 'Subscription end saved' && endStored?.cancelled === true && endStored?.revision === opened + 2,
-    missing: [`field ${endSaved.field}`, `toast ${endSaved.toast}`, `stored cancelled ${endStored?.cancelled}`, `revision ${endStored?.revision}, opened ${opened}`],
+    ok: !endSaved.field && endSaved.toast === 'Subscription end saved' && endStored?.canceled === true && endStored?.revision === opened + 2,
+    missing: [`field ${endSaved.field}`, `toast ${endSaved.toast}`, `stored canceled ${endStored?.canceled}`, `revision ${endStored?.revision}, opened ${opened}`],
   });
   // Cancel after a stale refusal reads the lists again as Reload does, since the refusal says the view is out of date.
   await editLabel();
@@ -3647,8 +3647,8 @@ m.unmount();
   const both = { alert: identity()?.querySelector('[role="alert"]')?.textContent ?? null, field: field() !== null, stored: await primary() };
   results.push({
     name: '/accounts a label save and then an end save from editors opened together both land without a Reload',
-    ok: both.alert === null && !both.field && both.stored?.label === 'primary 2' && both.stored?.cancelled === true && both.stored?.revision === opened + 2,
-    missing: [both.alert ?? 'no callout', `field ${both.field}`, `label ${both.stored?.label}`, `cancelled ${both.stored?.cancelled}`, `revision ${both.stored?.revision}, opened ${opened}`],
+    ok: both.alert === null && !both.field && both.stored?.label === 'primary 2' && both.stored?.canceled === true && both.stored?.revision === opened + 2,
+    missing: [both.alert ?? 'no callout', `field ${both.field}`, `label ${both.stored?.label}`, `canceled ${both.stored?.canceled}`, `revision ${both.stored?.revision}, opened ${opened}`],
   });
 
   // An end editor opened before another operator's write keeps its token through the title editor's own save, which
@@ -3679,8 +3679,8 @@ m.unmount();
   const fenced = { callout: identity()?.querySelector('[role="alert"]')?.textContent ?? '', stored: await primary() };
   results.push({
     name: "/accounts an end editor opened before another operator's write still reads stale_edit after the title editor's own save",
-    ok: fenced.callout === `${sentence} Reload` && fenced.stored?.label === 'primary 3' && fenced.stored?.cancelled === false,
-    missing: [fenced.callout || 'no callout', `label ${fenced.stored?.label}`, `cancelled ${fenced.stored?.cancelled}`],
+    ok: fenced.callout === `${sentence} Reload` && fenced.stored?.label === 'primary 3' && fenced.stored?.canceled === false,
+    missing: [fenced.callout || 'no callout', `label ${fenced.stored?.label}`, `canceled ${fenced.stored?.canceled}`],
   });
   identityButton('Cancel')?.click();
   await page.settle(400);
@@ -3798,14 +3798,14 @@ m.unmount();
       endLanded.path === `/accounts/${second}` &&
       endLanded.sent === labelOpened &&
       endLanded.alert === null &&
-      endLanded.second?.cancelled === true &&
+      endLanded.second?.canceled === true &&
       endLanded.second?.revision === labelOpened + 1 &&
       endLanded.first?.label === `${first} 2` &&
       fenceOpened !== null &&
       fenced.callout === `${sentence} Reload` &&
-      fenced.second?.cancelled === false &&
+      fenced.second?.canceled === false &&
       fenced.second?.label === `${second} (written)`,
-    missing: [`opened ${labelOpened}, sent ${endLanded.sent}`, `path ${endLanded.path}`, endLanded.alert ?? 'no callout', `${second} cancelled ${endLanded.second?.cancelled}, revision ${endLanded.second?.revision}`, `${first} label ${endLanded.first?.label}`, `fence opened ${fenceOpened}`, fenced.callout || 'no fence callout', `${second} after the fence: cancelled ${fenced.second?.cancelled}, label ${fenced.second?.label}`],
+    missing: [`opened ${labelOpened}, sent ${endLanded.sent}`, `path ${endLanded.path}`, endLanded.alert ?? 'no callout', `${second} canceled ${endLanded.second?.canceled}, revision ${endLanded.second?.revision}`, `${first} label ${endLanded.first?.label}`, `fence opened ${fenceOpened}`, fenced.callout || 'no fence callout', `${second} after the fence: canceled ${fenced.second?.canceled}, label ${fenced.second?.label}`],
   });
 
   const endOpened = await reset();
@@ -3836,8 +3836,8 @@ m.unmount();
       !labelLanded.input &&
       labelLanded.second?.label === `${second} 2` &&
       labelLanded.second?.revision === endOpened + 1 &&
-      labelLanded.first?.cancelled === true,
-    missing: [`opened ${endOpened}, sent ${labelLanded.sent}`, `path ${labelLanded.path}`, labelLanded.alert ?? 'no callout', `input ${labelLanded.input}`, `${second} label ${labelLanded.second?.label}, revision ${labelLanded.second?.revision}`, `${first} cancelled ${labelLanded.first?.cancelled}`],
+      labelLanded.first?.canceled === true,
+    missing: [`opened ${endOpened}, sent ${labelLanded.sent}`, `path ${labelLanded.path}`, labelLanded.alert ?? 'no callout', `input ${labelLanded.input}`, `${second} label ${labelLanded.second?.label}, revision ${labelLanded.second?.revision}`, `${first} canceled ${labelLanded.first?.canceled}`],
   });
   await reset();
   page.unmount();
@@ -3868,7 +3868,7 @@ m.unmount();
   held.release();
   await page.settle(600);
   held.restore();
-  const read = { path: left, stored: (await api.listAccounts()).find((a) => a.id === 'primary')?.cancelled, toast: page.container.querySelector('.toast')?.textContent ?? '' };
+  const read = { path: left, stored: (await api.listAccounts()).find((a) => a.id === 'primary')?.canceled, toast: page.container.querySelector('.toast')?.textContent ?? '' };
   results.push({
     name: '/accounts a save refused after the operator left the account raises the toast',
     ok: read.path === '/accounts/secondary' && read.toast === 'Save on primary refused: the account changed while the edit was being saved' && read.stored === false,

@@ -294,11 +294,11 @@ impl PairingVault {
     }
 
     /// Drops every bundle held for an account and returns the pairing sessions to cancel, each with the
-    /// admin session that owns it. Cancelling is left to the caller so no pairing lock is ever taken
+    /// admin session that owns it. Canceling is left to the caller so no pairing lock is ever taken
     /// while this one is held.
     pub fn discard_for_account(&self, account_id: &str, now: i64) -> Vec<(String, String)> {
         let mut records = self.records.lock().expect(LOCK_POISONED);
-        let mut cancelled = Vec::new();
+        let mut canceled = Vec::new();
         for (session_id, record) in records.iter_mut() {
             if record.account_id != account_id {
                 continue;
@@ -306,10 +306,10 @@ impl PairingVault {
             if matches!(record.status, VaultStatus::Started | VaultStatus::Exchanged) {
                 record.exchange = None;
                 record.move_to(VaultStatus::Discarded, now);
-                cancelled.push((session_id.clone(), record.admin_session_id.clone()));
+                canceled.push((session_id.clone(), record.admin_session_id.clone()));
             }
         }
-        cancelled
+        canceled
     }
 
     /// Drops every pairing whose session has run out: the bundle it may hold can never be confirmed, and
@@ -332,7 +332,7 @@ impl PairingVault {
 
 impl PairingRecord {
     /// An ended record keeps the stamp of its first end, which the sweep counts its lifetime from, so a second
-    /// discard (a callback's, when the owner cancelled while its exchange ran) leaves its lifetime where the first end
+    /// discard (a callback's, when the owner canceled while its exchange ran) leaves its lifetime where the first end
     /// put it.
     fn move_to(&mut self, status: VaultStatus, now: i64) {
         if matches!(self.status, VaultStatus::Started | VaultStatus::Exchanged) {

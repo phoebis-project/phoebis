@@ -20,6 +20,10 @@ pub enum OauthError {
     Malformed(String),
     #[error("control response is not valid JSON")]
     Json(#[from] serde_json::Error),
+    /// serde's message quotes the value it refused, which a usage body may show and a token body must not, so
+    /// the usage parse alone builds this variant.
+    #[error("control response is not valid JSON: {0}")]
+    UsageJson(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -281,6 +285,13 @@ mod tests {
         let printed = format!("{parsed:?}");
         assert!(!printed.contains("sk-ant-oat01"), "{printed}");
         assert!(!printed.contains("sk-ant-ort01"), "{printed}");
+    }
+
+    #[test]
+    fn a_token_parse_failure_never_quotes_the_value_it_refused() {
+        let body = br#"{"access_token":"a","expires_in":"sk-ant-oat01-PLACEHOLDER"}"#;
+        let error = parse_token_response(body).expect_err("a string lifetime is not a token");
+        assert_eq!(error.to_string(), "control response is not valid JSON");
     }
 
     #[test]

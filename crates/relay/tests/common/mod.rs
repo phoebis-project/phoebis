@@ -20,7 +20,7 @@ use phoebis_profile::{
 };
 use phoebis_relay::{
     router, AccountingSource, CatalogService, Limits, OriginalHead, Relay, RelayOutcome,
-    UpstreamGzip,
+    ShutdownMark, UpstreamGzip,
 };
 use phoebis_routing::{
     spawn, DecisionRecord, DecisionSummary, RouterConfig, RouterEvent, RouterHandle,
@@ -191,7 +191,7 @@ pub struct Harness {
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     /// Aborts the periodic refresh loop on drop, ahead of `_stop` so no tick still due starts a fill after the
-    /// fills below are cancelled.
+    /// fills below are canceled.
     _refresh: RefreshGuard,
     /// Cancels `catalog`'s fills and retries on drop, so a retry sleeping its backoff never outlives the test.
     _stop: CatalogGuard,
@@ -290,6 +290,11 @@ pub async fn relay_with_limits(
     up: &FakeUpstream,
     limits: Limits,
 ) -> axum::Router {
+    one_account_harness(kind, up, limits).await.app
+}
+
+/// The one-account relay `relay_with_limits` answers, with its whole harness, for a case that reads the relay's counts.
+pub async fn one_account_harness(kind: AccountKind, up: &FakeUpstream, limits: Limits) -> Harness {
     let secret = match kind {
         AccountKind::Oauth => "sk-ant-oat01-PLACEHOLDER",
         AccountKind::ApiKey => "sk-ant-api03-PLACEHOLDER",
@@ -308,7 +313,6 @@ pub async fn relay_with_limits(
         limits,
     )
     .await
-    .app
 }
 
 pub async fn harness(up: &FakeUpstream, accounts: &[TestAccount], pool: PoolSpec) -> Harness {
@@ -335,6 +339,7 @@ pub async fn harness_with_router_config(
         None,
         None,
         config,
+        None,
         None,
     )
     .await
@@ -401,6 +406,7 @@ pub async fn harness_on(
         None,
         RouterConfig::default(),
         None,
+        None,
     )
     .await
 }
@@ -424,6 +430,7 @@ pub async fn harness_on_with_bus(
         None,
         None,
         RouterConfig::default(),
+        None,
         None,
     )
     .await
@@ -450,6 +457,7 @@ pub async fn harness_with_memory_cap(
         None,
         RouterConfig::default(),
         None,
+        None,
     )
     .await
 }
@@ -473,6 +481,7 @@ pub async fn harness_with_signed_placeholder(
         None,
         None,
         RouterConfig::default(),
+        None,
         None,
     )
     .await
@@ -509,6 +518,34 @@ pub async fn harness_with_bus_limits(
         None,
         RouterConfig::default(),
         None,
+        None,
+    )
+    .await
+}
+
+/// `harness_with_bus_limits` with the router's shutdown mark attached, for the cases that set it.
+pub async fn harness_with_shutdown_mark(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    bus: Bus,
+    limits: Limits,
+    mark: ShutdownMark,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        limits,
+        Some(bus),
+        false,
+        None,
+        None,
+        RouterConfig::default(),
+        None,
+        Some(mark),
     )
     .await
 }
@@ -532,6 +569,7 @@ pub async fn harness_with_accounting(
         None,
         RouterConfig::default(),
         Some(source),
+        None,
     )
     .await
 }
@@ -558,6 +596,7 @@ pub async fn harness_with_bus_and_accounting(
         None,
         RouterConfig::default(),
         Some(source),
+        None,
     )
     .await
 }
@@ -582,6 +621,7 @@ pub async fn harness_with_catalog(
         None,
         Some(catalog_up),
         RouterConfig::default(),
+        None,
         None,
     )
     .await
@@ -611,6 +651,7 @@ pub async fn harness_on_with_bus_and_catalog(
         Some(catalog_up),
         RouterConfig::default(),
         accounting,
+        None,
     )
     .await
 }
@@ -636,6 +677,7 @@ pub async fn harness_with_store_and_catalog(
         Some(catalog_up),
         RouterConfig::default(),
         None,
+        None,
     )
     .await
 }
@@ -653,6 +695,7 @@ async fn build(
     catalog_up: Option<FakeUpstream>,
     router_config: RouterConfig,
     accounting: Option<AccountingSource>,
+    shutdown_mark: Option<ShutdownMark>,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -873,6 +916,10 @@ async fn build(
     };
     let relay = match accounting {
         Some(source) => relay.with_accounting(source),
+        None => relay,
+    };
+    let relay = match shutdown_mark {
+        Some(mark) => relay.with_shutdown_mark(mark),
         None => relay,
     };
     let relay = Arc::new(relay);

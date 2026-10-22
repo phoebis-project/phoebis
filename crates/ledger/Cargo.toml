@@ -6,8 +6,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-# The read-failure test seam, see `LedgerDb::debug_fail_next_read`. This crate's own dev-dependency below turns it
-# on for a test build, so a release build carries no way to fail a ledger read on purpose.
+# The read-failure test seam and the read count, see `LedgerDb::debug_fail_next_read` and `debug_page_reads`. This
+# crate's own dev-dependency below and the admin crate's turn it on for a test build, so a release build carries no
+# way to fail a ledger read on purpose and no counter.
 debug-hooks = []
 # The analytics folds only the tests call (`apply_filter`, `breakdown`, `burn_rows`, `burn_series`, `series` and
 # `LiveKeys::selects`), the disk cap a held batch is built on (`LedgerDb::fill_the_disk` and `free_the_disk`) and the

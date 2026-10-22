@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_oauth::{BackoffEdge, UsageError, UsageService, UsageSnapshot};
+use phoebis_oauth::{
+    BackoffEdge, LandedMark, PollFault, PollIssue, UsageError, UsageService, UsageSnapshot,
+};
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
     credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, FIVE_HOUR,
@@ -18,7 +20,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::assemble::Record;
-use crate::events::poll_backoff;
+use crate::events::{plan_ended, plan_restored, poll_backoff, poll_failed};
 use crate::record::{ExtraUsageSampleRecord, QuotaSampleRecord};
 use crate::rollup::bucket_of;
 use crate::task::Ledger;
@@ -43,6 +45,25 @@ const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
 const OPEN_RUNS_POISONED: &str = "the poll backoff's open-run set poisoned by a prior panic";
 
+/// The `source` of a plan event a profile read wrote, the hourly one, the startup's or the Refresh button's.
+const PROFILE_SOURCE: &str = "profile";
+
+/// The `source` of a `plan_ended` row whose profile read a usage 403 made due.
+const USAGE_403_SOURCE: &str = "usage_403";
+
+/// What a profile read found about the plan, which decides whether the usage 403 that made it due is a passing fault.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProfileRead {
+    NoPlan,
+    Plan,
+    Unread,
+}
+
+/// Whether the profile document names an organization with no plan, the type an ended subscription's profile reads.
+fn reports_no_plan(profile: &serde_json::Value) -> bool {
+    profile["organization"]["organization_type"] == "claude_free"
+}
+
 pub fn samples_from_head(
     account_id: &str,
     headers: &[(String, String)],
@@ -53,7 +74,7 @@ pub fn samples_from_head(
         headers: headers.to_vec(),
     };
     match UnifiedHeaders::parse(&head) {
-        Some(unified) => samples_from_unified(account_id, &unified, &head, observed_at),
+        Some(unified) => samples_from_unified(account_id, &unified, &head, observed_at, false),
         None => (Vec::new(), None),
     }
 }
@@ -65,6 +86,7 @@ pub(crate) fn samples_from_unified(
     unified: &UnifiedHeaders,
     head: &ResponseHead,
     observed_at: i64,
+    usage_based: bool,
 ) -> (Vec<QuotaSampleRecord>, Option<ExtraUsageSampleRecord>) {
     let bucket = bucket_of(observed_at);
     let float = |name: &str| {
@@ -105,18 +127,31 @@ pub(crate) fn samples_from_unified(
             });
         }
     }
-    let extra = unified.overage_in_use.map(|in_use| ExtraUsageSampleRecord {
+    let overage_utilization = float("anthropic-ratelimit-unified-overage-utilization");
+    // A usage-based seat's overage family is its spend window, never an overage episode, so its row keeps the share
+    // and the reset with no in-use flag, written whenever the head moves either.
+    let in_use = if usage_based {
+        (overage_utilization.is_some() || unified.overage_reset.is_some()).then_some(None)
+    } else {
+        unified.overage_in_use.map(Some)
+    };
+    let extra = in_use.map(|in_use| ExtraUsageSampleRecord {
         account_id: account_id.into(),
         bucket,
         is_enabled: true,
-        in_use: Some(in_use),
+        in_use,
         monthly_limit: None,
         used_credits: None,
-        utilization: float("anthropic-ratelimit-unified-overage-utilization"),
+        utilization: overage_utilization,
         currency: None,
         disabled_reason: unified.overage_disabled_reason.clone(),
         overage_reset: unified.overage_reset,
         source: "head".into(),
+        spend_limit_minor: None,
+        spend_used_minor: None,
+        spend_percent: None,
+        spend_currency: None,
+        spend_exponent: None,
     });
     (quota, extra)
 }
@@ -125,7 +160,8 @@ pub fn samples_from_poll(
     snapshot: &UsageSnapshot,
 ) -> (Vec<QuotaSampleRecord>, Option<ExtraUsageSampleRecord>) {
     let bucket = bucket_of(snapshot.fetched_at);
-    // The endpoint reports percent; the headers report a fraction. One scale in the table.
+    // The endpoint reports percent and the headers a fraction, so the table holds one scale, the extra-usage row's
+    // share included.
     let row = |key: &str, utilization: Option<f64>, reset_at: Option<i64>| QuotaSampleRecord {
         account_id: snapshot.account_id.clone(),
         bucket,
@@ -146,6 +182,9 @@ pub fn samples_from_poll(
     if let Some(fable) = &snapshot.fable_window {
         quota.push(row(SEVEN_DAY_FABLE, fable.utilization, fable.resets_at));
     }
+    // The `spend` columns hold the body's object as it gave it, so a reading the extra-usage amounts built leaves
+    // them null and the view falls back to the amounts beside them.
+    let spend = snapshot.spend.as_ref().filter(|s| s.from_spend);
     let extra = snapshot
         .extra_usage
         .as_ref()
@@ -156,11 +195,16 @@ pub fn samples_from_poll(
             in_use: None,
             monthly_limit: e.monthly_limit,
             used_credits: e.used_credits,
-            utilization: e.utilization,
+            utilization: e.utilization.map(|u| u / 100.0),
             currency: e.currency.clone(),
             disabled_reason: e.disabled_reason.clone(),
             overage_reset: None,
             source: "poll".into(),
+            spend_limit_minor: spend.and_then(|s| s.limit_minor),
+            spend_used_minor: spend.map(|s| s.used_minor),
+            spend_percent: spend.and_then(|s| s.percent),
+            spend_currency: spend.map(|s| s.currency.clone()),
+            spend_exponent: spend.map(|s| s.exponent),
         });
     (quota, extra)
 }
@@ -178,20 +222,26 @@ pub fn lead_over_pace(
     utilization - elapsed_share_at(window, reset_at, end, at)
 }
 
-/// Whether the poll asks about this account: every OAuth account that holds a credential, paused or not,
-/// because a paused account's quota is still the operator's to watch.
+/// Whether the poll asks about this account: every OAuth account that holds a credential the upstream has not
+/// refused, paused or not, because a paused account's quota is still the operator's to watch. A refused credential
+/// is asked again only after a re-pair.
 pub fn polled(kind: AccountKind, state: AccountState) -> bool {
     kind == AccountKind::Oauth
-        && !matches!(state, AccountState::Disconnected | AccountState::Unpaired)
+        && !matches!(
+            state,
+            AccountState::Disconnected | AccountState::Unpaired | AccountState::ReauthRequired
+        )
 }
 
 /// What the startup step found before the bound: `reported` accounts reached the router with a sample,
-/// `failed` answered no clean snapshot, `pending` had reported nothing when the bound passed.
+/// `failed` answered no clean snapshot, `pending` had reported nothing when the bound passed, and `paused` stand
+/// flagged plan ended, so the step read their profile alone and asked no usage of them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sampled {
     pub reported: usize,
     pub failed: usize,
     pub pending: usize,
+    pub paused: usize,
 }
 
 /// One polled account's place in the schedule.
@@ -376,9 +426,22 @@ impl QuotaPoll {
                     let (store, usage, ledger, router) =
                         (store.clone(), usage.clone(), ledger.clone(), router.clone());
                     let handle = attempts.spawn(async move {
-                        let _ = Self::poll_account(&usage, &ledger, Some(&router), &account).await;
-                        if profile_due {
-                            Self::refresh_profile(&store, &usage, &router, &account).await;
+                        // A slot of an account whose plan ended keeps its cadence for the hourly profile read.
+                        let mut profile_read = false;
+                        if !Self::plan_paused(&store, &account.id) {
+                            (_, profile_read) = Self::poll_reading(
+                                &store,
+                                &usage,
+                                &ledger,
+                                Some(&router),
+                                &account,
+                            )
+                            .await;
+                        }
+                        // The profile endpoint shares the usage endpoint's limit, so a read the poll made serves the
+                        // slot's.
+                        if profile_due && !profile_read {
+                            Self::refresh_profile(&store, &usage, &ledger, &router, &account).await;
                         }
                         Completion {
                             held: usage.held_for(&account.id),
@@ -432,19 +495,47 @@ impl QuotaPoll {
     /// whose `error` is set (the account held, or the read failed) was recorded nowhere, and the service's own
     /// error is a read that never completed. The scheduler calls it with the router and keeps nothing of the
     /// answer, and the startup step counts a clean snapshot as reported. A reauth mark the read's acquisition landed
-    /// reaches the router as `Report::AccountState` when `router` is given. The profile is `refresh_profile`'s.
+    /// reaches the router as `Report::AccountState` when `router` is given, as does the mark a usage 401 lands under
+    /// `auth_failed`, and any other failed answer or transport failure of the read writes a `poll_failed` row, but for
+    /// a usage 403 naming the organization's refusal whose profile, read at once, reports no plan, which writes
+    /// `plan_ended` instead. The profile is otherwise `refresh_profile`'s.
     pub async fn poll_account(
+        store: &Store,
         usage: &UsageService,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
         account: &AccountRow,
     ) -> Result<UsageSnapshot, UsageError> {
-        let answer = usage.poll(&account.id).await;
+        Self::poll_reading(store, usage, ledger, router, account)
+            .await
+            .0
+    }
+
+    /// `poll_account` with whether the poll read the profile, which a usage 403 naming the organization's refusal
+    /// makes it do, so a caller due to read the profile leaves its own read out.
+    async fn poll_reading(
+        store: &Store,
+        usage: &UsageService,
+        ledger: &Ledger,
+        router: Option<&RouterHandle>,
+        account: &AccountRow,
+    ) -> (Result<UsageSnapshot, UsageError>, bool) {
+        let mut profile_read = false;
+        let answer = match usage.poll_reporting(&account.id).await {
+            Ok((snapshot, issue)) => {
+                if let Some(issue) = issue {
+                    profile_read =
+                        Self::report_issue(store, usage, ledger, router, account, issue).await;
+                }
+                Ok(snapshot)
+            }
+            Err(error) => Err(error),
+        };
         if let Some(router) = router {
             Self::report_landed_mark(usage, router, &account.id).await;
         }
         // A snapshot with an error is a stale one, and a stale sample must not be written under a fresh bucket.
-        match answer {
+        let answer = match answer {
             Ok(snapshot) if snapshot.error.is_none() => {
                 let (quota, extra) = samples_from_poll(&snapshot);
                 ledger.record(Record::Samples { quota, extra });
@@ -487,43 +578,215 @@ impl QuotaPoll {
                 tracing::debug!(account = %account.id, %error, "the quota poll got no snapshot");
                 Err(error)
             }
-        }
+        };
+        (answer, profile_read)
     }
 
-    /// The profile row's refresh. A failure is logged, and a reauth mark its acquisition landed reaches the router as
-    /// `poll_account` reports one. A stored tier the profile changes asks the router to reload, since the snapshot's
-    /// tier prices the router's own use of the account's windows.
+    /// The profile row's refresh. A failure is logged, a failed answer or a transport failure writing a `poll_failed`
+    /// row beside its warning, and a reauth mark its acquisition landed reaches the router as `poll_account` reports
+    /// one. A stored tier or class the profile changes asks the router to reload, since the snapshot's tier prices the
+    /// router's own use of the account's windows and the class places the account among the paid sources. A profile
+    /// that reports no plan flags the account plan ended, storing nothing of the document, and one that reports a plan
+    /// clears a flag that stands.
     pub async fn refresh_profile(
         store: &Store,
         usage: &UsageService,
+        ledger: &Ledger,
         router: &RouterHandle,
         account: &AccountRow,
     ) {
+        Self::read_profile(store, usage, ledger, router, account, PROFILE_SOURCE).await;
+    }
+
+    /// Whether the account's plan-ended flag stands, so the poll sends it no usage request.
+    pub fn plan_paused(store: &Store, account_id: &str) -> bool {
+        store
+            .subscription_term(account_id)
+            .ok()
+            .flatten()
+            .is_some_and(|term| term.plan_ended_at.is_some())
+    }
+
+    /// `refresh_profile` with the `source` a flag it sets or clears names, answering what the read found.
+    async fn read_profile(
+        store: &Store,
+        usage: &UsageService,
+        ledger: &Ledger,
+        router: &RouterHandle,
+        account: &AccountRow,
+        source: &'static str,
+    ) -> ProfileRead {
         let answer = usage.profile(&account.id).await;
         Self::report_landed_mark(usage, router, &account.id).await;
         // The profile row is the poll's to refresh: nothing else reads the endpoint after pairing, and the
         // admin views show what it says.
         match answer {
+            Ok(profile) if reports_no_plan(&profile.raw) => {
+                Self::flag_plan_ended(store, usage, ledger, router, account, &profile.raw, source)
+                    .await;
+                ProfileRead::NoPlan
+            }
             Ok(profile) => {
-                let before = store
-                    .subscription(&account.id)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.tier);
+                // The term carries the class beside the tier, so a document whose seat tier alone moved reloads too.
+                let term = || {
+                    store
+                        .subscription_term(&account.id)
+                        .ok()
+                        .flatten()
+                        .map(|t| (t.tier, t.usage_based))
+                };
+                let before = term();
                 if let Err(error) =
                     store.set_profile(&account.id, &profile.raw.to_string(), &profile.subscription)
                 {
                     tracing::warn!(account = %account.id, %error, "the profile could not be stored");
-                } else if before != profile.subscription.tier {
+                } else if before != term() {
                     if let Err(error) = router.reload().await {
-                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier");
+                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier or class");
                     }
                 }
+                Self::restore_plan(store, usage, ledger, router, account, &profile.raw).await;
+                ProfileRead::Plan
+            }
+            Err(UsageError::Fault(fault)) => {
+                Self::record_fault(usage, ledger, &account.id, &fault);
+                ProfileRead::Unread
             }
             Err(error) => {
-                tracing::debug!(account = %account.id, %error, "the quota poll got no profile")
+                tracing::debug!(account = %account.id, %error, "the quota poll got no profile");
+                ProfileRead::Unread
             }
         }
+    }
+
+    /// Flags the account plan ended at the read's instant unless a flag stands, so the routing reads it as past its
+    /// end. The stored document and tier stay the last plan's, which keeps pricing the account's windows while the
+    /// flag stands, and the state stays as it is, since a renewed plan lifts the flag without a re-pair.
+    async fn flag_plan_ended(
+        store: &Store,
+        usage: &UsageService,
+        ledger: &Ledger,
+        router: &RouterHandle,
+        account: &AccountRow,
+        profile: &serde_json::Value,
+        source: &'static str,
+    ) {
+        usage.plan_ended(&account.id);
+        let at = usage.now();
+        match store.set_plan_ended(&account.id, at) {
+            Ok(true) => {
+                let organization = &profile["organization"];
+                let word = |key: &str| organization[key].as_str().unwrap_or("-").to_string();
+                tracing::warn!(
+                    account = %account.id,
+                    organization_type = %word("organization_type"),
+                    rate_limit_tier = %word("rate_limit_tier"),
+                    subscription_status = %word("subscription_status"),
+                    "the account's profile reports no plan, so the poll stops reading its usage"
+                );
+                ledger.record(plan_ended(&account.id, at, source, profile));
+                if let Err(error) = router.reload().await {
+                    tracing::debug!(account = %account.id, %error, "the router did not reload for an ended plan");
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(account = %account.id, %error, "the ended plan could not be stored")
+            }
+        }
+    }
+
+    /// Clears a plan-ended flag that stands, for a profile that reports a plan: the usage poll reads the account again
+    /// from its next slot.
+    async fn restore_plan(
+        store: &Store,
+        usage: &UsageService,
+        ledger: &Ledger,
+        router: &RouterHandle,
+        account: &AccountRow,
+        profile: &serde_json::Value,
+    ) {
+        match store.clear_plan_ended(&account.id) {
+            Ok(true) => {
+                usage.plan_restored(&account.id);
+                tracing::info!(
+                    account = %account.id,
+                    "the account's profile reports a plan again, so the poll reads its usage"
+                );
+                ledger.record(plan_restored(
+                    &account.id,
+                    usage.now(),
+                    PROFILE_SOURCE,
+                    profile,
+                ));
+                if let Err(error) = router.reload().await {
+                    tracing::debug!(account = %account.id, %error, "the router did not reload for a restored plan");
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(account = %account.id, %error, "the restored plan could not be stored")
+            }
+        }
+    }
+
+    /// What a usage fetch this poll started found beyond its snapshot: a 401 sends the account to the re-pair, and a
+    /// passing fault is recorded. The snapshot's own text and the schedule stay as the fetch left them. Answers whether
+    /// the profile was read.
+    async fn report_issue(
+        store: &Store,
+        usage: &UsageService,
+        ledger: &Ledger,
+        router: Option<&RouterHandle>,
+        account: &AccountRow,
+        issue: PollIssue,
+    ) -> bool {
+        match issue {
+            PollIssue::Fault(fault) => {
+                Self::record_fault(usage, ledger, &account.id, &fault);
+                false
+            }
+            // The organization's refusal is what an ended plan answers, so the profile decides whether it is one.
+            PollIssue::PlanRefused { fault, .. } => {
+                let read = match router {
+                    Some(router) => {
+                        Self::read_profile(store, usage, ledger, router, account, USAGE_403_SOURCE)
+                            .await
+                    }
+                    None => ProfileRead::Unread,
+                };
+                if read != ProfileRead::NoPlan {
+                    Self::record_fault(usage, ledger, &account.id, &fault);
+                }
+                router.is_some()
+            }
+            // The manager's fenced write moved the state before the report reaches the routing, so the transition row
+            // the mirror writes names no detail, as a refresh failure's does.
+            PollIssue::Unauthorized(refused) => {
+                if let (Some(mark), Some(router)) =
+                    (usage.mark_auth_failed(&account.id, refused), router)
+                {
+                    Self::report_mark(router, mark).await;
+                }
+                false
+            }
+        }
+    }
+
+    /// One warning line and one `poll_failed` row for a poll that faulted, as often as polls fault: a fault arms no
+    /// hold, so the poll interval spaces the rows.
+    fn record_fault(usage: &UsageService, ledger: &Ledger, account_id: &str, fault: &PollFault) {
+        let status = fault
+            .status
+            .map_or_else(|| "transport".to_string(), |status| status.to_string());
+        tracing::warn!(
+            account = %account_id,
+            status = %status,
+            error = %fault.text,
+            "a poll of the {} endpoint failed",
+            fault.endpoint
+        );
+        ledger.record(poll_failed(account_id, usage.now(), fault));
     }
 
     /// Reports the reauth mark the service's last acquisition for the account landed, as the relay reports its own:
@@ -531,24 +794,30 @@ impl QuotaPoll {
     /// the next one.
     async fn report_landed_mark(usage: &UsageService, router: &RouterHandle, account_id: &str) {
         if let Some(mark) = usage.take_landed_mark(account_id) {
-            router
-                .report(Report::AccountState {
-                    account_id: mark.account_id,
-                    state: mark.state,
-                    incarnation: mark.incarnation,
-                    lifecycle_generation: mark.lifecycle_generation,
-                    credential_generation: mark.credential_generation,
-                    cause: mark.cause,
-                    detail: None,
-                    dispatched_at: None,
-                })
-                .await;
+            Self::report_mark(router, mark).await;
         }
     }
 
-    /// `poll_account` with the router, then `refresh_profile`, for every account `polled` accepts,
-    /// concurrently; an account counts the moment its snapshot was reported, and what has not reported by
-    /// `bound` counts as pending and finishes in the background.
+    /// A mark the manager landed, a refresh's or a usage 401's, reported to the routing with no detail.
+    async fn report_mark(router: &RouterHandle, mark: LandedMark) {
+        router
+            .report(Report::AccountState {
+                account_id: mark.account_id,
+                state: mark.state,
+                incarnation: mark.incarnation,
+                lifecycle_generation: mark.lifecycle_generation,
+                credential_generation: mark.credential_generation,
+                cause: mark.cause,
+                detail: None,
+                dispatched_ordinal: None,
+            })
+            .await;
+    }
+
+    /// `poll_account` with the router, then `refresh_profile` where the poll did not read the profile, for every
+    /// account `polled` accepts, concurrently. An account counts the moment its snapshot was reported, and what has not
+    /// reported by `bound` counts as pending and finishes in the background. An account flagged plan ended reads its
+    /// profile alone and counts as paused.
     pub async fn sample_all(
         store: Arc<Store>,
         usage: Arc<UsageService>,
@@ -562,6 +831,19 @@ impl QuotaPoll {
             .into_iter()
             .filter(|a| polled(a.kind, a.state))
             .collect();
+        let (paused, accounts): (Vec<AccountRow>, Vec<AccountRow>) = accounts
+            .into_iter()
+            .partition(|a| Self::plan_paused(&store, &a.id));
+        // An account whose plan ended sends no usage request, so it reports no sample and counts as paused, and its
+        // profile read is the start's as every account's is.
+        let paused_count = paused.len();
+        for account in paused {
+            let (store, usage, task_ledger, router) =
+                (store.clone(), usage.clone(), ledger.clone(), router.clone());
+            ledger.track(tokio::spawn(async move {
+                Self::refresh_profile(&store, &usage, &task_ledger, &router, &account).await;
+            }));
+        }
         let total = accounts.len();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
         for account in accounts {
@@ -575,15 +857,20 @@ impl QuotaPoll {
             // Tracked so a fetch still stalled when `ledger.shutdown` runs is aborted with it, rather than
             // outliving the process holding its `Arc<Store>`.
             let handle = tokio::spawn(async move {
-                let answer =
-                    Self::poll_account(&usage, &task_ledger, Some(&router), &account).await;
+                let (answer, profile_read) =
+                    Self::poll_reading(&store, &usage, &task_ledger, Some(&router), &account).await;
                 let _ = tx.send(matches!(answer, Ok(ref s) if s.error.is_none()));
-                Self::refresh_profile(&store, &usage, &router, &account).await;
+                if !profile_read {
+                    Self::refresh_profile(&store, &usage, &task_ledger, &router, &account).await;
+                }
             });
             ledger.track(handle);
         }
         drop(tx);
-        let mut sampled = Sampled::default();
+        let mut sampled = Sampled {
+            paused: paused_count,
+            ..Sampled::default()
+        };
         let _ = tokio::time::timeout(bound, async {
             while sampled.reported + sampled.failed < total {
                 match rx.recv().await {
@@ -698,10 +985,12 @@ mod tests {
                 used_credits: Some(1_234),
                 utilization: Some(0.2468),
                 currency: Some("USD".into()),
+                decimal_places: None,
                 disabled_reason: None,
             }),
             raw_keys: vec![],
             error: None,
+            spend: None,
         };
         let (quota, extra) = samples_from_poll(&snapshot);
         assert_eq!(
@@ -729,7 +1018,13 @@ mod tests {
                 extra.currency.as_deref(),
                 extra.in_use
             ),
-            (Some(5_000), Some(1_234), Some(0.2468), Some("USD"), None)
+            (
+                Some(5_000),
+                Some(1_234),
+                Some(0.2468 / 100.0),
+                Some("USD"),
+                None
+            )
         );
     }
 }

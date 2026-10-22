@@ -10,8 +10,8 @@ use std::sync::atomic::Ordering;
 
 use crate::credentials::store_api_key_secret;
 use crate::{
-    AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError, SubscriptionRow,
-    LOCK_POISONED,
+    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, Store, StoreError,
+    SubscriptionRow, LOCK_POISONED,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -679,16 +679,33 @@ pub struct RetiredSecret {
 }
 
 /// What the engine knows about an account's paid term: the profile's start and trial end, the operator's flag
-/// and the end the operator saved with it (set only while the flag is on).
+/// and the end the operator saved with it (set only while the flag is on), and the class the stored profile names.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SubscriptionTerm {
     pub account_id: String,
     pub since: Option<i64>,
     pub trial_ends_at: Option<i64>,
-    pub cancelled: bool,
+    pub canceled: bool,
     pub ends_at: Option<i64>,
     /// The profile's rate-limit tier, which prices the router's own use of the account's windows.
     pub tier: Option<String>,
+    /// The class of a usage-based Enterprise seat: the tier `default_claude_zero`, or the stored document's
+    /// `organization.seat_tier` `enterprise_usage_based`. Derived at every load from the stored tier and document,
+    /// never stored, false for an `api_key` account and for a seat that keeps plan windows.
+    pub usage_based: bool,
+    /// When a profile read found the account's organization holding no plan, epoch milliseconds, `None` while a plan
+    /// stands. The engine reads it as an end that has passed.
+    pub plan_ended_at: Option<i64>,
+}
+
+/// The one derivation of the class, shared by the registry load and `Store::subscription_term`.
+pub fn usage_based_of(tier: Option<&str>, profile_json: Option<&str>) -> bool {
+    tier == Some("default_claude_zero")
+        || profile_json
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .is_some_and(|document| {
+                document["organization"]["seat_tier"] == "enterprise_usage_based"
+            })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -862,17 +879,23 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             terms: tx
                 .prepare(
-                    "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
-                     subscription_tier FROM accounts ORDER BY id",
+                    "SELECT id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
+                     subscription_tier, kind, profile_json, plan_ended_at FROM accounts ORDER BY id",
                 )?
                 .query_map([], |r| {
+                    let tier: Option<String> = r.get(5)?;
+                    let profile_json: Option<String> = r.get(7)?;
+                    let usage_based = r.get::<_, AccountKind>(6)? == AccountKind::Oauth
+                        && usage_based_of(tier.as_deref(), profile_json.as_deref());
                     Ok(SubscriptionTerm {
                         account_id: r.get(0)?,
                         since: r.get(1)?,
                         trial_ends_at: r.get(2)?,
-                        cancelled: r.get(3)?,
+                        canceled: r.get(3)?,
                         ends_at: r.get(4)?,
-                        tier: r.get(5)?,
+                        tier,
+                        usage_based,
+                        plan_ended_at: r.get(8)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
@@ -1603,14 +1626,14 @@ impl Store {
         let absent = || StoreError::AccountNotFound(u.id.to_string());
         let before = crate::accounts::account_in(&tx, u.id)?.ok_or_else(absent)?;
         let term = crate::accounts::subscription_term_in(&tx, u.id)?.ok_or_else(absent)?;
-        let cancelled = u.cancellation.map(|(cancelled, _)| cancelled);
+        let canceled = u.cancellation.map(|(canceled, _)| canceled);
         let ends_at = u.cancellation.and_then(|(_, ends_at)| ends_at);
         let (state, cause) = u.state.unzip();
-        // The end goes with the flag, as `set_cancelled` writes them: dropped the moment the flag is off.
+        // The end goes with the flag, as `set_canceled` writes them: dropped the moment the flag is off.
         let updated = tx.execute(
             "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), \
              state_cause = COALESCE(?11, state_cause), enabled = COALESCE(?7, enabled), \
-             cancelled = COALESCE(?8, cancelled), \
+             canceled = COALESCE(?8, canceled), \
              subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at WHEN ?8 THEN ?9 ELSE NULL END, \
              revision = revision + 1, updated_at = ?4 \
              WHERE id = ?1 AND incarnation = ?10 AND lifecycle_generation = ?5 AND revision = ?6",
@@ -1622,7 +1645,7 @@ impl Store {
                 u.lifecycle_generation as i64,
                 u.expected_revision as i64,
                 u.enabled,
-                cancelled,
+                canceled,
                 ends_at,
                 u.incarnation as i64,
                 cause,
@@ -1737,14 +1760,13 @@ impl Store {
         )?;
         set_guardrail_subjects_in(&tx, &row.id, "pool", pools, now)?;
         set_guardrail_subjects_in(&tx, &row.id, "key", keys, now)?;
-        record_change(
-            &tx,
-            now,
-            actor,
-            "guardrail_created",
-            &row.id,
-            &guardrail_diff(row, pools, keys),
-        )?;
+        // Read back rather than taken from the caller, so the lists sit in the order the update logs them.
+        let diff = guardrail_diff(
+            row,
+            &guardrail_subjects(&tx, &row.id, "pool")?,
+            &guardrail_subjects(&tx, &row.id, "key")?,
+        );
+        record_change(&tx, now, actor, "guardrail_created", &row.id, &diff)?;
         let written = tx.query_row(
             &format!("{GUARDRAIL_SELECT} WHERE id = ?1"),
             params![row.id],
@@ -1768,6 +1790,19 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         check_guardrail_side_bound(&tx, &row.id, pools, keys)?;
+        let before = tx
+            .query_row(
+                &format!("{GUARDRAIL_SELECT} WHERE id = ?1"),
+                params![row.id],
+                row_to_guardrail,
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::GuardrailNotFound(row.id.clone()))?;
+        let before = guardrail_fields(
+            &before,
+            &guardrail_subjects(&tx, &row.id, "pool")?,
+            &guardrail_subjects(&tx, &row.id, "key")?,
+        );
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE guardrails SET name = ?2, description = ?3, enabled = ?4, mode = ?5, action = ?6, conditions_json = ?7, preset_id = ?8, preset_version = ?9, updated_at = ?10 WHERE id = ?1 AND updated_at = ?11 AND incarnation = ?12",
@@ -1804,11 +1839,12 @@ impl Store {
         if let Some(keys) = keys {
             set_guardrail_subjects_in(&tx, &row.id, "key", keys, at)?;
         }
-        let diff = guardrail_diff(
+        let after = guardrail_fields(
             row,
             &guardrail_subjects(&tx, &row.id, "pool")?,
             &guardrail_subjects(&tx, &row.id, "key")?,
         );
+        let diff = serde_json::Value::Object(changed(&before, &after)).to_string();
         record_change(&tx, at, actor, "guardrail_updated", &row.id, &diff)?;
         tx.commit()?;
         Ok(at)
@@ -2381,8 +2417,8 @@ fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
 /// row holds the label, the state and the switch, and the term row the flag and the end.
 fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &SubscriptionTerm) -> String {
     // As the update's `CASE` writes them: the end goes with the flag, dropped the moment the flag is off.
-    let (cancelled, ends_at) = match u.cancellation {
-        None => (term.cancelled, term.ends_at),
+    let (canceled, ends_at) = match u.cancellation {
+        None => (term.canceled, term.ends_at),
         Some((true, ends_at)) => (true, ends_at),
         Some((false, _)) => (false, None),
     };
@@ -2390,14 +2426,14 @@ fn account_pairs(before: &AccountRow, u: &AccountUpdate<'_>, term: &Subscription
         "label": before.label,
         "enabled": before.enabled,
         "state": before.state.as_str(),
-        "cancelled": term.cancelled,
+        "canceled": term.canceled,
         "subscription_ends_at": term.ends_at,
     });
     let new = serde_json::json!({
         "label": u.label,
         "enabled": u.enabled.unwrap_or(before.enabled),
         "state": u.state.map_or(before.state, |(state, _)| state).as_str(),
-        "cancelled": cancelled,
+        "canceled": canceled,
         "subscription_ends_at": ends_at,
     });
     let mut pairs = changed(&old, &new);
@@ -2426,6 +2462,10 @@ fn changed(
 }
 
 fn guardrail_diff(row: &GuardrailRow, pools: &[String], keys: &[String]) -> String {
+    guardrail_fields(row, pools, keys).to_string()
+}
+
+fn guardrail_fields(row: &GuardrailRow, pools: &[String], keys: &[String]) -> serde_json::Value {
     serde_json::json!({
         "name": row.name,
         "description": row.description,
@@ -2438,5 +2478,4 @@ fn guardrail_diff(row: &GuardrailRow, pools: &[String], keys: &[String]) -> Stri
         "pools": pools,
         "keys": keys,
     })
-    .to_string()
 }

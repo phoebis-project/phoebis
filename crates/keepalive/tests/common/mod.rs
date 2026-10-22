@@ -666,6 +666,7 @@ impl Rig {
             attempt: 1,
             account_id: account.into(),
             account_kind: "api_key".into(),
+            usage_based: false,
             pin_epoch: Some(1),
             started_at: self.now(),
             cache_ttl_ms: None,
@@ -705,7 +706,6 @@ impl Rig {
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: self.now(),
         })
     }

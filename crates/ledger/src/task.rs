@@ -560,8 +560,9 @@ async fn land_all(ledger: &Ledger, records: Vec<Record>) {
     }
 }
 
-/// `ms` as the UTC time a log line names, or the raw milliseconds for one out of range.
-pub(crate) fn utc_stamp(ms: i64) -> String {
+/// `ms` as `YYYY-MM-DD HH:MM:SS UTC`, the one spelling the ledger's and the keepalive's log lines print, or the raw
+/// milliseconds for one out of range.
+pub fn utc_stamp(ms: i64) -> String {
     jiff::Timestamp::from_millisecond(ms)
         .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|_| ms.to_string())
@@ -1228,8 +1229,8 @@ async fn blocking<T: Send + 'static>(
         .map_err(|join| LedgerError::Io(std::io::Error::other(join.to_string())))?
 }
 
-/// Every budgeted period of every pool member, from the snapshot; a subscription member's sum reads its metered
-/// rows alone (overage and fast), since its plan-funded traffic is no spend.
+/// Every budgeted period of every pool member, from the snapshot. A subscription member's sum reads its metered
+/// rows alone (overage and fast, and `usage_based` for a usage-based seat), since its plan-funded traffic is no spend.
 fn budgeted_members(snapshot: &RegistrySnapshot) -> Vec<BudgetedMember> {
     snapshot
         .budgeted_members()
@@ -1927,7 +1928,12 @@ fn note_unweighted(
     }
     let plan_funded = attempts.iter().any(|a| {
         a.has_usage()
-            && funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()) == Funding::Plan
+            && funding_of(
+                &a.account_kind,
+                a.usage_based,
+                a.overage_in_use,
+                a.speed.as_deref(),
+            ) == Funding::Plan
     });
     if !plan_funded {
         return;

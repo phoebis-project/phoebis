@@ -404,22 +404,25 @@ pub enum Funding {
     ApiKey,
     Overage,
     Plan,
+    /// A usage-based Enterprise seat: dollars at the API rates, as an API-key member's probe settles.
+    UsageBased,
 }
 
 impl Funding {
-    pub fn of(kind: AccountKind, in_overage: bool) -> Funding {
-        match (kind, in_overage) {
-            (AccountKind::Oauth, false) => Funding::Plan,
-            (AccountKind::Oauth, true) => Funding::Overage,
-            (AccountKind::ApiKey, _) => Funding::ApiKey,
+    pub fn of(kind: AccountKind, usage_based: bool, in_overage: bool) -> Funding {
+        match (kind, usage_based, in_overage) {
+            (AccountKind::ApiKey, ..) => Funding::ApiKey,
+            (AccountKind::Oauth, true, _) => Funding::UsageBased,
+            (AccountKind::Oauth, false, true) => Funding::Overage,
+            (AccountKind::Oauth, false, false) => Funding::Plan,
         }
     }
 
-    /// `Plan` is the share of the account's 5-hour window, the other two dollars: `BurnUnit::of`'s rule.
+    /// `Plan` is the share of the account's 5-hour window, the other three dollars: `BurnUnit::of`'s rule.
     pub fn unit(self) -> SavingsUnit {
         match self {
             Funding::Plan => SavingsUnit::WindowShare,
-            Funding::ApiKey | Funding::Overage => SavingsUnit::Usd,
+            Funding::ApiKey | Funding::Overage | Funding::UsageBased => SavingsUnit::Usd,
         }
     }
 }
@@ -504,6 +507,9 @@ pub(crate) struct Session {
     /// this instant or until the mod registers it again, whichever is first: the mod re-adopts a restored session
     /// within its lease, and a parked recipe must not be discarded as idle before it can.
     pub restored_until: Option<i64>,
+    /// The requests that named another owner than the registration while the holder's lease was live, so the
+    /// warning goes out once per session rather than once per request.
+    pub owner_mismatches: u64,
     pub agents: BTreeMap<String, Agent>,
 }
 
@@ -611,9 +617,10 @@ pub(crate) struct Agent {
     /// the probes it took the same way.
     pub kept: Vec<Kept>,
     pub last_real_at: Option<i64>,
-    /// The arrival of the last request whose completion succeeded with a 2xx status. The kept-warm gap is measured
-    /// from it rather than from `last_real_at`, so a failed turn, which stays no evidence about the cache, leaves the
-    /// retry after it the gap from the last turn that answered.
+    /// The arrival of the last request whose completion succeeded with a 2xx status, or of a turn whose completion the
+    /// engine missed, which the next arrival or a bus gap ends with none observed. The kept-warm gap is measured from
+    /// it rather than from `last_real_at`, so a failed turn, which stays no evidence about the cache, leaves the retry
+    /// after it the gap from the last turn that answered.
     pub last_answered_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
@@ -734,6 +741,21 @@ impl Agent {
             }
         }
         moved
+    }
+
+    /// The names `follow_resolutions` reads on an agent with no compaction open, as an arrival leaves it once
+    /// `end_compaction` ran: the ones the arrival looks up in the catalog's acknowledged resolution.
+    pub(crate) fn held_models(&self) -> BTreeSet<String> {
+        let mut models = BTreeSet::from([self.canonical_model.clone()]);
+        models.extend(
+            self.current
+                .as_ref()
+                .and_then(|o| o.prior.as_ref())
+                .map(|prior| prior.model.clone()),
+        );
+        models.extend(self.kept.iter().map(|kept| kept.canonical_model.clone()));
+        models.extend(self.unanswered.iter().map(|probe| probe.model.clone()));
+        models
     }
 
     /// When the next probe is due: the entry's expiry less the timing's lead and this schedule's share of the
@@ -934,6 +956,7 @@ pub(crate) struct OpenCompaction {
     pub attempt: u8,
     pub account: Option<String>,
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
     /// Whether the current attempt's head was a 2xx, without which its stream's usage is no evidence about the cache.
     pub ok_head: bool,
@@ -972,6 +995,7 @@ struct Credit {
     ttl_ms: i64,
     fast: bool,
     kind: Option<AccountKind>,
+    usage_based: bool,
     in_overage: bool,
     client: Option<String>,
 }
@@ -1065,6 +1089,8 @@ pub(crate) struct Observation {
     /// The kind of the account the current attempt was placed on, read off `AccountSelected`, so a skip and a kept-warm
     /// credit file under the funding this request ran under whatever the registry holds by then.
     pub kind: Option<AccountKind>,
+    /// The class of that account, off the same fact beside the kind.
+    pub usage_based: bool,
     /// Whether the current attempt's head reported overage in use, the fact the request's own row files under.
     pub in_overage: bool,
 }
@@ -1089,9 +1115,10 @@ pub(crate) struct Settlement {
     /// The speed the probe's answer reported, `answered_speed` of its usage, so the waste prices at the cells and files
     /// under the funding its own cost row took even when a fast recipe's answer came back at standard speed.
     pub speed: Speed,
-    /// The kind the probe was served under and whether its answer reported overage, as the probe's own cost row
-    /// took them, so the waste files under the same funding word whatever the registry holds now.
+    /// The kind and the class the probe was served under and whether its answer reported overage, as the probe's own
+    /// cost row took them, so the waste files under the same funding word whatever the registry holds now.
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
 }
 
@@ -1105,9 +1132,10 @@ pub(crate) struct Skipped {
     pub canonical_model: String,
     pub fast: bool,
     pub state: RecipeState,
-    /// The kind and the overage of the request the recipe came from, off its observation, so the skip files under the
-    /// funding that request ran under.
+    /// The kind, the class and the overage of the request the recipe came from, off its observation, so the skip files
+    /// under the funding that request ran under.
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
 }
 
@@ -1122,6 +1150,7 @@ impl Skipped {
             fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
             state,
             kind: agent.current.as_ref().and_then(|o| o.kind),
+            usage_based: agent.current.as_ref().is_some_and(|o| o.usage_based),
             in_overage: agent.current.as_ref().is_some_and(|o| o.in_overage),
         }
     }
@@ -1155,9 +1184,10 @@ pub(crate) struct UnansweredProbe {
     /// `NoProbeCacheEvidence`, an unexpected output or a missing account keeps false and is still paid for and
     /// settled, so the cost record and the coverage record never merge.
     pub covered: bool,
-    /// The kind the probe was served under and whether its answer reported overage, off its `ProbeRecord`, so its
-    /// settlement files under the funding its cost row took.
+    /// The kind and the class the probe was served under and whether its answer reported overage, off its
+    /// `ProbeRecord`, so its settlement files under the funding its cost row took.
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
 }
 
@@ -1181,6 +1211,7 @@ pub(crate) struct Kept {
     /// settlement reads the chain's last entry (`chain_expires`).
     pub entry_expires: i64,
     pub kind: Option<AccountKind>,
+    pub usage_based: bool,
     pub in_overage: bool,
     /// What the probe proved, carried from its `UnansweredProbe` by `Kept::of`, so a turn that arrives after the
     /// ceiling moved the probe here reads the evidence the unanswered list held.
@@ -1208,6 +1239,7 @@ impl Kept {
             band: probe.band,
             entry_expires: probe.expires,
             kind: probe.kind,
+            usage_based: probe.usage_based,
             in_overage: probe.in_overage,
             covered: probe.covered,
             unit: probe.unit,
@@ -1229,6 +1261,7 @@ impl Kept {
             band: self.band,
             speed: crate::savings::answered_speed(self.usage),
             kind: self.kind,
+            usage_based: self.usage_based,
             in_overage: self.in_overage,
         }
     }
@@ -1384,16 +1417,17 @@ impl Engine {
     /// The pool's ceilings resolved over its fundings, its main TTLs and its models, and `None` for a pool with no
     /// member.
     /// `accounts` are the pool's members' accounts: an OAuth member brings the plan's factors, an API-key
-    /// member the dollar rows. The router's catalog names the dated id each undated dollar row resolves to, and a
-    /// router that cannot answer leaves every row judged under its own id.
+    /// member the dollar rows, and a usage-based seat the dollar rows too. The router's catalog names the dated id each
+    /// undated dollar row resolves to, and a router that cannot answer leaves every row judged under its own id.
     pub async fn resolve_pool_ceilings(
         &self,
         pool: &PoolRow,
         accounts: &[AccountRow],
     ) -> Option<ResolvedCeilings> {
         let mut fundings: Vec<Funding> = Vec::new();
+        let snapshot = self.parts.router.snapshot();
         for account in accounts {
-            let funding = Funding::of(account.kind, false);
+            let funding = Funding::of(account.kind, snapshot.usage_based(&account.id), false);
             if !fundings.contains(&funding) {
                 fundings.push(funding);
             }
@@ -1460,13 +1494,6 @@ impl Engine {
         inner.retained = 0;
         self.cancel.cancel();
     }
-}
-
-/// `ms` as the UTC time a log line names, or the raw milliseconds for one out of range.
-pub(crate) fn utc_stamp(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|_| ms.to_string())
 }
 
 impl Inner {
@@ -1833,7 +1860,7 @@ impl Inner {
             tracing::info!(
                 key = %key.0,
                 agent = %agent_id,
-                expires = %utc_stamp(expires),
+                expires = %phoebis_ledger::utc_stamp(expires),
                 late_ms = now - expires,
                 "a paused keepalive recipe's entry expired, so its prompt was dropped"
             );
@@ -1843,7 +1870,7 @@ impl Inner {
         tracing::info!(
             key = %key.0,
             agent = %agent_id,
-            expires = %utc_stamp(expires),
+            expires = %phoebis_ledger::utc_stamp(expires),
             late_ms = now - expires,
             "a keepalive recipe lapsed before its probe, so the probe was skipped"
         );
@@ -2261,7 +2288,10 @@ impl Engine {
         // the arms: an observation sweeps the lapsed sessions, and the settlements that sweep leaves have to
         // reach the ledger stamped with this event rather than with whatever call drains next.
         match event {
-            BusEvent::RequestObserved(observed) => self.on_observed(observed),
+            BusEvent::RequestObserved(observed) => {
+                let catalog = self.parts.relay.catalog();
+                self.on_observed(observed, |spelling| catalog.lookup(spelling))
+            }
             BusEvent::AccountSelected(selected) => self.on_selected(selected),
             BusEvent::ResponseHead(head) => self.on_head(head),
             BusEvent::ResponseChunk(chunk) => self.on_chunk(chunk),
@@ -2289,6 +2319,17 @@ impl Engine {
         );
         let open: Vec<(SessionKey, String)> = inner.pending.values().cloned().collect();
         for (key, agent_id) in open {
+            // The lost events may have been this turn's completion, so it counts as the turn that answered, as a
+            // missed one does at the next arrival.
+            if let Some(agent) = inner
+                .sessions
+                .get_mut(&key)
+                .and_then(|s| s.agents.get_mut(&agent_id))
+            {
+                if let Some(started) = agent.current.as_ref().map(|o| o.started) {
+                    agent.last_answered_at = Some(started);
+                }
+            }
             inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
             inner.set_reason(&key, &agent_id, Reason::BusGap);
         }
@@ -2343,7 +2384,7 @@ impl Engine {
         })
     }
 
-    fn on_observed(&self, observed: RequestObserved) {
+    fn on_observed(&self, observed: RequestObserved, resolve: impl Fn(&str) -> Option<String>) {
         // Only an inference request says anything about the cache entry a recipe is for. Token counting
         // carries the same session and agent headers and writes no cache, so it must reach nothing below:
         // not the recipe, not the schedule, and not the request time the kept-warm gap is measured from.
@@ -2401,14 +2442,34 @@ impl Engine {
             return;
         }
         // The header is an optional hardening on top of the registration rule: when both sides name an owner,
-        // they must agree. Foreign traffic proves nothing about this agent, so its status, its recipe, and
-        // its schedule are left as they were; only the mismatch itself is counted.
+        // they must agree while the holder's lease is live. Foreign traffic proves nothing about this agent, so its
+        // status, its recipe and its schedule are left as they were, and only the mismatch itself is counted.
         if let (Some(registered), Some(sent)) = (&session.owner_id, &observed.owner_id) {
             if registered != sent {
-                *inner.reasons.entry(Reason::OwnerMismatch).or_default() += 1;
-                return;
+                // A restored session's window reads as live, since the mod re-adopts the session within it. Past the
+                // lease the registered owner reports nothing, and a process that reloaded under a new owner would
+                // otherwise arm nothing until the idle limit ended the session.
+                if session.attended_at(now) {
+                    *inner.reasons.entry(Reason::OwnerMismatch).or_default() += 1;
+                    let session = inner.sessions.get_mut(&key).unwrap();
+                    session.owner_mismatches += 1;
+                    if session.owner_mismatches == 1 {
+                        tracing::warn!(
+                            session = %key.1,
+                            "a request named another owner than the session's registration"
+                        );
+                    }
+                    return;
+                }
+                // A request carries no instance, so the takeover records the owner alone. The touch saves it
+                // whichever way the request leaves below.
+                let sent = sent.clone();
+                inner.sessions.get_mut(&key).unwrap().owner_id = Some(sent);
+                inner.touch_session(&key);
             }
         }
+        // Read again past the takeover's write.
+        let agent = &inner.sessions[&key].agents[&agent_id];
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
         // unanswered probes a re-arming request's credit depends on. `reason` stays the recipe's gating
         // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
@@ -2454,15 +2515,24 @@ impl Engine {
         // A turn or a second compaction moves the agent past the context an open compaction was reading, so that one
         // ends as a failed one and leaves the recipe to this request's own path.
         inner.end_compaction(&key, &agent_id);
-        // A tick asks the router only about the models of retained recipes, so a probe an agent keeps past its
-        // recipe's end can miss a resolution: the one this request carries for its own spelling dates it here,
-        // before the credit compares its model with the request's, a compaction's as a turn's.
+        // A tick asks the router only about the models of retained recipes and of open compactions, so a probe an
+        // agent keeps past its recipe's end can miss a resolution: the catalog's acknowledged resolution dates the held
+        // probes' spellings here, the request's own pair first, before the credit compares its model with the
+        // request's, a compaction's as a turn's.
         let mut resolved = HashMap::new();
         if observed.wire_model != observed.canonical_model {
             resolved.insert(
                 observed.wire_model.clone(),
                 observed.canonical_model.clone(),
             );
+        }
+        for held in inner.sessions[&key].agents[&agent_id].held_models() {
+            if resolved.contains_key(&held) {
+                continue;
+            }
+            if let Some(dated) = resolve(&held).filter(|dated| *dated != held) {
+                resolved.insert(held, dated);
+            }
         }
         inner
             .sessions
@@ -2486,6 +2556,7 @@ impl Engine {
                 attempt: 0,
                 account: None,
                 kind: None,
+                usage_based: false,
                 in_overage: false,
                 ok_head: false,
                 read: 0,
@@ -2520,6 +2591,25 @@ impl Engine {
                 .static_hash
                 .clone()
                 .zip(observed.boundaries.last().cloned());
+        }
+        // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
+        // ends the observation, and the discard below ends it without one. It counts as the turn that answered, or the
+        // gap this arrival's coverage reads would run from a turn before it. A compaction ends no turn, so it returned
+        // above and leaves the open one to its own completion.
+        let missed = inner.sessions[&key].agents[&agent_id]
+            .current
+            .as_ref()
+            .filter(|observation| inner.pending.contains_key(&observation.id))
+            .map(|observation| observation.started);
+        if let Some(started) = missed {
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .last_answered_at = Some(started);
         }
         // Taken before anything below overwrites it and consumed with the observation.
         let prior = prior_coverage(&inner.sessions[&key].agents[&agent_id], now);
@@ -2603,6 +2693,7 @@ impl Engine {
             poisoned,
             dispatched_ms: None,
             kind: None,
+            usage_based: false,
             in_overage: false,
         });
         agent.body_dirty = true;
@@ -2627,6 +2718,7 @@ impl Engine {
                     compaction.attempt = selected.attempt;
                     compaction.account = Some(selected.account_id);
                     compaction.kind = kind_of_word(&selected.account_kind);
+                    compaction.usage_based = selected.usage_based;
                     compaction.in_overage = false;
                     compaction.ok_head = false;
                     compaction.read = 0;
@@ -2662,6 +2754,7 @@ impl Engine {
         observation.ttl_ms = 0;
         observation.dispatched_ms = selected.cache_ttl_ms;
         observation.kind = kind_of_word(&selected.account_kind);
+        observation.usage_based = selected.usage_based;
         observation.in_overage = false;
         agent.cache_started = observation.started;
         agent.expires = None;
@@ -2898,6 +2991,7 @@ impl Engine {
                         agent.canonical_model.clone(),
                         fast,
                         served.and_then(|o| o.kind),
+                        served.is_some_and(|o| o.usage_based),
                         served.is_some_and(|o| o.in_overage),
                         agent.client_label.clone(),
                     )
@@ -2978,7 +3072,18 @@ impl Engine {
             }
         }
         let credit = credited.map(
-            |(read, key_generation, pool_id, account, model, fast, kind, in_overage, client)| {
+            |(
+                read,
+                key_generation,
+                pool_id,
+                account,
+                model,
+                fast,
+                kind,
+                usage_based,
+                in_overage,
+                client,
+            )| {
                 Credit {
                     at: request_received,
                     key,
@@ -2990,6 +3095,7 @@ impl Engine {
                     ttl_ms: observed_ttl,
                     fast,
                     kind,
+                    usage_based,
                     in_overage,
                     client,
                 }
@@ -3057,6 +3163,7 @@ impl Engine {
             band,
             credit.fast,
             credit.kind,
+            credit.usage_based,
             credit.in_overage,
             credit.client.as_deref(),
         );
@@ -3134,6 +3241,7 @@ impl Inner {
                 ttl_ms,
                 fast: compaction.fast,
                 kind: compaction.kind,
+                usage_based: compaction.usage_based,
                 in_overage: compaction.in_overage,
                 client: Some(compaction.client_label.clone()),
             });
@@ -3555,7 +3663,7 @@ impl Engine {
         }
     }
 
-    /// Quiesces, waits for the probes the quiesce cancelled, saves, and only then clears: the last save carries
+    /// Quiesces, waits for the probes the quiesce canceled, saves, and only then clears: the last save carries
     /// everything the engine held at the quiesce, and a flush already in flight finishes first under the flush lock.
     /// The caller drains the listeners after this, so a probe never outlives the relay it runs through.
     pub async fn shutdown(self: &Arc<Self>) {
@@ -3741,7 +3849,11 @@ pub(crate) fn ceilings_for(
         .as_deref()
         .and_then(|id| view.snapshot.account(id))
     {
-        Some(account) if !fast => Funding::of(account.kind, view.overage.contains(&account.id)),
+        Some(account) if !fast => Funding::of(
+            account.kind,
+            view.snapshot.usage_based(&account.id),
+            view.overage.contains(&account.id),
+        ),
         _ => Funding::ApiKey,
     };
     let ttl_ms = agent.ttl_ms.max(FIVE_MINUTES_MS);
@@ -3843,12 +3955,6 @@ pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_log_lines_instant_prints_in_utc_with_the_zone_named_or_raw_when_out_of_range() {
-        assert_eq!(utc_stamp(1_760_961_787_123), "2025-10-20 12:03:07 UTC");
-        assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
-    }
 
     /// `ALL` is kept by hand. The cycle below names every variant with no wildcard, so a variant the enum gains stops
     /// this test compiling until it joins the cycle, and the walk then wants it in `ALL`.
@@ -3967,6 +4073,43 @@ mod tests {
         );
     }
 
+    /// The class decides after the kind: a usage-based seat's probe settles in dollars whatever the overage flag, as an
+    /// API-key member's does, and a plan account's in its window share or, in overage, in dollars.
+    #[test]
+    fn a_usage_based_seat_funds_its_probes_in_dollars_whatever_the_overage_flag() {
+        for in_overage in [false, true] {
+            assert_eq!(
+                (
+                    Funding::of(AccountKind::Oauth, true, in_overage),
+                    Funding::of(AccountKind::ApiKey, false, in_overage)
+                ),
+                (Funding::UsageBased, Funding::ApiKey),
+                "overage flag {in_overage}"
+            );
+        }
+        assert_eq!(
+            (
+                Funding::of(AccountKind::Oauth, false, false),
+                Funding::of(AccountKind::Oauth, false, true)
+            ),
+            (Funding::Plan, Funding::Overage)
+        );
+        assert_eq!(
+            [
+                Funding::UsageBased.unit(),
+                Funding::ApiKey.unit(),
+                Funding::Overage.unit(),
+                Funding::Plan.unit()
+            ],
+            [
+                SavingsUnit::Usd,
+                SavingsUnit::Usd,
+                SavingsUnit::Usd,
+                SavingsUnit::WindowShare
+            ]
+        );
+    }
+
     /// One pool holding one key and two members, subscription account `o` and api_key account `a`, with keepalive
     /// on.
     fn pool_view(o_in_overage: bool) -> RouterView {
@@ -4070,6 +4213,7 @@ mod tests {
             poisoned: false,
             dispatched_ms: None,
             kind: None,
+            usage_based: false,
             in_overage: false,
         }
     }

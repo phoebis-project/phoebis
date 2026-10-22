@@ -5,7 +5,8 @@
     "kind": "oauth",
     "label": "Business",
     "enabled": true,
-    "cancelled": false,
+    "canceled": false,
+    "plan_ended_at": null,
     "state": "ready",
     "funding_retry_at": null,
     "identity": {
@@ -139,6 +140,8 @@
         "next_attempt_at": null,
         "rate_limited_in_a_row": 0
       }
-    }
+    },
+    "usage_based": false,
+    "spend": null
   }
 }

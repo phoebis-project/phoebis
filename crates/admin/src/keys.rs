@@ -149,7 +149,8 @@ pub(crate) struct Key {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyUsage {
-    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
+    /// `cost_usd`.
     pub billed_usd: f64,
     pub cost_usd: f64,
     /// The plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
@@ -164,7 +165,8 @@ pub(crate) struct KeyUsage {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyLifetime {
-    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
+    /// `cost_usd`.
     pub billed_usd: f64,
     pub cost_usd: f64,
     /// The plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
@@ -218,7 +220,7 @@ fn new_secret() -> String {
     format!("phoebis-{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<(), Response> {

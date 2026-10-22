@@ -1238,8 +1238,8 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
     )
     .await;
     // The hook runs only for a request that carried or received the member, so every session here sends the
-    // client's own and each commit's hook joins the race below. The session's first answer leaves a request id
-    // in its record, which only the saved record carries once the key is evicted.
+    // client's own. The session's first answer leaves a request id in its record, which only the saved record
+    // carries once the key is evicted.
     let resp = h
         .app
         .clone()
@@ -1256,11 +1256,16 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
         "/v1/messages",
         Respond::SseGated {
             status: 200,
-            // No `request-id`: `record_request_id` is skipped, so the commit-time restore installs the entry
-            // clean and nothing marks it dirty until the hook does, leaving the narrow window the hook's own
-            // restore has to close on its own.
+            // No `request-id`: the second answer records no request id, so the session's record keeps the first
+            // answer's `req_up_0000` for the last assertion.
             headers: vec![],
             events: vec![
+                // Past the hold's 64 KiB bound, so the answer commits on the overflow before the gate, and
+                // `message_start`, which names the id the hook writes, arrives only once the gate opens.
+                SseEvent {
+                    event: "ping".into(),
+                    data: format!(r#"{{"type":"ping","pad":"{}"}}"#, "x".repeat(80 * 1024)),
+                },
                 SseEvent {
                     event: "message_start".into(),
                     data: r#"{"type":"message_start","message":{"id":"msg_01","type":"message","usage":{"input_tokens":1,"output_tokens":1}}}"#.into(),
@@ -1272,14 +1277,15 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
             ],
         },
     );
-    let held = tokio::spawn({
-        let app = h.app.clone();
-        async move { app.oneshot(cli_request_with_member("s-1")).await.unwrap() }
-    });
-    wait_for(std::time::Duration::from_secs(5), || {
-        (up.requests().len() == 2).then_some(())
-    })
-    .await;
+    // The head comes back once the hold commits, so the commit-time restore has run and the eviction below lands
+    // before the hook fires.
+    let held = h
+        .app
+        .clone()
+        .oneshot(cli_request_with_member("s-1"))
+        .await
+        .unwrap();
+    assert_eq!(held.status(), 200);
     up.set_rule_after(
         2,
         "/v1/messages",
@@ -1298,39 +1304,29 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
         .await
         .unwrap();
     h.relay.flush_memory().await;
-    // Several more sessions are gated on the same rule and released together with the held answer: their
-    // commits race the hook's own restore for the cap, so the eviction it has to survive can still land
-    // between the restore and the write, whichever of them the scheduler runs last.
-    up.set_rule_after(
-        3,
-        "/v1/messages",
-        Respond::Gated(Box::new(Respond::Json {
-            status: 200,
-            headers: vec![("request-id".into(), "req_up_0002".into())],
-            body: b"{\"id\":\"msg_02\",\"type\":\"message\"}".to_vec(),
-        })),
-    );
-    let others: Vec<_> = ["s-3", "s-4", "s-5", "s-6"]
-        .into_iter()
-        .map(|session| {
-            tokio::spawn({
-                let app = h.app.clone();
-                async move { app.oneshot(cli_request_with_member(session)).await.unwrap() }
-            })
-        })
-        .collect();
-    wait_for(std::time::Duration::from_secs(5), || {
-        (up.requests().len() == 7).then_some(())
-    })
-    .await;
+    // Nothing else commits before the flush below: the overlay holds one record at this cap, so a later eviction
+    // would shed the bare entry a missing restore leaves, and the case could no longer see it.
     up.release();
-    let resp = held.await.unwrap();
-    assert_eq!(resp.status(), 200);
-    resp.into_body().collect().await.unwrap();
-    for other in others {
-        other.await.unwrap().into_body().collect().await.unwrap();
-    }
+    held.into_body().collect().await.unwrap();
     h.relay.flush_memory().await;
+    // The prompt id came with the session's first request, so a bare entry the hook built without its restore and the
+    // flush saved over the record carries none.
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        "s-1",
+        "main",
+    );
+    let saved = h
+        .store
+        .load(&key)
+        .unwrap()
+        .expect("the session's record is saved");
+    let saved: serde_json::Value = serde_json::from_str(&saved.payload).unwrap();
+    assert_eq!(
+        saved["prompt_id"], PROMPT_ID,
+        "the hook read the saved record back rather than replacing it with a bare entry"
+    );
     h.app
         .clone()
         .oneshot(tool_loop_request("s-1"))

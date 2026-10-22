@@ -537,3 +537,266 @@ async fn a_listener_that_answers_something_else_is_named_as_answering() {
         assert_eq!(read.as_ref().err(), Some(&line), "{name}");
     }
 }
+
+/// 2026-10-31T12:00:00Z and 15:00:00Z and 2026-11-01T00:00:00Z in epoch milliseconds.
+const OCT_31_NOON: i64 = 1_793_448_000_000;
+const OCT_31_THREE: i64 = 1_793_458_800_000;
+const NOV_1: i64 = 1_793_491_200_000;
+
+/// A usage-based seat `id` of pool `main` whose account row carries `spend`.
+fn spend_seat(id: &str, spend: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "label": id, "enabled": true, "state": "ready", "windows": [], "cooldowns": [],
+        "pool": {"pool_id": "main", "priority": 1}, "usage_based": true, "spend": spend
+    })
+}
+
+#[test]
+fn a_usage_based_seats_row_prints_its_spend_share_its_amounts_and_its_reset_marked_while_estimated()
+{
+    use serde_json::json;
+    let amounts = |currency: &str, used: i64, limit: Option<i64>| json!({"currency": currency, "exponent": 2, "used_minor": used, "limit_minor": limit, "polled_at": OCT_31_NOON});
+    let spend = |amounts: serde_json::Value, utilization: f64, resets_at: i64, source: &str| {
+        json!({
+            "amounts": amounts, "utilization": utilization, "resets_at": resets_at, "reset_source": source,
+            "observed_at": OCT_31_NOON
+        })
+    };
+    let seats = [
+        (
+            "seat-e",
+            spend(
+                amounts("USD", 102_500, Some(250_000)),
+                0.41,
+                NOV_1,
+                "estimated",
+            ),
+        ),
+        (
+            "seat-h",
+            spend(
+                amounts("USD", 102_500, Some(250_000)),
+                0.41,
+                OCT_31_THREE,
+                "head",
+            ),
+        ),
+        (
+            "seat-u",
+            spend(serde_json::Value::Null, 0.3, NOV_1, "estimated"),
+        ),
+        (
+            "seat-o",
+            spend(amounts("USD", 5_000, None), 0.01, NOV_1, "estimated"),
+        ),
+        (
+            "seat-x",
+            spend(
+                amounts("EUR", 102_500, Some(250_000)),
+                0.41,
+                NOV_1,
+                "estimated",
+            ),
+        ),
+    ];
+    let mut accounts: Vec<serde_json::Value> = seats
+        .iter()
+        .map(|(id, spend)| spend_seat(id, spend.clone()))
+        .collect();
+    accounts.push(json!({
+        "id": "plan", "label": "plan", "enabled": true, "state": "ready", "cooldowns": [],
+        "windows": [{"id": "five_hour", "utilization": 0.4, "resets_at": OCT_31_THREE, "observed_at": OCT_31_NOON}],
+        "pool": {"pool_id": "main", "priority": 0}, "usage_based": false, "spend": null
+    }));
+    let members: Vec<serde_json::Value> = accounts
+        .iter()
+        .map(|a| json!({"account_id": a["id"], "priority": a["pool"]["priority"], "eligible": "eligible"}))
+        .collect();
+    let reads = status::Reads {
+        accounts: Ok(json!({ "accounts": accounts })),
+        attention: Ok(json!({"items": []})),
+        health: None,
+        pools: Ok(json!({"pools": [{
+            "id": "main", "status": "ok", "members": members, "keys": [], "active_pins": 0, "requests_24h": 0
+        }]})),
+        sessions: Ok(json!({"sessions": []})),
+        system: Ok(json!({"ready": true})),
+    };
+    // The day before the estimate's: a head's reset prints as a time of the clock's day, the estimate by its date.
+    let screen = render_at(&reads, OCT_31_NOON);
+    for (id, cells, why) in [
+        (
+            "seat-e",
+            ["spend 41%", "$1025 of $2500", "resets 11-01 est"],
+            "the amounts in whole dollars and the estimate by its date",
+        ),
+        (
+            "seat-h",
+            ["spend 41%", "$1025 of $2500", "resets 15:00"],
+            "a head's reset carries no mark",
+        ),
+        (
+            "seat-u",
+            ["spend 30%", "-", "resets 11-01 est"],
+            "a spend with no amounts prints a dash in their cell",
+        ),
+        (
+            "seat-o",
+            ["spend 1%", "$50", "resets 11-01 est"],
+            "a spend with no limit prints the spend alone",
+        ),
+        (
+            "seat-x",
+            ["spend 41%", "EUR 1025 of EUR 2500", "resets 11-01 est"],
+            "another currency prints its code",
+        ),
+        (
+            "plan",
+            ["5h 40%", "7d -", "resets 15:00"],
+            "a plan account's row prints as before",
+        ),
+    ] {
+        let expected: Vec<String> = [id, "ready", "eligible"]
+            .into_iter()
+            .chain(cells)
+            .map(String::from)
+            .collect();
+        assert_eq!(member_row(&screen, id), expected, "{why}: {screen}");
+    }
+}
+
+#[test]
+fn an_account_flagged_plan_ended_prints_plan_ended_beside_its_state_word() {
+    use serde_json::json;
+    let account = |id: &str, plan_ended_at: serde_json::Value, pool: serde_json::Value| {
+        json!({
+            "id": id, "label": id, "enabled": true, "state": "ready", "windows": [], "cooldowns": [],
+            "pool": pool, "usage_based": false, "spend": null, "plan_ended_at": plan_ended_at
+        })
+    };
+    let member = json!({"pool_id": "main", "priority": 0});
+    let reads = status::Reads {
+        accounts: Ok(json!({ "accounts": [
+            account("ended", json!(OCT_31_NOON), member.clone()),
+            account("plan", serde_json::Value::Null, json!({"pool_id": "main", "priority": 1})),
+            account("loose", json!(OCT_31_NOON), serde_json::Value::Null),
+        ]})),
+        attention: Ok(json!({"items": []})),
+        health: None,
+        pools: Ok(json!({"pools": [{
+            "id": "main", "status": "ok", "keys": [], "active_pins": 0, "requests_24h": 0,
+            "members": [
+                {"account_id": "ended", "priority": 0, "eligible": "eligible"},
+                {"account_id": "plan", "priority": 1, "eligible": "eligible"}
+            ]
+        }]})),
+        sessions: Ok(json!({"sessions": []})),
+        system: Ok(json!({"ready": true})),
+    };
+    let screen = render_at(&reads, OCT_31_NOON);
+    assert_eq!(
+        member_row(&screen, "ended")[..3],
+        ["ended", "ready, plan ended", "eligible"],
+        "{screen}"
+    );
+    assert_eq!(
+        member_row(&screen, "plan")[..3],
+        ["plan", "ready", "eligible"],
+        "{screen}"
+    );
+    assert_eq!(
+        member_row(&screen, "loose"),
+        ["loose", "ready, plan ended"],
+        "an account in no pool prints the word on its state line: {screen}"
+    );
+}
+
+/// `reads` rendered at `at_ms` in UTC.
+fn render_at(reads: &status::Reads, at_ms: i64) -> String {
+    let listeners = status::Listeners {
+        admin: "http://127.0.0.1:8081".to_owned(),
+        certificates: Vec::new(),
+        metrics: None,
+        proxy: None,
+    };
+    status::render(
+        reads,
+        &listeners,
+        VERSION,
+        "build",
+        jiff::Timestamp::from_millisecond(at_ms).unwrap(),
+        &jiff::tz::TimeZone::UTC,
+        false,
+    )
+}
+
+/// The cells of the pools block's line for the member labelled `label`, which the screen printed whole: the screen
+/// cuts a line past its width with an ellipsis, so a whole line has none.
+fn member_row(screen: &str, label: &str) -> Vec<String> {
+    let line = screen
+        .lines()
+        .find(|line| line.trim_start().starts_with(&format!("{label} ")))
+        .unwrap_or_else(|| panic!("no {label} row: {screen}"));
+    assert!(
+        !line.contains('\u{2026}') && line.chars().count() <= status::WIDTH,
+        "{label}'s row prints whole inside the width: {line}"
+    );
+    line.split("  ")
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// One captured admin answer of the fixture set, unwrapped from its `{"route", "body"}` envelope.
+fn fixture(name: &str) -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../web/test/fixtures")
+        .join(format!("{name}.json"));
+    let wrapped: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    wrapped["body"].clone()
+}
+
+/// The fixture set's clock, 2026-10-11T12:16:40Z, the day its captured answers read.
+const FIXTURE_NOW: i64 = 1_791_721_000_000;
+
+#[test]
+fn the_fixtures_seat_row_prints_whole_inside_eighty_columns_on_its_own_day_and_the_day_before_the_estimate(
+) {
+    let reads = status::Reads {
+        accounts: Ok(fixture("accounts")),
+        attention: Ok(fixture("attention")),
+        health: None,
+        pools: Ok(fixture("pools")),
+        sessions: Ok(fixture("sessions")),
+        system: Ok(fixture("system")),
+    };
+    let seat = fixture("accounts")["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|account| account["usage_based"] == true)
+        .cloned()
+        .expect("the fixture set seeds a usage-based seat");
+    assert_eq!(
+        seat["spend"]["reset_source"], "estimated",
+        "the seed's seat reads the estimate"
+    );
+    let label = seat["label"].as_str().unwrap();
+    for at in [FIXTURE_NOW, OCT_31_NOON] {
+        let screen = render_at(&reads, at);
+        assert_eq!(
+            member_row(&screen, label),
+            [
+                label,
+                "ready",
+                "eligible",
+                "spend 40%",
+                "$1025 of $2500",
+                "resets 11-01 est"
+            ],
+            "{screen}"
+        );
+    }
+}

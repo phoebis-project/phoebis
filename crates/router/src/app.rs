@@ -2,6 +2,7 @@
 //! ends them.
 
 use std::future::Future;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,7 +18,8 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
 use phoebis_relay::{
-    Accounting, CatalogService, Limits, ListenLimits, Relay, UpstreamGzip, REFRESH_TICK,
+    Accounting, CatalogService, Limits, ListenLimits, Relay, ShutdownMark, UpstreamGzip,
+    REFRESH_TICK,
 };
 use phoebis_store::{Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
@@ -38,7 +40,8 @@ const SHUTDOWN_BUDGET: Duration = Duration::from_secs(35);
 /// end with the runtime.
 const LISTENER_DRAIN: Duration = Duration::from_secs(30);
 
-/// A first TLS handshake on a cold host runs well under this; a stalled one costs at most twice it before the 502.
+/// A first TLS handshake on a cold host runs well under this, and a stalled one costs at most twice it plus the
+/// one-second wait between the two tries before the 502.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The relay's own ceiling on a silent upstream, above any client's wait: Claude Code 2.1.296 aborts a stream
@@ -252,6 +255,7 @@ pub async fn run_until(
         &ledger_db,
         &pricing.revisions(),
         config.stats.retention_days,
+        config.stats.rollup_retention_days,
         clock(),
     )
     .context("moving the stored refusals out of their hours' counts")?;
@@ -300,6 +304,7 @@ pub async fn run_until(
         let ledger = ledger.clone();
         move |change| ledger.record(phoebis_ledger::catalog_changed(&change))
     }));
+    let mark = ShutdownMark::default();
     let relay = Arc::new(
         Relay::new(
             store.clone(),
@@ -344,6 +349,7 @@ pub async fn run_until(
                 },
             })
         })
+        .with_shutdown_mark(mark.clone())
         .with_signed_placeholder(config.proxy.sign_cch_placeholder)
         .with_profile_name(profile.name)
         .with_session_memory(
@@ -465,6 +471,7 @@ pub async fn run_until(
         samples_reported = sampled.reported,
         samples_failed = sampled.failed,
         samples_pending = sampled.pending,
+        samples_paused = sampled.paused,
         bound_seconds = config.routing.startup_fetch_seconds,
         "startup fetch finished"
     );
@@ -575,6 +582,7 @@ pub async fn run_until(
             drain_timeout: LISTENER_DRAIN,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: PROXY_MAX_CONNECTIONS,
+            shutdown_mark: Some(mark.clone()),
         },
         proxy_acceptor,
     ));
@@ -586,6 +594,7 @@ pub async fn run_until(
             drain_timeout: LISTENER_DRAIN,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: ADMIN_MAX_CONNECTIONS,
+            shutdown_mark: None,
         },
         admin_acceptor,
     ));
@@ -607,6 +616,7 @@ pub async fn run_until(
             drain_timeout: LISTENER_DRAIN,
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: METRICS_MAX_CONNECTIONS,
+            shutdown_mark: None,
         },
         None,
     ));
@@ -675,6 +685,8 @@ pub async fn run_until(
             )),
         None => {
             tracing::warn!("requests were still in flight when the drain window closed");
+            // Ahead of the abort, so every end it causes books the router's own cut.
+            mark.store(true, Ordering::SeqCst);
             proxy.abort();
             admin_server.abort();
             metrics_server.abort();

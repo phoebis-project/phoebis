@@ -7,7 +7,8 @@
         "kind": "oauth",
         "label": "Business",
         "enabled": true,
-        "cancelled": false,
+        "canceled": false,
+        "plan_ended_at": null,
         "state": "ready",
         "funding_retry_at": null,
         "identity": {
@@ -141,14 +142,17 @@
             "next_attempt_at": null,
             "rate_limited_in_a_row": 0
           }
-        }
+        },
+        "usage_based": false,
+        "spend": null
       },
       {
         "id": "direct",
         "kind": "api_key",
         "label": "Direct",
         "enabled": true,
-        "cancelled": false,
+        "canceled": false,
+        "plan_ended_at": null,
         "state": "ready",
         "funding_retry_at": null,
         "identity": null,
@@ -172,7 +176,93 @@
           "last_7d": 1,
           "lifetime": 1
         },
-        "usage": null
+        "usage": null,
+        "usage_based": false,
+        "spend": null
+      },
+      {
+        "id": "usage-seat",
+        "kind": "oauth",
+        "label": "Seat",
+        "enabled": true,
+        "canceled": false,
+        "plan_ended_at": null,
+        "state": "ready",
+        "funding_retry_at": null,
+        "identity": {
+          "email": "seat@example.invalid",
+          "account_uuid": "00000000-0000-4000-8000-000000000003",
+          "organization_uuid": "00000000-0000-4000-8000-000000000004"
+        },
+        "credential": {
+          "access_expires_at": 1791724600000,
+          "refresh_expires_at": null,
+          "generation": 1,
+          "last_refresh_at": null,
+          "last_error": null,
+          "quarantined": false
+        },
+        "lifecycle_generation": 1,
+        "revision": 4294967297,
+        "cooldowns": [],
+        "overage": null,
+        "profile": {
+          "billing_type": null,
+          "display_name": "Seat",
+          "has_extra_usage_enabled": true,
+          "organization_name": "Enterprise Org",
+          "organization_type": "claude_enterprise",
+          "rate_limit_tier": "default_claude_zero"
+        },
+        "subscription": {
+          "plan": null,
+          "tier": "default_claude_zero",
+          "since": null,
+          "trial_ends_at": null,
+          "ends_at": null
+        },
+        "windows": [],
+        "slow_down": null,
+        "fast_lane": null,
+        "extra_usage": {
+          "currency": "USD",
+          "disabled_reason": null,
+          "in_use": null,
+          "is_enabled": true,
+          "monthly_limit": 250000,
+          "used_credits": 102500,
+          "utilization": 0.4,
+          "observed_at": 1791720900000
+        },
+        "pool": {
+          "pool_id": "main",
+          "priority": 2
+        },
+        "requests": {
+          "last_24h": 1,
+          "last_7d": 1,
+          "lifetime": 1
+        },
+        "usage": {
+          "error": "the poll has not read this account yet",
+          "fetched_at": null,
+          "held_until": null,
+          "poll": null
+        },
+        "usage_based": true,
+        "spend": {
+          "amounts": {
+            "currency": "USD",
+            "exponent": 2,
+            "limit_minor": 250000,
+            "used_minor": 102500,
+            "polled_at": 1791720300000
+          },
+          "utilization": 0.4,
+          "resets_at": 1793491200000,
+          "reset_source": "estimated",
+          "observed_at": 1791720900000
+        }
       }
     ]
   }

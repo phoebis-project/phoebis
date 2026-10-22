@@ -58,10 +58,10 @@ use crate::classify::{
     classify, error_message, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict,
     MARGIN_MS,
 };
-use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
+use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
-    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
+    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELED, METHOD_NOT_ALLOWED,
     MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_CUT,
     UPSTREAM_STALLED, UPSTREAM_UNDECODABLE, UPSTREAM_UNREACHABLE,
 };
@@ -104,7 +104,7 @@ const HOLD_TICK: Duration = Duration::from_millis(250);
 /// How a wait on an account's backoff ended.
 enum Waited {
     /// The account left the router meanwhile.
-    Cancelled,
+    Canceled,
     Cleared,
     /// The request's deadline came before the backoff cleared.
     Deadline,
@@ -201,6 +201,9 @@ pub struct RelayOutcome {
     /// answer alone, an account that leaves the registry while the probe is in flight included. `None` for an answer
     /// the relay built before any selection.
     pub account_kind: Option<AccountKind>,
+    /// The served account's class as the leg stamped it beside `account_kind`, so a probe settles under the funding
+    /// its request row takes. False for an answer the relay built before any selection.
+    pub usage_based: bool,
     /// The source of the `diagnostics` member on the answering leg's body; `None` for an answer the relay built
     /// before any leg and for a leg that sent none.
     pub diagnostics: Option<DiagnosticsSource>,
@@ -255,7 +258,10 @@ pub struct Relay {
     bus: Option<Bus>,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
-    /// The decoders built for the hold's and the bus copy's reads of a response.
+    /// The connections the pool opened for this relay's checkouts, as against the idle ones it reused.
+    #[cfg(feature = "debug-hooks")]
+    connections_opened: std::sync::atomic::AtomicUsize,
+    /// The decoders built for the hold's reads of a response.
     #[cfg(feature = "debug-hooks")]
     pub(crate) decoders_built: Arc<std::sync::atomic::AtomicU64>,
     drift: DriftGuard,
@@ -275,6 +281,7 @@ pub struct Relay {
     /// The API keys legs dispatch with, by account id, so a leg reads no registry while its row's lineage
     /// and the snapshot's generation hold.
     secrets: Mutex<HashMap<String, SecretEntry>>,
+    shutdown_mark: Option<ShutdownMark>,
     /// `proxy.sign_cch_placeholder`: whether a restored `cch=00000` is signed rather than sent as the placeholder.
     sign_cch_placeholder: bool,
     store: Arc<Store>,
@@ -308,6 +315,19 @@ pub struct Accounting {
 /// the ledger counts, and false for one taken at a refusal of another kind.
 pub type AccountingSource = Arc<dyn Fn(bool) -> Accounting + Send + Sync>;
 
+/// Set by the router before it aborts the proxy listener, and by the listener before it cuts what is still open at its
+/// own drain deadline, so an end either cut causes is booked as the router's own cut rather than the caller's leaving.
+/// Memory, read on the end's path alone.
+pub type ShutdownMark = Arc<AtomicBool>;
+
+/// `router_shutdown` while the mark is set, else `client_gone`.
+pub(crate) fn cut_code(mark: Option<&ShutdownMark>) -> &'static str {
+    match mark {
+        Some(mark) if mark.load(Ordering::SeqCst) => "router_shutdown",
+        _ => "client_gone",
+    }
+}
+
 impl Relay {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -329,6 +349,8 @@ impl Relay {
             catalog,
             clock,
             #[cfg(feature = "debug-hooks")]
+            connections_opened: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(feature = "debug-hooks")]
             decoders_built: Arc::default(),
             drift: DriftGuard,
             heads: Arc::new(Mutex::new(HashMap::new())),
@@ -342,6 +364,7 @@ impl Relay {
             resolver,
             router,
             secrets: Mutex::new(HashMap::new()),
+            shutdown_mark: None,
             sign_cch_placeholder: false,
             store,
         }
@@ -361,7 +384,20 @@ impl Relay {
         self.heads.lock().expect(HEADS_POISONED).len()
     }
 
-    /// A decoder for the relay's own read of a response body: the hold's inspection copy or the bus copy.
+    /// The connections the relay opened fresh (a checkout the pool did not reuse), for a test that counts them
+    /// without reading the fake upstream's accepts.
+    #[cfg(feature = "debug-hooks")]
+    pub fn connections_opened(&self) -> usize {
+        self.connections_opened.load(Ordering::Relaxed)
+    }
+
+    /// Counts a checkout the pool answered with a connection it opened, which the test hooks alone read.
+    pub(crate) fn note_opened(&self) {
+        #[cfg(feature = "debug-hooks")]
+        self.connections_opened.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A decoder for the relay's own read of a response body, the hold's inspection copy.
     fn copy_decoder(&self, coding: Encoding) -> Box<dyn Decoder> {
         #[cfg(feature = "debug-hooks")]
         self.decoders_built.fetch_add(1, Ordering::Relaxed);
@@ -372,6 +408,14 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
+            ..self
+        }
+    }
+
+    /// Attaches the shutdown mark. Without one every closed channel reads as the caller's leaving.
+    pub fn with_shutdown_mark(self, mark: ShutdownMark) -> Relay {
+        Relay {
+            shutdown_mark: Some(mark),
             ..self
         }
     }
@@ -513,6 +557,8 @@ pub(crate) struct Trace {
     /// The handler's armed guard. The handler's own trace holds the slot, and the stream body's copy is detached
     /// after the hand-off emptied it, so the handler future's drop is the guard's drop.
     completion: Arc<Mutex<Option<CompletionGuard>>>,
+    /// The relay's shutdown mark, which the stream body and the guard read when they book the end.
+    pub shutdown_mark: Option<ShutdownMark>,
 }
 
 impl Trace {
@@ -670,6 +716,7 @@ impl Trace {
         &self,
         attempt: u8,
         account: &AccountRow,
+        usage_based: bool,
         pin_epoch: Option<u64>,
         started_at: i64,
         cache_ttl_ms: Option<i64>,
@@ -684,6 +731,7 @@ impl Trace {
                 AccountKind::Oauth => "oauth",
             }
             .into(),
+            usage_based,
             pin_epoch,
             started_at,
             cache_ttl_ms,
@@ -734,7 +782,6 @@ impl Trace {
         message_id: Option<String>,
         skipped_events: u32,
         interruption: Option<Interruption>,
-        passthrough: Option<String>,
         finished_at: i64,
     ) {
         // Held by value across the publish: a handler dropped while a durable slot is full drops the guard still
@@ -768,7 +815,6 @@ impl Trace {
             message_id,
             skipped_events,
             interruption,
-            passthrough,
             finished_at,
         }))
         .await;
@@ -780,10 +826,10 @@ impl Trace {
 
 /// Armed once the request's first fact opened the assembler's entry, disarmed by `Trace::complete` once its
 /// awaited publish returns or by the hand-off to the stream body, which completes on its own path. A drop while
-/// armed is a client that left before the completion landed: hyper dropped the handler future, or the keepalive
-/// dropped a probe's exchange at its deadline or its cancel, so the completion is published from here, with what
-/// the handler knew (the attempt it was on and the account of the leg in flight), and the entry lands rather than
-/// aging out as a `ledger_gap`.
+/// armed is a client that left, or the router's shutdown that cut it, before the completion landed: hyper dropped
+/// the handler future, or the keepalive dropped a probe's exchange at its deadline or its cancel, so the completion
+/// is published from here, with what the handler knew (the attempt it was on and the account of the leg in flight),
+/// and the entry lands rather than aging out as a `ledger_gap`.
 struct CompletionGuard {
     /// `Trace::detached`: the guard sits in the trace's slot, so a clone holding that slot would keep itself alive.
     trace: Trace,
@@ -827,7 +873,7 @@ impl Drop for CompletionGuard {
             response: ResponseFacts::default(),
             ttfb_ms: None,
             ttfc_ms: None,
-            error_code: Some("client_gone".into()),
+            error_code: Some(cut_code(self.trace.shutdown_mark.as_ref()).into()),
             client_drift: None,
             client_contract: None,
             client_version: None,
@@ -841,7 +887,6 @@ impl Drop for CompletionGuard {
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: (self.trace.clock)(),
         });
         // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
@@ -942,7 +987,7 @@ fn inflate_request(raw: &[u8], bound: usize) -> Result<Vec<u8>, RelayError> {
 /// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
-        Some("account_cancelled") => Outcome::Canceled,
+        Some("account_canceled") => Outcome::Canceled,
         // A probe answered on its pinned member's standing (`Exhaustion::Pinned`, the one untimed answer that
         // names an obstacle) is refused for the probe alone, whatever its siblings hold: conclusive, and no
         // exhaustion of the pool for the attention gauge or the rollups to count.
@@ -1046,6 +1091,12 @@ fn cache_ttl_ms(ttl: Option<CacheTtl>) -> Option<i64> {
         CacheTtl::FiveMinutes => 300_000,
         CacheTtl::OneHour => 3_600_000,
     })
+}
+
+/// Whether the account pays for a cache write, which selects the cache TTL policy's metered set: an api_key account,
+/// a usage-based seat and an account in overage do.
+fn pays_for_writes(kind: AccountKind, usage_based: bool, in_overage: bool) -> bool {
+    in_overage || usage_based || kind == AccountKind::ApiKey
 }
 
 fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<CooldownSet> {
@@ -1163,6 +1214,7 @@ impl Relay {
             clock: self.clock.clone(),
             bodies: self.bodies.clone(),
             completion: Arc::new(Mutex::new(None)),
+            shutdown_mark: self.shutdown_mark.clone(),
         };
         let (parts, body) = request.into_parts();
         let original = parts.extensions.get::<OriginalHead>();
@@ -2277,6 +2329,7 @@ impl Relay {
                 }
             };
             attempted.push(selection.account.id.clone());
+            let usage_based = self.router.snapshot().usage_based(&selection.account.id);
             dialed = true;
             match self
                 .dispatch_to(
@@ -2285,6 +2338,8 @@ impl Relay {
                     selections,
                     &answer.cancel,
                     answer.ticket,
+                    answer.funding_ordinal,
+                    usage_based,
                     &mut attempt,
                     &mut key_permit,
                     &mut end_guard,
@@ -2317,10 +2372,11 @@ impl Relay {
                         in_overage: selection.in_overage,
                     });
                     // Stamped here rather than where the upstream's head is read, so an answer the relay built
-                    // itself after the selection carries the attempt's account kind too, the fact the ledger files
-                    // the attempt's funding from.
+                    // itself after the selection carries the attempt's account kind and class too, the facts the
+                    // ledger files the attempt's funding from.
                     if let Some(outcome) = response.extensions_mut().get_mut::<RelayOutcome>() {
                         outcome.account_kind = Some(selection.account.kind);
+                        outcome.usage_based = usage_based;
                     }
                     return response;
                 }
@@ -2419,7 +2475,8 @@ impl Relay {
     /// carries. `seq` is the selecting decision's, which every pass of the leg reports its cache map under.
     /// `key_permit` is the request's own, which a committed stream takes into its body, and so is `end_guard`, the
     /// request's end report, which every pass of the leg re-arms with its attempt. `selected` is the ticket the
-    /// selection charged for the leg's first pass.
+    /// selection charged for the leg's first pass. `usage_based` is the account's class, read once by the selection
+    /// loop, so a reload during the leg never files its selection and its outcome under two classes.
     ///
     /// An OAuth 401 runs the refresh ladder on this account: a refresh, and after one that failed without a
     /// conclusive answer a second once the account's backoff clears, the key's permit and the ticket held through
@@ -2434,6 +2491,8 @@ impl Relay {
         seq: u32,
         cancel: &CancellationToken,
         mut selected: Option<AccountTicket>,
+        funding_ordinal: Option<u64>,
+        usage_based: bool,
         attempt: &mut u8,
         key_permit: &mut Option<KeyPermit>,
         end_guard: &mut Option<EndGuard>,
@@ -2535,8 +2594,8 @@ impl Relay {
                 phoebis_cch::cache_control_spans(&edited).is_ok_and(|spans| !spans.is_empty());
             let mut body_injected = Vec::new();
             let mut inject_betas: Vec<Injected> = Vec::new();
-            // An api_key account, or an account in overage, pays for the write, so the metered set applies.
-            let writes_cost_money = selection.in_overage || account.kind == AccountKind::ApiKey;
+            let writes_cost_money =
+                pays_for_writes(account.kind, usage_based, selection.in_overage);
             // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
             // retry reuses this body rather than pricing again.
             // A probe replays another turn's markers under that turn's agent, so the branch follows the agent for
@@ -2751,6 +2810,7 @@ impl Relay {
                 .selected(
                     *attempt,
                     account,
+                    usage_based,
                     pin_epoch,
                     (self.clock)(),
                     cache_ttl_ms(ttl),
@@ -2846,6 +2906,7 @@ impl Relay {
                 fast: admitted.fast,
                 floor_held: &admitted.floor_held,
                 fresh_pin: selection.pin.is_some() && !selection.trace.renewed,
+                funding_ordinal,
                 head: &mut leg_head,
                 identity: admitted.identity,
                 injected: &injected,
@@ -2893,15 +2954,32 @@ impl Relay {
                         )
                         .await),
                 };
+            let dispatched = match dispatched {
+                Err(AttemptFailure::Unsent { detail, connect }) if !retried => {
+                    tracing::debug!(
+                        account = %account.id,
+                        %detail,
+                        connect,
+                        "retrying a request that never reached the upstream"
+                    );
+                    // A cancellation that ends the wait answers as one during the attempt, since nothing was written.
+                    if connect
+                        && until_canceled(tokio::time::sleep(dispatch::CONNECT_RETRY_WAIT), cancel)
+                            .await
+                            .is_none()
+                    {
+                        Err(AttemptFailure::Canceled)
+                    } else {
+                        fresh = true;
+                        retried = true;
+                        continue;
+                    }
+                }
+                dispatched => dispatched,
+            };
             let next = match dispatched {
                 Ok(next) => next,
-                Err(AttemptFailure::Unsent(detail)) if !retried => {
-                    tracing::debug!(account = %account.id, %detail, "retrying a request that never reached the upstream");
-                    fresh = true;
-                    retried = true;
-                    continue;
-                }
-                Err(AttemptFailure::Cancelled) => {
+                Err(AttemptFailure::Canceled) => {
                     let outcome = self.outcome(
                         admitted.trace,
                         Some(admitted.key),
@@ -2913,7 +2991,7 @@ impl Relay {
                         None,
                         None,
                         admitted.client_version.clone(),
-                        Some("account_cancelled"),
+                        Some("account_canceled"),
                         pin_epoch,
                         None,
                         cache_ttl_ms(ttl),
@@ -2921,7 +2999,7 @@ impl Relay {
                     return Leg::Respond(
                         self.answer(
                             admitted.trace,
-                            ACCOUNT_CANCELLED.response(admitted.request_id),
+                            ACCOUNT_CANCELED.response(admitted.request_id),
                             outcome,
                             None,
                             ResponseFacts::default(),
@@ -2986,7 +3064,7 @@ impl Relay {
                 }
                 // The same account and the same credential once the throttle has passed.
                 Next::RetryInPlace(delay) => {
-                    if until_cancelled(tokio::time::sleep(delay), cancel)
+                    if until_canceled(tokio::time::sleep(delay), cancel)
                         .await
                         .is_none()
                     {
@@ -3001,7 +3079,7 @@ impl Relay {
                             None,
                             None,
                             admitted.client_version.clone(),
-                            Some("account_cancelled"),
+                            Some("account_canceled"),
                             pin_epoch,
                             None,
                             cache_ttl_ms(ttl),
@@ -3009,7 +3087,7 @@ impl Relay {
                         return Leg::Respond(
                             self.answer(
                                 admitted.trace,
-                                ACCOUNT_CANCELLED.response(admitted.request_id),
+                                ACCOUNT_CANCELED.response(admitted.request_id),
                                 outcome,
                                 None,
                                 ResponseFacts::default(),
@@ -3114,13 +3192,13 @@ impl Relay {
         // the prefix the drain read as if it were the whole body, and keeps its reader for the rest should the
         // verdict forward it; a body drained whole has already handed its connection back to the pool.
         let (buffered, mut reader, cut) = if matches!(head.status, 400 | 401 | 403 | 404 | 429) {
-            let Some(drained) = until_cancelled(
+            let Some(drained) = until_canceled(
                 drain_bounded(&mut reader, self.limits.idle_timeout),
                 ctx.cancel,
             )
             .await
             else {
-                return Next::Respond(self.cancelled(&ctx, &head, written_at).await);
+                return Next::Respond(self.canceled(&ctx, &head, written_at).await);
             };
             match drained {
                 Ok(Drained::Complete(buffered)) => {
@@ -3157,9 +3235,9 @@ impl Relay {
                 Err(_) => None,
             });
             let Some(result) =
-                until_cancelled(hold(reader, inspect, self.limits.hold_timeout), ctx.cancel).await
+                until_canceled(hold(reader, inspect, self.limits.hold_timeout), ctx.cancel).await
             else {
-                return Next::Respond(self.cancelled(&ctx, &head, written_at).await);
+                return Next::Respond(self.canceled(&ctx, &head, written_at).await);
             };
             match result {
                 Ok(h) => {
@@ -3330,9 +3408,9 @@ impl Relay {
                                 // The loop head answers the exhaustion past the deadline; this account is done.
                                 Waited::Deadline => break (None, None, true),
                                 // The 401's head is this attempt's, published before the verdict.
-                                Waited::Cancelled => {
+                                Waited::Canceled => {
                                     return Next::Respond(
-                                        self.cancelled_after_head(&ctx, head.status).await,
+                                        self.canceled_after_head(&ctx, head.status).await,
                                     )
                                 }
                             }
@@ -3376,7 +3454,7 @@ impl Relay {
                             credential_generation: generations.2,
                             cause: StateCause::FundingRetry,
                             detail: None,
-                            dispatched_at: Some(written_at),
+                            dispatched_ordinal: ctx.funding_ordinal,
                         })
                         .await;
                 }
@@ -3504,8 +3582,7 @@ impl Relay {
                     (Some(buffered), None) => {
                         let guards = ctx.guards();
                         self.forward_buffered(
-                            ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
-                            guards,
+                            ctx.trace, &head, buffered, outcome, renewal, affinity, guards,
                         )
                         .await
                     }
@@ -3515,7 +3592,6 @@ impl Relay {
                         let guards = ctx.guards();
                         self.stream(Forward {
                             affinity,
-                            caller: ctx.caller,
                             cancel: ctx.cancel.clone(),
                             checkin,
                             guards,
@@ -3579,7 +3655,6 @@ impl Relay {
             return Next::Respond(
                 self.stream(Forward {
                     affinity: None,
-                    caller: ctx.caller,
                     cancel: ctx.cancel.clone(),
                     checkin,
                     guards,
@@ -3628,7 +3703,6 @@ impl Relay {
                     ctx.trace,
                     &head,
                     buffered,
-                    ctx.caller,
                     outcome,
                     None,
                     None,
@@ -3642,7 +3716,6 @@ impl Relay {
         Next::Respond(
             self.stream(Forward {
                 affinity: None,
-                caller: ctx.caller,
                 cancel: ctx.cancel.clone(),
                 checkin,
                 guards,
@@ -3854,7 +3927,7 @@ impl Relay {
                                 credential_generation: mark.credential_generation,
                                 cause: mark.cause,
                                 detail: None,
-                                dispatched_at: None,
+                                dispatched_ordinal: None,
                             })
                             .await;
                         return Err(NoCredential::Marked);
@@ -4130,7 +4203,8 @@ impl Relay {
             item = %item,
             user_agent = %user_agent(headers),
             key = %key.id,
-            "a Claude Code client sent a request without the {item} the router requires. Read the client page for the environment block",
+            "a Claude Code client sent a request without the {item} the router requires. \
+             Read the client page for the environment block",
         );
         self.router.record_refusal(
             RefusedRequest {
@@ -4190,7 +4264,6 @@ impl Relay {
                 None,
                 None,
                 0,
-                None,
                 None,
                 (self.clock)(),
             )
@@ -4255,19 +4328,19 @@ impl Relay {
                 // Any change wakes the waiter: the value moves to `true` at a leg's final answer alone, and a dropped
                 // sender means the request ended.
                 Some(head) => tokio::select! {
-                    slept = until_cancelled(tokio::time::sleep(slice), cancel) => slept,
+                    slept = until_canceled(tokio::time::sleep(slice), cancel) => slept,
                     _ = head.changed() => return Waited::Head,
                 },
-                None => until_cancelled(tokio::time::sleep(slice), cancel).await,
+                None => until_canceled(tokio::time::sleep(slice), cancel).await,
             };
             if slept.is_none() {
-                return Waited::Cancelled;
+                return Waited::Canceled;
             }
         }
     }
 
     /// The answer to a response that arrived for an account that is no longer there.
-    async fn cancelled(
+    async fn canceled(
         &self,
         ctx: &Responding<'_>,
         head: &ResponseHead,
@@ -4284,13 +4357,13 @@ impl Relay {
                 (self.clock)(),
             )
             .await;
-        self.cancelled_after_head(ctx, head.status).await
+        self.canceled_after_head(ctx, head.status).await
     }
 
     /// The caller's answer once the account left the router after this attempt's head was published: the request
     /// completes `canceled` and the attempt keeps the outcome its head recorded, since a second head for the same
     /// attempt would overwrite that outcome in the ledger.
-    async fn cancelled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
+    async fn canceled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
         let mut outcome = self.outcome(
             ctx.trace,
             Some(ctx.key),
@@ -4302,7 +4375,7 @@ impl Relay {
             None,
             None,
             ctx.client_version.clone(),
-            Some("account_cancelled"),
+            Some("account_canceled"),
             ctx.pin_epoch,
             None,
             ctx.cache_ttl_ms,
@@ -4313,7 +4386,7 @@ impl Relay {
         outcome.diagnostics_named = ctx.diagnostics_named;
         self.answer(
             ctx.trace,
-            ACCOUNT_CANCELLED.response(ctx.request_id),
+            ACCOUNT_CANCELED.response(ctx.request_id),
             outcome,
             None,
             ResponseFacts::default(),
@@ -4362,6 +4435,7 @@ impl Relay {
             cache_ttl_ms,
             overage_in_use: None,
             account_kind: None,
+            usage_based: false,
             diagnostics: None,
             diagnostics_named: false,
             obstacle: None,
@@ -4393,7 +4467,9 @@ impl Relay {
             .await;
     }
 
-    /// Only an OAuth head with the unified headers is evidence; everything else changes nothing.
+    /// Only an OAuth head with the unified headers is evidence, and everything else changes nothing. A usage-based
+    /// seat's overage family is its spend window against the monthly cap, so its head reports the share and the reset
+    /// and never overage evidence.
     async fn report_overage(&self, account: &AccountRow, head: &ResponseHead, now: i64) {
         if account.kind != AccountKind::Oauth {
             return;
@@ -4401,12 +4477,30 @@ impl Relay {
         let Some(unified) = UnifiedHeaders::parse(head) else {
             return;
         };
+        let observed_at = upstream_date(head).unwrap_or(now);
+        if self.router.snapshot().usage_based(&account.id) {
+            let utilization = head
+                .get("anthropic-ratelimit-unified-overage-utilization")
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|share| share.is_finite());
+            if utilization.is_some() || unified.overage_reset.is_some() {
+                self.router
+                    .report(Report::SpendHead {
+                        account_id: account.id.clone(),
+                        utilization,
+                        reset: unified.overage_reset,
+                        observed_at,
+                        incarnation: account.incarnation,
+                    })
+                    .await;
+            }
+            return;
+        }
         let in_use = match unified.overage_in_use {
             Some(flag) => flag,
             None if unified.present() => false,
             None => return,
         };
-        let observed_at = upstream_date(head).unwrap_or(now);
         // The provider's overage reset when it sends one, else the latest reset among the shared windows that
         // read full: the account stays out under `never` until every full window has reset.
         let full = |u: Option<f64>| u.is_some_and(|u| u >= 1.0);
@@ -4442,7 +4536,6 @@ impl Relay {
     ) -> Response {
         let Forward {
             affinity,
-            caller,
             cancel,
             checkin,
             mut guards,
@@ -4458,7 +4551,7 @@ impl Relay {
             renewal,
             trace,
         } = forward;
-        let (builder, decoder) = match forward_head(head, caller, rate_limit_event) {
+        let (builder, decoder) = match forward_head(head, rate_limit_event) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -4469,18 +4562,8 @@ impl Relay {
         let event_stream = head
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
-        let caller_decodes = decoder.is_some();
-        // The client reads the upstream's coding as sent, so the completion names it whichever decoder the bus copy
-        // ends up with, and a copy the router cannot read says nothing of the answer the client received.
-        let passthrough = match encoding(head) {
-            Ok(Encoding::Identity) | Err(_) => None,
-            Ok(_) if caller_decodes => None,
-            Ok(_) => head
-                .get("content-encoding")
-                .map(|coding| coding.trim().to_ascii_lowercase()),
-        };
         // A held stream was decoded and parsed up to its commit by the hold, so the bus copy goes on from there
-        // with the hold's decoder and parser.
+        // with the hold's parser.
         let handover = match held {
             Some(Inspect {
                 decoder: hold_decoder,
@@ -4492,7 +4575,6 @@ impl Relay {
                     None => prefix.clone(),
                 };
                 Some((
-                    hold_decoder.filter(|_| !caller_decodes),
                     parser,
                     HeldText {
                         text,
@@ -4517,21 +4599,12 @@ impl Relay {
             || affinity.is_some())
         .then(|| {
             // A copy that stopped following the stream, and a body no hold read, are read afresh.
-            let (bus_decoder, parser, held) = match handover {
-                Some((bus_decoder, parser, held)) => (
-                    bus_decoder,
+            let (parser, held) = match handover {
+                Some((parser, held)) => (
                     event_stream.then_some(parser.into_skipping(INSPECT_BUFFER)),
                     Some(held),
                 ),
                 None => (
-                    (!caller_decodes)
-                        .then(|| {
-                            encoding(head)
-                                .ok()
-                                .filter(|e| !matches!(e, Encoding::Identity))
-                                .map(|coding| self.copy_decoder(coding))
-                        })
-                        .flatten(),
                     event_stream.then(|| SseParser::skipping(INSPECT_BUFFER)),
                     None,
                 ),
@@ -4541,9 +4614,6 @@ impl Relay {
                 clock: self.clock.clone(),
                 outcome: outcome.clone(),
                 catalog: self.catalog.clone(),
-                decoder: bus_decoder,
-                decode_failed: false,
-                passthrough,
                 parser,
                 held,
                 on_error,
@@ -4591,14 +4661,13 @@ impl Relay {
         trace: &Trace,
         head: &ResponseHead,
         raw: Bytes,
-        caller: &HeaderMap,
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
         mut guards: Guards,
     ) -> Response {
         // A buffered answer is never an event stream, so its status alone says whether it is a rate limit.
-        let (builder, decoder) = match forward_head(head, caller, false) {
+        let (builder, decoder) = match forward_head(head, false) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -4617,27 +4686,18 @@ impl Relay {
                 }
             },
         };
-        // The chunk is the decoded body whatever the caller accepts; a coding the caller takes as it is still
-        // reaches the bus as text. A body that will not decode reaches it as nothing, because a consumer of a
-        // chunk was promised text and coded bytes are worse than none.
-        let mut chunk_published = false;
-        let answer = match inspectable_copy(head, &raw, false).map(Bytes::from) {
-            None => None,
-            Some(text) => {
-                trace.publish_chunk(ResponseChunk {
-                    request_id: trace.request_id.clone(),
-                    attempt: outcome.attempt,
-                    index: 0,
-                    body: text.clone(),
-                    phase: None,
-                });
-                chunk_published = true;
-                // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read
-                // by the body task; the 200 arm guards a caller that would buffer one, whose usage still counts.
-                (head.status == 200)
-                    .then(|| answer_from_json(&text, &[], outcome.diagnostics_named))
-            }
-        };
+        // The chunk is the decoded body the caller receives, since a consumer of a chunk was promised text.
+        trace.publish_chunk(ResponseChunk {
+            request_id: trace.request_id.clone(),
+            attempt: outcome.attempt,
+            index: 0,
+            body: payload.clone(),
+            phase: None,
+        });
+        // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read by the body
+        // task, and the 200 arm guards a caller that would buffer one, whose usage still counts.
+        let answer = (head.status == 200)
+            .then(|| answer_from_json(&payload, &[], outcome.diagnostics_named));
         let (usage, facts) = match answer {
             Some(answer) => (Some(answer.usage), answer.response),
             None => (None, ResponseFacts::default()),
@@ -4679,12 +4739,11 @@ impl Relay {
                 facts,
                 None,
                 Some(payload.len() as u64),
-                chunk_published.then_some(1),
+                Some(1),
                 None,
                 // An error document carries no message `id`.
                 None,
                 0,
-                None,
                 None,
                 (self.clock)(),
             )
@@ -4707,13 +4766,12 @@ fn unreachable_outcome(outcome: RelayOutcome, code: &str) -> RelayOutcome {
 struct Forward<'a, C> {
     /// The conversation report a committed answer sends, beside the renewal; `None` for a rejection.
     affinity: Option<AffinityFacts>,
-    caller: &'a HeaderMap,
     cancel: CancellationToken,
     checkin: Checkin,
     /// The response's in-flight counts, which ride the body to its end.
     guards: Guards,
     head: &'a ResponseHead,
-    /// The pre-commit hold's read of a held stream, whose decoder and parser the bus copy goes on with.
+    /// The pre-commit hold's read of a held stream, whose parser the bus copy goes on with.
     held: Option<Inspect>,
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
@@ -4781,6 +4839,9 @@ struct Responding<'a> {
     floor_held: &'a AtomicBool,
     /// Whether this selection created `pin` rather than renewing one that already served.
     fresh_pin: bool,
+    /// The funding ordinal the selection's claim answered, `None` off a `funding_required` account. Every pass of the
+    /// leg reports a retry's success under it, since each one went out under the mark the claim found.
+    funding_ordinal: Option<u64>,
     /// The leg's head report, which the pass that learns the leg's answer sends.
     head: &'a mut Option<HeadGuard>,
     identity: &'a RequestIdentity,
@@ -5297,7 +5358,7 @@ pub(crate) fn failover_reports(
             credential_generation: generations.2,
             cause,
             detail,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         });
     }
     reports
@@ -5330,17 +5391,14 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportE
     Ok(Bytes::from(out))
 }
 
-/// Builds the caller's response head from the upstream's and decides whether the payload can be passed through
-/// as it came. Returns the decoder to run over the body when it cannot. `rate_limit_event` marks a 200 whose
+/// Every coded body is decoded for the forward and `content-encoding` dropped, whatever the caller accepts, so the
+/// relay's parser reads every answer and the client always receives identity. `rate_limit_event` marks a 200 whose
 /// first event is a `rate_limit_error`, which keeps the rate-limit families as a 429 does.
 fn forward_head(
     head: &ResponseHead,
-    caller: &HeaderMap,
     rate_limit_event: bool,
 ) -> Result<(Builder, Option<Box<dyn Decoder>>), TransportError> {
     let upstream = encoding(head)?;
-    let coding = head.get("content-encoding").unwrap_or("identity");
-    let passthrough = matches!(upstream, Encoding::Identity) || caller_accepts(caller, coding);
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY));
     // The relay's own read of the families (`ratelimit.rs`) already ran on the upstream head; hiding them
@@ -5358,7 +5416,7 @@ fn forward_head(
         {
             continue;
         }
-        if !passthrough && name.eq_ignore_ascii_case("content-encoding") {
+        if name.eq_ignore_ascii_case("content-encoding") {
             continue;
         }
         let (Ok(name), Ok(value)) = (
@@ -5369,7 +5427,8 @@ fn forward_head(
         };
         builder = builder.header(name, value);
     }
-    Ok((builder, (!passthrough).then(|| decoder(upstream))))
+    let identity = matches!(upstream, Encoding::Identity);
+    Ok((builder, (!identity).then(|| decoder(upstream))))
 }
 
 fn built(builder: Builder, body: Body) -> Response {
@@ -5377,35 +5436,6 @@ fn built(builder: Builder, body: Body) -> Response {
         .body(body)
         // The status is a validated `StatusCode` and every header was parsed before it was added.
         .expect("a forwarded response head is always well formed")
-}
-
-/// Whether the caller said it can read this content coding. An explicit entry for the coding decides, the last
-/// one written winning, and only when none names it does a wildcard speak; every `Accept-Encoding` line is read,
-/// since a proxy may add one beside the client's. `q=0` on the deciding entry is a refusal.
-fn caller_accepts(caller: &HeaderMap, coding: &str) -> bool {
-    let mut explicit = None;
-    let mut wildcard = None;
-    for line in caller
-        .get_all(header::ACCEPT_ENCODING)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-    {
-        for entry in line.split(',') {
-            let (name, params) = entry.split_once(';').unwrap_or((entry, ""));
-            let refused = params
-                .split(';')
-                .filter_map(|p| p.trim().strip_prefix("q="))
-                .any(|w| w.trim().parse::<f32>().is_ok_and(|w| w <= 0.0));
-            let accepted = !refused;
-            let name = name.trim();
-            if name.eq_ignore_ascii_case(coding) {
-                explicit = Some(accepted);
-            } else if name == "*" {
-                wildcard = Some(accepted);
-            }
-        }
-    }
-    explicit.or(wildcard).unwrap_or(false)
 }
 
 /// The caller's own `User-Agent`, the only handle an operator has on which client drifted.
@@ -5421,10 +5451,9 @@ fn user_agent(headers: &HeaderMap) -> &str {
 const DECODE_PIECE: usize = 4096;
 
 /// The decoded copy the classification table reads. A compressed body is decoded because the table reads JSON,
-/// and the copy is inspection only: what the caller receives is the upstream's own bytes under the upstream's
-/// own headers. `None` means the payload does not decode or does not fit. `cut` is a body the drain stopped
-/// reading at the bound: its coded stream ends early and its text may run past the bound, so the copy is what
-/// decoded up to there, as far as the bound.
+/// and the copy is inspection only: the forward decodes the caller's body on its own. `None` means the payload does not
+/// decode or does not fit. `cut` is a body the drain stopped reading at the bound: its coded stream ends early and its
+/// text may run past the bound, so the copy is what decoded up to there, as far as the bound.
 fn inspectable_copy(head: &ResponseHead, raw: &[u8], cut: bool) -> Option<Vec<u8>> {
     match encoding(head) {
         Ok(Encoding::Identity) => Some(raw.to_vec()),
@@ -5476,12 +5505,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_refused_coding_is_not_passed_through() {
-        let mut caller = HeaderMap::new();
-        caller.insert(header::ACCEPT_ENCODING, "gzip;q=0, br".parse().unwrap());
-        assert!(!caller_accepts(&caller, "gzip"));
-        assert!(caller_accepts(&caller, "br"));
-        assert!(!caller_accepts(&HeaderMap::new(), "gzip"));
+    fn a_usage_based_seat_pays_for_every_cache_write_as_an_api_key_account_does() {
+        assert!(
+            pays_for_writes(AccountKind::Oauth, true, false),
+            "a usage-based seat bills every write in dollars, so the metered set applies"
+        );
+        assert!(pays_for_writes(AccountKind::ApiKey, false, false));
+        assert!(
+            pays_for_writes(AccountKind::Oauth, false, true),
+            "a plan seat in overage pays for its writes"
+        );
+        assert!(
+            !pays_for_writes(AccountKind::Oauth, false, false),
+            "a plan seat on its plan quota keeps the plan set"
+        );
     }
 
     #[test]
@@ -5541,6 +5578,7 @@ mod tests {
             cache_ttl_ms: None,
             overage_in_use: None,
             account_kind: None,
+            usage_based: false,
             diagnostics: None,
             diagnostics_named: false,
             obstacle: None,

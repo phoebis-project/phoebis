@@ -575,6 +575,61 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     );
 }
 
+/// A usage-based seat settles its probes in dollars, so the pool's ceilings read the dollar rows for it as for an
+/// API-key member, never the plan's multipliers an unclassed OAuth member brings.
+#[tokio::test]
+async fn a_usage_based_seat_brings_the_dollar_rows_to_the_pools_ceilings_as_an_api_key_member_does()
+{
+    let rig = common::rig(common::RigSpec {
+        accounts: vec![common::oauth("seat", "sk-ant-oat01-SSSS", 0)],
+        tier: Some("default_claude_zero"),
+        pricing: PriceRevisions::from_yaml(PRICES, "test").unwrap(),
+        tables: PlanTables {
+            revisions: CostRevisions::from_yaml(COSTS).unwrap(),
+            path: None,
+            source: "test".to_string(),
+        },
+        timing: KeepaliveTiming::default(),
+        ..common::RigSpec::default()
+    })
+    .await;
+    let seat = test_account_row(&common::oauth("seat", "sk-ant-oat01-SSSS", 0));
+    let plan = test_account_row(&common::oauth("o", "sk-ant-oat01-OOOO", 0));
+    let dollars = test_account_row(&common::api_key("k", common::A, 0));
+    let pool = PoolRow {
+        keepalive_json: r#"{"enabled":true}"#.into(),
+        model_rules: vec![
+            ModelRule {
+                pattern: "claude-opus-5-5".into(),
+                not: false,
+            },
+            ModelRule {
+                pattern: "*".into(),
+                not: true,
+            },
+        ],
+        ..PoolRow::for_tests("p")
+    };
+    let break_even = async |account: &phoebis_store::AccountRow| {
+        rig.engine
+            .resolve_pool_ceilings(&pool, std::slice::from_ref(account))
+            .await
+            .unwrap()
+            .break_even_seconds
+    };
+    let on_the_seat = break_even(&seat).await;
+    assert_eq!(
+        on_the_seat,
+        break_even(&dollars).await,
+        "the seat reads the API-key member's dollar rows"
+    );
+    assert_ne!(
+        on_the_seat,
+        break_even(&plan).await,
+        "and not the plan's multipliers an unclassed OAuth member brings"
+    );
+}
+
 /// Fast cells that are no multiple of the standard ones, and a second model with no fast cells of its own.
 const FAST_PRICES: &str = r#"
 revisions:

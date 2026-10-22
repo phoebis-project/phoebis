@@ -56,7 +56,7 @@ pub use identity::{identify, RequestIdentity};
 pub use memory::{MemoryKey, Previous};
 pub use messages::{
     new_request_id, router, Accounting, AccountingSource, Limits, Probe, ReadinessSource, Relay,
-    RelayOutcome, ServedUnder, MEMORY_FLUSH_INTERVAL,
+    RelayOutcome, ServedUnder, ShutdownMark, MEMORY_FLUSH_INTERVAL,
 };
 pub use portability::is_portable;
 pub use ratelimit::{
@@ -68,8 +68,8 @@ pub use sse::{SseEvent, SseParser};
 
 #[cfg(feature = "debug-hooks")]
 impl Relay {
-    /// How many decoders this relay built for the hold's and the bus copy's reads of a response, so a test can
-    /// tell how many times a committed stream was decoded.
+    /// How many decoders this relay built for the hold's reads of a response, so a test can tell that a held coded
+    /// stream is decoded once beside the forward.
     pub fn decoders_built(&self) -> u64 {
         self.decoders_built
             .load(std::sync::atomic::Ordering::Relaxed)

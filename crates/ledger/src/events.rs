@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_oauth::{BackoffEdge, Clock};
+use phoebis_oauth::{BackoffEdge, Clock, PollFault};
 use phoebis_relay::CatalogChange;
 use phoebis_routing::{CreditsState, RouterEvent, RouterHandle};
 use phoebis_store::{AccountState, ResolvedAttempt, StateCause, Store};
@@ -519,6 +519,68 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
         kind: kind.into(),
         account_id: Some(account_id.clone()),
         detail: Some(detail.to_string()),
+        ..Default::default()
+    })
+}
+
+/// `poll_failed` on the polled account, detail {endpoint, status, error, transport}.
+pub fn poll_failed(account_id: &str, at: i64, fault: &PollFault) -> Record {
+    Record::Event(EventRecord {
+        at,
+        kind: "poll_failed".into(),
+        account_id: Some(account_id.to_string()),
+        detail: Some(
+            json!({
+                "endpoint": fault.endpoint,
+                "status": fault.status,
+                "error": fault.text,
+                "transport": fault.transport,
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    })
+}
+
+/// `plan_ended` on the account whose profile reports no plan, detail {source, organization_type, rate_limit_tier,
+/// subscription_status}: `source` is `profile` for a profile read and `usage_403` for one a usage 403 made due, and the
+/// other three are the profile document's words.
+pub fn plan_ended(account_id: &str, at: i64, source: &str, profile: &serde_json::Value) -> Record {
+    plan_event("plan_ended", account_id, at, source, profile)
+}
+
+/// `plan_restored` on the account whose plan-ended flag a profile with a plan or a pairing confirm cleared, detail
+/// {source, organization_type, rate_limit_tier, subscription_status}: `source` is `profile` or `pairing`.
+pub fn plan_restored(
+    account_id: &str,
+    at: i64,
+    source: &str,
+    profile: &serde_json::Value,
+) -> Record {
+    plan_event("plan_restored", account_id, at, source, profile)
+}
+
+fn plan_event(
+    kind: &str,
+    account_id: &str,
+    at: i64,
+    source: &str,
+    profile: &serde_json::Value,
+) -> Record {
+    let organization = &profile["organization"];
+    Record::Event(EventRecord {
+        at,
+        kind: kind.into(),
+        account_id: Some(account_id.to_string()),
+        detail: Some(
+            json!({
+                "source": source,
+                "organization_type": organization["organization_type"],
+                "rate_limit_tier": organization["rate_limit_tier"],
+                "subscription_status": organization["subscription_status"],
+            })
+            .to_string(),
+        ),
         ..Default::default()
     })
 }
@@ -1615,7 +1677,7 @@ mod tests {
             pool_id: "p".into(),
             ends_at: 9_000,
             wind_down_minutes: 30,
-            end_source: "cancelled",
+            end_source: "canceled",
             restored: false,
             at: 5_000,
         })
@@ -1635,7 +1697,7 @@ mod tests {
         );
         assert_eq!(
             detail_of(&row),
-            json!({"ends_at": 9_000, "wind_down_minutes": 30, "end_source": "cancelled"})
+            json!({"ends_at": 9_000, "wind_down_minutes": 30, "end_source": "canceled"})
         );
 
         let row = event_of(&RouterEvent::SlowDownStarted {

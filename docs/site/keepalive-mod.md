@@ -190,17 +190,40 @@ session id. The mod keeps the instance id in `PHOEBIS_KEEPALIVE_INSTANCE`. Every
 since the owner is the process.
 
 Claude Code holds the pair in the plugin's own state for the session, and that state survives a hot reload of the
-module. A reload reuses the pair while the two variables still name it, so the owner line and the instance stay. A child
-process inherits the two variables without that state, so it mints its own pair and registers as its own instance. A
-child process that never runs the fence keeps the parent's owner line: one on a client older than the floor in
-[Install](#install), one with the mod disabled, or one without a URL or a key. That line matters only for a child that
-sends the parent's session id.
+module. The mod also keeps the pair in the plugin's store under the key `identities`, beside the identity of the client
+process it was minted in, for the newest eight processes. The store outlives the session, so a reload after a `/clear`
+or a `/resume`, under either id, finds the pair there when the session's state holds none. A reload reuses the pair
+while the two variables still name it, so the owner line and the instance stay, and the router's session keeps its
+owner. A child process inherits the two variables but runs as another process, for which the store holds no pair, so it
+mints its own pair and registers as its own instance. Where Claude Code cannot run the command that reads the process's
+identity, a reload after a `/clear` mints a new pair. A child process that never runs the fence keeps the parent's owner
+line: one on a client older than the floor in [Install](#install), one with the mod disabled, or one without a URL or a
+key. That line matters only for a child that sends the parent's session id.
+
+A `session_start` the router refuses with a bare `instance_conflict`, since another instance holds the session under a
+live lease, leaves the session live. The mod writes one line to the transcript,
+`another instance reports session <id>, so the start is retried once its lease lapses`, and sends the start again under
+its backoff, from one second up to thirty and every thirty seconds from then on. Once the holder's 90-second lease
+lapses, the router names the silent holder, and the mod's next start takes the session over with `previous_instance_id`:
+the router replaces the session's agents, the next requests arm recipes again, and the mod writes
+`took over session <id> from a silent instance`. Claude Code puts the plugin's name in front of both lines.
+
+On the router's side, a request whose owner header names another owner than the session's registration is foreign
+traffic while the holder's lease is live, and a session saved attended reads as live for one lease length after a router
+restart, until its registration arrives. The router leaves the session's recipes as they were, counts the mismatch, and
+at the session's first mismatch writes one WARN line, `a request named another owner than the session's registration`,
+naming the session id and never an owner id. Once the lease has lapsed, such a request takes the session over: the
+router records the request's owner as the session's, keeps it across a restart and arms the recipe as it does for the
+registered owner. The new instance's start still meets the silent holder and takes over as above, which replaces the
+agents those requests armed.
 
 ### What the mod leaves alone
 
-The mod runs no shell command. It hooks two settings-hook events, `classic.Stop` and `classic.SubagentStop`, for the
-background list they carry, and reads no transcript, no background command's output and no conversation text.
-The one file it reads is the key file that `token_file` names.
+The mod runs one shell command at load, `echo $PPID`, to read the client process's identity, and no other. It hooks two
+settings-hook events, `classic.Stop` and `classic.SubagentStop`, for the background list they carry, and reads no
+transcript, no background command's output and no conversation text. Beside the key file that `token_file` names, the
+one file it reads, it keeps the key `identities` in its own store, which Claude Code holds as a file under the user's
+configuration directory.
 
 ## Where it runs
 
@@ -208,8 +231,9 @@ The mod runs wherever Claude Code loads the plugin: the Agent SDK, `claude -p`, 
 the Desktop app, the terminal and the VS Code extension's chat panel. It behaves the same everywhere: with a URL and a
 key it reports unless Claude Code refuses its fetch (see [Configure](#configure)), and without them it does nothing. A
 `claude -p` run registers, reports its turns, its background commands and its subagents, and ends its session when it
-exits. The mod draws nothing. Its only messages are the conflict line in the transcript and six kinds of line in Claude
-Code's debug log: a blank key file, a dropped report, a key file that could not be read, a key file without
+exits. The mod draws nothing. Its only messages are two lines in the transcript, the conflict line and the takeover line
+of [The owner header](#the-owner-header), and seven kinds of line in Claude Code's debug log: a blank key file, the
+client process's identity read at load, a dropped report, a key file that could not be read, a key file without
 `management_url`, a refused key and a report whose fetch threw.
 
 ## Verify
@@ -233,8 +257,9 @@ statement of what the mod does:
 ❯ ./register.ts gating hook with .catch: classic.Stop
 ❯ ./register.ts gating hook with .catch: classic.SubagentStop
 ❯ ./register.ts calls: $.agent.list (via agentList, reconcile), $.clock.after (via acknowledged, deferAgent, delay),
-    $.clock.now, $.env.get, $.env.set (via fence), $.fs.read, $.http.fetch, $.session.id (via ensureSession),
-    $.session.version, $.state.get (via ensureSession, fence), $.state.set (via fence, persistModel), $.ui.log
+    $.clock.now, $.env.get, $.env.set (via fence), $.fs.read, $.http.fetch, $.process.run (via processIdentity),
+    $.session.id (via ensureSession), $.session.version, $.state.get (via ensureSession, fence),
+    $.state.set (via fence, persistModel), $.store.get (via storedPairs), $.store.set (via keepPair), $.ui.log
 ❯ ./register.ts env writes: ANTHROPIC_CUSTOM_HEADERS, PHOEBIS_KEEPALIVE_INSTANCE
 ❯ ./register.ts env reads: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS,
     BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS, CLAUDE_CODE_OAUTH_TOKEN, PHOEBIS_KEEPALIVE_INSTANCE

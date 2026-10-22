@@ -442,6 +442,35 @@ async fn the_admin_routes_store_operator_and_the_pairing_confirm_paired() {
 }
 
 #[tokio::test]
+async fn the_account_create_answers_its_own_sentence_to_an_object_that_lacks_id_kind_or_label() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (id, body) in [
+        ("noid", r#"{"kind":"oauth","label":"No id"}"#),
+        ("nokind", r#"{"id":"nokind","label":"No kind"}"#),
+        ("nolabel", r#"{"id":"nolabel","kind":"oauth"}"#),
+    ] {
+        let refused = post(&app, "/admin/accounts", body, Some(&cookie)).await;
+        let status = refused.status().as_u16();
+        assert_eq!(
+            (status, json(refused).await["error"].clone()),
+            (
+                400,
+                serde_json::json!("body must carry id, kind, and label")
+            ),
+            "{body}"
+        );
+        assert_eq!(
+            get(&app, &format!("/admin/accounts/{id}"), Some(&cookie))
+                .await
+                .status(),
+            404,
+            "the refused create left no row: {body}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn an_account_write_ignores_a_member_the_route_does_not_name() {
     let (app, _up, _store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
@@ -858,7 +887,7 @@ async fn an_account_answers_its_funding_retry_while_marked_and_null_once_the_ope
             credential_generation: snapshot.credential_generation("direct").unwrap_or(1),
             cause: StateCause::FundingRefused,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     fake_upstream::wait_for(std::time::Duration::from_secs(2), || {
@@ -1024,7 +1053,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     let now = common::NOW;
     parts.store.set_profile(
         "business",
-        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
+        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","has_extra_usage_enabled":true,"subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
         &SubscriptionRow {
             plan: Some("max".into()),
             tier: Some("default_claude_max_5x".into()),
@@ -1069,6 +1098,11 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
                 disabled_reason: None,
                 overage_reset: None,
                 source: "poll".into(),
+                spend_limit_minor: None,
+                spend_used_minor: None,
+                spend_percent: None,
+                spend_currency: None,
+                spend_exponent: None,
             }),
         )
         .unwrap();
@@ -1187,9 +1221,9 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
             "trial_ends_at": 1_790_899_200_000_i64,
             "ends_at": null,
         }),
-        "never cancelled, so the stored end is null"
+        "never canceled, so the stored end is null"
     );
-    assert_eq!(listed["cancelled"], false);
+    assert_eq!(listed["canceled"], false);
     let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
     assert!(
         direct["profile"].is_null()
@@ -1223,7 +1257,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
         second["subscription"],
         serde_json::json!({"plan": null, "tier": null, "since": null, "trial_ends_at": null, "ends_at": null})
     );
-    assert_eq!(second["cancelled"], false);
+    assert_eq!(second["canceled"], false);
     // An OAuth account that has never paired (no profile document at all) answers `subscription: null`
     // outright, distinct from a paired account whose profile carries none of the five fields.
     assert_eq!(
@@ -1306,7 +1340,7 @@ async fn a_window_sampled_without_an_end_leads_by_its_utilization_less_the_share
 }
 
 #[tokio::test]
-async fn a_cancelled_end_inside_the_window_answers_a_smaller_lead() {
+async fn a_canceled_end_inside_the_window_answers_a_smaller_lead() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     seed_five_hour(&parts, Some(0.62));
@@ -1318,7 +1352,7 @@ async fn a_cancelled_end_inside_the_window_answers_a_smaller_lead() {
         patch(
             &parts.app,
             "/admin/accounts/business",
-            &format!(r#"{{"cancelled":true,"subscription_ends_at":{end}}}"#),
+            &format!(r#"{{"canceled":true,"subscription_ends_at":{end}}}"#),
             Some(&cookie),
         )
         .await
@@ -1358,7 +1392,7 @@ async fn a_window_sampled_without_a_utilization_answers_a_null_lead() {
 }
 
 #[tokio::test]
-async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_back() {
+async fn a_canceled_account_stores_the_end_it_was_saved_with_and_answers_it_back() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     parts
@@ -1375,11 +1409,11 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_bac
         )
         .unwrap();
     let end = 1_790_000_000_000_i64;
-    let cancelled = json(
+    let canceled = json(
         patch(
             &parts.app,
             "/admin/accounts/business",
-            &format!(r#"{{"cancelled":true,"subscription_ends_at":{end}}}"#),
+            &format!(r#"{{"canceled":true,"subscription_ends_at":{end}}}"#),
             Some(&cookie),
         )
         .await,
@@ -1387,13 +1421,13 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_bac
     .await;
     assert_eq!(
         (
-            cancelled["cancelled"].as_bool(),
-            cancelled["subscription"]["ends_at"].as_i64(),
+            canceled["canceled"].as_bool(),
+            canceled["subscription"]["ends_at"].as_i64(),
         ),
         (Some(true), Some(end)),
         "the route answers exactly the end it was saved with"
     );
-    // An end alone is accepted on the resulting row: the account is already cancelled, so the flag needs no
+    // An end alone is accepted on the resulting row: the account is already canceled, so the flag needs no
     // repeating.
     let new_end = end + 1_000;
     let end_only = json(
@@ -1408,11 +1442,11 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_bac
     .await;
     assert_eq!(
         (
-            end_only["cancelled"].as_bool(),
+            end_only["canceled"].as_bool(),
             end_only["subscription"]["ends_at"].as_i64(),
         ),
         (Some(true), Some(new_end)),
-        "an end alone is accepted while the resulting row is already cancelled"
+        "an end alone is accepted while the resulting row is already canceled"
     );
     // The flag alone, re-affirming a cancellation already on file, falls back to the stored end rather than
     // needing it repeated.
@@ -1420,7 +1454,7 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_bac
         patch(
             &parts.app,
             "/admin/accounts/business",
-            r#"{"cancelled":true}"#,
+            r#"{"canceled":true}"#,
             Some(&cookie),
         )
         .await,
@@ -1428,13 +1462,13 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_bac
     .await;
     assert_eq!(
         (
-            flag_only["cancelled"].as_bool(),
+            flag_only["canceled"].as_bool(),
             flag_only["subscription"]["ends_at"].as_i64(),
         ),
         (Some(true), Some(new_end)),
         "the flag alone keeps the stored end standing"
     );
-    // A cancelled OAuth account with no profile at all still answers the flag and the stored end: the flag
+    // A canceled OAuth account with no profile at all still answers the flag and the stored end: the flag
     // must never read false for lack of a profile.
     assert_eq!(
         post(
@@ -1447,11 +1481,11 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_bac
         .status(),
         201
     );
-    let unpaired_cancelled = json(
+    let unpaired_canceled = json(
         patch(
             &parts.app,
             "/admin/accounts/unpaired",
-            &format!(r#"{{"cancelled":true,"subscription_ends_at":{end}}}"#),
+            &format!(r#"{{"canceled":true,"subscription_ends_at":{end}}}"#),
             Some(&cookie),
         )
         .await,
@@ -1459,18 +1493,18 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_bac
     .await;
     assert_eq!(
         (
-            unpaired_cancelled["cancelled"].as_bool(),
-            unpaired_cancelled["subscription"]["ends_at"].as_i64(),
+            unpaired_canceled["canceled"].as_bool(),
+            unpaired_canceled["subscription"]["ends_at"].as_i64(),
         ),
         (Some(true), Some(end)),
         "no profile on file, but the flag and the stored end round-trip regardless"
     );
-    // Cancelling off drops the stored end, per `set_cancelled`'s own rule.
+    // Canceling off drops the stored end, per `set_canceled`'s own rule.
     let restored = json(
         patch(
             &parts.app,
             "/admin/accounts/business",
-            r#"{"cancelled":false}"#,
+            r#"{"canceled":false}"#,
             Some(&cookie),
         )
         .await,
@@ -1478,7 +1512,7 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_it_bac
     .await;
     assert_eq!(
         (
-            restored["cancelled"].as_bool(),
+            restored["canceled"].as_bool(),
             restored["subscription"]["ends_at"].as_i64(),
         ),
         (Some(false), None),
@@ -1501,36 +1535,125 @@ async fn an_end_without_the_flag_a_flag_without_an_end_and_a_flag_on_an_api_key_
     assert_eq!(bare_end.status(), 400);
     assert_eq!(
         json(bare_end).await["error"].as_str(),
-        Some("subscription_ends_at needs cancelled")
+        Some("subscription_ends_at needs canceled")
     );
     let bare_flag = patch(
         &parts.app,
         "/admin/accounts/business",
-        r#"{"cancelled":true}"#,
+        r#"{"canceled":true}"#,
         Some(&cookie),
     )
     .await;
     assert_eq!(bare_flag.status(), 400);
     assert_eq!(
         json(bare_flag).await["error"].as_str(),
-        Some("cancelled needs subscription_ends_at")
+        Some("canceled needs subscription_ends_at")
     );
     let on_api_key = patch(
         &parts.app,
         "/admin/accounts/direct",
-        r#"{"cancelled":true,"subscription_ends_at":1790000000000}"#,
+        r#"{"canceled":true,"subscription_ends_at":1790000000000}"#,
         Some(&cookie),
     )
     .await;
     assert_eq!(on_api_key.status(), 400);
     assert_eq!(
         json(on_api_key).await["error"].as_str(),
-        Some("only an oauth account is cancelled")
+        Some("only an oauth account is canceled")
     );
     let unchanged = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
     assert_eq!(
-        unchanged["cancelled"], false,
+        unchanged["canceled"], false,
         "every refusal above changed nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_flag_under_another_spelling_is_a_member_the_edit_ignores_so_its_end_is_refused_and_alone_it_changes_nothing(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let with_end = patch(
+        &parts.app,
+        "/admin/accounts/business",
+        r#"{"cancelled":true,"subscription_ends_at":1790000000000}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(with_end.status(), 400);
+    assert_eq!(
+        json(with_end).await["error"].as_str(),
+        Some("subscription_ends_at needs canceled"),
+        "the end meets a row the edit left unflagged"
+    );
+    let before = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let alone = patch(
+        &parts.app,
+        "/admin/accounts/business",
+        r#"{"cancelled":true}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(alone.status(), 200);
+    let after = json(alone).await;
+    assert_eq!(
+        (
+            after["canceled"].as_bool(),
+            &after["subscription"]["ends_at"],
+            &after["revision"]
+        ),
+        (Some(false), &serde_json::Value::Null, &before["revision"]),
+        "a body naming no member of the edit writes nothing and moves no revision"
+    );
+}
+
+#[tokio::test]
+async fn an_end_edit_logs_its_pairs_under_the_canceled_key() {
+    // The mirror reads the change log every `event_poll`, so a short one lands the edit's row inside the wait.
+    let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
+        event_poll: std::time::Duration::from_millis(20),
+        ..phoebis_ledger::LedgerConfig::default()
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let end = 1_790_000_000_000_i64;
+    let patched = patch(
+        &parts.app,
+        "/admin/accounts/business",
+        &format!(r#"{{"canceled":true,"subscription_ends_at":{end}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(patched.status(), 200);
+    let edit = |page: &serde_json::Value| {
+        page["rows"].as_array().and_then(|rows| {
+            rows.iter()
+                .find(|row| row["detail"]["kind"] == "account_updated")
+                .cloned()
+        })
+    };
+    let page = common::wait_json(
+        &parts.app,
+        &format!(
+            "/admin/routing-log?kinds=registry_changed&from={}&to={}",
+            common::NOW - 60_000,
+            common::NOW + 60_000
+        ),
+        &cookie,
+        |page| edit(page).is_some(),
+    )
+    .await;
+    let edit = edit(&page).unwrap();
+    assert_eq!(
+        (&edit["detail"]["target"], &edit["detail"]["diff"]),
+        (
+            &serde_json::json!("business"),
+            &serde_json::json!({
+                "canceled": { "from": false, "to": true },
+                "subscription_ends_at": { "from": null, "to": end },
+            })
+        ),
+        "the flag and its end, each with its value before and after"
     );
 }
 
@@ -1629,18 +1752,18 @@ async fn a_combined_account_patch_lands_whole_in_one_revision() {
     );
 
     let before = revision("team");
-    let cancelled = patch(
+    let canceled = patch(
         &app,
         "/admin/accounts/team",
-        r#"{"enabled":false,"cancelled":true,"subscription_ends_at":2000000}"#,
+        r#"{"enabled":false,"canceled":true,"subscription_ends_at":2000000}"#,
         Some(&cookie),
     )
     .await;
-    assert_eq!(cancelled.status(), 200);
+    assert_eq!(canceled.status(), 200);
     let row = store.account("team").unwrap().unwrap();
     let term = store.subscription_term("team").unwrap().unwrap();
     assert_eq!(
-        (row.enabled, term.cancelled, term.ends_at, row.revision),
+        (row.enabled, term.canceled, term.ends_at, row.revision),
         (false, true, Some(2_000_000), before + 1),
         "enabled with a cancellation and its end"
     );
@@ -1950,7 +2073,7 @@ async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
     let revision = |id: &str| store.account(id).unwrap().unwrap().edit_token();
     let end = |revision: u64| {
         fenced(
-            r#""cancelled":true,"subscription_ends_at":2000000"#,
+            r#""canceled":true,"subscription_ends_at":2000000"#,
             revision,
         )
     };
@@ -1979,7 +2102,7 @@ async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
             .subscription_term("business")
             .unwrap()
             .unwrap_or_default()
-            .cancelled,
+            .canceled,
         "the end edit read before the rename wrote nothing"
     );
 
@@ -1993,7 +2116,7 @@ async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
     assert_eq!(fresh.status(), 200);
     let term = store.subscription_term("business").unwrap().unwrap();
     assert_eq!(
-        (term.cancelled, term.ends_at, revision("business")),
+        (term.canceled, term.ends_at, revision("business")),
         (true, Some(2_000_000), read + 2)
     );
 }

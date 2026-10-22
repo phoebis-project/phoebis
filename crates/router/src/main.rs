@@ -50,7 +50,8 @@ enum Command {
     Health,
     /// Write the bootstrap file, the storage key and the admin secret, once, refusing anything that exists.
     Init(init::InitArgs),
-    /// Discard the registry's secrets after a lost storage key and seal a new canary, on a stopped registry.
+    /// Discard the registry's secrets after a lost storage key and seal a new canary, or seal a missing canary under a
+    /// key that opens the sealed rows, on a stopped registry.
     RecoverKey(RecoverKeyArgs),
     /// Probe the proxy listener, read the admin API and print one screen of readiness, pools, accounts and live pins:
     /// exit 0 when ready, 1 otherwise.

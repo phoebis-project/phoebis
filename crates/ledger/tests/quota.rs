@@ -19,7 +19,7 @@ use phoebis_oauth::PollOutcome;
 use phoebis_routing::{EvidenceSource, FIVE_HOUR};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, StorageKey,
-    Store,
+    Store, SubscriptionRow,
 };
 use tokio::time::Instant;
 use tower::ServiceExt;
@@ -372,11 +372,13 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
     let extra = resumed(h.db.extra_usage_samples("a", bucket, bucket + 300))
         .await
         .unwrap();
-    assert_eq!(extra.len(), 1, "one extra-usage row per bucket");
     assert_eq!(
-        (extra[0].source.as_str(), extra[0].used_credits),
-        ("head", None),
-        "the head row keeps its bucket, and credits wait for a bucket the poll owns"
+        extra
+            .iter()
+            .map(|e| (e.source.as_str(), e.used_credits))
+            .collect::<Vec<_>>(),
+        [("head", None), ("poll", Some(1_234))],
+        "the head row keeps its bucket, and the poll lands its credits on a row of its own beside it"
     );
 
     // The next slot, an interval on, lands in the next bucket and writes the credits there.
@@ -398,10 +400,64 @@ async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_ke
             extra[0].used_credits,
             extra[0].utilization
         ),
-        ("poll", Some(5_000), Some(1_234), Some(0.2468)),
+        ("poll", Some(5_000), Some(1_234), Some(0.2468 / 100.0)),
         "extra-usage credits come from the poll only"
     );
     up.shutdown().await;
+}
+
+/// A head row and a poll row of one bucket both stand whichever lands first: the samples answer both, the head's share
+/// and the poll's amounts each on its own row, and the account's latest reading is the bucket's head row, one row per
+/// account.
+#[tokio::test]
+async fn a_head_and_a_poll_of_one_bucket_both_stand_in_either_order_and_the_latest_reading_is_the_head(
+) {
+    let now = NOW + 600_000;
+    let bucket = phoebis_ledger::bucket_of(now);
+    let head = phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: "a".into(),
+        bucket,
+        is_enabled: true,
+        in_use: Some(false),
+        utilization: Some(0.4),
+        overage_reset: Some(now + 3_600_000),
+        source: "head".into(),
+        ..Default::default()
+    };
+    let poll = phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: "a".into(),
+        bucket,
+        is_enabled: true,
+        monthly_limit: Some(5_000),
+        used_credits: Some(1_234),
+        utilization: Some(0.25),
+        currency: Some("USD".into()),
+        source: "poll".into(),
+        ..Default::default()
+    };
+    for (first, second, order) in [
+        (&head, &poll, "the head first"),
+        (&poll, &head, "the poll first"),
+    ] {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        db.insert_samples(&[], Some(first)).unwrap();
+        db.insert_samples(&[], Some(second)).unwrap();
+        assert_eq!(
+            db.extra_usage_samples("a", bucket, bucket + 300)
+                .await
+                .unwrap(),
+            [head.clone(), poll.clone()],
+            "{order}: neither hides the other"
+        );
+        let latest = db
+            .read_blocking(move |c| phoebis_ledger::latest_extra_usage(c, now))
+            .unwrap();
+        assert_eq!(
+            latest,
+            std::slice::from_ref(&head),
+            "{order}: the bucket's head row is the account's one latest reading"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1057,10 +1113,15 @@ async fn a_poll_whose_refresh_lands_a_reauth_mark_reports_it_to_routing_at_once(
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     due_for_refresh(&h.store, "a");
     let row = h.store.account("a").unwrap().unwrap();
-    let answer =
-        QuotaPoll::poll_account(h.usage.as_ref().unwrap(), &h.ledger, Some(&h.router), &row)
-            .await
-            .unwrap();
+    let answer = QuotaPoll::poll_account(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        Some(&h.router),
+        &row,
+    )
+    .await
+    .unwrap();
     assert!(answer.error.is_some(), "the poll read nothing");
     assert_eq!(
         h.store.account("a").unwrap().unwrap().state,
@@ -1077,13 +1138,73 @@ async fn a_profile_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routi
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     due_for_refresh(&h.store, "a");
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(&h.store, h.usage.as_ref().unwrap(), &h.router, &row).await;
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
     assert_eq!(
         h.store.account("a").unwrap().unwrap().state,
         AccountState::ReauthRequired,
         "the refresh's invalid_grant landed the mark"
     );
     routing_reads_reauth_required(&h, "a").await;
+    up.shutdown().await;
+}
+
+/// A profile answer whose seat tier names a usage-based Enterprise seat under the plan tier the case stores first.
+fn usage_based_seat_profile_rule() -> Rule {
+    Rule {
+        path_prefix: "/api/oauth/profile".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid"},"organization":{"uuid":"o","rate_limit_tier":"default_claude_max_5x","seat_tier":"enterprise_usage_based"}}"#
+                .to_vec(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn a_profile_refresh_whose_seat_tier_alone_moves_the_class_reloads_the_router() {
+    let up = FakeUpstream::start(vec![usage_rule(), usage_based_seat_profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The refresh repeats the stored tier, so only the seat tier moves.
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_max_5x"}}"#,
+            &SubscriptionRow {
+                tier: Some("default_claude_max_5x".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    assert!(
+        !h.router.snapshot().usage_based("a"),
+        "a plan seat before the refresh"
+    );
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    assert!(
+        h.store.subscription_term("a").unwrap().unwrap().usage_based,
+        "the stored document classes the seat"
+    );
+    assert!(
+        h.router.snapshot().usage_based("a"),
+        "the routing snapshot reads the class the refresh stored, with no other reload"
+    );
     up.shutdown().await;
 }
 
@@ -1123,7 +1244,8 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
         Sampled {
             reported: 2,
             failed: 0,
-            pending: 0
+            pending: 0,
+            paused: 0
         }
     );
     let samples = h.router.samples().await.unwrap();
@@ -1203,7 +1325,8 @@ async fn a_usage_endpoint_that_hangs_ends_the_startup_step_at_its_bound() {
         Sampled {
             reported: 0,
             failed: 0,
-            pending: 1
+            pending: 1,
+            paused: 0
         }
     );
     up.release();
@@ -1263,7 +1386,8 @@ async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
         Sampled {
             reported: 1,
             failed: 0,
-            pending: 0
+            pending: 0,
+            paused: 0
         }
     );
     let samples = h.router.samples().await.unwrap();
@@ -1295,7 +1419,8 @@ async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_furt
         Sampled {
             reported: 0,
             failed: 0,
-            pending: 1
+            pending: 1,
+            paused: 0
         }
     );
     h.ledger.clone().shutdown().await.unwrap();
@@ -1539,6 +1664,652 @@ async fn a_run_after_an_invalidated_one_writes_its_own_start_and_end() {
     up.shutdown().await;
 }
 
+/// An answer of `status` with an empty object for its body.
+fn answering(status: u16) -> Respond {
+    Respond::Json {
+        status,
+        headers: vec![],
+        body: b"{}".to_vec(),
+    }
+}
+
+/// The rows of `kind` the ledger holds, in order: the account, when, and the detail.
+async fn rows_of(h: &Harness, kind: &str) -> Vec<(Option<String>, i64, serde_json::Value)> {
+    h.db.events(0, i64::MAX, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == kind)
+        .map(|e| {
+            let detail = serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+            (e.account_id, e.at, detail)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_usage_401_lands_reauth_required_under_auth_failed_and_the_poll_stops_asking_the_account()
+{
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", answering(401));
+    let h = harness_with_poll(
+        &up,
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(usage_asked(&up, A), 1, "the first slot meets the 401");
+    let usage = h.usage.as_ref().unwrap();
+    assert_eq!(
+        (
+            usage.poll_status("a").and_then(|s| s.last_error),
+            usage.latest("a").and_then(|s| s.error)
+        ),
+        (
+            Some("usage request rejected with status 401".to_string()),
+            Some("usage request rejected with status 401".to_string())
+        ),
+        "the standing and the snapshot keep the text every refused status writes"
+    );
+    let row = h.store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.state_cause),
+        (AccountState::ReauthRequired, StateCause::AuthFailed),
+        "the usage endpoint refused the credential"
+    );
+    resumed(routing_reads_reauth_required(&h, "a")).await;
+    let moved = resumed(wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "account_state_changed").await.pop()
+    }))
+    .await;
+    assert_eq!(
+        (
+            moved.0.as_deref(),
+            moved.2["from"].as_str(),
+            moved.2["to"].as_str(),
+            moved.2["cause"].as_str()
+        ),
+        (
+            Some("a"),
+            Some("ready"),
+            Some("reauth_required"),
+            Some("auth_failed")
+        )
+    );
+
+    let sibling = usage_asked(&up, OAUTH_C);
+    step_to(&h, &up, &paused, secs(302 + 3 * 300)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        1,
+        "the marked account is out of the schedule"
+    );
+    assert!(
+        usage_asked(&up, OAUTH_C) >= sibling + 3,
+        "its sibling keeps the interval"
+    );
+    assert!(
+        resumed(rows_of(&h, "poll_failed")).await.is_empty(),
+        "the re-pair writes no passing fault"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_403_writes_poll_failed_naming_the_usage_endpoint_and_keeps_the_schedule() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", answering(403));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let (lines, _sink) = capture_tracing();
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(usage_asked(&up, A), 2, "a fault holds no slot back");
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::Ready
+    );
+    let rows = resumed(wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows_of(&h, "poll_failed").await;
+        (rows.len() == 2).then_some(rows)
+    }))
+    .await;
+    for (account, _, detail) in &rows {
+        assert_eq!(account.as_deref(), Some("a"));
+        assert_eq!(
+            detail,
+            &serde_json::json!({
+                "endpoint": "usage",
+                "status": 403,
+                "error": "usage request rejected with status 403",
+                "transport": false,
+            }),
+            "one row per poll that faulted"
+        );
+    }
+    let warnings = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("endpoint failed") && l.contains("account=a") && l.contains("403"))
+        .count();
+    assert_eq!(warnings, 2, "one warning per poll that faulted");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_profile_500_writes_poll_failed_naming_the_profile_endpoint_and_logs_one_warning() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", answering(500));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let (lines, _sink) = capture_tracing();
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows_of(&h, "poll_failed").await;
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|(account, _, detail)| (account.as_deref(), detail.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            Some("a"),
+            serde_json::json!({
+                "endpoint": "profile",
+                "status": 500,
+                "error": "profile request rejected with status 500",
+                "transport": false,
+            })
+        )]
+    );
+    let warnings = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("endpoint failed") && l.contains("account=a"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("profile") && warnings[0].contains("500"),
+        "the line names the endpoint and the status: {}",
+        warnings[0]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_transport_failure_writes_poll_failed_with_transport_set_and_no_status() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", Respond::CloseAfterRequest);
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    let answer = QuotaPoll::poll_account(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        Some(&h.router),
+        &row,
+    )
+    .await
+    .unwrap();
+    let text = answer.error.expect("the poll read nothing");
+    assert!(text.starts_with("transport: "), "{text}");
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows_of(&h, "poll_failed").await;
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|(account, _, detail)| (account.as_deref(), detail.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            Some("a"),
+            serde_json::json!({
+                "endpoint": "usage",
+                "status": null,
+                "error": text,
+                "transport": true,
+            })
+        )],
+        "the snapshot's text, no status, and the transport flag"
+    );
+    up.shutdown().await;
+}
+
+/// The profile of an organization whose plan ended, as the live read answered it.
+const NO_PLAN_PROFILE: &[u8] = br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid","has_claude_max":false,"has_claude_pro":false},"organization":{"uuid":"o","organization_type":"claude_free","rate_limit_tier":"default_claude_ai","subscription_status":"canceled","billing_type":"none"}}"#;
+
+/// The usage endpoint's 403 for an organization that holds no plan.
+const PLAN_REFUSED_BODY: &[u8] = br#"{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization.","details":{"error_code":"oauth_not_allowed_for_organization","error_visibility":"user_facing"}}}"#;
+
+fn no_plan_profile() -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: NO_PLAN_PROFILE.to_vec(),
+    }
+}
+
+fn plan_refused() -> Respond {
+    Respond::Json {
+        status: 403,
+        headers: vec![("x-should-retry".into(), "false".into())],
+        body: PLAN_REFUSED_BODY.to_vec(),
+    }
+}
+
+/// Stores the Max 20x tier as the account's plan, the tier a profile read before the end left.
+fn store_max_20x(store: &Store, id: &str) {
+    store
+        .set_profile(
+            id,
+            r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#,
+            &SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_20x".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+}
+
+fn profile_asked(up: &FakeUpstream, secret: &str) -> usize {
+    asked(up, "/api/oauth/profile", secret)
+}
+
+fn plan_ended_at(h: &Harness, id: &str) -> Option<i64> {
+    h.store
+        .subscription_term(id)
+        .unwrap()
+        .unwrap()
+        .plan_ended_at
+}
+
+#[tokio::test]
+async fn a_profile_reporting_no_plan_flags_the_account_and_its_slots_read_the_profile_hourly_and_no_usage(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_max_20x(&h.store, "a");
+    h.router.reload().await.unwrap();
+    let (lines, _sink) = capture_tracing();
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    assert_eq!(plan_ended_at(&h, "a"), Some(NOW), "the read's instant");
+    let term = h.store.subscription_term("a").unwrap().unwrap();
+    assert_eq!(
+        (
+            term.tier.as_deref(),
+            h.store.account("a").unwrap().unwrap().state
+        ),
+        (Some("default_claude_max_20x"), AccountState::Ready),
+        "the last plan's tier keeps pricing the windows and the state stands"
+    );
+    assert_eq!(
+        h.router.snapshot().term("a").and_then(|t| t.plan_ended_at),
+        Some(NOW),
+        "the router reloads the flag"
+    );
+    let ended = wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "plan_ended").await.pop()
+    })
+    .await;
+    assert_eq!(
+        (ended.0.as_deref(), ended.1, ended.2),
+        (
+            Some("a"),
+            NOW,
+            serde_json::json!({
+                "source": "profile",
+                "organization_type": "claude_free",
+                "rate_limit_tier": "default_claude_ai",
+                "subscription_status": "canceled",
+            })
+        )
+    );
+    let warnings = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("account=a") && l.contains("claude_free"))
+        .count();
+    assert_eq!(
+        warnings, 1,
+        "one line names the account and the profile's words"
+    );
+    assert_eq!(
+        h.usage
+            .as_ref()
+            .unwrap()
+            .poll_status("a")
+            .and_then(|s| s.last_error),
+        Some("plan ended".to_string())
+    );
+
+    let paused = start_polling(&h, &up).await;
+    step_to(&h, &up, &paused, secs(3_599)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (0, 1),
+        "no usage request while the flag stands, and no profile read before the hour"
+    );
+    step_to(&h, &up, &paused, secs(3_602)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (0, 2),
+        "the hourly slot reads the profile alone"
+    );
+    assert_eq!(
+        resumed(rows_of(&h, "plan_ended")).await.len(),
+        1,
+        "a flag that stands writes no second row"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_403_naming_the_refusal_reads_the_profile_in_the_same_poll_and_flags_a_no_plan_account(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::poll_account(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        Some(&h.router),
+        &row,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (1, 1),
+        "the 403 made the profile due in the same poll"
+    );
+    assert_eq!(plan_ended_at(&h, "a"), Some(NOW));
+    let ended = wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "plan_ended").await.pop()
+    })
+    .await;
+    assert_eq!(ended.2["source"], "usage_403");
+    assert!(
+        rows_of(&h, "poll_failed").await.is_empty(),
+        "the ended plan explains the 403, so no passing fault is written"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_403_naming_the_refusal_on_an_account_whose_profile_reports_a_plan_writes_poll_failed(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::poll_account(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        Some(&h.router),
+        &row,
+    )
+    .await
+    .unwrap();
+    assert_eq!(profile_asked(&up, A), 1, "the profile was read");
+    assert_eq!(plan_ended_at(&h, "a"), None, "a plan stands");
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows_of(&h, "poll_failed").await;
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|(_, _, detail)| (detail["endpoint"].clone(), detail["status"].clone()))
+            .collect::<Vec<_>>(),
+        [(serde_json::json!("usage"), serde_json::json!(403))],
+        "the 403 stays a passing fault"
+    );
+    assert!(rows_of(&h, "plan_ended").await.is_empty());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_profile_with_a_plan_clears_the_flag_stores_its_tier_and_the_next_slot_reads_usage() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_max_20x(&h.store, "a");
+    assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
+    h.router.reload().await.unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    assert_eq!(plan_ended_at(&h, "a"), None, "the plan is back");
+    assert_eq!(
+        h.store
+            .subscription_term("a")
+            .unwrap()
+            .unwrap()
+            .tier
+            .as_deref(),
+        Some("default_claude_max_5x"),
+        "the tier the profile names is stored"
+    );
+    assert_eq!(
+        h.router.snapshot().term("a").map(|t| t.plan_ended_at),
+        Some(None),
+        "the router reloads the cleared flag"
+    );
+    let restored = wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "plan_restored").await.pop()
+    })
+    .await;
+    assert_eq!(
+        (restored.0.as_deref(), restored.2["source"].as_str()),
+        (Some("a"), Some("profile"))
+    );
+    assert_eq!(restored.2["organization_type"], "claude_max");
+
+    let paused = start_polling(&h, &up).await;
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        1,
+        "the usage poll resumes at the account's next slot"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_run_of_usage_429s_flags_nothing_and_writes_no_poll_failed_row() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", rate_limited_for("3600"));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let usage = h.usage.as_ref().unwrap();
+    let row = h.store.account("a").unwrap().unwrap();
+    for step in 0..3 {
+        h.clock.store(NOW + step * 900_000, Ordering::SeqCst);
+        QuotaPoll::poll_account(&h.store, usage, &h.ledger, Some(&h.router), &row)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        usage_asked(&up, A),
+        3,
+        "each poll past the capped hold asked"
+    );
+    assert_eq!(
+        (
+            plan_ended_at(&h, "a"),
+            h.store.account("a").unwrap().unwrap().state
+        ),
+        (None, AccountState::Ready),
+        "a 429 marks nothing"
+    );
+    for kind in ["plan_ended", "poll_failed"] {
+        assert!(rows_of(&h, kind).await.is_empty(), "{kind}");
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_backoff_run_open_when_the_plan_ended_closes_at_the_first_clean_poll_after_the_restore() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", usage_rule().respond);
+    up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    // The first slot at 300 s opens the run, and the case sets the flag in place of a profile read that finds the plan
+    // ended.
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(usage_asked(&up, A), 1);
+    assert!(h.store.set_plan_ended("a", NOW + 302_000).unwrap());
+    step_to(&h, &up, &paused, secs(600)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        1,
+        "the flag holds the slot after the hold"
+    );
+    let row = h.store.account("a").unwrap().unwrap();
+    resumed(QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    ))
+    .await;
+    assert_eq!(plan_ended_at(&h, "a"), None, "the profile reports the plan");
+    // Read now and asserted with the end row, so one run shows both halves of the rule.
+    let after_restore = h
+        .usage
+        .as_ref()
+        .unwrap()
+        .poll_status("a")
+        .map(|s| (s.rate_limited_in_a_row, s.backoff_since.is_some()));
+
+    step_to(&h, &up, &paused, secs(725)).await;
+    assert_eq!(usage_asked(&up, A), 2, "the next slot reads the usage");
+    let rows = resumed(wait_for_async(Duration::from_secs(5), || async {
+        let rows = backoff_rows(&h).await;
+        (rows.len() == 2).then_some(rows)
+    }))
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.0.as_str(), row.1.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("poll_backoff_started", Some("a")),
+            ("poll_backoff_ended", Some("a"))
+        ],
+        "the run the 429 opened closes at the first clean poll"
+    );
+    assert_eq!(
+        (after_restore, rows[1].3["attempts"].as_u64()),
+        (Some((1, true)), Some(1)),
+        "the restore leaves the run's count and start to the clean poll, whose end row counts the run's 429s"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_startup_step_reads_a_flagged_accounts_profile_alone_and_counts_it_paused() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", no_plan_profile());
+    let h = harness_with_poll(
+        &up,
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    assert!(h.store.set_plan_ended("a", NOW - 60_000).unwrap());
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage.clone().unwrap(),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(
+        sampled,
+        Sampled {
+            reported: 1,
+            failed: 0,
+            pending: 0,
+            paused: 1
+        },
+        "the flagged account counts as paused beside the one reported"
+    );
+    wait_for(Duration::from_secs(5), || {
+        (profile_asked(&up, A) == 1).then_some(())
+    })
+    .await;
+    assert_eq!(
+        usage_asked(&up, A),
+        0,
+        "no usage request for the flagged account"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_poll_whose_403_read_the_profile_reads_it_no_second_time() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", plan_refused());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The startup step reads every account's profile, which is due as the 403 makes it due.
+    let sampled = QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage.clone().unwrap(),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(sampled.failed, 1);
+    wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "poll_failed").await.pop()
+    })
+    .await;
+    stays_for(Duration::from_millis(500), || profile_asked(&up, A) == 1).await;
+    up.shutdown().await;
+}
+
 #[test]
 fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -1653,5 +2424,338 @@ fn the_lead_over_pace_reads_the_steeper_pace_to_an_end_inside_the_window() {
         lead_over_pace("seven_day", 0.5, reset, Some(at + week), at),
         lead_over_pace("seven_day", 0.5, reset, None, at),
         "an end past the reset reads the reset's pace"
+    );
+}
+
+/// A poll of `body` for the seat at `fetched_at`, as the usage service hands it to the sampler.
+fn seat_poll(body: &[u8], fetched_at: i64) -> phoebis_oauth::UsageSnapshot {
+    let (windows, fable_window, extra_usage, spend, raw_keys) =
+        phoebis_oauth::parse_usage(body).unwrap();
+    phoebis_oauth::UsageSnapshot {
+        account_id: "seat".into(),
+        identity_generation: 1,
+        fetched_at,
+        windows,
+        fable_window,
+        extra_usage,
+        raw_keys,
+        error: None,
+        spend,
+    }
+}
+
+#[tokio::test]
+async fn a_polls_extra_usage_row_stores_the_share_as_a_fraction_and_the_spend_objects_figures_alone(
+) {
+    // The amounts beside the object are a minor unit apart from it, so each column says which object it came from.
+    let with_object = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250001,"used_credits":102501.0,"utilization":41.0,"currency":"USD","decimal_places":2},"spend":{"used":{"amount_minor":102500,"currency":"USD","exponent":2},"limit":{"amount_minor":250000,"currency":"USD","exponent":2},"percent":41}}"#;
+    let amounts_alone = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":102500.0,"utilization":41.0,"currency":"USD","decimal_places":2}}"#;
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    for (body, at) in [(&with_object[..], NOW), (&amounts_alone[..], NOW + 300_000)] {
+        let (quota, extra) = phoebis_ledger::samples_from_poll(&seat_poll(body, at));
+        db.insert_samples(&quota, extra.as_ref()).unwrap();
+    }
+    let rows = db.extra_usage_samples("seat", 0, i64::MAX).await.unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.utilization,
+                r.monthly_limit,
+                r.used_credits,
+                r.spend_limit_minor,
+                r.spend_used_minor,
+                r.spend_percent,
+                r.spend_currency.as_deref(),
+                r.spend_exponent,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                Some(0.41),
+                Some(250_001),
+                Some(102_501),
+                Some(250_000),
+                Some(102_500),
+                Some(41.0),
+                Some("USD"),
+                Some(2)
+            ),
+            (
+                Some(0.41),
+                Some(250_000),
+                Some(102_500),
+                None,
+                None,
+                None,
+                None,
+                None
+            ),
+        ],
+        "the share reads as the head rows read it, and the spend columns carry the body's object or nothing"
+    );
+}
+
+/// The bus events of one request on `account` whose answer's head carries `headers`, the selection classing the
+/// account as `usage_based`.
+fn headed(
+    id: &str,
+    account: &str,
+    usage_based: bool,
+    headers: &[(&str, &str)],
+    at: i64,
+) -> Vec<phoebis_bus::Event> {
+    use phoebis_bus::{AccountSelected, AttemptOutcome, Event, Kind, Origin, RequestObserved};
+    vec![
+        Event::RequestObserved(RequestObserved {
+            request_id: id.into(),
+            origin: Origin::Client,
+            kind: Kind::Inference,
+            key_id: None,
+            key_generation: 0,
+            pool_id: None,
+            session_id: None,
+            agent_id: None,
+            parent_agent_id: None,
+            owner_id: None,
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            wire_model: "claude-sonnet-5".into(),
+            stream: false,
+            headers: vec![],
+            body: bytes::Bytes::new(),
+            body_capture_hours: 0,
+            shape: phoebis_bus::RequestShape::default(),
+            static_hash: None,
+            boundaries: Vec::new(),
+            client: phoebis_bus::ClientFacts::default(),
+            auto_mode: None,
+            fork: phoebis_bus::Fork::default(),
+            presented_retired: false,
+            rotation_at: None,
+            guardrail_id: None,
+            guardrails: Vec::new(),
+            received_at: at,
+        }),
+        Event::AccountSelected(AccountSelected {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: "oauth".into(),
+            usage_based,
+            pin_epoch: None,
+            started_at: at,
+            cache_ttl_ms: None,
+            selection: None,
+        }),
+        Event::ResponseHead(phoebis_bus::ResponseHead {
+            request_id: id.into(),
+            attempt: 1,
+            status: 200,
+            headers: headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            first_event: None,
+            outcome: AttemptOutcome::Succeeded,
+            cooldown: None,
+            written_at: at,
+            observed_at: at,
+        }),
+    ]
+}
+
+#[tokio::test]
+async fn a_usage_based_attempts_head_row_carries_the_share_and_the_reset_with_no_in_use_flag_and_a_plan_attempts_keeps_it(
+) {
+    let reset = "2592000";
+    let full = [
+        ("anthropic-ratelimit-unified-status", "allowed"),
+        ("anthropic-ratelimit-unified-overage-in-use", "true"),
+        ("anthropic-ratelimit-unified-overage-utilization", "0.4"),
+        ("anthropic-ratelimit-unified-overage-reset", reset),
+    ];
+    let reset_only = [
+        ("anthropic-ratelimit-unified-status", "allowed"),
+        ("anthropic-ratelimit-unified-overage-reset", reset),
+    ];
+    let mut assembler = phoebis_ledger::Assembler::new(Arc::new(|| NOW));
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    for events in [
+        headed("r-seat", "seat", true, &full, NOW),
+        headed("r-reset", "seat-reset", true, &reset_only, NOW),
+        headed("r-plan", "plan", false, &full, NOW),
+    ] {
+        for event in events {
+            for record in assembler.observe(event) {
+                if let phoebis_ledger::Record::Samples { quota, extra } = record {
+                    db.insert_samples(&quota, extra.as_ref()).unwrap();
+                }
+            }
+        }
+    }
+    let row = |account: &'static str| {
+        let db = db.clone();
+        async move {
+            db.extra_usage_samples(account, 0, i64::MAX)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.in_use, r.utilization, r.overage_reset, r.source))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        row("seat").await,
+        [(None, Some(0.4), Some(2_592_000_000), "head".to_string())],
+        "the seat's head is no overage, so its row carries the share and the reset with no in-use flag"
+    );
+    assert_eq!(
+        row("seat-reset").await,
+        [(None, None, Some(2_592_000_000), "head".to_string())],
+        "a seat's head that names the reset alone still writes the row"
+    );
+    assert_eq!(
+        row("plan").await,
+        [(
+            Some(true),
+            Some(0.4),
+            Some(2_592_000_000),
+            "head".to_string()
+        )],
+        "a plan attempt's head row keeps the head's flag"
+    );
+}
+
+/// An extra-usage row of account `a` in `bucket` from `source`, with the amounts on a poll row alone.
+fn extra_row(
+    bucket: i64,
+    source: &str,
+    utilization: f64,
+) -> phoebis_ledger::ExtraUsageSampleRecord {
+    let polled = source == "poll";
+    phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: "a".into(),
+        bucket,
+        is_enabled: true,
+        monthly_limit: polled.then_some(5_000),
+        used_credits: polled.then_some(1_234),
+        utilization: Some(utilization),
+        currency: polled.then(|| "USD".into()),
+        overage_reset: (!polled).then_some(bucket * 1_000 + 3_600_000),
+        source: source.into(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn the_polled_read_answers_the_poll_row_under_a_newer_head_row_while_the_latest_read_answers_the_head(
+) {
+    let now = NOW + 900_000;
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
+    let head = extra_row(phoebis_ledger::bucket_of(NOW + 600_000), "head", 0.4);
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    db.insert_samples(&[], Some(&poll)).unwrap();
+    db.insert_samples(&[], Some(&head)).unwrap();
+    let (latest, polled) = db
+        .read_blocking(move |c| {
+            Ok((
+                phoebis_ledger::latest_extra_usage(c, now)?,
+                phoebis_ledger::latest_extra_usage_polled(c, now)?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(latest, [head], "the newest row of any source is the head's");
+    assert_eq!(
+        polled,
+        [poll],
+        "the newest polled row still carries the amounts under the head's"
+    );
+}
+
+#[tokio::test]
+async fn the_polled_read_answers_the_poll_row_of_a_bucket_a_head_row_shares_in_either_order() {
+    let now = NOW + 600_000;
+    let bucket = phoebis_ledger::bucket_of(now);
+    let head = extra_row(bucket, "head", 0.4);
+    let poll = extra_row(bucket, "poll", 0.25);
+    for (first, second, order) in [
+        (&head, &poll, "the head first"),
+        (&poll, &head, "the poll first"),
+    ] {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        db.insert_samples(&[], Some(first)).unwrap();
+        db.insert_samples(&[], Some(second)).unwrap();
+        let polled = db
+            .read_blocking(move |c| phoebis_ledger::latest_extra_usage_polled(c, now))
+            .unwrap();
+        assert_eq!(
+            polled,
+            std::slice::from_ref(&poll),
+            "{order}: the bucket's poll row answers the polled read"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_share_read_answers_the_newest_row_that_carries_a_share_under_a_newer_head_naming_the_reset_alone(
+) {
+    let now = NOW + 900_000;
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
+    let head = extra_row(phoebis_ledger::bucket_of(NOW + 300_000), "head", 0.4);
+    let reset_only = phoebis_ledger::ExtraUsageSampleRecord {
+        utilization: None,
+        ..extra_row(phoebis_ledger::bucket_of(NOW + 600_000), "head", 0.0)
+    };
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    for row in [&poll, &head, &reset_only] {
+        db.insert_samples(&[], Some(row)).unwrap();
+    }
+    let (latest, share) = db
+        .read_blocking(move |c| {
+            Ok((
+                phoebis_ledger::latest_extra_usage(c, now)?,
+                phoebis_ledger::latest_extra_usage_share(c, now)?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        latest,
+        [reset_only],
+        "the reset-only head is the newest row"
+    );
+    assert_eq!(
+        share,
+        [head],
+        "the newest row that carries a share is the head before it, not the older poll"
+    );
+}
+
+#[tokio::test]
+async fn a_head_naming_the_reset_alone_keeps_the_share_an_earlier_head_wrote_in_its_bucket() {
+    let now = NOW + 900_000;
+    let bucket = phoebis_ledger::bucket_of(NOW + 300_000);
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
+    let head = extra_row(bucket, "head", 1.0);
+    let later_reset = head.overage_reset.map(|reset| reset + 3_600_000);
+    let reset_only = phoebis_ledger::ExtraUsageSampleRecord {
+        utilization: None,
+        overage_reset: later_reset,
+        ..extra_row(bucket, "head", 0.0)
+    };
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    for row in [&poll, &head, &reset_only] {
+        db.insert_samples(&[], Some(row)).unwrap();
+    }
+    let share = db
+        .read_blocking(move |c| phoebis_ledger::latest_extra_usage_share(c, now))
+        .unwrap();
+    assert_eq!(
+        share,
+        [phoebis_ledger::ExtraUsageSampleRecord {
+            utilization: Some(1.0),
+            overage_reset: later_reset,
+            ..head
+        }],
+        "the bucket's head row keeps its last share under its last reset"
     );
 }

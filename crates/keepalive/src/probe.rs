@@ -77,6 +77,9 @@ pub(crate) struct ProbeResult {
     /// the account leaves the registry while the probe is in flight. `None` for an answer the relay built before any
     /// selection.
     pub account_kind: Option<AccountKind>,
+    /// The served account's class off `RelayOutcome::usage_based`, stamped beside the kind, so the settlement reads the
+    /// funding the request row files under. False for an answer the relay built before any selection.
+    pub usage_based: bool,
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
     /// The relay's `RelayOutcome::obstacle`: `budget` for a probe the selector refused on the pinned member's
@@ -87,13 +90,13 @@ pub(crate) struct ProbeResult {
 
 pub(crate) enum Exchange {
     Answered(ProbeResult),
-    Cancelled,
+    Canceled,
     TimedOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProbeOutcome {
-    Cancelled,
+    Canceled,
     Exhausted,
     Failed,
     Held,
@@ -107,7 +110,7 @@ pub enum ProbeOutcome {
 impl ProbeOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
-            ProbeOutcome::Cancelled => "cancelled",
+            ProbeOutcome::Canceled => "canceled",
             ProbeOutcome::Exhausted => "exhausted",
             ProbeOutcome::Failed => "failed",
             ProbeOutcome::Held => "held",
@@ -128,7 +131,7 @@ pub(crate) fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'
         ProbeOutcome::Migrated | ProbeOutcome::Ok if cache_read => "landed",
         ProbeOutcome::Migrated | ProbeOutcome::Ok => "cold",
         ProbeOutcome::Held => "held",
-        ProbeOutcome::Cancelled
+        ProbeOutcome::Canceled
         | ProbeOutcome::Exhausted
         | ProbeOutcome::Failed
         | ProbeOutcome::RateLimited
@@ -166,6 +169,8 @@ pub struct ProbeRecord {
     /// credit files under the kind the request row carries even when the account leaves while the probe is in flight.
     /// `None` for an answer the relay built before any selection, which prices nothing.
     pub kind: Option<AccountKind>,
+    /// The served account's class as the same leg stamped it beside the kind, false where no leg answered.
+    pub usage_based: bool,
     pub outcome: ProbeOutcome,
     pub pool_id: String,
     pub usage: ProbeUsage,
@@ -283,6 +288,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             cache_ttl_ms: None,
             in_overage: false,
             account_kind: None,
+            usage_based: false,
             retry_after_secs: None,
             obstacle: None,
         }),
@@ -314,6 +320,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                         .as_ref()
                         .is_some_and(|o| o.overage_in_use == Some(true)),
                     account_kind: outcome.as_ref().and_then(|o| o.account_kind),
+                    usage_based: outcome.as_ref().is_some_and(|o| o.usage_based),
                     retry_after_secs,
                     obstacle: outcome.as_ref().and_then(|o| o.obstacle),
                 }
@@ -322,7 +329,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             // it wherever it is, and a body that keeps coming never outlives either.
             tokio::select! {
                 result = answered => Exchange::Answered(result),
-                _ = engine.cancel.cancelled() => Exchange::Cancelled,
+                _ = engine.cancel.cancelled() => Exchange::Canceled,
                 _ = tokio::time::sleep(PROBE_DEADLINE) => Exchange::TimedOut,
             }
         }
@@ -333,7 +340,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     // start. The completion stays the clock the schedule reads.
     let at = match &exchange {
         Exchange::Answered(result) => result.received_at.unwrap_or(sent),
-        Exchange::Cancelled | Exchange::TimedOut => sent,
+        Exchange::Canceled | Exchange::TimedOut => sent,
     };
     let revisions = engine.parts.pricing.revisions();
     let table = revisions.in_force(at);
@@ -345,7 +352,9 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         // a registry write mid-exchange never changes which account this probe is charged against, and an answer the
         // relay never built names no account: its probe settles in dollars and the credit path never matches it.
         let in_overage = record.in_overage;
-        let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
+        let funding = record
+            .kind
+            .map(|kind| Funding::of(kind, record.usage_based, in_overage));
         // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's
         // speed decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its
         // request row files it.
@@ -429,6 +438,7 @@ impl Inner {
             key: job.key.clone(),
             key_generation: job.key_generation,
             kind: None,
+            usage_based: false,
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
@@ -437,8 +447,8 @@ impl Inner {
             tier: None,
         };
         let result = match exchange {
-            Exchange::Cancelled => {
-                record.outcome = ProbeOutcome::Cancelled;
+            Exchange::Canceled => {
+                record.outcome = ProbeOutcome::Canceled;
                 return record;
             }
             Exchange::TimedOut => {
@@ -449,6 +459,7 @@ impl Inner {
         };
         record.in_overage = result.in_overage;
         record.kind = result.account_kind;
+        record.usage_based = result.usage_based;
         if let Some(account) = &result.account {
             record.account = account.clone();
         }
@@ -570,6 +581,7 @@ impl Inner {
                             band: record.band,
                             entry_expires: job.started + ttl,
                             kind: record.kind,
+                            usage_based: record.usage_based,
                             in_overage: record.in_overage,
                             // The landing's coverage checks never ran on this path, so the probe earns no credit,
                             // and a turn on its lineage that reads the cache leaves it unwasted.
@@ -595,6 +607,7 @@ impl Inner {
                 band: record.band,
                 speed: answered_speed(record.usage),
                 kind: record.kind,
+                usage_based: record.usage_based,
                 in_overage: record.in_overage,
             });
             return Applied::Orphaned;
@@ -608,7 +621,7 @@ impl Inner {
             .unwrap();
         let cold_limit = agent.timing.cold_probe_limit;
         let result = match exchange {
-            Exchange::Cancelled | Exchange::TimedOut => {
+            Exchange::Canceled | Exchange::TimedOut => {
                 self.probe_error(
                     key,
                     agent_id,
@@ -669,6 +682,7 @@ impl Inner {
             expires: job.started + ttl,
             covered: false,
             kind: record.kind,
+            usage_based: record.usage_based,
             in_overage: record.in_overage,
         });
         let Some(account) = result.account.clone() else {
@@ -794,20 +808,20 @@ impl Inner {
         }
     }
 
-    /// The Go `probeErrorLocked`, read from the answer the relay gave: a 429 after failover, or the exhaustion
-    /// 429 the relay answers when every account is cooled, is the quota pause; a pool at its in-flight cap
-    /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the
-    /// next real request would; a probe the selector refused on the pinned member's spend budget holds under
-    /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; a probe
-    /// the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no
-    /// idle tick; a probe the selector answered on its pinned member's standing holds under that standing:
-    /// `Paused` for the operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in
-    /// the console), a retry for a member this probe already tried, or for one whose budget the degraded ledger
-    /// leaves unknown, which the ledger's recovery clears without a real request; a pinned member a leg of the
-    /// probe marked for re-authentication pauses under the authentication reason; the untimed exhaustion 503, when
-    /// every account of the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from
-    /// upstream retries; any other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange
-    /// (status 0) is a transport error.
+    /// The Go `probeErrorLocked`, read from the answer the relay gave. A 429 after failover, or the exhaustion 429
+    /// the relay answers when every account is cooled, is the quota pause. A pool at its in-flight cap
+    /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the next
+    /// real request would. A probe the selector refused on the pinned member's spend budget holds under `budget`
+    /// without a pause, since only a raised budget or the period's end clears it, never a wait. A probe the router
+    /// refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no idle tick. A
+    /// probe the selector answered on its pinned member's standing holds under that standing: `Paused` for the
+    /// operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in the console), a
+    /// retry for a member this probe already tried, or for one whose budget the degraded ledger leaves unknown,
+    /// which the ledger's recovery clears without a real request. A pinned member a leg of the probe marked for
+    /// re-authentication pauses under the authentication reason. The untimed exhaustion 503, when every account of
+    /// the pool was unusable at selection, pauses under its own reason. A 5xx forwarded from upstream retries, any
+    /// other 4xx is a shape the upstream refuses, and a canceled, timed-out, or lost exchange (status 0) is a
+    /// transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,
@@ -1042,6 +1056,7 @@ mod tests {
                 last_report_at: 0,
                 last_real_at: Some(0),
                 restored_until: None,
+                owner_mismatches: 0,
                 agents,
             },
         );
@@ -1091,6 +1106,7 @@ mod tests {
             cache_ttl_ms: None,
             in_overage: false,
             account_kind: None,
+            usage_based: false,
             retry_after_secs: Some(5),
             obstacle: None,
         })
@@ -1531,7 +1547,7 @@ mod tests {
             );
         }
         for outcome in [
-            ProbeOutcome::Cancelled,
+            ProbeOutcome::Canceled,
             ProbeOutcome::Exhausted,
             ProbeOutcome::Failed,
             ProbeOutcome::RateLimited,

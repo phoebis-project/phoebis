@@ -415,6 +415,8 @@ pub struct AccountSelected {
     pub attempt: u8,
     pub account_id: String,
     pub account_kind: String,
+    /// The serving account's class at the attempt, the registry's `usage_based` flag as the leg read it.
+    pub usage_based: bool,
     pub pin_epoch: Option<u64>,
     pub started_at: i64,
     /// The TTL the relay rewrote the body to on this attempt, in milliseconds; `None` when the body went as sent.
@@ -495,11 +497,6 @@ pub struct RequestComplete {
     /// `None` for a clean end, a client that left, a local answer, and a stream that carried an `error` event, whose
     /// code is the error's own type.
     pub interruption: Option<Interruption>,
-    /// The coding of a streamed body the relay passed through as sent (`br`, `deflate`, `gzip` or `zstd`), named
-    /// whatever the relay's own copy made of the bytes. `None` for a body the relay decoded for the caller, an
-    /// identity body, a local answer, a client that left before the body, and a buffered answer forwarded whole,
-    /// whose outcome is the error's own.
-    pub passthrough: Option<String>,
     pub finished_at: i64,
 }
 
@@ -534,9 +531,8 @@ impl Event {
 /// asserts the two agree, since the bus may not depend on the relay), the credentials, and the framing headers
 /// the relay regenerates for its own hop.
 ///
-/// `accept-encoding` is the one entry that is neither: the relay decodes a compressed upstream answer only for
-/// a caller that sent none, so a replayed one would hand compressed bytes to the probe's usage parser and pause
-/// every recipe it ran for.
+/// `accept-encoding` is the one entry that is neither: a probe asks for an identity answer so its usage parser reads
+/// the body without a decode, and the probe's bytes toward the upstream stay as the recorded fixtures pin them.
 pub const HEADER_DENYLIST: &[&str] = &[
     "accept-encoding",
     "authorization",

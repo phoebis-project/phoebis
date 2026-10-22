@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use phoebis_guardrails::CompiledGuardrail;
 use phoebis_store::{
-    digest_with, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad, SubscriptionTerm,
+    digest_with, AccountKind, AccountRow, ApiKeyRow, PoolMember, PoolRow, RegistryLoad,
+    SubscriptionTerm,
 };
 use subtle::ConstantTimeEq;
 
@@ -240,6 +241,10 @@ impl RegistrySnapshot {
     pub fn tier(&self, account_id: &str) -> Option<&str> {
         self.terms.get(account_id).and_then(|t| t.tier.as_deref())
     }
+    /// The term row's class flag, false for an account with no term row.
+    pub fn usage_based(&self, account_id: &str) -> bool {
+        self.terms.get(account_id).is_some_and(|t| t.usage_based)
+    }
     pub fn body_capture_hours(&self, key: &ApiKeyRow) -> u32 {
         key.body_capture_hours.unwrap_or_else(|| {
             self.pools
@@ -257,4 +262,13 @@ impl RegistrySnapshot {
                 .is_none_or(|p| p.auto_mode_server)
         })
     }
+}
+
+/// The paid sources the economics read: an `api_key` account and a usage-based `oauth` account, whose spend is
+/// billed in dollars and whose window is no plan window.
+pub fn paid_source(snapshot: &RegistrySnapshot, account_id: &str) -> bool {
+    snapshot
+        .account(account_id)
+        .is_some_and(|a| a.kind == AccountKind::ApiKey)
+        || snapshot.usage_based(account_id)
 }

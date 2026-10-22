@@ -409,7 +409,8 @@ pub(crate) fn refresh_runs(
 /// `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the whole
 /// answer, since a series answered without its evidence could clear a real alarm. `parked` and `routing` are `None`
 /// where no ledger is built, and neither `ledger_record_parked`, `meter_drift` nor the four routing conditions
-/// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) then have a series. `pairs` is `None`
+/// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) then have a series. Where one is built,
+/// `destination_spent` stops holding once a `window_cleared` followed its spent window. `pairs` is `None`
 /// where no listener is built, and neither certificate kind then has a series. `unweighted` is the ledger's map, empty
 /// where no ledger is built.
 #[allow(clippy::too_many_arguments)]
@@ -686,7 +687,8 @@ pub(crate) fn conditions(
 
 /// The five conditions the ledger's hourly fold wrote: one per pool for `shed_no_runway` and one per OAuth account for
 /// `meter_drift`, `wall_reached`, `destination_spent` and `slowed_long`, each holding where a row names its subject,
-/// with the row's `since` and its detail. A row whose pool the snapshot holds gains `setting_values`, that pool's value
+/// with the row's `since` and its detail, so `destination_spent` ends where the fold read a `window_cleared` after the
+/// spent window. A row whose pool the snapshot holds gains `setting_values`, that pool's value
 /// of each setting the row's `setting` names, since the ledger reads no registry. A subject the registry no longer
 /// holds keeps its row's condition, labeled by its id and opening nothing, until the fold no longer writes the row.
 fn routing_conditions(

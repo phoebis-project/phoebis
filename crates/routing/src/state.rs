@@ -126,19 +126,96 @@ pub struct CreditsState {
 }
 
 impl CreditsState {
-    /// The reason fast mode cannot draw credits here: the poll's own reason, `extra_usage_disabled` for a disabled
-    /// state without one, `org_spend_cap_reached` at a utilization of one or more; `None` while credits have room.
+    /// The reason fast mode cannot draw credits here, for a reading as it arrives: `blocked_with_share` over the
+    /// reading's own share.
     pub fn blocked(&self) -> Option<&str> {
+        self.blocked_with_share(self.utilization)
+    }
+
+    /// The reason fast mode cannot draw credits here with `share` standing for the reading's: the poll's own reason,
+    /// `extra_usage_disabled` for a disabled state without one, `org_spend_cap_reached` at a share of one or more, and
+    /// `None` while credits have room.
+    pub fn blocked_with_share(&self, share: Option<f64>) -> Option<&str> {
         if let Some(reason) = self.disabled_reason.as_deref().filter(|r| !r.is_empty()) {
             return Some(reason);
         }
         if !self.enabled {
             return Some("extra_usage_disabled");
         }
-        self.utilization
+        share
             .is_some_and(|u| u >= 1.0)
             .then_some("org_spend_cap_reached")
     }
+}
+
+/// 00:00:00 UTC on the first of the calendar month after the UTC month of `now`, in epoch milliseconds: the spend
+/// window's reset while no head has named one.
+pub fn spend_reset_estimate(now: i64) -> i64 {
+    let utc = jiff::tz::TimeZone::UTC;
+    // An instant outside the calendar's range has no month to roll, so it answers itself.
+    jiff::Timestamp::from_millisecond(now)
+        .ok()
+        .and_then(|instant| {
+            instant
+                .to_zoned(utc.clone())
+                .date()
+                .first_of_month()
+                .checked_add(jiff::Span::new().months(1))
+                .ok()
+        })
+        .and_then(|first| first.to_zoned(utc).ok())
+        .map_or(now, |midnight| midnight.timestamp().as_millisecond())
+}
+
+/// The reset a spend reading was taken under: the reset its head named where that is ahead of the reading's
+/// instant, else the estimate over that instant. The router and the account view both read a share's expiry
+/// through this, so the hold and the meter lapse at one instant.
+pub fn spend_reading_reset(observed_at: i64, head_reset: Option<i64>) -> i64 {
+    head_reset
+        .filter(|reset| *reset > observed_at)
+        .unwrap_or_else(|| spend_reset_estimate(observed_at))
+}
+
+/// Where a spend window's reset came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpendResetSource {
+    Estimated,
+    Head,
+}
+
+impl SpendResetSource {
+    /// The word the serialization writes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpendResetSource::Estimated => "estimated",
+            SpendResetSource::Head => "head",
+        }
+    }
+}
+
+/// A usage-based account's spend window as the selector and the views read it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpendWindow {
+    /// The share, the newest of the poll's and a head's: `None` until one arrived, and once the reset it was read
+    /// under has passed with no newer reading, as a spent plan window's reading lapses at its reset.
+    pub utilization: Option<f64>,
+    /// `poll` or `head` for a reading of this run, `None` for the persisted share a restart reads, whose row keeps
+    /// no source.
+    pub share_source: Option<&'static str>,
+    pub reset: i64,
+    pub reset_source: SpendResetSource,
+    /// The newest reading's instant, `None` until one arrived.
+    pub observed_at: Option<i64>,
+}
+
+/// The reading that set a usage-based account's share in this run, kept beside the credits state it set.
+#[derive(Clone, Copy, Debug)]
+struct SpendShare {
+    source: &'static str,
+    /// `spend_reading_reset` of the reading, where the share lapses.
+    reset: i64,
+    observed_at: i64,
 }
 
 pub const FIVE_HOUR: &str = "five_hour";
@@ -244,7 +321,7 @@ impl UtilizationSample {
     }
 }
 
-// A pin write goes out on nearly every placement and moves once into the writer's batch; boxing it would put an
+// A pin write goes out on nearly every placement and moves once into the writer's batch. Boxing it would put an
 // allocation on that path to shrink the rarer writes queued beside it.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
@@ -261,10 +338,10 @@ pub enum StateWrite {
         credential_generation: u64,
         cause: StateCause,
         detail: Option<String>,
-        /// The instant the loop stamped the account's funding retry for this mark, `None` for a mark that is not
-        /// `FundingRequired` and for a superseded verdict's write, which its fences refuse, carried back on the
-        /// writer's acknowledgment so it credits that entry alone.
-        marked_at: Option<i64>,
+        /// The ordinal of the funding retry the loop stamped for this mark, carried back on the writer's acknowledgment
+        /// so it credits that entry alone. `None` for a mark that is not `FundingRequired` and for a superseded
+        /// verdict's write, which its fences refuse.
+        marked_ordinal: Option<u64>,
     },
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
@@ -655,8 +732,8 @@ impl RateTable {
 }
 
 /// Which figure a reader takes for a pin's burn: the share of the account's 5-hour window while a subscription
-/// account runs on its plan, dollars on an api_key account or a subscription account in overage. Serializes
-/// as `window_share` or `usd`.
+/// account runs on its plan, dollars on an api_key account, a usage-based seat or a subscription account in
+/// overage. Serializes as `window_share` or `usd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BurnUnit {
@@ -672,8 +749,8 @@ impl BurnUnit {
         }
     }
 
-    pub fn of(kind: AccountKind, in_overage: bool) -> BurnUnit {
-        match (kind, in_overage) {
+    pub fn of(kind: AccountKind, usage_based: bool, in_overage: bool) -> BurnUnit {
+        match (kind, usage_based || in_overage) {
             (AccountKind::Oauth, false) => BurnUnit::WindowShare,
             (AccountKind::Oauth, true) | (AccountKind::ApiKey, _) => BurnUnit::Usd,
         }
@@ -1135,9 +1212,12 @@ fn rounds_of(load: &RoutingLoad) -> HashMap<(String, String), i64> {
         .collect()
 }
 
-/// A `funding_required` account's retry: the instant one request may try it again, the incarnation the mark landed
-/// on, and the account ticket of the attempt that holds the one slot. Memory only: a restart reads the mark with no
-/// entry, and the first request after it retries at once.
+/// A funding retry's entry: the wall-clock instant one request may try the `funding_required` account again, which
+/// the view shows, and the ordinal that names the entry, which the acknowledgment and a retry's success match, so a
+/// backward clock step neither lets one mark's acknowledgment credit another nor lets a retry sent under an older mark
+/// clear a newer one. It also holds the incarnation the mark landed on and the account ticket of the attempt that
+/// holds the one slot. Memory only: a restart reads the mark with no entry, and the first request after it retries at
+/// once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FundingRetry {
     pub retry_at: i64,
@@ -1145,11 +1225,11 @@ pub struct FundingRetry {
     /// The in-flight id of the claiming attempt's `AccountTicket`. The claim lasts while the ticket is in the
     /// table, so a slow upstream head never frees it early.
     pub claimed_by: Option<u64>,
-    /// When the entry was made: the mark's landing, or the claim that found none after a restart. A mark's stamp is
-    /// strictly later than the entry it replaces, so it is unique per account while the entry lives and names the
-    /// entry the mark's acknowledgment credits. A retry's success that went out before it says nothing of the
-    /// balance the mark found.
-    pub stamped_at: i64,
+    /// The account's funding ordinal the entry took at the mark's landing, or at the claim that found none after a
+    /// restart: one past the account's previous mark or claim, whatever the clock read. It names the entry the mark's
+    /// acknowledgment credits, and a retry's success dispatched under a lower one says nothing of the balance this
+    /// entry's mark found.
+    pub ordinal: u64,
     /// The account row's revision once the writer acknowledged the mark's write, `None` until then. A load that read
     /// the row below it read the registry before the mark landed, so it drops nothing. A mark the fences refused and a
     /// claim, which writes nothing, read 0.
@@ -1172,6 +1252,11 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
+    /// Each account's last funding ordinal, which every mark and every claim that makes an entry takes one past. It
+    /// outlives the entries, so an entry made after another's clearing never takes an ordinal a success still in
+    /// flight was dispatched under. Memory only: a restart drops every in-flight leg with the router, so the count
+    /// starts again at 1.
+    funding_ordinals: HashMap<String, u64>,
     /// Each `funding_required` account's retry by account id. Memory only: the store keeps no instant for a mark,
     /// so a restart starts with none.
     funding_retries: HashMap<String, FundingRetry>,
@@ -1220,6 +1305,12 @@ pub struct RoutingState {
     /// selection on the account wrote it. Memory only, as the reservations are: a restart starts every account
     /// unslowed.
     slow_downs: HashMap<(String, String), SlowDownState>,
+    /// Each usage-based account's newest head reset with the head's observation, by account id. Memory only: the
+    /// persisted credits row keeps the share, and a restart reads the estimate until the next head names a reset.
+    spend_heads: HashMap<String, (i64, i64)>,
+    /// The source and the reset of each usage-based account's share as a poll or a head of this run set it, by
+    /// account id. Memory only, with no column: the share a restart loads takes the estimate over its own instant.
+    spend_shares: HashMap<String, SpendShare>,
 }
 
 impl RoutingState {
@@ -1277,6 +1368,7 @@ impl RoutingState {
                     )
                 })
                 .collect(),
+            funding_ordinals: HashMap::new(),
             funding_retries: HashMap::new(),
             head_marks: HashMap::new(),
             in_flight: InFlight::default(),
@@ -1320,6 +1412,8 @@ impl RoutingState {
             shed_rounds,
             slow_down_edges: Vec::new(),
             slow_downs: HashMap::new(),
+            spend_heads: HashMap::new(),
+            spend_shares: HashMap::new(),
         }
     }
 
@@ -1387,12 +1481,6 @@ impl RoutingState {
                 pace.deadline = None;
             }
         }
-    }
-
-    /// The pin's fast usage, typed tokens per second decayed from the pin's `burn_at` as `PinRow::burn` is, and
-    /// zero for a pin never renewed fast.
-    pub fn fast_burn(&self, key: &PinKey) -> PinBurn {
-        self.pin(key).map(|p| p.burn_fast).unwrap_or_default()
     }
 
     /// Sets the held pin's fast usage in the state alone, for a test that prices a round over fast usage. A renewal
@@ -1660,6 +1748,169 @@ impl RoutingState {
             .filter(|state| state.incarnation == incarnation)
     }
 
+    /// The newest head's spend reset of a usage-based account with its observation, `None` until a head carried one.
+    pub fn spend_head(&self, account_id: &str) -> Option<(i64, i64)> {
+        self.spend_heads.get(account_id).copied()
+    }
+
+    /// Folds a usage-based account's head: the share into the credits state (persisted as the poll's is) and the
+    /// reset beside it. False when the reading is older than the one held, or names no share: the answer is whether
+    /// the credits state moved, the write the caller persists.
+    pub fn record_spend_head(
+        &mut self,
+        account_id: &str,
+        utilization: Option<f64>,
+        reset: Option<i64>,
+        observed_at: i64,
+        incarnation: u64,
+    ) -> bool {
+        if let Some(reset) = reset {
+            if self
+                .spend_heads
+                .get(account_id)
+                .is_none_or(|(_, held_at)| *held_at < observed_at)
+            {
+                self.spend_heads
+                    .insert(account_id.to_string(), (reset, observed_at));
+            }
+        }
+        let Some(utilization) = utilization else {
+            return false;
+        };
+        // A head before any poll, or after one of another holder, has no flag to keep: the head came, so the
+        // spend window answered, and a later poll replaces this state by holder and age.
+        let held = self.credits_of(account_id, incarnation).cloned();
+        let state = match held {
+            Some(held) if held.observed_at >= observed_at => return false,
+            Some(held) => CreditsState {
+                utilization: Some(utilization),
+                observed_at,
+                ..held
+            },
+            None => CreditsState {
+                enabled: true,
+                disabled_reason: None,
+                utilization: Some(utilization),
+                observed_at,
+                incarnation,
+            },
+        };
+        self.credits.insert(account_id.to_string(), state);
+        self.spend_shares.insert(
+            account_id.to_string(),
+            SpendShare {
+                source: "head",
+                reset: spend_reading_reset(observed_at, reset),
+                observed_at,
+            },
+        );
+        true
+    }
+
+    /// Marks the share a poll just set on a usage-based account: a poll names no reset, so the share lapses at the
+    /// estimate over the poll's instant.
+    pub(crate) fn record_poll_share(&mut self, account_id: &str, observed_at: i64) {
+        self.spend_shares.insert(
+            account_id.to_string(),
+            SpendShare {
+                source: "poll",
+                reset: spend_reading_reset(observed_at, None),
+                observed_at,
+            },
+        );
+    }
+
+    /// The share `state` carries at `now`, with the source of the reading that set it in this run. A reading of
+    /// this run lapses at the reset kept beside it, and the persisted share a restart loads at the estimate over its
+    /// own instant, since the head's reset lived in memory alone.
+    fn live_share(
+        &self,
+        account_id: &str,
+        state: &CreditsState,
+        now: i64,
+    ) -> (Option<f64>, Option<&'static str>) {
+        let share = self
+            .spend_shares
+            .get(account_id)
+            .filter(|share| share.observed_at == state.observed_at);
+        let reset = share.map_or_else(
+            || spend_reading_reset(state.observed_at, None),
+            |share| share.reset,
+        );
+        (
+            state.utilization.filter(|_| now < reset),
+            share.map(|share| share.source),
+        )
+    }
+
+    /// The spend window of a usage-based account at `now`: the head's reset while it is ahead of `now`, else
+    /// `spend_reset_estimate(now)` marked `Estimated`. The share reads `None` once `now` reaches the reset it was
+    /// read under (`spend_reading_reset` of its reading). `None` for an account the class does not hold.
+    pub fn spend_window(
+        &self,
+        snapshot: &RegistrySnapshot,
+        account_id: &str,
+        now: i64,
+    ) -> Option<SpendWindow> {
+        if !snapshot.usage_based(account_id) {
+            return None;
+        }
+        let head = self
+            .spend_head(account_id)
+            .filter(|(reset, _)| *reset > now);
+        let (reset, reset_source) = match head {
+            Some((reset, _)) => (reset, SpendResetSource::Head),
+            None => (spend_reset_estimate(now), SpendResetSource::Estimated),
+        };
+        let held = snapshot
+            .account(account_id)
+            .and_then(|account| self.credits_of(account_id, account.incarnation));
+        let (utilization, share_source) = held.map_or((None, None), |state| {
+            self.live_share(account_id, state, now)
+        });
+        // The newest of the share's reading and the head whose reset the window reads.
+        let observed_at = held
+            .map(|state| state.observed_at)
+            .into_iter()
+            .chain(head.map(|(_, at)| at))
+            .max();
+        Some(SpendWindow {
+            utilization,
+            share_source,
+            reset,
+            reset_source,
+            observed_at,
+        })
+    }
+
+    /// The fast lane's credits read of the holder `incarnation`: `CreditsState::blocked_with_share` over the share
+    /// `spend_window` reads for a usage-based account, so the cap blocks nothing past the reset its share was read
+    /// under while the poll's reason and the disabled flag still do, and over the stored share for every other
+    /// account.
+    pub fn credits_blocked(
+        &self,
+        snapshot: &RegistrySnapshot,
+        account_id: &str,
+        incarnation: u64,
+        now: i64,
+    ) -> Option<&str> {
+        let state = self.credits_of(account_id, incarnation)?;
+        let share = if snapshot.usage_based(account_id) {
+            self.live_share(account_id, state, now).0
+        } else {
+            state.utilization
+        };
+        state.blocked_with_share(share)
+    }
+
+    /// Drops the overage evidence of every account `snapshot` classes usage-based: a row stored before the class
+    /// existed would otherwise hold the account in overage until its reset. The registry's row stays as written,
+    /// so each start drops it again until the account's own cascade removes it.
+    pub fn drop_usage_based_overage(&mut self, snapshot: &RegistrySnapshot) {
+        self.overage
+            .retain(|account_id, _| !snapshot.usage_based(account_id));
+    }
+
     /// Every live cooldown row of one account, whatever its scope, in no particular order. `cooldown` answers
     /// the one row that blocks a model; this is for a reader asking whether anything on the account is still
     /// standing.
@@ -1679,48 +1930,53 @@ impl RoutingState {
         v
     }
 
-    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation`, frees the slot, since the
-    /// attempt that held it ended in this mark, and answers the entry's stamp, `max(now, the account's previous
-    /// stamp + 1)`: two marks in one millisecond still name two entries, so the first one's acknowledgment cannot
-    /// credit the second.
+    /// The account's next funding ordinal, which the entry a mark or a claim makes takes.
+    fn next_funding_ordinal(&mut self, account_id: &str) -> u64 {
+        let ordinal = self
+            .funding_ordinals
+            .entry(account_id.to_string())
+            .or_default();
+        *ordinal += 1;
+        *ordinal
+    }
+
+    /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation` and the account's next
+    /// ordinal, frees the slot, since the attempt that held it ended in this mark, and answers the ordinal: two marks in
+    /// one millisecond, or either side of a clock stepped back, still name two entries, so the first one's
+    /// acknowledgment cannot credit the second.
     pub fn funding_marked(
         &mut self,
         account_id: &str,
         incarnation: u64,
         now: i64,
         interval_ms: i64,
-    ) -> i64 {
-        let stamped_at = self
-            .funding_retries
-            .get(account_id)
-            .map_or(now, |previous| {
-                now.max(previous.stamped_at.saturating_add(1))
-            });
+    ) -> u64 {
+        let ordinal = self.next_funding_ordinal(account_id);
         self.funding_retries.insert(
             account_id.to_string(),
             FundingRetry {
                 retry_at: now.saturating_add(interval_ms),
                 incarnation,
                 claimed_by: None,
-                stamped_at,
+                ordinal,
                 mark_revision: None,
             },
         );
-        stamped_at
+        ordinal
     }
 
-    /// The writer finished the mark's write for `account_id` under `incarnation`, the entry stamped at `stamped_at`:
-    /// landed at `revision`, or refused by its fences. A newer entry under the same incarnation stays unacknowledged.
+    /// The writer finished the mark's write for `account_id` under `incarnation`, the entry `ordinal` names: landed
+    /// at `revision`, or refused by its fences. A newer entry under the same incarnation stays unacknowledged.
     pub fn funding_written(
         &mut self,
         account_id: &str,
         incarnation: u64,
-        stamped_at: i64,
+        ordinal: u64,
         revision: Option<u64>,
     ) {
         if let Some(retry) = self.funding_retries.get_mut(account_id).filter(|retry| {
             retry.incarnation == incarnation
-                && retry.stamped_at == stamped_at
+                && retry.ordinal == ordinal
                 && retry.mark_revision.is_none()
         }) {
             retry.mark_revision = Some(revision.unwrap_or(0));
@@ -1731,11 +1987,12 @@ impl RoutingState {
         self.funding_retries.remove(account_id);
     }
 
-    /// Whether the account's entry was stamped after `at`, the instant an attempt went out.
-    pub fn funding_stamped_after(&self, account_id: &str, at: i64) -> bool {
+    /// Whether a mark newer than the one `ordinal` names stands on the account, the fence a retry's success reads,
+    /// whatever the clock read.
+    pub fn funding_marked_since(&self, account_id: &str, ordinal: u64) -> bool {
         self.funding_retries
             .get(account_id)
-            .is_some_and(|retry| retry.stamped_at > at)
+            .is_some_and(|retry| retry.ordinal > ordinal)
     }
 
     /// Whether a `funding_required` account may take a request at `now`: at once with no entry, as after a restart,
@@ -1750,28 +2007,34 @@ impl RoutingState {
                 .is_none_or(|id| !self.in_flight.holds(account_id, id))
     }
 
-    /// Hands the slot to the attempt the account ticket `ticket` counts. An account with no entry for
-    /// `incarnation`, as after a restart, gets one due at `now`, so the next request finds the slot taken.
+    /// Hands the slot to the attempt `ticket` counts and answers the ordinal of the entry it claimed, the mark the
+    /// attempt is dispatched under. An account with no entry for `incarnation`, as after a restart, gets one due at
+    /// `now` under the account's next ordinal, so the next request finds the slot taken.
     pub fn claim_funding_retry(
         &mut self,
         account_id: &str,
         incarnation: u64,
         ticket: u64,
         now: i64,
-    ) {
+    ) -> u64 {
         match self.funding_retries.get_mut(account_id) {
-            Some(retry) if retry.incarnation == incarnation => retry.claimed_by = Some(ticket),
+            Some(retry) if retry.incarnation == incarnation => {
+                retry.claimed_by = Some(ticket);
+                retry.ordinal
+            }
             _ => {
+                let ordinal = self.next_funding_ordinal(account_id);
                 self.funding_retries.insert(
                     account_id.to_string(),
                     FundingRetry {
                         retry_at: now,
                         incarnation,
                         claimed_by: Some(ticket),
-                        stamped_at: now,
+                        ordinal,
                         mark_revision: Some(0),
                     },
                 );
+                ordinal
             }
         }
     }
@@ -2061,6 +2324,8 @@ impl RoutingState {
         self.samples.remove(account_id);
         self.charges.remove(account_id);
         self.credits.remove(account_id);
+        self.spend_heads.remove(account_id);
+        self.spend_shares.remove(account_id);
     }
 
     /// Every account's latest reading, by id: one snapshot for a caller that evaluates thresholds over all of them.
@@ -2084,7 +2349,8 @@ impl RoutingState {
         self.in_flight = in_flight;
     }
 
-    /// The tables the shedding round prices each pin's burn through.
+    /// The tables a usd shedding round prices each pin's burn through. A window-share round orders its pins by its
+    /// own walk's figure.
     pub fn rates(&self) -> &BurnRates {
         &self.rates
     }
@@ -3244,9 +3510,13 @@ impl RoutingState {
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
+        self.drop_usage_based_overage(snapshot);
         self.credits
             .retain(|account_id, state| !gone(account_id, state.incarnation));
         self.samples.retain(|account_id, _| !absent(account_id));
+        self.spend_heads.retain(|account_id, _| !absent(account_id));
+        self.spend_shares
+            .retain(|account_id, _| !absent(account_id));
         // A bucket names a canonical model, so without the cut every model an account was ever asked for would keep
         // its buckets for the account's life.
         let expired_before = now - BUCKET_TTL_MS;
@@ -3445,6 +3715,24 @@ fn since_of(current: Option<&OverageEvidence>, evidence: &OverageEvidence) -> Op
 mod tests {
     use super::*;
 
+    fn at(instant: &str) -> i64 {
+        instant
+            .parse::<jiff::Timestamp>()
+            .expect("an RFC 3339 instant")
+            .as_millisecond()
+    }
+
+    #[test]
+    fn the_spend_reset_estimate_is_the_next_months_first_midnight_in_utc() {
+        for (now, reset) in [
+            ("2026-10-31T23:59:59Z", "2026-11-01T00:00:00Z"),
+            ("2028-02-29T12:00:00Z", "2028-03-01T00:00:00Z"),
+            ("2026-12-31T10:00:00Z", "2027-01-01T00:00:00Z"),
+        ] {
+            assert_eq!(spend_reset_estimate(at(now)), at(reset), "{now}");
+        }
+    }
+
     fn burning(session: &str, burn: f64) -> (PinRow, Option<f64>) {
         let pin = PinRow {
             key_id: "k".into(),
@@ -3541,17 +3829,22 @@ mod tests {
     }
 
     #[test]
-    fn two_funding_marks_in_one_millisecond_take_two_stamps_and_only_the_second_ones_acknowledgment_credits_it(
+    fn two_funding_marks_in_one_millisecond_take_two_ordinals_and_only_the_second_ones_acknowledgment_credits_it(
     ) {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         let first = state.funding_marked("a", 1, 1_000, 300_000);
         let second = state.funding_marked("a", 1, 1_000, 300_000);
         assert_eq!(
             (first, second),
-            (1_000, 1_001),
-            "the second mark is stamped one past the first"
+            (1, 2),
+            "an account's ordinals start at 1 and each mark takes the next one"
         );
-        assert_eq!(state.funding_retries["a"].retry_at, 301_000);
+        let retry = state.funding_retries["a"];
+        assert_eq!(
+            (retry.ordinal, retry.retry_at),
+            (second, 301_000),
+            "the second mark's entry stands under its own ordinal"
+        );
         state.funding_written("a", 1, first, None);
         assert_eq!(
             state.funding_retries["a"].mark_revision, None,
@@ -3559,6 +3852,51 @@ mod tests {
         );
         state.funding_written("a", 1, second, Some(5));
         assert_eq!(state.funding_retries["a"].mark_revision, Some(5));
+    }
+
+    #[test]
+    fn a_funding_mark_after_a_clock_stepped_back_takes_the_next_ordinal_and_retries_from_that_clock(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let first = state.funding_marked("a", 1, 10_000, 300_000);
+        let second = state.funding_marked("a", 1, 5_000, 300_000);
+        let retry = state.funding_retries["a"];
+        assert_eq!(
+            (retry.ordinal, retry.retry_at),
+            (first + 1, 305_000),
+            "the second entry takes the first's ordinal plus one and retries from the stepped-back clock"
+        );
+        state.funding_written("a", 1, first, Some(4));
+        assert_eq!(
+            state.funding_retries["a"].mark_revision, None,
+            "the first write's acknowledgment names its own ordinal"
+        );
+        state.funding_written("a", 1, second, Some(5));
+        assert_eq!(state.funding_retries["a"].mark_revision, Some(5));
+    }
+
+    #[test]
+    fn an_accounts_funding_ordinals_outlive_a_cleared_retry_so_a_claim_after_the_clear_takes_the_next_one(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let marked = state.funding_marked("a", 1, 1_000, 300_000);
+        state.funding_cleared("a");
+        let claimed = state.claim_funding_retry("a", 1, 7, 2_000);
+        assert_eq!(
+            claimed,
+            marked + 1,
+            "the entry the claim makes takes the account's next ordinal"
+        );
+        assert!(
+            state.funding_marked_since("a", marked),
+            "a success dispatched under the cleared mark reads a newer entry standing"
+        );
+        assert!(!state.funding_marked_since("a", claimed));
+        assert_eq!(
+            state.claim_funding_retry("a", 1, 8, 3_000),
+            claimed,
+            "a claim on a standing entry answers that entry's ordinal"
+        );
     }
 
     #[test]

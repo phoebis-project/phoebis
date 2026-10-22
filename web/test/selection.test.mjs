@@ -207,7 +207,7 @@ test('pace places a winding-down member last and knows no floor', () => {
     // resort of its own.
     account('spent', { windows: window7d(hoursFromNow(0.5), 0.96) }),
     // Cancelled and ten minutes from its end, inside the default half-hour wind-down, with the best score of all.
-    account('ending', { cancelled: true, subscription: subscription({ endsAt: new Date(NOW + 10 * MINUTE).toISOString() }), windows: window7d(hoursFromNow(24), 0.1) }),
+    account('ending', { canceled: true, subscription: subscription({ endsAt: new Date(NOW + 10 * MINUTE).toISOString() }), windows: window7d(hoursFromNow(24), 0.1) }),
     account('other', { windows: window7d(hoursFromNow(24), 0.5) }),
     account('key', { kind: 'api_key' }),
   ];
@@ -260,7 +260,7 @@ test('pace places a winding-down member last and knows no floor', () => {
 
 test("a winding-down placement carries the end it winds down to, and a member that is not winding down none", () => {
   const subscription = { billingType: 'monthly', endsAt: new Date(NOW + 10 * MINUTE).toISOString(), organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: null, trialEndsAt: null };
-  const pair = [account('ending', { cancelled: true, subscription, windows: window7d(hoursFromNow(24), 0.1) }), account('fresh', { windows: window7d(hoursFromNow(24), 0.5) })];
+  const pair = [account('ending', { canceled: true, subscription, windows: window7d(hoursFromNow(24), 0.1) }), account('fresh', { windows: window7d(hoursFromNow(24), 0.5) })];
   const [tier] = selectionOrder(pool('pace', 'allow', [member('ending', 0), member('fresh', 0)]), pair, NOW);
   assert.deepEqual(
     tier.placements.map((p) => [p.account.id, p.lastResort, p.end]),

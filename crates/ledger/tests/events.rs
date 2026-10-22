@@ -910,6 +910,65 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
 }
 
 #[test]
+fn a_window_cleared_after_a_spent_window_ends_its_reach_so_the_move_before_it_holds_no_spent_destination(
+) {
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    let t = 1_000 * HOUR;
+    let window_event = |at: i64, kind: &str, account: &str, window: &str| EventRecord {
+        at,
+        kind: kind.into(),
+        account_id: Some(account.into()),
+        detail: Some(serde_json::json!({ "window": window, "source": "head" }).to_string()),
+        ..Default::default()
+    };
+    let db = LedgerDb::open_in_memory().unwrap();
+    for row in [
+        // `b`'s 5-hour window was spent 20 minutes after the move onto it and cleared 20 minutes after that.
+        moved(t, "b", "spent", Some("fits")),
+        window_event(t + 20 * MINUTE, "window_spent", "b", "five_hour"),
+        window_event(t + 40 * MINUTE, "window_cleared", "b", "five_hour"),
+        // `c`'s clear names another window, so its spent 5-hour window still reaches the move.
+        moved(t, "c", "spent", Some("fits")),
+        window_event(t + 20 * MINUTE, "window_spent", "c", "five_hour"),
+        window_event(t + 40 * MINUTE, "window_cleared", "c", "seven_day"),
+        // `d`'s clear came before its window was spent, so it ends nothing.
+        moved(t, "d", "spent", Some("fits")),
+        window_event(t + 10 * MINUTE, "window_cleared", "d", "five_hour"),
+        window_event(t + 20 * MINUTE, "window_spent", "d", "five_hour"),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let tables = phoebis_ledger::test_tables::subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_routing_conditions(&tx, &tables, t + HOUR)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap();
+    let held = |kind: &str| {
+        rows.iter()
+            .filter(|r| r.kind == kind)
+            .map(|r| r.subject_id.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        held("destination_spent"),
+        ["c", "d"],
+        "the clear on b's spent window ends that window's reach, so the move onto b holds nothing: {rows:?}"
+    );
+    assert_eq!(
+        held("wall_reached"),
+        ["b", "c", "d"],
+        "a cleared wall was still reached: {rows:?}"
+    );
+}
+
+#[test]
 fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window() {
     const HOUR: i64 = 3_600_000;
     let t = 1_000 * HOUR;
@@ -1776,7 +1835,7 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
 fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically() {
     use phoebis_ledger::EVENT_KINDS;
     use phoebis_routing::{CacheMapEntry, CreditsState, PinKeyFacts, ShedRoundFacts, WindowSource};
-    const KINDS: [&str; 34] = [
+    const KINDS: [&str; 37] = [
         "account_state_changed",
         "budget_period_ended",
         "budget_reached",
@@ -1794,8 +1853,11 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         "pin_expired",
         "pin_migrated",
         "pin_released",
+        "plan_ended",
+        "plan_restored",
         "poll_backoff_ended",
         "poll_backoff_started",
+        "poll_failed",
         "refresh_failed",
         "refresh_succeeded",
         "refresh_uncertain",
@@ -2503,7 +2565,7 @@ async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
         pool_id: "main".into(),
         ends_at: opened_at + 30 * 60_000,
         wind_down_minutes: 30,
-        end_source: "cancelled",
+        end_source: "canceled",
         restored: true,
         at: NOW,
     };
@@ -2543,7 +2605,7 @@ async fn a_wind_down_a_cancellation_after_the_start_opens_lands_whenever_its_win
     // Ten minutes out under the pool's thirty-minute wind-down: the window opened twenty minutes ago, before the
     // previous run's last row, and no run announced it.
     let ends_at = NOW + 10 * 60_000;
-    h.store.set_cancelled("a", true, Some(ends_at)).unwrap();
+    h.store.set_canceled("a", true, Some(ends_at)).unwrap();
     h.router.reload().await.unwrap();
     let wind_downs = || async {
         h.db.events(0, i64::MAX, 100)

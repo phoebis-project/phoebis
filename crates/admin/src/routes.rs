@@ -25,8 +25,8 @@ use phoebis_oauth::{
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
-    is_plan_window, AccountProjection, MemberSpend, OverageEvidence, ReloadError,
-    UtilizationSample, WindowReading, SEVEN_DAY_FABLE,
+    is_plan_window, AccountProjection, MemberSpend, OverageEvidence, ReloadError, SpendResetSource,
+    SpendWindow, UtilizationSample, WindowReading, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
@@ -847,6 +847,10 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
 /// reading is recorded to the ledger and handed to the router, so the account's windows change on it, and the Quota
 /// view's timeline when the reading's five-minute bucket holds no sample yet. The hold, the concurrency cap and the
 /// coalescing bound the read, so a held-down refresh makes one request per account per fetch.
+///
+/// While the account's `plan_ended_at` is set, the profile is read first: a profile with a plan clears the flag and
+/// the usage endpoint is read as above, and with no plan no usage request goes out and the answer is the `GET`'s,
+/// `poll.last_error` reading `plan ended`.
 #[utoipa::path(
     post,
     path = "/admin/accounts/{id}/usage/refresh",
@@ -869,7 +873,30 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    match QuotaPoll::poll_account(&state.usage, &state.ledger, Some(&state.router), &row).await {
+    // An account whose plan ended sends no usage request until a profile read finds a plan, so the button reads the
+    // profile first and, with no plan back, answers the standing as the `GET` does.
+    if QuotaPoll::plan_paused(&state.store, &id) {
+        QuotaPoll::refresh_profile(
+            &state.store,
+            &state.usage,
+            &state.ledger,
+            &state.router,
+            &row,
+        )
+        .await;
+        if QuotaPoll::plan_paused(&state.store, &id) {
+            return usage_latest(State(state), Path(id)).await;
+        }
+    }
+    match QuotaPoll::poll_account(
+        &state.store,
+        &state.usage,
+        &state.ledger,
+        Some(&state.router),
+        &row,
+    )
+    .await
+    {
         Ok(snapshot) => {
             let poll = state.usage.poll_status(&id);
             Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
@@ -930,7 +957,7 @@ pub(crate) struct PairingStartInput {
     #[schema(example = "claude_ai")]
     pub login: Option<String>,
     /// The router reserves the id for the session and writes the row at the confirm, so a session that is
-    /// cancelled, expires or fails leaves no account.
+    /// canceled, expires or fails leaves no account.
     #[serde(default, rename = "new")]
     pub new_account: Option<NewAccountInput>,
 }
@@ -974,9 +1001,9 @@ pub(crate) struct PairingSessionView {
     pub account_id: String,
     pub expires_at: i64,
     pub id: String,
-    /// One of eight values: `cancelled`, `code_received`, `confirmed`, `confirming`, `exchanged`, `expired`,
+    /// One of eight values: `canceled`, `code_received`, `confirmed`, `confirming`, `exchanged`, `expired`,
     /// `failed`, `pending`.
-    #[schema(example = "cancelled")]
+    #[schema(example = "canceled")]
     pub status: String,
 }
 
@@ -1195,7 +1222,7 @@ async fn pairing_show(
     tag = "Pairing",
     params(("id" = String, Path, description = "The pairing session's id")),
     responses(
-        (status = 204, description = "The session is cancelled."),
+        (status = 204, description = "The session is canceled."),
         (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
         (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
     ),
@@ -1520,6 +1547,20 @@ async fn pairing_confirm(
             return unstored(&state, error);
         }
     }
+    // The confirmed pairing names the plan its profile holds, so a flag an ended plan left goes with it, published by
+    // the reload below.
+    if !created {
+        match state.store.clear_plan_ended(&row.id) {
+            Ok(true) => state.ledger.record(phoebis_ledger::plan_restored(
+                &row.id,
+                now,
+                "pairing",
+                &pending.profile.raw,
+            )),
+            Ok(false) => {}
+            Err(error) => return unstored(&state, error),
+        }
+    }
     state.usage.invalidate(&row.id);
     state.vault.mark_confirmed(&id, now);
     // The credential just committed replaces whatever a slot under this id answered before, so the cached
@@ -1545,6 +1586,7 @@ async fn pairing_confirm(
                 match polled.store.account(&account_id) {
                     Ok(Some(committed)) => {
                         let _ = QuotaPoll::poll_account(
+                            &polled.store,
                             &polled.usage,
                             &polled.ledger,
                             Some(&polled.router),
@@ -1932,7 +1974,7 @@ async fn control_send(
         .map_err(|error| format!("control request failed: {error}"))
 }
 
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
@@ -1948,6 +1990,10 @@ pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
     pub day: BTreeMap<String, phoebis_ledger::Totals>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    /// The newest polled extra-usage row per account, the one that carries the amounts a later head row lacks.
+    pub extra_polled: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    /// The newest extra-usage row per account that carries a share, which a later head naming the reset alone lacks.
+    pub extra_share: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
     /// The router's retry instant per `funding_required` account.
     pub funding_retries: BTreeMap<String, i64>,
     /// The router's windows per account, predicted at its clock, as the usage `GET` reads them.
@@ -1961,6 +2007,8 @@ pub(crate) struct AccountContext {
     /// The router's samples per account as the poll or a head reported them, no charge added and no reset rolled:
     /// the readings an account's windows draw.
     pub reported: BTreeMap<String, UtilizationSample>,
+    /// The router's spend window per usage-based account, at its clock.
+    pub spend_windows: BTreeMap<String, SpendWindow>,
     pub week: BTreeMap<String, phoebis_ledger::Totals>,
 }
 
@@ -2045,6 +2093,8 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             Ok((
                 phoebis_ledger::latest_quota(c, now)?,
                 phoebis_ledger::latest_extra_usage(c, now)?,
+                phoebis_ledger::latest_extra_usage_polled(c, now)?,
+                phoebis_ledger::latest_extra_usage_share(c, now)?,
                 phoebis_ledger::request_totals(
                     c,
                     "account_id",
@@ -2066,7 +2116,7 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             ))
         })
         .await;
-    let (quota, extra, day, week, lifetime) = match ledger {
+    let (quota, extra, extra_polled, extra_share, day, week, lifetime) = match ledger {
         Ok(read) => read,
         Err(error) => {
             tracing::warn!(%error, "the account view could not read the ledger, so totals and windows are empty");
@@ -2082,6 +2132,8 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
         extra,
+        extra_polled,
+        extra_share,
         funding_retries: state
             .router
             .funding_retries()
@@ -2114,6 +2166,13 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
             .unwrap_or_default()
             .into_iter()
             .collect(),
+        spend_windows: state
+            .router
+            .spend_windows()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         week,
     }
 }
@@ -2137,7 +2196,13 @@ pub(crate) struct Account {
     pub label: String,
     pub enabled: bool,
     /// Set only on an `oauth` account. An `api_key` account always reads false.
-    pub cancelled: bool,
+    pub canceled: bool,
+    /// Epoch milliseconds: when a profile read found the account's organization holding no plan, null while a plan
+    /// stands. While it is set the usage poll sends the account no usage request and reads its profile hourly, the
+    /// routing reads the account as past its end, the row keeps the last plan's `profile.organization_type`,
+    /// `profile.billing_type` and `subscription.tier`, and a profile read that finds a plan, or a pairing confirm,
+    /// clears it.
+    pub plan_ended_at: Option<i64>,
     /// `disconnected`, `funding_required`, `reauth_required`, `ready` or `unpaired`.
     #[schema(example = "disconnected")]
     pub state: String,
@@ -2154,7 +2219,7 @@ pub(crate) struct Account {
     pub overage: Option<Overage>,
     pub profile: Option<AccountProfile>,
     /// The whole object null for an `api_key` account or an `oauth` account with no profile document yet and not
-    /// cancelled.
+    /// canceled.
     pub subscription: Option<AccountSubscription>,
     /// The account's quota windows: the router's reported sample first and the ledger's samples of the last day for
     /// the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
@@ -2172,6 +2237,12 @@ pub(crate) struct Account {
     /// Null for an `api_key` account. For an `oauth` account `error`, `fetched_at`, `held_until` and `poll`, as
     /// `GET /admin/accounts/{id}/usage` answers them, so one list read carries every account's standing.
     pub usage: Option<UsageStanding>,
+    /// True for an `oauth` account whose stored profile names a usage-based Enterprise seat (the rate-limit tier
+    /// `default_claude_zero` or the seat tier `enterprise_usage_based`), false on every other row, an `api_key`
+    /// account included. Such an account never reads as in overage, so `overage` answers null.
+    pub usage_based: bool,
+    /// The spend window of a usage-based account, null on every account the class does not hold.
+    pub spend: Option<Spend>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -2223,7 +2294,8 @@ pub(crate) struct AccountProfile {
     pub billing_type: Value,
     /// Usually a string, null when the document lacks it.
     pub display_name: Value,
-    /// Usually a boolean, null when the document lacks it.
+    /// Usually a boolean, read from the document's `organization` as the tier is, null when the document lacks it
+    /// there.
     pub has_extra_usage_enabled: Value,
     /// Usually a string, null when the document lacks it.
     pub organization_name: Value,
@@ -2244,7 +2316,7 @@ pub(crate) struct AccountSubscription {
     pub since: Option<i64>,
     /// Epoch milliseconds, null when the profile lacks it.
     pub trial_ends_at: Option<i64>,
-    /// The end the operator saved, standing only while `cancelled` is set.
+    /// The end the operator saved, standing only while `canceled` is set.
     pub ends_at: Option<i64>,
 }
 
@@ -2319,6 +2391,40 @@ pub(crate) struct ExtraUsage {
     pub used_credits: Option<i64>,
     pub utilization: Option<f64>,
     pub observed_at: i64,
+}
+
+/// A usage-based seat's spend window: the poll's amounts, the newest share and the window's reset.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Spend {
+    /// Null while no polled row of the last day carries the amounts.
+    pub amounts: Option<SpendAmounts>,
+    /// The share as a fraction, the stored `utilization` of the newest row of any source that carries one, null where
+    /// no row of the day carries one and once the reset that row's reading was taken under has passed, the amounts
+    /// drawn with no meter then.
+    pub utilization: Option<f64>,
+    /// Epoch milliseconds: the window's reset as the router reads it, the estimate where the router answers none.
+    pub resets_at: i64,
+    /// `head` for the newest head's reset while it is ahead of now, else `estimated` for 00:00 UTC on the first of
+    /// the next calendar month.
+    #[schema(example = "estimated")]
+    pub reset_source: String,
+    /// The newest row's instant, null without a row.
+    pub observed_at: Option<i64>,
+}
+
+/// The polled row's `spend` figures, or its `extra_usage` amounts where the body carried no `spend` object.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SpendAmounts {
+    pub currency: String,
+    /// The currency's minor-unit exponent.
+    pub exponent: u8,
+    /// Null where the body sets no limit: the spend alone, no bar.
+    pub limit_minor: Option<i64>,
+    pub used_minor: i64,
+    /// Epoch milliseconds: the polled row's instant.
+    pub polled_at: i64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -2458,12 +2564,12 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .map(|p| AccountProfile {
             billing_type: p["organization"]["billing_type"].clone(),
             display_name: p["account"]["display_name"].clone(),
-            has_extra_usage_enabled: p["account"]["has_extra_usage_enabled"].clone(),
+            has_extra_usage_enabled: p["organization"]["has_extra_usage_enabled"].clone(),
             organization_name: p["organization"]["name"].clone(),
             organization_type: p["organization"]["organization_type"].clone(),
             rate_limit_tier: p["organization"]["rate_limit_tier"].clone(),
         });
-    // The stored flag and end read through this alone, with no profile join, so a cancelled account answers
+    // The stored flag and end read through this alone, with no profile join, so a canceled account answers
     // them even before it ever pairs.
     let term = state
         .store
@@ -2473,9 +2579,9 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .unwrap_or_default();
     let now = (state.clock)();
     let end = phoebis_routing::term::end_of(&term, now);
-    // Null until the account has paired and a profile document exists, unless the operator has cancelled it:
-    // a cancelled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
-    let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.cancelled))
+    // Null until the account has paired and a profile document exists, unless the operator has canceled it:
+    // a canceled, unpaired OAuth row still has an end to report, so the flag joins `profile.is_some()` here.
+    let subscription = (row.kind == AccountKind::Oauth && (profile.is_some() || term.canceled))
         .then(|| match state.store.subscription(&row.id) {
             Ok(subscription) => subscription.unwrap_or_default(),
             Err(error) => {
@@ -2517,7 +2623,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             let (projection, horizon, burn) = window_projection(ctx, &row.id, &key);
             let demand = window_demand(ctx, &row.id, &key);
             AccountWindow {
-                id: key,
+                id: account_window_id(&key).to_string(),
                 utilization: Some(reading.utilization),
                 resets_at: reading.reset,
                 observed_at: reading.observed_at,
@@ -2538,10 +2644,11 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                     .is_some_and(|s| is_plan_window(&q.window) && s.reading(&q.window).is_some())
             })
             .map(|q| {
-                let (projection, horizon, burn) = window_projection(ctx, &row.id, &q.window);
-                let demand = window_demand(ctx, &row.id, &q.window);
+                let id = account_window_id(&q.window);
+                let (projection, horizon, burn) = window_projection(ctx, &row.id, id);
+                let demand = window_demand(ctx, &row.id, id);
                 AccountWindow {
-                    id: q.window.clone(),
+                    id: id.to_string(),
                     utilization: q.utilization,
                     resets_at: q.reset_at,
                     observed_at: q.observed_at.unwrap_or(q.bucket * 1_000),
@@ -2555,6 +2662,17 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 }
             }),
     );
+    // The Fable week reaches the list under one id from up to three sources, so one row stands per id: the newest
+    // reading, the router's on a tie.
+    let mut one_per_id: Vec<AccountWindow> = Vec::with_capacity(windows.len());
+    for window in windows {
+        match one_per_id.iter_mut().find(|kept| kept.id == window.id) {
+            Some(kept) if kept.observed_at < window.observed_at => *kept = window,
+            Some(_) => {}
+            None => one_per_id.push(window),
+        }
+    }
+    let windows = one_per_id;
     let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
     // The router may hold an entry for a mark whose write landed nowhere, so the registry's state decides.
     let funding_retry_at = (row.state == AccountState::FundingRequired)
@@ -2585,7 +2703,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         kind: kind_name(row.kind).to_string(),
         label: row.label.clone(),
         enabled: row.enabled,
-        cancelled: term.cancelled,
+        canceled: term.canceled,
+        plan_ended_at: term.plan_ended_at,
         state: state_name(row.state).to_string(),
         funding_retry_at,
         identity: row.identity.as_ref().map(|identity| AccountIdentity {
@@ -2628,31 +2747,37 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 set_at: cooldown.set_at,
             })
             .collect(),
-        overage: overage.map(|overage| Overage {
-            in_use: overage.in_use,
-            since: overage.since,
-            reset: overage.reset,
-            observed_at: overage.observed_at,
-        }),
+        // A usage-based seat's overage family is its spend window, so no evidence the router or a head row from before
+        // the class holds reads as overage on it.
+        overage: overage
+            .filter(|_| !term.usage_based)
+            .map(|overage| Overage {
+                in_use: overage.in_use,
+                since: overage.since,
+                reset: overage.reset,
+                observed_at: overage.observed_at,
+            }),
         profile,
         subscription,
         windows,
         slow_down: slow_down_view(ctx, &row.id),
         fast_lane,
-        extra_usage: ctx
-            .extra
-            .iter()
-            .find(|e| e.account_id == row.id)
-            .map(|e| ExtraUsage {
-                currency: e.currency.clone(),
+        // The amounts come from the newest polled row, since a head row carries none, the share from the newest row
+        // that carries one, and the rest from the newest row of any source.
+        extra_usage: ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| {
+            let polled = ctx.extra_polled.iter().find(|p| p.account_id == row.id);
+            let shared = ctx.extra_share.iter().find(|p| p.account_id == row.id);
+            ExtraUsage {
+                currency: polled.and_then(|p| p.currency.clone()),
                 disabled_reason: e.disabled_reason.clone(),
-                in_use: e.in_use,
+                in_use: e.in_use.filter(|_| !term.usage_based),
                 is_enabled: e.is_enabled,
-                monthly_limit: e.monthly_limit,
-                used_credits: e.used_credits,
-                utilization: e.utilization,
+                monthly_limit: polled.and_then(|p| p.monthly_limit),
+                used_credits: polled.and_then(|p| p.used_credits),
+                utilization: shared.and_then(|p| p.utilization),
                 observed_at: e.bucket * 1_000,
-            }),
+            }
+        }),
         pool: ctx
             .members
             .iter()
@@ -2667,6 +2792,76 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             lifetime: ctx.lifetime.get(&row.id).map_or(0, |t| t.requests),
         },
         usage,
+        usage_based: term.usage_based,
+        spend: term.usage_based.then(|| spend_view(ctx, &row.id, now)),
+    }
+}
+
+/// The ledger's and the endpoint's spelling of the overage-included week a head reports as `7d_oi`.
+const OVERAGE_INCLUDED_WEEK: &str = "seven_day_overage_included";
+
+/// The one id the account view and the dashboard answer a window under: the Fable week as `seven_day_fable`, whether
+/// the router holds it under the endpoint's key or a head row stored the overage-included week. The head's
+/// overage-included week is read as the Fable week until a second model week arrives by head, since the upstream's
+/// name is generic.
+pub(crate) fn account_window_id(key: &str) -> &str {
+    if key == FABLE_WINDOW_KEY || key == OVERAGE_INCLUDED_WEEK {
+        SEVEN_DAY_FABLE
+    } else {
+        key
+    }
+}
+
+/// A usage-based seat's spend window: the amounts from the newest polled row, the share from the newest row that
+/// carries one, the instant from the newest row of any source, and the reset from the router's window. The share lapses
+/// where `now` reaches the reset its row's reading was taken under, the instant the router's hold lifts at, so the
+/// meter and the hold agree whether or not the router holds a reading of the seat.
+fn spend_view(ctx: &AccountContext, account_id: &str, now: i64) -> Spend {
+    let polled = ctx.extra_polled.iter().find(|e| e.account_id == account_id);
+    let newest = ctx.extra.iter().find(|e| e.account_id == account_id);
+    let shared = ctx.extra_share.iter().find(|e| e.account_id == account_id);
+    let amounts = polled.and_then(|p| {
+        let polled_at = p.bucket * 1_000;
+        match p.spend_used_minor {
+            Some(used_minor) => Some(SpendAmounts {
+                currency: p.spend_currency.clone()?,
+                exponent: p.spend_exponent?,
+                limit_minor: p.spend_limit_minor,
+                used_minor,
+                polled_at,
+            }),
+            // A row the body's `spend` object did not fill stores no exponent, and the endpoint's currencies carry two
+            // decimals.
+            None => Some(SpendAmounts {
+                currency: p.currency.clone()?,
+                exponent: 2,
+                limit_minor: p.monthly_limit,
+                used_minor: p.used_credits?,
+                polled_at,
+            }),
+        }
+    });
+    let utilization = shared.and_then(|e| {
+        let reset = phoebis_routing::spend_reading_reset(e.bucket * 1_000, e.overage_reset);
+        e.utilization.filter(|_| now < reset)
+    });
+    // A router that answers no window for the seat, a stopped one or one whose snapshot predates the class, leaves the
+    // estimate.
+    let (resets_at, reset_source) = ctx.spend_windows.get(account_id).map_or_else(
+        || {
+            (
+                phoebis_routing::spend_reset_estimate(now),
+                SpendResetSource::Estimated,
+            )
+        },
+        |window| (window.reset, window.reset_source),
+    );
+    Spend {
+        amounts,
+        utilization,
+        resets_at,
+        reset_source: reset_source.as_str().to_string(),
+        observed_at: newest.map(|e| e.bucket * 1_000),
     }
 }
 
@@ -2766,6 +2961,7 @@ fn compose_usage(
         windows,
         fable_window: fable,
         extra_usage: latest.as_ref().and_then(|s| s.extra_usage.clone()),
+        spend: latest.as_ref().and_then(|s| s.spend.clone()),
         raw_keys: latest.map(|s| s.raw_keys).unwrap_or_default(),
         error: None,
     })
@@ -2867,7 +3063,7 @@ fn state_name(state: AccountState) -> &'static str {
 
 fn reported_status(session: &PairingSession) -> &'static str {
     match session.status {
-        PairingStatus::Cancelled => "cancelled",
+        PairingStatus::Canceled => "canceled",
         PairingStatus::CodeReceived { .. } => "code_received",
         PairingStatus::Confirmed => "confirmed",
         PairingStatus::Confirming { .. } => "confirming",
@@ -2883,7 +3079,9 @@ fn reported_status(session: &PairingSession) -> &'static str {
 fn oauth_detail(what: &str, error: OauthError) -> String {
     match error {
         OauthError::Malformed(detail) => format!("{what} response: {detail}"),
-        OauthError::Json(_) => format!("{what} response was not the JSON this endpoint returns"),
+        OauthError::Json(_) | OauthError::UsageJson(_) => {
+            format!("{what} response was not the JSON this endpoint returns")
+        }
     }
 }
 
@@ -2988,7 +3186,7 @@ pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
 /// refused when it is not a non-negative integer, and answered `409 stale_edit` with `stale` when it names another
 /// incarnation than the row's. A token of the row's incarnation answers the stamp it carries, which the route
 /// compares with its own read.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn fence_token(
@@ -3020,7 +3218,7 @@ pub(crate) fn fence_token(
 /// The edit token an account edit's body names, `None` when it sent none, refused when it is not a non-negative integer.
 /// The route answers 409 when it names another incarnation or revision than its own read, so the store fences on the
 /// read alone.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn fence_revision(sent: Option<&serde_json::Value>) -> Result<Option<u64>, Response> {

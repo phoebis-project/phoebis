@@ -303,12 +303,12 @@ verdict. Past the commit, the router's own reading of a stream, the copy the led
 phases and usage from, holds at most 512 KiB of one event while that event is still arriving. An event that outgrows
 the bound before its end is skipped in that copy and the events after it are still read, while one that arrives whole
 in one decoded piece is parsed whatever its size. The relay logs one warning at the end of a stream that had an event
-skipped, and the client receives every byte as sent either way. A stream the upstream cuts, stalls or sends undecodable
-after the head, and one the account's cancel ends, for an account disconnected, unpaired, deleted or re-created under
-its id, logs one warning with the account, the request id, the upstream request id, the bytes the client received, the
-cut's code and the error's words, and lands in the ledger as a `stream_interrupted` event the request's drawer shows.
-Every cooldown deadline carries a second of margin, so a request sent at the reset is not refused by a clock a hair
-behind.
+skipped, and the client receives the whole stream either way, decoded where the upstream coded it. A stream the upstream
+cuts, stalls or sends undecodable after the head, and one the account's cancel ends, for an account disconnected,
+unpaired, deleted or re-created under its id, logs one warning with the account, the request id, the upstream request
+id, the bytes the client received, the cut's code and the error's words, and lands in the ledger as a
+`stream_interrupted` event the request's drawer shows. Every cooldown deadline carries a second of margin, so a request
+sent at the reset is not refused by a clock a hair behind.
 
 | Head | Verdict | What follows |
 | --- | --- | --- |
@@ -321,17 +321,14 @@ behind.
 | API-key `400` naming the credit balance | `FailOver` | Another account, this one marked `funding_required` |
 | `401`, or `403` `authentication_error` | `Refresh` for OAuth, `FailOver` for an API key | OAuth: the token is refreshed and the request tried again on the same account. API key: another account, this one marked `reauth_required` |
 | `403` `permission_error` | `FailOver` | Another account, the model cooled on this one for an hour, reason `permission` |
-| Anything else (a `2xx`, any other `4xx` or `5xx`) | `Commit` | The upstream's answer reaches the client as sent |
-
-A coded `200` the client accepts passes through as sent and records as succeeded even where the router's own copy of the
-bytes does not decode, with no `stream_interrupted` event and the coding named among the attempt's stored facts as
-`passthrough`.
+| Anything else (a `2xx`, any other `4xx` or `5xx`) | `Commit` | The upstream's answer reaches the client, decoded where the upstream coded it |
 
 The cooldown tables, the windows and the reasons are on [Cooldowns and failover](routing.md#cooldowns-and-failover).
 The rate-limit families the router reads off a head are `anthropic-ratelimit-unified-*`, `anthropic-ratelimit-*` and
 `anthropic-fast-*`. A connection that fails before the whole request was written is retried once on a fresh connection,
-and one that may have reached the upstream is never sent again: an upstream that read the request and closed without
-answering is indistinguishable from one that never saw it, and sending it again could bill it twice.
+after about a second when no connection could be opened and at once when a reused connection died, and one that may
+have reached the upstream is never sent again: an upstream that read the request and closed without answering is
+indistinguishable from one that never saw it, and sending it again could bill it twice.
 
 ## The edits toward the client
 
@@ -341,10 +338,11 @@ connection and framing headers describe the upstream hop, and the framing does n
 while the upstream's own identity and cookies name the account behind the key, never the key holder. It hides the
 `anthropic-ratelimit-` and `anthropic-fast-` families on every answer that is not a `429` or a `200` whose first event
 is a `rate_limit_error`, so an organization's standing never reads as the key holder's own, and a rate limit keeps them
-so the client's continue arms on the reset the upstream named. When the client does not accept the upstream's coding,
-read from every `Accept-Encoding` line it sent, the router decodes the body and drops `content-encoding`. Everything
-else in the head reaches the client as the upstream wrote it. A refusal the router answers itself is in Anthropic's
-error shape with the header `x-phoebis-error-code` naming the code ([refusal codes](client.md#refusal-codes)).
+so the client's continue arms on the reset the upstream named. The router decodes every coded body (gzip, deflate,
+brotli and zstd), forwards it as identity and drops `content-encoding`, whatever the client's `Accept-Encoding`, and
+answers any other coding with a `502` `upstream_undecodable` before any byte reaches the client. Everything else in the
+head reaches the client as the upstream wrote it. A refusal the router answers itself is in Anthropic's error shape
+with the header `x-phoebis-error-code` naming the code ([refusal codes](client.md#refusal-codes)).
 
 ## Headers and transport
 
@@ -487,8 +485,9 @@ out before a registration has been acknowledged. What each answer makes the mod 
 - `agent_exists`: the mod drops the report, counts the agent as announced and registers again.
 - `agent_released` with a generation: the mod drops the report and adopts the generation, and the agent's next report
   starts it again with `agent_start`. Without a generation the mod drops the report and registers again.
-- `instance_conflict` naming the holding instance: the mod retries the registration once with `previous_instance_id`.
-  A second conflict, or one that names no instance, stops reporting for that session id.
+- `instance_conflict` naming the holding instance: the mod retries the registration with `previous_instance_id`, and
+  again with each newly named holder. One that names no instance keeps the session: the start goes back to the head of
+  the queue and is retried along the same backoff until the router names the holder.
 - `instance_ended`, `stale_sequence` and `unknown_instance`: the report goes back behind one `session_start` with the
   same instance. A registration refused again with the same code waits along the same backoff before it goes out
   again, rather than going out at once round after round.
@@ -506,7 +505,7 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 
 | Wait | Bound | Why |
 | --- | --- | --- |
-| The upstream connect and TLS handshake | 10 seconds | A first handshake on a cold host runs well under it, and a stalled one costs at most twice it before the `502` |
+| The upstream connect and TLS handshake | 10 seconds | A first handshake on a cold host runs well under it, and a stalled one costs at most twice it plus the one-second wait between the two tries before the `502` |
 | The upstream response head | 600 seconds | The relay's own ceiling on a silent upstream, above the client's wait with the client's default timeouts: Claude Code gives the head 180 seconds plus 1 second per 32 KiB of body under its own 600-second cap, so the client leaves no later than this guard |
 | The gap between two stream events | 600 seconds | The same ceiling: Claude Code aborts a stream after 180 seconds without a byte while its watchdog is on, so the client leaves no later than this guard |
 | The pre-commit hold | 30 seconds and 64 KiB | The client is waiting, and a longer hold buys no better verdict |
@@ -514,12 +513,12 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 | The slow-down's hold | The pool's `slow_down_hold_seconds`, 1 to 300, default 120 | Before the head, so the client's first-byte window covers it |
 | The wait for a moved pin's first head | The pool's `slow_down_hold_seconds` from the first request's dispatch, never past the request's deadline | Before the head, so the client's first-byte window covers it |
 
-A connect or handshake that times out counts as unsent, so the request is written once more on a fresh connection. A
-retry in place sleeps the throttle's delay on the same account, with the same credential, before any byte of the
-answer's head reaches the client ([Retry in place](routing.md#retry-in-place)). The slow-down's hold sleeps to the pin's
-deadline, which a retry or a sibling request of the pin rejoins, before the request is selected again
-([Slow-down](routing.md#slow-down)). A reset wait and the slow-down and rewrite holds end inside the head guard whatever
-its length: at the request's deadline where the guard leaves one, else at the guard itself.
+A connect or handshake that times out counts as unsent, so the request is written once more on a fresh connection after
+a wait of about a second. A retry in place sleeps the throttle's delay on the same account, with the same credential,
+before any byte of the answer's head reaches the client ([Retry in place](routing.md#retry-in-place)). The slow-down's
+hold sleeps to the pin's deadline, which a retry or a sibling request of the pin rejoins, before the request is selected
+again ([Slow-down](routing.md#slow-down)). A reset wait and the slow-down and rewrite holds end inside the head guard
+whatever its length: at the request's deadline where the guard leaves one, else at the guard itself.
 
 Beneath these sit Claude Code's own waits. The client cuts a stream that has gone silent for 180 seconds with its
 watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The four

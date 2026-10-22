@@ -330,6 +330,139 @@ async fn a_replaced_registration_and_a_foreign_owner_header_are_not_retained() {
     );
 }
 
+/// A registration of `session` under the rig's instance whose `owner_id` names `owner`.
+fn registered_by(session: &str, owner: &str) -> Event {
+    Event {
+        event: "session_start".into(),
+        session_id: session.into(),
+        owner_id: Some(owner.into()),
+        ..Default::default()
+    }
+}
+
+/// A request on main of `session` whose owner header names `owner`, as the relay reports it.
+fn owned(r: &Rig, id: &str, session: &str, owner: &str) -> BusEvent {
+    let mut event = r.observed(id, "main", BODY);
+    if let BusEvent::RequestObserved(observed) = &mut event {
+        observed.session_id = Some(session.into());
+        observed.owner_id = Some(owner.into());
+    }
+    event
+}
+
+const OWNER_MISMATCH_LINE: &str = "a request named another owner than the session's registration";
+
+#[tokio::test]
+async fn a_sessions_first_owner_mismatch_logs_one_warning_naming_the_session_and_its_second_logs_none(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    r.event(registered_by("session", "owner-1")).unwrap();
+    r.event(registered_by("other", "owner-1")).unwrap();
+    let captured = Captured::default();
+    let _guard = captured.install();
+    for (id, session) in [("r-1", "session"), ("r-2", "session"), ("r-3", "other")] {
+        r.engine.observe(owned(&r, id, session, "owner-2"));
+    }
+    let text = captured.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains(OWNER_MISMATCH_LINE))
+        .collect();
+    assert_eq!(lines.len(), 2, "one line per session: {text}");
+    for (line, session) in lines.iter().zip(["session", "other"]) {
+        assert!(
+            line.contains("WARN") && line.contains(&format!("session={session}")),
+            "{line}"
+        );
+    }
+    assert!(
+        !text.contains("owner-1") && !text.contains("owner-2"),
+        "the line names no owner id: {text}"
+    );
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        Some(3),
+        "the global count takes every mismatch"
+    );
+    let refused = r
+        .event(Event {
+            event: "session_start".into(),
+            instance_id: "second".into(),
+            ..Default::default()
+        })
+        .unwrap_err();
+    assert_eq!(
+        (refused.code, refused.instance_id),
+        ("instance_conflict", None),
+        "a start from another instance still meets the live holder unnamed"
+    );
+}
+
+#[tokio::test]
+async fn a_request_naming_another_owner_after_the_holders_lease_lapsed_takes_the_session_over() {
+    let mut r = rig(RigSpec::default()).await;
+    r.event(registered_by("session", "owner-1")).unwrap();
+    r.advance(r.lease_ms());
+    let mut req = r.request("main");
+    relay_common::set_header(&mut req, "x-keepalive-owner-id", "owner-2");
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.reason, status.next_probe_at.is_some()),
+        (Reason::Scheduled, true),
+        "the request arms its recipe as the registered owner's would"
+    );
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        None,
+        "a takeover counts no mismatch"
+    );
+    // The re-registration renews the lease and names no owner, so the owner the takeover recorded stands and is the
+    // one the fence compares against, and the first owner's request is the foreign one.
+    r.reregister();
+    r.engine
+        .observe(owned(&r, "r-first-owner", "session", "owner-1"));
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        Some(1)
+    );
+}
+
+#[tokio::test]
+async fn a_request_naming_another_owner_within_a_restored_sessions_window_changes_nothing() {
+    let mut r = rig(RigSpec {
+        on_disk: true,
+        ..RigSpec::default()
+    })
+    .await;
+    r.event(registered_by("session", "owner-1")).unwrap();
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
+    let before = r.status("main");
+    // The load restores the session silent, with the attended reading for one lease length, which counts as the
+    // holder's live lease until the mod registers it again.
+    r.engine
+        .observe(owned(&r, "r-foreign", "session", "owner-2"));
+    let after = r.status("main");
+    assert_eq!(
+        (after.reason, after.next_probe_at, after.request_generation),
+        (
+            before.reason,
+            before.next_probe_at,
+            before.request_generation
+        )
+    );
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        Some(1)
+    );
+}
+
 #[tokio::test]
 async fn a_stale_lifecycle_report_cannot_override_a_new_request() {
     let mut r = rig(RigSpec::default()).await;
@@ -368,6 +501,7 @@ async fn a_later_selection_supersedes_an_earlier_attempts_evidence() {
             attempt: 2,
             account_id: "b".into(),
             account_kind: "api_key".into(),
+            usage_based: false,
             pin_epoch: Some(2),
             started_at: r.now(),
             cache_ttl_ms: None,

@@ -107,12 +107,13 @@ async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_
         let db = LedgerDb::open(&path).unwrap();
         db.insert_request(&request("before", 1_000, "k", Vec::new()), &[], None)
             .unwrap();
-        // Migration 40's two request columns, migration 41's index and two columns and migration 42's flag and
-        // refusals map leave too, the index before the column SQLite refuses to drop while indexed, so the replay from
-        // 38 adds them again.
+        // Migration 40's two request columns, migration 41's index and two columns, migration 42's flag and
+        // refusals map and migration 43's attempt class leave too, the index before the column SQLite refuses to drop
+        // while indexed, so the replay from 38 adds them again.
         db.write(|c| {
             c.execute_batch(
-                "ALTER TABLE requests DROP COLUMN refused; \
+                "ALTER TABLE attempts DROP COLUMN usage_based; \
+                 ALTER TABLE requests DROP COLUMN refused; \
                  ALTER TABLE rollups_hourly DROP COLUMN refusals_json; \
                  DROP INDEX requests_landed_at; ALTER TABLE requests DROP COLUMN landed_at; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN wall_early_ms; \
@@ -131,7 +132,7 @@ async fn migration_39_adds_the_column_the_table_and_the_index_on_a_fresh_ledger_
         (&fresh, "the fresh ledger"),
         (&migrated, "the ledger at 38"),
     ] {
-        assert_eq!(db.schema_version().await.unwrap(), 42, "{which}");
+        assert_eq!(db.schema_version().await.unwrap(), 43, "{which}");
         assert!(
             names(db, "SELECT name FROM pragma_table_info('requests')")
                 .iter()
@@ -450,7 +451,6 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         message_id: None,
         skipped_events: 0,
         interruption: None,
-        passthrough: None,
         finished_at: NOW + 5,
     }));
     let (row, attempts) = ledgered(&h, "blocked").await;
@@ -592,6 +592,36 @@ fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_p
             context_compacted: Some("true".into()),
         }],
         "the row carries the facts and the five hints it keeps"
+    );
+}
+
+/// The cursor names the page's last row by its instant and its id, so a row that shares the instant and sorts below
+/// the id opens the next page and one older than the instant follows it.
+#[test]
+fn two_rows_at_one_instant_are_walked_in_id_order_across_a_page_boundary() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 1_000 * HOUR_MS;
+    for row in [
+        sampled("a", now, "k1", true, "inference"),
+        sampled("t1", now - 1_000, "k1", true, "inference"),
+        sampled("t2", now - 1_000, "k2", true, "inference"),
+        sampled("z", now - 2_000, "k1", true, "inference"),
+    ] {
+        db.insert_request(&row, &[], None).unwrap();
+    }
+    let pool = SampleSubject::Pool("main");
+    let since = now - 72 * HOUR_MS;
+    let (first, next) = sample_ids(&db, pool, since, None, 2);
+    let cursor = format!("{}:t2", now - 1_000);
+    assert_eq!(
+        (first, next.as_deref()),
+        (vec!["a".into(), "t2".into()], Some(cursor.as_str())),
+        "the higher id first at the shared instant"
+    );
+    assert_eq!(
+        sample_ids(&db, pool, since, next.as_deref(), 2),
+        (vec!["t1".into(), "z".into()], None),
+        "the other row at that instant opens the next page"
     );
 }
 

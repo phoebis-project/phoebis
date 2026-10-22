@@ -5,7 +5,7 @@
 
 use std::path::Path;
 #[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -37,6 +37,8 @@ pub struct LedgerDb {
     writes: Writes,
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_read: AtomicBool,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    page_reads: AtomicUsize,
 }
 
 /// One `parked_records` row as the start reads it: the row's id and the serialized `ParkedRecord`.
@@ -108,6 +110,8 @@ impl LedgerDb {
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_read: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            page_reads: AtomicUsize::new(0),
         })
     }
 
@@ -121,6 +125,8 @@ impl LedgerDb {
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_read: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            page_reads: AtomicUsize::new(0),
         })
     }
 
@@ -182,10 +188,12 @@ impl LedgerDb {
         self: &Arc<Self>,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,
     ) -> Result<T, LedgerError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.page_reads.fetch_add(1, Ordering::SeqCst);
         let db = Arc::clone(self);
         tokio::task::spawn_blocking(move || db.read_blocking(f))
             .await
-            .map_err(|_| LedgerError::ReadCancelled)?
+            .map_err(|_| LedgerError::ReadCanceled)?
     }
 
     /// The same read on the calling thread, for the ledger task's own thread and for tests that hold no runtime
@@ -203,7 +211,7 @@ impl LedgerDb {
         // A read opens no transaction but a read one, such as `list_request_page`'s, which rolls back as it drops
         // while the panic unwinds, so a closure that panics mid-row leaves the connection as consistent as it was
         // before the call. Recovering the guard here, rather than propagating the poisoning, keeps one panicked read
-        // from turning every later read into a `ReadCancelled`.
+        // from turning every later read into a `ReadCanceled`.
         match &self.reader {
             Some(reader) => f(&reader.lock().unwrap_or_else(PoisonError::into_inner)),
             None => f(&self.writer.lock().unwrap_or_else(PoisonError::into_inner)),
@@ -255,6 +263,14 @@ impl LedgerDb {
     #[doc(hidden)]
     pub fn debug_fail_next_read(&self) {
         self.fail_next_read.store(true, Ordering::SeqCst);
+    }
+
+    /// The `read` calls this handle has run since it opened. A paged walk such as the guardrail dry run's takes one
+    /// per page, so a test pins the page size the walk reads by the count across it.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_page_reads(&self) -> usize {
+        self.page_reads.load(Ordering::SeqCst)
     }
 
     /// Caps the writer connection's file at the pages it holds once a vacuum has left none free, so the next insert
@@ -422,7 +438,7 @@ impl LedgerDb {
     ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
         let account_id = account_id.to_string();
         self.read(move |conn| {
-            let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source FROM extra_usage_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY bucket")?;
+            let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY bucket, source")?;
             let rows = stmt.query_map(params![account_id, from, to], |r| {
                 Ok(ExtraUsageSampleRecord {
                     account_id: r.get(0)?,
@@ -436,6 +452,11 @@ impl LedgerDb {
                     disabled_reason: r.get(8)?,
                     overage_reset: r.get(9)?,
                     source: r.get(10)?,
+                    spend_limit_minor: r.get(11)?,
+                    spend_used_minor: r.get(12)?,
+                    spend_percent: r.get(13)?,
+                    spend_currency: r.get(14)?,
+                    spend_exponent: r.get(15)?,
                 })
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -489,18 +510,25 @@ pub(crate) fn insert_samples_in(
         )?;
     }
     if let Some(e) = extra {
-        let verb = if e.source == "head" {
-            "INSERT OR REPLACE"
+        // Keyed by the source too, so a head updates the bucket's head row and the bucket's first poll keeps its row:
+        // neither hides the other. A head that names the share or the reset alone keeps the other one the row holds,
+        // since each header is its own reading: the row carries the bucket's last share and last reset.
+        let (verb, conflict) = if e.source == "head" {
+            (
+                "INSERT",
+                " ON CONFLICT (account_id, bucket, source) DO UPDATE SET is_enabled = excluded.is_enabled, in_use = excluded.in_use, utilization = COALESCE(excluded.utilization, utilization), disabled_reason = excluded.disabled_reason, overage_reset = COALESCE(excluded.overage_reset, overage_reset)",
+            )
         } else {
-            "INSERT OR IGNORE"
+            ("INSERT OR IGNORE", "")
         };
         conn.execute(
             &format!(
-                "{verb} INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                "{verb} INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16){conflict}"
             ),
             params![
                 e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits,
                 e.utilization, e.currency, e.disabled_reason, e.overage_reset, e.source,
+                e.spend_limit_minor, e.spend_used_minor, e.spend_percent, e.spend_currency, e.spend_exponent,
             ],
         )?;
     }
@@ -586,8 +614,8 @@ pub(crate) fn insert_request_in(
     )?;
     for a in attempts {
         tx.execute(
-            "INSERT INTO attempts (request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45)",
+            "INSERT INTO attempts (request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46)",
             params![
                 a.request_id, a.attempt, a.account_id, a.account_kind, a.pin_epoch.map(|n| n as i64), a.started_at, a.finished_at,
                 a.ttfb_ms, a.ttfc_ms, a.upstream_status.map(i64::from), a.upstream_request_id, a.outcome, a.cooldown_scope, a.cooldown_until,
@@ -598,7 +626,7 @@ pub(crate) fn insert_request_in(
                 a.thinking_tokens.map(|n| n as i64), a.web_search_requests.map(|n| n as i64), a.web_fetch_requests.map(|n| n as i64),
                 a.stop_reason, a.stop_sequence, a.served_model, a.speed, a.inference_geo,
                 a.cleared_input_tokens.map(|n| n as i64), a.refusal_category, a.refusal_recommended_model, a.selection,
-                a.upstream_message_id, a.written_at, a.tier,
+                a.upstream_message_id, a.written_at, a.tier, a.usage_based,
             ],
         )?;
     }
@@ -678,7 +706,7 @@ pub(crate) fn update_cache_map_in(
 }
 
 pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, request_truncated, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, refused FROM requests";
-pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier FROM attempts";
+pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based FROM attempts";
 
 pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestRecord> {
     Ok(RequestRecord {
@@ -814,6 +842,7 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
         selection: r.get(41)?,
         upstream_message_id: r.get(42)?,
         written_at: r.get(43)?,
+        usage_based: r.get(45)?,
     })
 }
 
@@ -969,6 +998,7 @@ mod tests {
                     .into(),
             ),
             written_at: Some(1_010 + n as i64),
+            usage_based: true,
         }
     }
 
@@ -976,7 +1006,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -1067,23 +1097,22 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 42, "and answered what the connection holds");
+        assert_eq!(version, 43, "and answered what the connection holds");
     }
 
     #[tokio::test]
-    async fn a_panicked_read_answers_read_cancelled_and_the_next_read_on_the_same_ledger_succeeds()
-    {
+    async fn a_panicked_read_answers_read_canceled_and_the_next_read_on_the_same_ledger_succeeds() {
         let db = Arc::new(LedgerDb::open_in_memory().unwrap());
         let panicked = db
             .read(|_conn| -> Result<(), LedgerError> {
                 panic!("a read closure that never means to answer");
             })
             .await;
-        assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
+        assert!(matches!(panicked, Err(LedgerError::ReadCanceled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            42,
-            "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
+            43,
+            "the poisoned guard recovered rather than turning every later read into ReadCanceled too"
         );
     }
 
@@ -1123,7 +1152,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 42,
+                    supported: 43,
                     ..
                 }
             ),

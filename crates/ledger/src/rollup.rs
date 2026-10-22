@@ -45,6 +45,9 @@ pub const FAST_FUNDING: &str = "fast";
 /// The funding of an attempt an api_key account served: billed in dollars whatever its speed or the head's overage
 /// flag, as `funding_of` reads the kind first.
 pub const BILLED_FUNDING: &str = "billed";
+/// The funding of an attempt a usage-based seat served: billed in dollars at the API rates whatever its speed or the
+/// head's overage flag, as `funding_of` reads the class after the kind.
+pub const USAGE_BASED_FUNDING: &str = "usage_based";
 
 /// The prompt-length band a row's attempts priced at: the key word of `Band::Standard`.
 pub const STANDARD_BAND: &str = "standard";
@@ -187,10 +190,11 @@ pub struct RollupRow {
     /// attempt's, else `fast` when the request asked for it, else `STANDARD_SPEED`. A dimension, so it sits in the key.
     pub speed: String,
     /// Who paid for the row's attempts, `funding_of`'s answer as a key word: `billed` for an api_key account's answer
-    /// whatever its speed or overage flag; else `fast` when it was served fast, whose answer draws usage credits in
-    /// dollars whatever the overage flag; else `overage` when the head's unified headers said overage was in use;
-    /// else `plan`. Written with the row, so a reader needs no registry to tell billed spend from plan spend, and a
-    /// deleted or recreated account moves none of its rows. A dimension, so it sits in the key.
+    /// whatever its speed or overage flag, else `usage_based` for a usage-based seat's answer whatever its speed or
+    /// overage flag, else `fast` for a plan account's answer served fast, which draws usage credits in dollars
+    /// whatever the overage flag, else `overage` when the head's unified headers said overage was in use, else `plan`.
+    /// Written with the row, so a reader needs no registry to tell billed spend from plan spend, and a deleted or
+    /// recreated account moves none of its rows. A dimension, so it sits in the key.
     pub funding: String,
     /// The cells the row's attempts priced at (`STANDARD_BAND` or `LONG_BAND`), read against the threshold in
     /// force at the request's instant. A dimension, so it sits in the key.
@@ -541,7 +545,7 @@ fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64
 
 /// One delta per distinct (band, speed, funding) triple among the attempts with usage, the band from the attempt's
 /// own prompt against the revision in force at the request's `received_at`, the speed the attempt's own and the
-/// funding `funding_of` reads off the attempt's three facts, each delta summing its attempts' five counts,
+/// funding `funding_of` reads off the attempt's four facts, each delta summing its attempts' five counts,
 /// `thinking_tokens`, `web_search_requests`, `web_fetch_requests` and its attempt count. The request counters,
 /// `failovers`, the cache figures, the histograms and the errors sit on the serving attempt's delta alone (its band,
 /// its speed, its funding). A request with no attempt with usage files one delta under `STANDARD_BAND` keyed by the
@@ -556,11 +560,17 @@ pub fn deltas_of(
     let model = request.canonical_model.as_str();
     let last = attempts.last();
 
-    // An attempt's funding whole, read off its own three facts, so the key tells billed spend from plan spend without
+    // An attempt's funding whole, read off its own four facts, so the key tells billed spend from plan spend without
     // the registry. A request no attempt served files under `plan`.
     let funding_word = |a: Option<&AttemptRecord>| {
         a.map_or(PLAN_FUNDING, |a| {
-            funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()).rollup_word()
+            funding_of(
+                &a.account_kind,
+                a.usage_based,
+                a.overage_in_use,
+                a.speed.as_deref(),
+            )
+            .rollup_word()
         })
     };
     let band_of = |a: &AttemptRecord| {
@@ -1012,10 +1022,13 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
             STANDARD_SPEED
         },
         // A credit files beside its probe's request row, in the order `funding_of` reads an attempt: `billed` on an
-        // api_key account, `fast` for a fast delta (a fast answer's request row `deltas_of` keys `fast` whatever the
-        // overage flag), else the overage fact the probe's answer reported, else `plan`.
+        // api_key account, `usage_based` on a usage-based seat, `fast` for a fast delta (a fast answer's request row
+        // `deltas_of` keys `fast` whatever the overage flag), else the overage fact the probe's answer reported, else
+        // `plan`.
         if delta.account_kind == Some(AccountKind::ApiKey) {
             BILLED_FUNDING
+        } else if delta.usage_based {
+            USAGE_BASED_FUNDING
         } else if delta.speed == Some(Speed::Fast) {
             FAST_FUNDING
         } else if delta.overage_in_use == Some(true) {
@@ -1248,6 +1261,7 @@ struct Held {
 /// The five routing conditions, written whole into `routing_conditions`. Four read the trailing 24 hours of events:
 /// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway,
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
+/// with no `window_cleared` on that account and window after it,
 /// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
 /// account from its slow-down spans, summed across its pools, once their parts inside the day pass the bar:
 /// `SLOWED_LONG_STRETCHES` times the `threshold_ms` of the newest counted span's start row, at least
@@ -1276,8 +1290,8 @@ pub fn fold_routing_conditions(
     let events: Vec<Row> = tx
         .prepare(
             "SELECT at, kind, account_id, pool_id, detail FROM events \
-             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent', 'router_started', \
-             'slow_down_ended', 'slow_down_started') AND at >= ?1 AND at <= ?2 \
+             WHERE kind IN ('shedding_round', 'pin_migrated', 'window_spent', 'window_cleared', \
+             'router_started', 'slow_down_ended', 'slow_down_started') AND at >= ?1 AND at <= ?2 \
              ORDER BY at, rowid",
         )?
         .query_map(params![now - CONDITION_SPAN_MS, now], |r| {
@@ -1323,17 +1337,33 @@ pub fn fold_routing_conditions(
         );
     }
 
-    let spent: Vec<(&str, i64, &str, &serde_json::Value)> = events
+    let cleared: Vec<(usize, &str, &str)> = events
         .iter()
-        .filter(|e| e.kind == "window_spent")
-        .filter_map(|e| {
-            let account = e.account_id.as_deref()?;
+        .enumerate()
+        .filter(|(_, e)| e.kind == "window_cleared")
+        .filter_map(|(index, e)| {
             Some((
-                account,
-                e.at,
+                index,
+                e.account_id.as_deref()?,
                 e.detail["window"].as_str().unwrap_or("unknown"),
-                &e.detail,
             ))
+        })
+        .collect();
+    // Each spent window with whether a `window_cleared` on the same account and window came after it in the events'
+    // order. Every clear the query reads sits at or before `now`, so a spent window a clear followed reaches no move.
+    let spent: Vec<(&str, i64, &str, &serde_json::Value, bool)> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.kind == "window_spent")
+        .filter_map(|(index, e)| {
+            let account = e.account_id.as_deref()?;
+            let window = e.detail["window"].as_str().unwrap_or("unknown");
+            let ended = cleared
+                .iter()
+                .any(|(position, cleared_on, cleared_window)| {
+                    *position > index && *cleared_on == account && *cleared_window == window
+                });
+            Some((account, e.at, window, &e.detail, ended))
         })
         .collect();
     type Moves<'a> = (i64, u64, BTreeMap<&'a str, u64>, BTreeSet<&'a str>);
@@ -1344,10 +1374,10 @@ pub fn fold_routing_conditions(
         };
         let followed: Vec<&str> = spent
             .iter()
-            .filter(|(account, at, _, _)| {
-                *account == to && *at >= event.at && *at - event.at <= SPENT_AFTER_MOVE_MS
+            .filter(|(account, at, _, _, ended)| {
+                !ended && *account == to && *at >= event.at && *at - event.at <= SPENT_AFTER_MOVE_MS
             })
-            .map(|(_, _, window, _)| *window)
+            .map(|(_, _, window, _, _)| *window)
             .collect();
         if followed.is_empty() {
             continue;
@@ -1387,7 +1417,7 @@ pub fn fold_routing_conditions(
         (i64, &'a str, &'a serde_json::Value),
     );
     let mut walls: BTreeMap<&str, Walls> = BTreeMap::new();
-    for (account, at, window, detail) in &spent {
+    for (account, at, window, detail, _) in &spent {
         let entry =
             walls
                 .entry(account)
@@ -2460,7 +2490,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2524,7 +2554,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2620,7 +2650,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -4284,7 +4314,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 42);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 43);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

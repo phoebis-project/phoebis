@@ -407,6 +407,7 @@ fn predicted(
         received_at: i64,
         speed: Option<String>,
         account_kind: String,
+        usage_based: bool,
         overage_in_use: Option<bool>,
         kind: String,
         tier: Option<String>,
@@ -417,7 +418,7 @@ fn predicted(
         "SELECT r.canonical_model, a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, \
          a.cache_write_1h_tokens, a.output_tokens, COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed, \
          r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client, \
-         r.classifier \
+         r.classifier, a.usage_based \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE a.account_id = ?1 AND a.started_at > ?2 - ?4 AND a.started_at <= ?3 \
          AND completed > ?2 AND completed <= ?3",
@@ -444,15 +445,21 @@ fn predicted(
             tier: r.get(12)?,
             client: r.get(13)?,
             classifier: r.get(14)?,
+            usage_based: r.get(15)?,
         })
     })?;
     let (mut share, mut requests, mut estimated) = (0.0, 0u32, 0u32);
     for attempt in attempts {
         let a = attempt?;
-        let funding = funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref());
+        let funding = funding_of(
+            &a.account_kind,
+            a.usage_based,
+            a.overage_in_use,
+            a.speed.as_deref(),
+        );
         let classifier = a.classifier.as_deref() == Some(Classifier::Client.as_str());
-        // API-key, fast and overage answers draw no plan window, so they are no part of the rise either. A classifier
-        // call draws no plan window either.
+        // API-key, usage-based, fast and overage answers draw no plan window, so they are no part of the rise either. A
+        // classifier call draws no plan window either.
         if funding != Funding::Plan
             || (window == SEVEN_DAY_FABLE && window_for(&a.model) != SEVEN_DAY_FABLE)
             || classifier

@@ -80,11 +80,11 @@ async fn logged_in(client: &reqwest::Client, session_url: &str) {
     }
 }
 
-/// How many ports one test process draws from: a hundred slices of a hundred fill `20_000..30_000`, all of it
-/// below the kernel's ephemeral range (`net.ipv4.ip_local_port_range`, 32768 upward on Linux).
-const PORT_SPAN: u16 = 100;
+/// How many ports one test process draws from: fifty slices of 200 fill `20_000..30_000`, all of it below the
+/// kernel's ephemeral range (`net.ipv4.ip_local_port_range`, 32768 upward on Linux).
+const PORT_SPAN: u16 = 200;
 
-/// Where the kernel's own ephemeral range starts (`net.ipv4.ip_local_port_range`, 32768 upward on Linux); the
+/// Where the kernel's own ephemeral range starts (`net.ipv4.ip_local_port_range`, 32768 upward on Linux). The
 /// allocator's whole span must stay below it.
 const EPHEMERAL_FLOOR: u16 = 32_768;
 
@@ -97,32 +97,32 @@ fn slice_base(residue: u32) -> u16 {
 
 /// The first port of this process's slice, spread by pid so two test processes rarely share one.
 fn port_base() -> u16 {
-    slice_base(std::process::id() % 100)
+    slice_base(std::process::id() % 50)
 }
 
-/// A port no other test in this binary is handed, from a hundred-port slice below the range the kernel picks
+/// A port no other test in this binary is handed, from a 200-port slice below the range the kernel picks
 /// ephemeral ports from, so a concurrent test's outbound connection cannot take it between here and the bind
-/// that uses it. Probed once so a port another process holds is skipped; a slice with no free port panics.
+/// that uses it. Probed once so a port another process holds is skipped, and a slice with no free port panics.
 /// Rests on one precondition, asserted below: the cursor advances fewer than `PORT_SPAN` times in one
 /// process, one advance per draw and one per port a fake upstream holds.
 ///
-/// Two processes whose pids are congruent modulo 100 share a slice, and a draw inside the probe-to-bind
-/// window can collide; the default cargo runner never runs two of these binaries at once, so the window is
+/// Two processes whose pids are congruent modulo 50 share a slice, and a draw inside the probe-to-bind
+/// window can collide. The default cargo runner never runs two of these binaries at once, so the window is
 /// left open. A parallel runner would need a per-slice lock file under `target/` held for the process's
 /// lifetime, taken before the first draw.
 fn free_port() -> u16 {
     static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
     let base = port_base();
     // Every pass through the loop takes the next offset, so a probe that finds a port another process holds
-    // burns one rather than retrying it; the probe's socket is dropped at once. One full pass with no free
-    // port is a host with a hundred listeners in this slice, reported by name rather than looped on.
+    // burns one rather than retrying it, and the probe's socket is dropped at once. One full pass with no free
+    // port is a host with 200 listeners in this slice, reported by name rather than looped on.
     for _ in 0..PORT_SPAN {
         // The raw counter rather than the ports handed out, because a slice another process is filling burns
         // advances on failed probes: a counter that wrapped would hand one port out twice, silently.
         let raw = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         assert!(
             raw < PORT_SPAN,
-            "end_to_end.rs advanced its port cursor past {PORT_SPAN} in one process; a test is drawing ports it never binds, another process's listeners are filling the slice, or the slice must grow"
+            "end_to_end.rs advanced its port cursor past {PORT_SPAN} in one process. A test is drawing ports it never binds, another process's listeners are filling the slice, or the slice must grow"
         );
         let port = base + raw;
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {
@@ -136,26 +136,26 @@ fn free_port() -> u16 {
 fn every_pid_slice_stays_below_the_ephemeral_range() {
     // Checked once rather than per residue: even the highest slice never reaches the kernel's own range.
     assert!(
-        20_000u32 + 100 * PORT_SPAN as u32 <= EPHEMERAL_FLOOR as u32,
+        20_000u32 + 50 * PORT_SPAN as u32 <= EPHEMERAL_FLOOR as u32,
         "the allocator's full span reaches the kernel's ephemeral range"
     );
     // Arithmetic only: a live draw per residue would draw from the counter every other test in this process
     // shares, which is the bug this test used to cause.
-    for residue in 0..100u32 {
+    for residue in 0..50u32 {
         let base = slice_base(residue);
         assert!(
             base as u32 >= 20_000,
             "residue {residue} starts below the allocator's floor: base {base}"
         );
         assert!(
-            base as u32 + PORT_SPAN as u32 <= 20_000 + 100 * PORT_SPAN as u32,
+            base as u32 + PORT_SPAN as u32 <= 20_000 + 50 * PORT_SPAN as u32,
             "residue {residue} pushes its slice past the allocator's own span: base {base}"
         );
     }
     // One live draw, which cannot wrap the shared counter by itself, proves free_port actually lands inside
     // this process's own slice.
     let port = free_port();
-    let base = slice_base(std::process::id() % 100);
+    let base = slice_base(std::process::id() % 50);
     assert!(
         (base..base + PORT_SPAN).contains(&port),
         "{port} is outside this process's slice ({base}..{})",
@@ -645,22 +645,35 @@ async fn every_new_upstream_connection_logs_its_host_and_its_dial_and_handshake_
 /// removes it once the admin answers, as `probe_soon_on` and `probe_soon_off` do for the keepalive's timing.
 const SHUTDOWN_BUDGET_SECONDS: &str = "PHOEBIS_DEBUG_SHUTDOWN_BUDGET_SECONDS";
 
-/// The figure is removed when this drops, a panic's unwinding included, so a case that fails before its admin answers
-/// leaves no short budget to a binary another case starts later.
+/// The figure is removed when the last holder drops, a panic's unwinding included, so a case that fails before its
+/// admin answers leaves no short budget to a binary another case starts later.
 struct ShortShutdownBudget;
+
+/// The cases holding the figure. Two may overlap, so the figure is removed only once the last of them has started.
+static SHORT_BUDGET_HOLDERS: Mutex<usize> = Mutex::new(0);
 
 impl ShortShutdownBudget {
     fn set(seconds: &str) -> ShortShutdownBudget {
+        let mut holders = SHORT_BUDGET_HOLDERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var(SHUTDOWN_BUDGET_SECONDS, seconds);
+        *holders += 1;
         ShortShutdownBudget
     }
 }
 
 impl Drop for ShortShutdownBudget {
     fn drop(&mut self) {
-        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        std::env::remove_var(SHUTDOWN_BUDGET_SECONDS);
+        let mut holders = SHORT_BUDGET_HOLDERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *holders -= 1;
+        if *holders == 0 {
+            let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::env::remove_var(SHUTDOWN_BUDGET_SECONDS);
+        }
     }
 }
 
@@ -797,6 +810,176 @@ async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes
             "{flushed}: {text}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_shutdown_past_the_drain_window_books_the_cut_stream_and_the_headless_request_as_router_shutdown(
+) {
+    const STREAMED: &str = "sk-ant-api03-CUTSTREAM";
+    const HEADLESS: &str = "sk-ant-api03-CUTHEADLESS";
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+        },
+    }])
+    .await;
+    // The head and `message_start` commit the first account's stream, and the gate holds the rest past the stop. The
+    // second account's answer waits at the gate before its head, so its request has none when the window closes.
+    up.add_credential_rule(
+        STREAMED,
+        "/v1/messages",
+        Respond::SseGated {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                fake_upstream::SseEvent {
+                    event: "message_start".into(),
+                    data: r#"{"type":"message_start","message":{"id":"msg_cut","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":5,"output_tokens":1}}}"#.into(),
+                },
+                fake_upstream::SseEvent {
+                    event: "message_stop".into(),
+                    data: r#"{"type":"message_stop"}"#.into(),
+                },
+            ],
+        },
+    );
+    up.add_credential_rule(
+        HEADLESS,
+        "/v1/messages",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_headless","type":"message","usage":{"input_tokens":5,"output_tokens":1}}"#
+                .to_vec(),
+        })),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    // Three seconds, so the router's own cut ends the window long before the proxy listener's 30 s deadline.
+    let short_budget = ShortShutdownBudget::set("3");
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    drop(short_budget);
+    let mut secrets = Vec::new();
+    for (account, secret, pool, key) in [
+        ("streamed", STREAMED, "main", "desktop"),
+        ("headless", HEADLESS, "second", "laptop"),
+    ] {
+        assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": account, "kind": "api_key", "label": account, "secret": secret })).send().await.unwrap().status(), 201);
+        assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": pool, "label": pool, "strategy": "priority", "members": [{ "account_id": account, "priority": 0 }] })).send().await.unwrap().status(), 201);
+        let created: serde_json::Value = client
+            .post(admin("/keys"))
+            .json(&serde_json::json!({ "id": key, "label": key, "pool_id": pool }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        secrets.push(created["secret"].as_str().unwrap().to_string());
+    }
+    let held = fixture_request(&client, proxy_port, &secrets[0], "e2e-cut-stream")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(held.status(), 200, "the stream committed before the stop");
+    let headless =
+        tokio::spawn(fixture_request(&client, proxy_port, &secrets[1], "e2e-cut-headless").send());
+    let give_up = std::time::Instant::now() + SETTLE;
+    while !up
+        .requests()
+        .iter()
+        .any(|r| r.line.starts_with("POST /v1/messages") && r.credential() == Some(HEADLESS))
+    {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the second request never reached its account"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let _ = stop_tx.send(());
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(15), server).await;
+    assert!(ended.is_ok(), "the stop ran past 15 s");
+    ended.unwrap().unwrap().unwrap();
+    drop(held);
+    let _ = headless.await;
+    // The cut's completions are published after the abort and the ledger's phase got no time, so its tasks land the
+    // two rows on this runtime after `run` returned.
+    let ledger = phoebis_ledger::LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+    let give_up = std::time::Instant::now() + SETTLE;
+    let rows = loop {
+        let (listed, _) = ledger
+            .read_blocking(|c| {
+                phoebis_ledger::list_requests(
+                    c,
+                    &phoebis_ledger::RequestFilter::default(),
+                    &phoebis_ledger::LiveKeys::default(),
+                    None,
+                    10,
+                )
+            })
+            .unwrap();
+        if listed.len() == 2 || std::time::Instant::now() >= give_up {
+            break listed;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    let mut booked: Vec<_> = rows
+        .iter()
+        .map(|(r, _)| (r.key_id.clone(), r.outcome.clone(), r.error_code.clone()))
+        .collect();
+    booked.sort();
+    assert_eq!(
+        booked,
+        [
+            (
+                Some("desktop".to_string()),
+                "canceled".to_string(),
+                Some("router_shutdown".to_string())
+            ),
+            (
+                Some("laptop".to_string()),
+                "canceled".to_string(),
+                Some("router_shutdown".to_string())
+            ),
+        ],
+        "the cut stream and the headless request both carry the router's own cut"
+    );
+    up.release();
+    up.shutdown().await;
 }
 
 #[tokio::test]

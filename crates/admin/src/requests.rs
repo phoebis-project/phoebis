@@ -144,7 +144,8 @@ pub(crate) struct RequestSummary {
     pub shape: RequestShape,
     pub usage: RequestUsage,
     pub cost_usd: f64,
-    /// Null for a request billed in dollars: an overage attempt, a fast answer, an API key account or no attempt.
+    /// Null for a request billed in dollars: an overage attempt, a fast answer, an API key account, a usage-based seat
+    /// or no attempt.
     /// Else an object keyed by the account's window ids, `five_hour`, `seven_day` and the model's own week where it
     /// has one, each the serving attempt's share of that window under the account tier the attempt recorded, priced
     /// at read time on the cost revision in force at the request's receipt with the peak band read at the attempt's
@@ -266,6 +267,8 @@ pub(crate) struct Attempt {
     /// present only when the head carried it.
     pub windows: Vec<AttemptWindow>,
     pub overage_in_use: Option<bool>,
+    /// The serving account's class at the attempt, false on a row from before the router recorded it.
+    pub usage_based: bool,
     /// The attempt's dollars at the cells its own prompt selects on the API price revision in force at its request's
     /// receipt, priced when it is read, null for a model the revision lacks and for an attempt without usage.
     pub estimated_usd: Option<f64>,
@@ -274,8 +277,7 @@ pub(crate) struct Attempt {
     /// fail-over or a move landed it here), `skipped` (array of `account_id`, `obstacle`, every candidate the
     /// choice passed over), `placement` (null, or `rung` (`content`, `static`, or `with_main`), `depth`, and
     /// `prefix_tokens` for a fresh placement with no pin of its own). The completion adds `cache_read`, the tokens the
-    /// answer read from the cache, and `passthrough`, the content coding (`gzip`, for instance) of an answer the client
-    /// took as the upstream sent it.
+    /// answer read from the cache.
     #[schema(value_type = Option<Object>)]
     pub selection: Option<Value>,
     pub response: AttemptResponse,
@@ -321,7 +323,7 @@ pub(crate) struct AttemptResponse {
 #[serde(deny_unknown_fields)]
 pub(crate) struct StreamCut {
     pub at: i64,
-    /// One of `account_cancelled`, `stream_cut`, `stream_stalled` and `stream_undecodable`.
+    /// One of `account_canceled`, `stream_cut`, `stream_stalled` and `stream_undecodable`.
     #[schema(example = "stream_cut")]
     pub code: String,
     pub text: String,
@@ -373,11 +375,23 @@ pub(crate) struct Event {
     /// - `pin_expired`: a pin left its account, with the facts that released it.
     /// - `pin_migrated`: a pin moved to another account, with the move's reason.
     /// - `pin_released`: an operator released the session.
+    /// - `plan_ended`: a profile read found the account's organization holding no plan, which flags the account
+    ///   plan ended, with the read's `source` (`profile`, or `usage_403` where a usage 403 naming the organization's
+    ///   refusal made the read due) and the profile's `organization_type`, `rate_limit_tier` and
+    ///   `subscription_status`.
+    /// - `plan_restored`: the account's plan-ended flag cleared, with its `source` (`profile` for a profile read that
+    ///   found a plan, `pairing` for a pairing confirm) and the profile's `organization_type`, `rate_limit_tier` and
+    ///   `subscription_status`.
     /// - `poll_backoff_ended`: the usage poll's backoff on an account ended with a clean answer, with
     ///   `duration_ms`.
     /// - `poll_backoff_started`: the usage or the profile endpoint (`endpoint`) rate-limited an account, starting
     ///   the usage poll's backoff, with `next_attempt_at` and `last_clean_poll_at`, when the last clean answer
     ///   before it was read.
+    /// - `poll_failed`: the usage poll's read of the usage or the profile endpoint (`endpoint`) answered a status
+    ///   other than 200 and 429 or failed in transport, once per poll, with the `status`, null on a transport
+    ///   failure, the `error` text the poll recorded and `transport`. A usage 401 writes none, since it moves the
+    ///   account to `reauth_required`, and a usage 403 naming the organization's refusal whose profile reports no plan
+    ///   writes `plan_ended` instead.
     /// - `refresh_failed`: an OAuth token refresh failed, with the `error` the refresh recorded and its `cause`:
     ///   the token endpoint's error code (`invalid_grant`), else the status it answered (`503`), else the words
     ///   before the colon of an error that carries its detail after one (`transport`), else the error's own words
@@ -390,8 +404,8 @@ pub(crate) struct Event {
     ///   and `cause` as on a failed one.
     /// - `registry_changed`: an operator's edit to the registry, with its `kind`, `target` and `diff`: the row's
     ///   snapshot for a creation, the `{field: {from, to}}` pairs of the changed fields for an account, a key or a pool
-    ///   update, the guardrail's snapshot with its `pools` and `keys` lists for a guardrail update, `{}` for a deletion
-    ///   or a revocation, and the member list for `pool_members_set`. An account update's pairs carry
+    ///   update, the same pairs for a guardrail update with its `pools` and `keys` lists among the fields, `{}` for a
+    ///   deletion or a revocation, and the member list for `pool_members_set`. An account update's pairs carry
     ///   `"secret_replaced": true` beside them where the edit staged a secret, whose value the diff never holds, and
     ///   `key_rotated` carries the new secret's `prefix` and `previous_secret_until`, the instant the retired secret
     ///   stops being accepted.
@@ -414,15 +428,16 @@ pub(crate) struct Event {
     ///   with the read's `factor`, `stretch_ms`, `threshold_ms`, `demand` (share of the 5-hour window per hour) and
     ///   the window's `reset`.
     /// - `stream_interrupted`: the request's body ended short after the head, with the `code` its `error_code` carries
-    ///   (`account_cancelled`, `stream_cut`, `stream_stalled` or `stream_undecodable`), the error's own words as
+    ///   (`account_canceled`, `stream_cut`, `stream_stalled` or `stream_undecodable`), the error's own words as
     ///   `text`, `bytes_relayed`, the bytes the client received before the end, the head's `upstream_request_id`, null
     ///   where the head carried none, and the `attempt`.
     /// - `warm_prefix_expired`: the cache-map entries the purge removed for one conversation root on one account,
     ///   with the largest of them and the cause, `ttl` or `incarnation`.
-    /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `cancelled` or
+    /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `canceled` or
     ///   `trial`.
-    /// - `window_cleared`: a plan window read under 1.0 after a reading at 1.0 under the same reset, with the
-    ///   reading before and after and the unchanged reset, so the history no longer keeps the window spent.
+    /// - `window_cleared`: a plan window read under 1.0 after a reading at 1.0 or a predicted spent edge under the
+    ///   same reset, with the figure before, the reading's or the prediction's, the reading after and the unchanged
+    ///   reset, so the history no longer keeps the window spent.
     /// - `window_reset`: a plan window's reset passed, seen by a sample naming a later reset, or naming none once
     ///   read past it (`sample`), or by the clock (`clock`), once per reset.
     /// - `window_spent`: a plan window's reading reached 1.0 from under it, with the head's request when a head
@@ -613,7 +628,13 @@ fn plan_figures(
     tables: &PlanTables,
 ) -> Option<PlanFigures> {
     let a = attempts.last()?;
-    if funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()) != Funding::Plan {
+    if funding_of(
+        &a.account_kind,
+        a.usage_based,
+        a.overage_in_use,
+        a.speed.as_deref(),
+    ) != Funding::Plan
+    {
         return None;
     }
     let usage = PinUsage {
@@ -765,6 +786,7 @@ fn attempt_json(a: &AttemptRecord, r: &RequestRecord, prices: &PriceRevisions) -
         }),
         windows,
         overage_in_use: a.overage_in_use,
+        usage_based: a.usage_based,
         estimated_usd: attempt_usd(a, r, prices),
         selection: a
             .selection

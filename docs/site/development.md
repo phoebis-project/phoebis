@@ -304,6 +304,7 @@ python3 scripts/check-docs.py client
 python3 scripts/check-docs.py check-config
 python3 scripts/check-docs.py codes
 python3 scripts/check-docs.py example
+python3 scripts/check-docs.py unit
 python3 scripts/check-docs.py prose docs/site/<page>.md
 ```
 
@@ -322,13 +323,14 @@ read rather than dropping it:
 - `codes` compares the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the table
   under [Refusal codes](client.md#refusal-codes) on The client.
 - `example` compares the installation page's quoted example with `deploy/config.example.yaml`.
+- `unit` compares the installation page's quoted unit with `deploy/phoebis.service`.
 - `prose` holds the site's prose to its mechanical rules, by path or, with no path, over every page and the README: a
   semicolon on a prose line, a line over 120 columns that is not a table row, an em-dash or an en-dash, a word from
   its list of words no page carries, and a bare `api_key` outside a code span. It drops fenced blocks and code spans
   before it reads.
 
-`bash scripts/tests/check-docs.sh` runs the checker's own cases against throwaway trees, and the favicon case at the
-end against the real one, so the checker fails on what it exists to catch.
+`bash scripts/tests/check-docs.sh` runs the checker's own cases against throwaway trees, and the favicon case and the
+unit case at the end against the real one, so the checker fails on what it exists to catch.
 
 ## Continuous checks
 
@@ -390,7 +392,8 @@ on a published release, on a manual dispatch, and on a pull request that touches
    libclang without tzdata's time zone prompt, so the build runs through rather than waiting for an answer. Once every
    smoke passes it publishes one manifest list at `ghcr.io/daystrom-labs/phoebis` under `X.Y.Z`, `X.Y` and `X` (from
    major 1, never for a prerelease), `latest` (never for a prerelease), and `sha-<short sha>`, checks that the list
-   holds amd64 and arm64, and uploads the two archives with `SHA256SUMS` to the release.
+   holds amd64 and arm64, and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the
+   image's node stage to `node:26.11.1-trixie-slim` by digest, resolved 2026-10-22, as it pins the runtime base.
 
 A failed smoke, of the image or of a binary, or a failed bundle check leaves untagged digests in the registry, no tag
 and no archive on the release. A failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the

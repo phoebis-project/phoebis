@@ -274,6 +274,58 @@ async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_insta
     );
 }
 
+/// A request on main naming `owner` in its owner header, of the class `request_class` when one is named.
+fn owned_request(r: &Rig, id: &str, request_class: Option<&str>, owner: &str) -> BusEvent {
+    let mut event = r.observed_with(
+        id,
+        "main",
+        request_class,
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    );
+    if let BusEvent::RequestObserved(observed) = &mut event {
+        observed.owner_id = Some(owner.into());
+    }
+    event
+}
+
+#[tokio::test]
+async fn an_auxiliary_requests_takeover_of_a_lapsed_session_saves_its_owner_across_the_restart() {
+    let mut r = rig(on_disk()).await;
+    r.event(Event {
+        event: "session_start".into(),
+        owner_id: Some("owner-1".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.advance(LEASE_MS);
+    // The lapse is swept and saved first, so the one session write the takeover's flush can carry is the takeover's.
+    r.engine.expire();
+    r.engine.flush_persisted().await;
+    // A title request is not refreshing, so it leaves at the guard before a turn's own session write.
+    r.engine
+        .observe(owned_request(&r, "r-title", Some("title"), "owner-2"));
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        None,
+        "a request past the lease takes the session over"
+    );
+    r.engine.flush_persisted().await;
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
+    // The re-registration renews the lease and names no owner, so the fence compares against the owner the load read.
+    r.reregister();
+    r.engine
+        .observe(owned_request(&r, "r-first-owner", None, "owner-1"));
+    assert_eq!(
+        r.engine.reasons().get(&Reason::OwnerMismatch).copied(),
+        Some(1),
+        "the saved owner is the one the takeover recorded"
+    );
+}
+
 #[tokio::test]
 async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
     let mut r = rig(on_disk()).await;
@@ -1087,6 +1139,117 @@ async fn a_restart_restores_a_pending_probe_with_its_funding_coverage_unit_and_l
         ),
         (Some(2_000), true, Some(NOW + 270_000), Some("standard")),
         "{kept}"
+    );
+}
+
+/// A usage-based seat's observation, its unanswered probe and the probe the idle limit left pending come back from a
+/// restart with the class their facts carried, and a payload written before the class rode the records reads false
+/// on each, so its probes settle as they did.
+#[tokio::test]
+async fn a_restart_restores_the_class_of_a_seats_records_and_a_payload_from_before_reads_false() {
+    const OAUTH: &str = "sk-ant-oat01-OOOO";
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH, 0)],
+        tier: Some("default_claude_zero"),
+        policy: KeepalivePolicy {
+            enabled: true,
+            max_idle_seconds: 500,
+            ..KeepalivePolicy::default()
+        },
+        ..on_disk()
+    })
+    .await;
+    // The record's kind and class at `pointer` in a saved agent's payload.
+    let class_at = |payload: &str, pointer: &str| {
+        let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
+        let record = payload.pointer(pointer).cloned().unwrap_or_default();
+        (
+            record["kind"].as_str().map(String::from),
+            record["usage_based"].as_bool(),
+        )
+    };
+    // A payload from before the class: the member leaves each record it rides on.
+    let from_before = |rows: &[KeepaliveAgentRow], pointers: &[&str]| {
+        let mut rows = rows.to_vec();
+        let mut payload: serde_json::Value = serde_json::from_str(&rows[0].payload).unwrap();
+        for pointer in pointers {
+            payload
+                .pointer_mut(pointer)
+                .and_then(serde_json::Value::as_object_mut)
+                .unwrap()
+                .remove("usage_based");
+        }
+        rows[0].payload = payload.to_string();
+        rows
+    };
+    let seat = (Some("oauth".to_string()), Some(true));
+    let read_false = (Some("oauth".to_string()), Some(false));
+    r.observe("main").await;
+    r.up.push_credential_rule(OAUTH, "/v1/messages", probe_answer(2_000, 0));
+    r.advance(270_000);
+    r.step().await;
+    let (open_sessions, open_agents) = r.engine.persist_rows();
+    assert_eq!(
+        (
+            class_at(&open_agents[0].payload, "/current"),
+            class_at(&open_agents[0].payload, "/unanswered/0")
+        ),
+        (seat.clone(), seat.clone()),
+        "the save writes the class the selection and the probe's answer carried"
+    );
+    r.engine.flush_persisted().await;
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions: open_sessions,
+            agents: from_before(&open_agents, &["/current", "/unanswered/0"]),
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let older = r.restart().await;
+    older.load_persisted().await;
+    let loaded = older.persist_rows().1;
+    assert_eq!(
+        (
+            class_at(&loaded[0].payload, "/current"),
+            class_at(&loaded[0].payload, "/unanswered/0")
+        ),
+        (read_false.clone(), read_false.clone()),
+        "an observation and an unanswered probe from before the class load and read false"
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").unanswered),
+        (Reason::IdleLimit, 1),
+        "the idle limit left the probe pending"
+    );
+    let (sessions, agents) = r.engine.persist_rows();
+    assert_eq!(
+        class_at(&agents[0].payload, "/kept/0"),
+        seat,
+        "the pending probe keeps the class its answer carried"
+    );
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(
+        second.persist_rows().1,
+        agents,
+        "the agent with its pending probe reads back as it stood"
+    );
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions,
+            agents: from_before(&agents, &["/kept/0"]),
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let third = r.restart().await;
+    third.load_persisted().await;
+    assert_eq!(
+        class_at(&third.persist_rows().1[0].payload, "/kept/0"),
+        read_false,
+        "a pending probe from before the class loads and reads false"
     );
 }
 

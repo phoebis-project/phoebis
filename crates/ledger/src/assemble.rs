@@ -274,6 +274,7 @@ impl Assembler {
                             &unified,
                             &wire,
                             head.observed_at,
+                            attempt.usage_based,
                         );
                         if !quota.is_empty() || extra.is_some() {
                             records.push(Record::Samples { quota, extra });
@@ -371,6 +372,7 @@ fn attempt_row(selected: &AccountSelected) -> AttemptRecord {
         attempt: selected.attempt as u32,
         account_id: selected.account_id.clone(),
         account_kind: selected.account_kind.clone(),
+        usage_based: selected.usage_based,
         pin_epoch: selected.pin_epoch,
         started_at: selected.started_at,
         outcome: "transport_error".into(),
@@ -499,16 +501,6 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 }
             }
         }
-        // Apart from the usage block: a pass-through whose copy the router could not decode read no usage, and its
-        // trace still names the coding the client took.
-        if let (Some(coding), Some(trace)) = (&complete.passthrough, &last.selection) {
-            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trace) {
-                if let Some(obj) = value.as_object_mut() {
-                    obj.insert("passthrough".into(), json!(coding));
-                    last.selection = Some(value.to_string());
-                }
-            }
-        }
         let response = &complete.response;
         last.stop_reason = response.stop_reason.clone();
         last.stop_sequence = response.stop_sequence.clone();
@@ -523,12 +515,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         last.cleared_input_tokens = response.cleared_input_tokens;
         last.refusal_category = response.refusal_category.clone();
         last.refusal_recommended_model = response.refusal_recommended_model.clone();
-        // No transport failed a headless attempt that the account's removal or the client's leaving cut short, so
-        // it files as canceled over its row's `transport_error` default.
+        // No transport failed a headless attempt that the account's removal, the client's leaving or the router's
+        // shutdown cut short, so it files as canceled over its row's `transport_error` default.
         if last.upstream_status.is_none()
             && matches!(
                 complete.error_code.as_deref(),
-                Some("account_cancelled" | "client_gone")
+                Some("account_canceled" | "client_gone" | "router_shutdown")
             )
         {
             last.outcome = "canceled".into();
@@ -597,9 +589,8 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
     for attempt in &mut attempts {
         attempt.client_drift = complete.client_drift.clone();
     }
-    // Completeness is the terminal chunk count alone: `response_bytes` counts what the caller received
-    // (compressed on a pass-through) while the chunks it is compared against are decoded, so the two cannot
-    // be compared for length across every encoding the relay forwards.
+    // Completeness is the terminal chunk count alone: a chunk can carry a phase and no bytes, so a dropped one
+    // need not shorten any length the count could be compared with.
     let short = complete
         .response_chunks
         .is_some_and(|published| next_index < published);
@@ -831,6 +822,7 @@ mod tests {
             attempt: n,
             account_id: account.into(),
             account_kind: "oauth".into(),
+            usage_based: false,
             pin_epoch: Some(4),
             started_at: at,
             cache_ttl_ms: None,
@@ -927,7 +919,6 @@ mod tests {
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: 1_500,
         })
     }
@@ -971,7 +962,6 @@ mod tests {
             message_id: None,
             skipped_events: 0,
             interruption: None,
-            passthrough: None,
             finished_at: 1_500,
         }
     }
@@ -1283,7 +1273,7 @@ mod tests {
                 Some("a"),
                 Outcome::Canceled,
                 503,
-                Some("account_cancelled"),
+                Some("account_canceled"),
             ))
             .pop()
         else {
@@ -1363,7 +1353,7 @@ mod tests {
                 Some("a"),
                 Outcome::Canceled,
                 503,
-                Some("account_cancelled"),
+                Some("account_canceled"),
             ))
             .pop()
         else {
@@ -1372,7 +1362,7 @@ mod tests {
         assert_eq!(
             attempts[0].outcome.as_str(),
             "canceled",
-            "cancelled after the head"
+            "canceled after the head"
         );
     }
 
@@ -1832,11 +1822,11 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_through_response_larger_on_the_wire_than_decoded_is_stored_complete() {
+    fn a_response_larger_on_the_wire_than_decoded_is_stored_complete() {
         let mut a = Assembler::new(clock_at(1_000));
         a.observe(observed_capturing("r1", Some("k"), 1));
         a.chunk(&chunk_bytes("r1", 0, b"0123456789"));
-        // One chunk published, one delivered; the caller took 40 compressed bytes for these 10.
+        // One chunk published and delivered, under a byte count four times its length.
         let records = a.observe(Event::RequestComplete(completion("r1", Some(1), Some(40))));
         let (request, bodies) = request_and_bodies(&records);
         assert!(!request.response_truncated);

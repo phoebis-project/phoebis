@@ -176,8 +176,8 @@ const PURGE_BODIES: &str = "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM
 /// responses' lengths. The join reads the bodies record's first column and the request row by its key, and SQLite
 /// answers `length()` of a blob from the record's header, so no blob is read: the record's own `request_len_seen` sits
 /// behind both blobs, and reading it would walk each row's overflow pages under the lock the budget exists to shorten.
-/// The request row's `response_bytes` counts what the caller received, compressed on a pass-through, so it bounds
-/// nothing the bodies row holds.
+/// The request row's `response_bytes` counts what the caller received, while the bodies row keeps what the bus
+/// delivered up to the capture's bound, so a stored response counts at its own length.
 const EXPIRED_BODY_BYTES: &str = "SELECT r.id IS NOT NULL, r.request_bytes, length(b.response_body) FROM bodies b LEFT JOIN requests r ON r.id = b.request_id WHERE b.expires_at <= ?1 ORDER BY b.expires_at, b.rowid LIMIT ?2";
 
 /// What one body frees: the request as its row counts it, received whole since the capture never cuts it, at

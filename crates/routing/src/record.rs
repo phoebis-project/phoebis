@@ -242,8 +242,10 @@ pub struct CandidateFacts {
     pub overage: Option<OverageFacts>,
     pub in_flight: u32,
     pub in_flight_cap: u32,
-    /// By window name: the three plan windows for a subscription member, the worst bucket and the two fast buckets
-    /// for an api_key one, each as `predicted` reads it at decision time.
+    /// By window name: the three plan windows for a subscription member (a usage-based seat holds none), the worst
+    /// bucket and the two fast buckets for an api_key one, each as `predicted` reads it at decision time, and
+    /// `spend` for a usage-based seat while its share is held: the share, the window's reset with its source, and no
+    /// lead, projection or demand.
     pub windows: BTreeMap<String, WindowFacts>,
     pub allowance_known: bool,
     /// Filled for every member under Pace, chosen or not, and `None` under another strategy.
@@ -302,8 +304,9 @@ pub struct WindowFacts {
     pub reserved: f64,
 }
 
-/// `end`, `deadline` and `hours` are `None` and `burn` is 0 for an api_key member, which Pace scores by its remaining
-/// share alone. A subscription member with neither a reset nor an end reads a week of hours.
+/// `end`, `deadline` and `hours` are `None` and `burn` is 0 for a paid source (an api_key member or a usage-based
+/// seat), which Pace scores by its remaining share alone. A subscription member with neither a reset nor an end reads a
+/// week of hours.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PaceFacts {
     pub remaining: f64,
@@ -312,8 +315,8 @@ pub struct PaceFacts {
     pub deadline: Option<i64>,
     pub hours: Option<f64>,
     pub score: f64,
-    /// The window the score read (`seven_day`, or the model's week such as `seven_day_fable`). `None` for an api_key
-    /// member, which the worst bucket scores. The caller holds the window, so the console derives nothing.
+    /// The window the score read (`seven_day`, or the model's week such as `seven_day_fable`). `None` for a paid
+    /// source, which no plan window scores. The caller holds the window, so the console derives nothing.
     pub window: Option<String>,
     /// The demand of the pins on the account on `window`, their burn over the account's realized speed, share per
     /// hour: what the score subtracts.
@@ -354,7 +357,7 @@ pub struct CreditsFacts {
 pub struct TermFacts {
     pub since: Option<i64>,
     pub trial_ends_at: Option<i64>,
-    pub cancelled: bool,
+    pub canceled: bool,
     pub ends_at: Option<i64>,
     pub winding_down: bool,
     pub ended: bool,

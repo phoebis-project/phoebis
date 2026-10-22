@@ -13,10 +13,12 @@ for the client request, stamped with the instant the ledger wrote it, and one ro
 as `landed_through`, at most the read's `to` where it names one, and the Requests view's auto reload polls a preset
 range by it with no `to`, so the route reads to its own clock. The relay waits for the ledger's queue when it must, so a
 row is never lost to a busy moment. A request whose client leaves before the head lands as a canceled request with the
-code `client_gone`, keeping the attempts it reached. Captured bodies are the one best-effort part, since a stream may
-outrun its recorder, and a capture whose chunks were lost is stored as truncated with a `ledger_gap` event naming the
-request. Once a request finishes, it is folded into the hour's rollup in the same transaction as its rows, which is what
-the analytics routes report, so a long range costs one row per hour rather than one per request.
+code `client_gone`, keeping the attempts it reached. A request the router's own shutdown ends past its drain window,
+after the head or before one, lands the same way under the code `router_shutdown`. Captured bodies are the one
+best-effort part, since a stream may outrun its recorder, and a capture whose chunks were lost is stored as truncated
+with a `ledger_gap` event naming the request. Once a request finishes, it is folded into the hour's rollup in the same
+transaction as its rows, which is what the analytics routes report, so a long range costs one row per hour rather than
+one per request.
 
 Every routing decision lands as its own row in a decisions table beside the attempt rows: one zstd-compressed record per
 decision holding the request's facts, the settings in force, every pool member's standing at decision time, the rule
@@ -56,13 +58,14 @@ carries that conversation's root and the matched depth as well. The session the 
 and the Sessions view groups a row by it. The request row records who put the cache
 diagnostics member on the body the upstream compared: the client, the router, or none.
 
-The attempt row names the account and its kind, the upstream status, request id and message id, the outcome, the
-cooldown the attempt set, the stop reason, the model the answer names when it differs from the one the router resolved,
-the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and recommended
-model. It carries the five token counts, with the thinking share of the output and the web search and fetch calls the
-answer made, the cache miss reason the diagnostics beta reports, the unified rate-limit window readings, overage, and
-the serving account's rate-limit tier as the router held it when the request landed. No dollar is stored: every price is
-computed when it is read, from these counts, at the price revision in force when the request arrived.
+The attempt row names the account and its kind, whether the account is a usage-based seat, the upstream status, request
+id and message id, the outcome, the cooldown the attempt set, the stop reason, the model the answer names when it
+differs from the one the router resolved, the speed, the region inference ran in, the tokens a context edit cleared, and
+a refusal's category and recommended model. It carries the five token counts, with the thinking share of the output and
+the web search and fetch calls the answer made, the cache miss reason the diagnostics beta reports, the unified
+rate-limit window readings, overage, and the serving account's rate-limit tier as the router held it when the request
+landed. No dollar is stored: every price is computed when it is read, from these counts, at the price revision in force
+when the request arrived.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -71,15 +74,18 @@ every account at its cap, by any request's landing on another agent's pin of its
 
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
 day and the current month: an API-key member's rows whole, a subscription member's metered rows alone (`overage` and
-`fast`). A keepalive probe's cost counts toward it the same as any other request's, since a probe on an API-key member
-still draws real money. A member's spend is the period's hourly sums priced at the revision in force at each hour, so a
-revision that lands moves the spend at the next refresh, and a model priced by prompt length sums its hours by the band
-each attempt fell in. The rollups file each hour's traffic under who paid for it: the plan, overage, or a fast answer's
-usage credits, as the response reported it. They also count, per account and pool, the time the slow-down held the
-hour's requests before their heads and how many requests it held, which the Analytics view's held chart reads
-([Slow-down](routing.md#slow-down)). An account's rollups also book a cooldown's time when its announcement
-lands, each part to the hour it falls in, up to seven days past the announcement, a later announcement booking on from
-the end already booked, and a cooldown cleared early gives back the time after the clear.
+`fast`, and `usage_based` for a usage-based seat). A keepalive probe's cost counts toward it the same as any other
+request's, since a probe on an API-key member still draws real money. A member's spend is the period's hourly sums
+priced at the revision in force at each hour, so a revision that lands moves the spend at the next refresh, and a model
+priced by prompt length sums its hours by the band each attempt fell in. The rollups file each hour's traffic under who
+paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it, or a usage-based seat's
+dollars at the API rates. They key it by five words, `plan`, `overage`, `fast`, an API-key account's `billed` and a
+usage-based seat's `usage_based`, the last priced in dollars with no window share and kept by the analytics `billed`
+funding filter. They also count, per account and pool, the time the slow-down held the hour's requests before their
+heads and how many requests it held, which the Analytics view's held chart reads ([Slow-down](routing.md#slow-down)). An
+account's rollups also book a cooldown's time when its announcement lands, each part to the hour it falls in, up to
+seven days past the announcement, a later announcement booking on from the end already booked, and a cooldown cleared
+early gives back the time after the clear.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
@@ -98,7 +104,7 @@ The ledger flags a request the router refused before any account was asked, for 
 missing, malformed or doubled key header, a refused key, a client outside Claude Code, a client drift or a missing
 header the contract requires, a guardrail block, a malformed, incomplete, late or oversized body, an unsupported
 encoding, an unknown route or method, and a model the key does not allow, one the body lacks or one that is not a usable
-model name, never a keepalive probe. The router's own refusals stay in the figures, `account_cancelled`,
+model name, never a keepalive probe. The router's own refusals stay in the figures, `account_canceled`,
 `accounts_unavailable`, `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, and so does
 every outcome after an account was asked. The hourly row counts a flagged request in a map by error code and in no
 request, outcome, cache, latency or error figure, nor in the slow-down's held count or held time, so every reader of the
@@ -108,7 +114,8 @@ Dashboard's Refused tile, the Analytics view's Refused column and "Refusals by c
 block, the Requests view and a session's request list, and in `phoebis_refusals_total` ([Metrics](#metrics)). The first
 start after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the
 map, in pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old
-counts.
+counts. With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
+`stats.rollup_retention_days` keeps, so a refusal in an hour the rollup purge removed writes no row into it.
 
 ## Quota samples
 
@@ -122,7 +129,15 @@ A sample's window is one of the endpoint's keys: `five_hour`, `seven_day`, `seve
 overage-included week), `seven_day_fable` (the `limits` window) and any other `seven_day_*` key the poll reports. The
 metric's `window` label uses the same spelling, and the console draws the windows it knows under its own labels and any
 other key as it is. A head and a poll of the same five-minute bucket write one row per window, the head's where both
-read it.
+read it. The extra-usage rows are keyed by the source too, so a head and a poll of one bucket each keep a row, and
+`GET /admin/accounts/{id}/quota` answers both samples at one instant, the head's first. The extra-usage rows hold the
+share as a fraction from both sources, the poll's percent divided by a hundred as on its quota rows. A poll's row also
+carries the body's `spend` figures where the body has the object: the cap and the spend in minor units, the percent, the
+currency and its exponent. A usage-based seat's head row carries no in-use flag, since the seat's overage family is its
+spend window. The account view and the Dashboard answer the head's `seven_day_overage_included` and the poll's
+`seven_day_fable` under the one id `seven_day_fable`, the newest reading winning, while the ledger keeps the head's key
+as stored. The head's overage-included week is read as the Fable week until a second model week arrives by head, since
+the upstream's name for it is generic.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
 accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the first
@@ -207,17 +222,19 @@ every prompt at the long-context cells. The list itself is refused when it is em
 ## Plan meter
 
 A subscription account's plan-side figures read as a share of its own 5-hour and 7-day windows, a percent with the
-window named. An API-key account, and a subscription account in overage, read dollars, and an overage request adds to
-no window share.
+window named. An API-key account, and a subscription account in overage, read dollars, and an overage request adds to no
+window share. A usage-based seat reads dollars at the API rates with no window share, since its spend is billed against
+its cap and draws no plan window.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, the projection, or the burn a shedding
 round ranks by. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which
 Spend per minute charts under every grouping. An answer in overage reads the same in the burn figures, a zero share in
-Plan per hour and its dollars in `usd`. A member's budget counts a fast answer at the fast cells, a subscription
-member's as an API-key member's.
+Plan per hour and its dollars in `usd`. A usage-based seat's answer counts its dollars in `usd` with no share, and the
+burn route names its group's unit `usd`, as an API-key account's. A member's budget counts a fast answer at the fast
+cells, a subscription member's as an API-key member's.
 
 A client classifier call reads a zero share and a zero equivalent on a subscription account, with the reason
-`client_classifier` on the request, and its dollars in the overage and on an API key.
+`client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat.
 
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
@@ -564,7 +581,7 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `model_unweighted` | warning | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
 | `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind that ended in the last eight days with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no such window remains |
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
-| `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours |
+| `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours, or a `window_cleared` on the same window followed each such spent window |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
 | `slowed_long` | warning | the account | the slow-down spans of the last 24 hours sum at or under twice the pool's `slow_down_stretch_seconds`, at least an hour |
 
@@ -672,10 +689,11 @@ so the figure outlives the trailing day. The item opens the [routing log](consol
 windows since the condition began.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
-source followed on it within the hour. It is folded as `wall_reached` is. The subject is the destination account, and
-the item dates from the oldest such move. The detail counts the moves, gives their destination fits with a count each
-and names the spent windows and the setting `window_ceiling`. The item opens the routing log on the account's moves and
-spent windows since the condition began.
+source followed on it within the hour, until a `window_cleared` event on the same account and window follows that spent
+event. It is folded as `wall_reached` is. The subject is the destination account, and the item dates from the oldest
+such move. The detail counts the moves, gives their destination fits with a count each and names the spent windows and
+the setting `window_ceiling`. The item opens the routing log on the account's moves and spent windows since the
+condition began.
 
 **`shed_no_runway`** holds while a shedding round of the pool marked nothing for want of a destination with runway (the
 outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one round being enough. It is folded as

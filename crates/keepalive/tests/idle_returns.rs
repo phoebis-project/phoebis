@@ -527,15 +527,23 @@ async fn a_changed_prefix_counts_as_no_return_before_and_after_the_recipes_dispo
         ([1, 1, 1, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
         "disposed"
     );
-    // A refreshing class re-arms whatever its chain says, and says nothing about the prefix.
+    // A refreshing class re-arms whatever its chain says, and says nothing about the prefix: the class decides the
+    // re-arm, so the recipe's schedule runs from this request, and the chain decides the return, so a request whose
+    // boundaries lack the tail the window opened on counts none in the buckets the window reached.
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
+    let before = reached(&r);
     tick_to(&mut r, start, 12).await;
     observe_classed(&mut r, "main", &fresh_chain()).await;
     assert_eq!(last_guard(&r), Some(Guard::Rearm));
     assert_eq!(
-        (reached(&r), returned(&r)),
-        ([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
+        (retained(&r), r.status("main").next_probe_at),
+        (true, Some(r.now() + 270_000)),
+        "the class re-armed the recipe on the fresh chain"
+    );
+    assert_eq!(
+        (before, reached(&r), returned(&r)),
+        ([0; 10], [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
         "refreshing class"
     );
 }

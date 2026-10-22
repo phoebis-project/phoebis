@@ -37,6 +37,7 @@ async fn a_connection_that_sends_no_head_is_closed_at_the_header_read_timeout() 
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(300),
         max_connections: 8,
+        shutdown_mark: None,
     };
     let (addr, _stop) = listening(limits, None).await;
     let mut idle = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -55,6 +56,7 @@ async fn a_plain_peer_that_sends_one_byte_and_stalls_is_closed_at_the_header_rea
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(300),
         max_connections: 8,
+        shutdown_mark: None,
     };
     let (addr, _stop) = listening(limits, None).await;
     let connected = std::time::Instant::now();
@@ -89,6 +91,7 @@ async fn a_tls_listener_drops_a_silent_peer_at_the_bound_and_serves_a_finished_h
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(200),
         max_connections: 1,
+        shutdown_mark: None,
     };
     let (addr, _stop) = listening(limits, Some(acceptor.clone())).await;
     let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -129,6 +132,7 @@ async fn the_connection_cap_holds_the_next_accept_until_a_slot_frees() {
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(500),
         max_connections: 2,
+        shutdown_mark: None,
     };
     let (addr, _stop) = listening(limits, None).await;
     let _first = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -162,6 +166,7 @@ async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_secs(30),
         max_connections: 8,
+        shutdown_mark: None,
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -204,6 +209,7 @@ async fn a_stop_ends_an_idle_keep_alive_connection_well_before_the_drain_deadlin
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_secs(30),
         max_connections: 8,
+        shutdown_mark: None,
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

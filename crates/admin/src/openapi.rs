@@ -56,12 +56,13 @@ Each operation names its request (path segments, query parameters, or body field
             (newline-separated patterns. Under `group_by=user_agent` each names a group, a row falls in the first that \
             matches its agent's token, and the rest group under `other`), `clients` (newline-separated patterns over \
             the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`). Both also \
-            take `funding` (`billed` keeps the overage and fast rows and every row an API key account served, `plan` \
-            the rows a subscription window paid for and the rows of a request no account served. Each row files under \
-            the funding its serving attempt had when the ledger recorded it, so deleting an account, or recreating its \
-            id as the other kind, moves none of its rows. A probe's cost files under the funding of the probe's own \
-            request, while a recipe's settlement, which carries the probes' waste, files under the kind its record \
-            carries: `billed` for an API key account, else `fast` for a fast recipe, else `plan`. Absent keeps every \
+            take `funding` (`billed` keeps the overage and fast rows, every row an API key account served and every \
+            row a usage-based seat served, `plan` the rows a subscription window paid for and the rows of a request \
+            no account served. Each row files under the funding its serving attempt had when the ledger recorded it, \
+            so deleting an account, or recreating its id as the other kind, moves none of its rows. A probe's cost \
+            files under the funding of the probe's own request, while a recipe's settlement, which carries the \
+            probes' waste, files under the kind and the class its record carries: `billed` for an API key account, \
+            `usage_based` for a usage-based seat, else `fast` for a fast recipe, else `plan`. Absent keeps every \
             row. The two subsets partition the rows). `/accounts` takes `range` alone. `GET /admin/analytics/budgets`, \
             `/burn`, `/placements`, `/reconciliations`, and `/rewrites`, elsewhere under this tag, take their own \
             request shapes."),
@@ -364,7 +365,8 @@ pub(crate) struct TrafficBucketView {
     pub failed: u64,
     pub tokens: u64,
     pub cost_usd: f64,
-    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
+    /// `cost_usd`.
     pub billed_usd: f64,
     /// The plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
     pub equivalent: SharedEquivalentView,
@@ -595,7 +597,8 @@ pub(crate) struct BreakdownRow {
     pub key: String,
     /// Under `group_by=key` an earlier holder's rows read `<id> (deleted)` whatever the generation, the creation
     /// instant being `key_created_at`'s to format. Under `group_by=model` the empty key, the requests the router
-    /// rejected before routing, reads `no model`. Under `group_by=client` the `-` row reads `unattributed`.
+    /// rejected before routing, reads `no model`. Under `group_by=client` the `-` row reads `unattributed`. Under
+    /// `group_by=classifier` the `-` row reads `none`.
     pub label: String,
     /// The key's id under `group_by=key`. Absent for another dimension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -681,7 +684,8 @@ pub(crate) struct BreakdownRow {
     /// The saving in the 20x window equivalent per window, under every grouping, a window absent where a row could not
     /// be priced on it.
     pub saving_equivalent: BTreeMap<String, f64>,
-    /// The dollars of the billed rows alone (fast mode, overage and API key accounts), a part of `cost_usd`.
+    /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
+    /// `cost_usd`.
     pub billed_usd: f64,
     /// `billed_usd` by token kind.
     pub billed: CostSplitView,
@@ -812,7 +816,8 @@ pub(crate) struct SeriesPointView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct HourPointView {
     pub at: i64,
-    /// The dollars of the hour's billed rows alone (fast mode, overage and API key accounts), a part of `cost`.
+    /// The dollars of the hour's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a
+    /// part of `cost`.
     pub billed: f64,
     pub cost: f64,
     /// The hour's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
@@ -1112,19 +1117,39 @@ mod tests {
         });
     }
 
+    /// The members a source serializes. An all-optional mirror reads a missing key as unset, so a member the source
+    /// drops still round trips, and the count of a fully set source is what catches it.
+    fn members(source: &impl serde::Serialize) -> usize {
+        serde_json::to_value(source)
+            .unwrap()
+            .as_object()
+            .map_or(0, serde_json::Map::len)
+    }
+
     #[test]
     fn an_override_with_both_members_set_round_trips_through_its_mirror() {
-        round_trips_source::<_, OverrideView>(Override {
+        let source = Override {
             type_multiplier: Some(every_cell()),
             weight_by_window: Some(IndexMap::from([
                 ("five_hour".to_string(), 1.5),
                 ("seven_day".to_string(), 0.75),
             ])),
-        });
+        };
+        assert_eq!(
+            members(&source),
+            2,
+            "the two members of Override, each set here"
+        );
+        round_trips_source::<_, OverrideView>(source);
     }
 
     #[test]
     fn a_type_override_with_every_cell_set_round_trips_through_its_mirror() {
+        assert_eq!(
+            members(&every_cell()),
+            5,
+            "the five cells of TypeOverride, each set here"
+        );
         round_trips_source::<_, TypeOverrideView>(every_cell());
     }
 
@@ -1134,5 +1159,15 @@ mod tests {
             cost: 0.25,
             wasted: Some(0.4),
         });
+    }
+
+    #[test]
+    fn a_build_holding_a_byte_no_header_carries_answers_unknown_in_the_build_header() {
+        assert_eq!(super::build_value("0123abc\n4567def"), "unknown");
+        assert_eq!(
+            super::build_value("0123abc4567def"),
+            "0123abc4567def",
+            "a build every header carries is its own value"
+        );
     }
 }

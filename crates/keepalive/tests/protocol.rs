@@ -130,11 +130,11 @@ async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() 
         (401, Some("error"), Some("authentication_error"))
     );
     assert_eq!(refused.header("cache-control"), Some("no-store"));
+    assert_eq!(refused.header("x-should-retry"), Some("false"));
+    let unknown = post(&app, heartbeat(2), Some("phoebis-nobody")).await;
     assert_eq!(
-        post(&app, heartbeat(2), Some("phoebis-nobody"))
-            .await
-            .status,
-        401
+        (unknown.status, unknown.header("x-should-retry")),
+        (401, Some("false"))
     );
     let worker = report(
         "agent_start",
@@ -200,16 +200,16 @@ async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() 
     );
     r.h.store.revoke_api_key("laptop", NOW, "test").unwrap();
     r.h.router.reload().await.unwrap();
+    let revoked = post(
+        &app,
+        report("heartbeat", "session", "mine", 2, json!({})),
+        Some(OTHER_KEY),
+    )
+    .await;
     assert_eq!(
-        post(
-            &app,
-            report("heartbeat", "session", "mine", 2, json!({})),
-            Some(OTHER_KEY)
-        )
-        .await
-        .status,
-        401,
-        "a revoked key is refused at once"
+        (revoked.status, revoked.header("x-should-retry")),
+        (401, Some("false")),
+        "a revoked key is refused at once and told not to resend"
     );
 }
 
@@ -234,16 +234,16 @@ async fn a_key_created_again_under_a_used_id_inherits_none_of_its_sessions() {
         .insert_api_key(&other_key_row(&r, "desktop"), "test")
         .unwrap();
     r.h.router.reload().await.unwrap();
+    let deleted = post(
+        &app,
+        report("heartbeat", "session", "instance", 3, json!({})),
+        Some(KEY),
+    )
+    .await;
     assert_eq!(
-        post(
-            &app,
-            report("heartbeat", "session", "instance", 3, json!({})),
-            Some(KEY)
-        )
-        .await
-        .status,
-        401,
-        "the deleted secret is refused outright"
+        (deleted.status, deleted.header("x-should-retry")),
+        (401, Some("false")),
+        "the deleted secret is refused outright and told not to resend"
     );
     let ended = post(
         &app,

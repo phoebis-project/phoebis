@@ -105,7 +105,7 @@ fn kinds(state: &AdminState) -> Result<HashMap<String, AccountKind>, Response> {
 }
 
 /// Every analytics route starts here.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {
@@ -554,7 +554,7 @@ fn base_windows() -> Map<String, Value> {
 /// sample that reported the reset alone has no lead. The pace runs to the account's end in the registry's current
 /// term, resolved at the sample's instant, since the ledger keeps no term history. The lead matches the router's for
 /// a trial end and for the samples taken after a cancellation was recorded, and the older samples of the window that
-/// holds a cancelled end re-read with it.
+/// holds a canceled end re-read with it.
 fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> WindowSample {
     let sampled_at = s.observed_at.unwrap_or(s.bucket * 1_000);
     let end = term.and_then(|t| term::end_of(t, sampled_at));
@@ -805,12 +805,13 @@ pub(crate) struct Burn {
 pub(crate) struct BurnPoint {
     pub at: i64,
     pub group: String,
-    /// `window_share` for an oauth account, `usd` for an API key one. Null for an account no longer registered, and
-    /// under every grouping but `account` unless the `accounts` filter names exactly one account.
+    /// `window_share` for an oauth account, `usd` for an API key one and for a usage-based seat, whose spend is billed
+    /// in dollars. Null for an account no longer registered, and under every grouping but `account` unless the
+    /// `accounts` filter names exactly one account.
     #[schema(example = "window_share")]
     pub unit: Option<String>,
-    /// An API key account's estimated cost. It also carries a subscription account's fast-mode and overage spend,
-    /// which draws usage credits and no window.
+    /// An API key account's estimated cost, and a usage-based seat's. It also carries a subscription account's
+    /// fast-mode and overage spend, which draws usage credits and no window.
     pub usd: f64,
     /// The share of the account's own 5-hour window, band-weighted by the hour the tokens landed in: a fraction of
     /// the window, not a percentage. Null under every grouping but `account` unless the `accounts` filter names
@@ -935,24 +936,26 @@ pub(crate) async fn burn(
         Ok(s) => s,
         Err(e) => return ledger_failure(e),
     };
+    let snapshot = state.router.snapshot();
     let points = series
         .into_iter()
         .flat_map(|(group, points)| {
             // The one account the group's rows belong to, under the gate the ledger answers the shares under. Its
-            // kind names the unit a reader charts the group in, so a subscription whose tier no table sizes reads
-            // apart from an api_key account, both answering no share. An account the registry no longer holds has
-            // none.
+            // kind and its class name the unit a reader charts the group in, so a subscription whose tier no table
+            // sizes reads apart from an api_key account or a usage-based seat, all answering no share. An account the
+            // registry no longer holds has none.
             let account = if group_by == "account" {
                 Some(&group)
             } else {
                 one_account.as_ref()
             };
-            let unit = account
-                .and_then(|account| kinds.get(account))
-                .map(|kind| match kind {
+            let unit = account.and_then(|account| {
+                kinds.get(account).map(|kind| match kind {
+                    AccountKind::Oauth if snapshot.usage_based(account) => "usd",
                     AccountKind::Oauth => "window_share",
                     AccountKind::ApiKey => "usd",
-                });
+                })
+            });
             points.into_iter().map(move |p| BurnPoint {
                 at: p.at,
                 group: group.clone(),
@@ -1181,12 +1184,13 @@ pub(crate) async fn rewrites(
     .into_response()
 }
 
-/// One row per guardrail that matched a request in the range, ordered by id.
+/// The guardrail matches of the range.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GuardrailCounts {
     pub from: i64,
     pub to: i64,
+    /// One row per guardrail that matched a request in the range, ordered by id.
     pub guardrails: Vec<GuardrailCount>,
 }
 

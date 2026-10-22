@@ -13,7 +13,7 @@ use phoebis_ledger::{
     GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow,
     PlanTables, PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
     RollupSelect, SeriesFilter, SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING,
-    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -654,6 +654,92 @@ fn the_model_grouping_labels_its_empty_key_no_model_on_the_breakdown_and_the_ser
         ],
         "only the model grouping reads its empty key as no model"
     );
+}
+
+#[test]
+fn the_classifier_grouping_labels_its_reserved_id_none_on_the_breakdown_and_the_series_while_the_key_grouping_keeps_unattributed(
+) {
+    const HOUR_MS: i64 = 3_600_000;
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, key: Option<&str>, classifier: Option<&str>| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: 1_000,
+            key_id: key.map(String::from),
+            model: "claude-sonnet-5-5".into(),
+            canonical_model: "claude-sonnet-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            classifier: classifier.map(String::from),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[], None).unwrap();
+    };
+    plant("classified", Some("k"), Some("client"));
+    // No classifier call, and no key the router attributed the request to.
+    plant("plain", None, None);
+    let live = LiveKeys::default();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let labels = |groups: &[GroupRow]| -> Vec<(String, String)> {
+        groups
+            .iter()
+            .map(|g| (g.key.clone(), g.label.clone()))
+            .collect()
+    };
+    let grouped = |group_by: &str| {
+        breakdown(
+            &apply_filter(rows.clone(), &RollupFilter::default()),
+            group_by,
+            true,
+            &live,
+            &[],
+            None,
+            &PRICES,
+            &COSTS,
+        )
+    };
+    let want = vec![
+        ("client".to_string(), "client".to_string()),
+        (UNATTRIBUTED.to_string(), "none".to_string()),
+    ];
+    assert_eq!(
+        labels(&grouped("classifier")),
+        want,
+        "the reserved id keeps its key, so a filter on it works, and reads none, as the Requests facet names it"
+    );
+    let points = series(
+        &apply_filter(rows.clone(), &RollupFilter::default()),
+        0,
+        HOUR_MS,
+        3_600,
+        "classifier",
+        true,
+        &live,
+        &[],
+        None,
+        &PRICES,
+        &COSTS,
+    )
+    .unwrap();
+    assert_eq!(
+        points.iter().map(|p| labels(&p.groups)).collect::<Vec<_>>(),
+        vec![want],
+        "the series labels its groups by the same function"
+    );
+    for group_by in ["key", "account"] {
+        let reserved = labels(&grouped(group_by))
+            .into_iter()
+            .find(|(key, _)| key == UNATTRIBUTED)
+            .map(|(_, label)| label);
+        assert_eq!(
+            reserved.as_deref(),
+            Some("unattributed"),
+            "the {group_by} grouping keeps its label for the reserved id"
+        );
+    }
 }
 
 /// The fixed filters as the analytics applied them in memory before the read took them into SQL: a key selector
@@ -1311,7 +1397,7 @@ fn the_start_time_pass_moves_the_stored_refusals_and_leaves_a_request_after_an_a
     .unwrap();
     let now = 3_700_000 + DAY_MS;
     assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 0, now).unwrap(),
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, 0, now).unwrap(),
         1,
         "the one flagged request moved"
     );
@@ -1353,7 +1439,7 @@ fn the_start_time_pass_moves_the_stored_refusals_and_leaves_a_request_after_an_a
         .expect("the pass wrote its mark");
     assert_eq!(mark["done_at"].as_i64(), Some(now));
     assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 0, now + DAY_MS).unwrap(),
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, 0, now + DAY_MS).unwrap(),
         0,
         "the mark stands, so a second start moves nothing"
     );
@@ -1405,7 +1491,7 @@ fn the_start_time_pass_takes_a_refusal_out_of_the_row_an_older_fold_keyed_it_und
         .expect("the served request's row");
     let now = 3_700_000 + DAY_MS;
     assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 0, now).unwrap(),
+        refold_refusals(&db, &PriceRevisions::shipped(), 0, 0, now).unwrap(),
         1
     );
     let after = all_rows(&db);
@@ -1465,7 +1551,7 @@ fn the_start_time_pass_leaves_a_refusal_older_than_the_retention_and_moves_one_i
     })
     .unwrap();
     assert_eq!(
-        refold_refusals(&db, &PriceRevisions::shipped(), 90, now).unwrap(),
+        refold_refusals(&db, &PriceRevisions::shipped(), 90, 0, now).unwrap(),
         1,
         "the request inside the window alone"
     );
@@ -1736,6 +1822,7 @@ struct ShareRow<'a> {
     client: Option<&'a str>,
     tier: Option<&'a str>,
     classifier: Option<&'a str>,
+    usage_based: bool,
 }
 
 impl Default for ShareRow<'_> {
@@ -1753,6 +1840,7 @@ impl Default for ShareRow<'_> {
             client: None,
             tier: Some("test_tier"),
             classifier: None,
+            usage_based: false,
         }
     }
 }
@@ -1796,6 +1884,7 @@ fn plant_share(db: &LedgerDb, row: ShareRow<'_>) {
                 .tier
                 .filter(|_| row.account_kind != "api_key")
                 .map(String::from),
+            usage_based: row.usage_based,
             ..Default::default()
         }],
         None,
@@ -3002,6 +3091,88 @@ async fn the_funding_filter_partitions_the_rows() {
     );
 }
 
+/// A usage-based seat's attempt files its rollup row under the seat's own funding word, which the `billed` filter keeps
+/// and the `plan` filter drops, and the budget's metered sum counts its dollars as it counts an overage or a fast row.
+#[tokio::test]
+async fn a_usage_based_seats_row_files_under_usage_based_stays_billed_and_counts_in_the_metered_sum(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-seat",
+            account: "seat",
+            usage_based: true,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plan",
+            ..ShareRow::default()
+        },
+    );
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let word_of = |account: &str| {
+        rows.iter()
+            .find(|r| r.account_id == account)
+            .map(|r| r.funding.as_str())
+    };
+    assert_eq!(
+        (word_of("seat"), word_of("a")),
+        (Some(USAGE_BASED_FUNDING), Some(PLAN_FUNDING)),
+        "the seat's row carries its own word in the key beside the plan row's: {rows:?}"
+    );
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let read = |funding: FundingFilter| {
+        let db = db.clone();
+        async move {
+            let filter = RollupFilter {
+                funding: Some(funding),
+                ..RollupFilter::default()
+            };
+            account_groups(&db, &filter, from, to, None)
+                .await
+                .iter()
+                .map(|g| (g.key.clone(), g.requests))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        (
+            read(FundingFilter::Billed).await,
+            read(FundingFilter::Plan).await
+        ),
+        (vec![("seat".to_string(), 1)], vec![("a".to_string(), 1)]),
+        "billed keeps the seat's row and plan drops it"
+    );
+    // A flat dollar a token, so the sum is the row's token count.
+    let prices = priced_table("claude-fable-5-1", 1.0);
+    let metered = db
+        .read_blocking(|c| {
+            member_spends(
+                c,
+                &[BudgetedMember {
+                    pool_id: "p".into(),
+                    account_id: "seat".into(),
+                    period: BudgetPeriod::Day,
+                    metered_only: true,
+                }],
+                WEEKDAY_OFF_PEAK + 3_600_000,
+                &prices,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        metered.iter().map(|m| m.spent_usd).collect::<Vec<_>>(),
+        [1_100.0],
+        "the metered sum counts the seat's thousand input and hundred output tokens"
+    );
+}
+
 /// A row files under the funding its serving attempt had and keeps the account tier it recorded, so an id that comes
 /// back as another kind of account moves none of it: an api_key account's row stays billed and priced in dollars once
 /// its id serves as an oauth account with a tier, whose own row prices its share alone.
@@ -3865,6 +4036,121 @@ fn a_classifier_rows_burn_bucket_reads_zero_shares_and_equivalents_beside_a_plai
     assert!(
         plain.iter().all(|figure| figure.is_some_and(|f| f > 0.0)),
         "the plain row's shares and equivalents on both windows: {plain:?}"
+    );
+}
+
+/// A classifier call's plan row reads a zero equivalent through the totals and zero shares and equivalents through its
+/// session's series, while a plain row of the same counts on another account reads its figures there. The row's own
+/// price is the one reader that names why its shares read zero.
+#[test]
+fn a_classifier_row_reads_zero_in_the_totals_and_session_series_and_its_price_names_the_reason() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let tables = share_tables();
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-classifier",
+            classifier: Some("client"),
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plain",
+            account: "b",
+            ..ShareRow::default()
+        },
+    );
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let totals = db
+        .read_blocking(|c| request_totals(c, "account_id", hour, hour + 3_600, &PRICES, &tables))
+        .unwrap();
+    let (marked, plain) = (&totals["a"].equivalent, &totals["b"].equivalent);
+    assert!(
+        marked.five_hour == 0.0
+            && marked.seven_day == 0.0
+            && !marked.unpriced.five_hour
+            && !marked.unpriced.seven_day,
+        "the classifier row's equivalent in the totals: {marked:?}"
+    );
+    assert!(
+        plain.five_hour > 0.0 && plain.seven_day > 0.0,
+        "the plain row's equivalent in the totals: {plain:?}"
+    );
+    // A read naming one account answers the session's shares from that account's attempts alone.
+    let figures = |account: &str| {
+        let filter = SeriesFilter {
+            from: hour * 1_000,
+            to: (hour + 3_600) * 1_000,
+            bucket_seconds: 3_600,
+            accounts: vec![account.into()],
+            ..SeriesFilter::default()
+        };
+        let sessions = db
+            .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &PRICES, &filter))
+            .unwrap();
+        let (_, points) = sessions
+            .iter()
+            .find(|(id, _)| id == "s")
+            .unwrap_or_else(|| panic!("the session is answered: {sessions:?}"));
+        let point = point_at(points, hour);
+        [
+            point.five_hour_share,
+            point.seven_day_share,
+            point.five_hour_equivalent,
+            point.seven_day_equivalent,
+        ]
+    };
+    assert_eq!(
+        figures("a"),
+        [Some(0.0); 4],
+        "the classifier row's shares and equivalents in the session series"
+    );
+    let plain = figures("b");
+    assert!(
+        plain.iter().all(|figure| figure.is_some_and(|f| f > 0.0)),
+        "the plain row's shares and equivalents in the session series: {plain:?}"
+    );
+    let rows = all_rows(&db);
+    let priced = |account: &str| {
+        let row = rows
+            .iter()
+            .find(|row| row.account_id == account)
+            .unwrap_or_else(|| panic!("the row of {account} is stored: {rows:?}"));
+        let key = phoebis_ledger::RowKey {
+            model: &row.canonical_model,
+            speed: Speed::of(Some(row.speed.as_str())),
+            band: phoebis_ledger::Band::of_rollup(&row.band),
+            funding: phoebis_ledger::Funding::of_rollup(&row.funding),
+            kind: &row.kind,
+            tier: Some(&row.tier),
+            entrypoint: phoebis_ledger::entrypoint_of_client(&row.client),
+            classifier: row.classifier == "client",
+            at: row.hour * 1_000,
+            band_at: None,
+        };
+        phoebis_ledger::price_row(&PRICES, &tables, &key, row.usage())
+    };
+    let marked = priced("a");
+    assert_eq!(
+        marked.share_reason,
+        Some(phoebis_ledger::SHARE_REASON_CLIENT_CLASSIFIER),
+        "the classifier row's price names its reason: {marked:?}"
+    );
+    assert!(
+        marked.shares.as_ref().is_some_and(|shares| {
+            [FIVE_HOUR, SEVEN_DAY]
+                .iter()
+                .all(|window| shares.get(window) == Some(&Some(0.0)))
+                && shares.values().all(|share| *share == Some(0.0))
+        }),
+        "the classifier row's price shares nothing on either window: {marked:?}"
+    );
+    let plain = priced("b");
+    assert_eq!(
+        plain.share_reason, None,
+        "the plain row's price names no reason: {plain:?}"
     );
 }
 

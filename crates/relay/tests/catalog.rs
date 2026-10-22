@@ -1934,7 +1934,7 @@ async fn a_response_naming_the_resolved_id_triggers_no_refresh() {
 }
 
 #[tokio::test]
-async fn a_cancelled_stream_with_a_message_start_naming_another_snapshot_triggers_no_refresh() {
+async fn a_canceled_stream_with_a_message_start_naming_another_snapshot_triggers_no_refresh() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::SseGated {

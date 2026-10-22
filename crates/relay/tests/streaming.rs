@@ -345,10 +345,14 @@ async fn a_lost_response_after_the_body_was_written_is_not_replayed() {
     up.shutdown().await;
 }
 
+/// The relay's wait before it retries a request whose connection could not be opened.
+const CONNECT_RETRY_WAIT: Duration = Duration::from_secs(1);
+
 #[tokio::test]
-async fn a_connection_that_dies_before_any_byte_is_retried_once_on_a_fresh_one() {
-    // The first connection is closed at accept, which is what a pooled connection the upstream already dropped
-    // looks like to the client: nothing was written and nothing can have been billed.
+async fn a_connection_that_cannot_be_opened_is_retried_once_after_the_wait() {
+    // The first connection is closed at accept, so its handshake fails: no connection was opened, nothing was
+    // written and nothing can have been billed. Real time rather than the test clock, since the wait sits before a
+    // real socket's dial.
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::CloseImmediately,
@@ -364,19 +368,108 @@ async fn a_connection_that_dies_before_any_byte_is_retried_once_on_a_fresh_one()
         },
     );
     let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    let started = Instant::now();
     let resp = app
         .oneshot(common::stream_request("phoebis-testkey"))
         .await
         .unwrap();
+    let elapsed = started.elapsed();
     assert_eq!(resp.status(), 200);
-    assert_eq!(up.connections(), 2, "one dead connection, one retry");
+    assert!(
+        elapsed >= CONNECT_RETRY_WAIT,
+        "the retry waits before it dials again, answered after {elapsed:?}"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert_eq!(outcome.attempt, 2, "the failed dial and the one retry");
     let recorded = up.requests();
     assert_eq!(
         recorded.len(),
         1,
-        "the dead connection never carried a request"
+        "the closed connection never carried a request"
     );
     assert!(recorded[0].complete);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_request_refused_on_both_connects_answers_502_after_one_wait() {
+    // The listener is bound and dropped before the request, so both connects are refused. An API-key account, so
+    // the relay calls no control plane on the dead address.
+    let up = FakeUpstream::start(Vec::new()).await;
+    let app = common::relay_with(phoebis_store::AccountKind::ApiKey, &up).await;
+    up.shutdown().await;
+    let started = Instant::now();
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.oneshot(common::stream_request("phoebis-testkey")),
+    )
+    .await
+    .expect("two refused connects and one wait end the request well inside the bound")
+    .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(resp.status(), 502);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "upstream_unreachable"
+    );
+    eprintln!("two refused connects answered after {elapsed:?}");
+    assert!(
+        elapsed >= CONNECT_RETRY_WAIT && elapsed < 2 * CONNECT_RETRY_WAIT,
+        "one wait between the two connects and none after the second, answered after {elapsed:?}"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert_eq!(outcome.attempt, 2, "no third attempt after the retry");
+    assert!(!outcome.written, "neither connect carried a byte");
+}
+
+#[tokio::test]
+async fn the_accounts_removal_during_the_connect_wait_answers_account_canceled_with_no_retry() {
+    // Every connection is closed at accept, so the first dial fails its handshake and the wait starts. The relay's
+    // debug line right before the wait is the signal to remove the account, and the removal and the reload take
+    // milliseconds on this harness, well inside the one-second wait.
+    let captured = common::Captured::default();
+    let _log = captured.install_at(tracing::Level::DEBUG);
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::CloseImmediately,
+    }])
+    .await;
+    let (h, _sub) = bus_harness(&up, common::default_limits()).await;
+    let inflight = tokio::spawn(h.app.clone().oneshot(common::stream_request(common::KEY)));
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        captured
+            .text()
+            .contains("retrying a request that never reached the upstream")
+            .then_some(())
+    })
+    .await;
+    h.store.delete_account("a", "test").unwrap();
+    h.router.reload().await.unwrap();
+    let resp = tokio::time::timeout(Duration::from_secs(5), inflight)
+        .await
+        .expect("the removal ends the request")
+        .unwrap()
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "account_canceled"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert_eq!(
+        outcome.attempt, 1,
+        "the cancellation ended the wait, so the removed account was not dialed again"
+    );
+    assert!(!outcome.written, "the failed dial carried no byte");
     up.shutdown().await;
 }
 
@@ -391,9 +484,16 @@ async fn keep_alive_reuses_the_upstream_connection() {
         },
     }])
     .await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
+    // The relay's own count, since the fake's accepts would count a connect another process on the host opened.
+    let h = common::one_account_harness(
+        phoebis_store::AccountKind::Oauth,
+        &up,
+        common::default_limits(),
+    )
+    .await;
     for _ in 0..3 {
-        let resp = app
+        let resp = h
+            .app
             .clone()
             .oneshot(common::stream_request("phoebis-testkey"))
             .await
@@ -403,35 +503,117 @@ async fn keep_alive_reuses_the_upstream_connection() {
         resp.into_body().collect().await.unwrap();
     }
     assert_eq!(
-        up.connections(),
+        h.relay.connections_opened(),
         1,
         "three requests, one upstream connection"
     );
     up.shutdown().await;
 }
 
-/// The body the fake serves compressed in both tests below.
+/// A body the fake serves compressed.
 const COMPRESSIBLE: &[u8] =
     br#"{"id":"msg_1","type":"message","content":[{"type":"text","text":"aaaaaaaaaaaaaaaaaaaa"}]}"#;
 
+/// A committed answer with its usage block, which the relay reads whatever coding carried it.
+const ANSWER_WITH_USAGE: &[u8] = br#"{"id":"msg_coded","type":"message","content":[{"type":"text","text":"aaaaaaaaaaaaaaaaaaaa"}],"usage":{"input_tokens":5,"output_tokens":7}}"#;
+
 #[tokio::test]
-async fn a_gzipped_response_stays_compressed_for_a_caller_that_reads_gzip() {
-    let gzipped = gzip(COMPRESSIBLE);
-    let up = gzip_upstream(gzipped.clone()).await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-    let resp = app
-        .oneshot(common::stream_request("phoebis-testkey"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
+async fn a_gzipped_response_arrives_as_identity_with_its_usage_read_whatever_the_caller_accepts() {
+    let (coding, body, complete, attempt) = one_coded_answer("gzip", gzip(ANSWER_WITH_USAGE)).await;
     assert_eq!(
-        body.as_ref(),
-        gzipped.as_slice(),
-        "a caller that reads gzip gets the upstream payload untouched"
+        coding, None,
+        "a caller that reads gzip still gets the answer decoded"
     );
+    assert_eq!(body.as_ref(), ANSWER_WITH_USAGE);
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.interruption
+        ),
+        (phoebis_bus::Outcome::Succeeded, None, None)
+    );
+    assert_eq!(
+        (attempt.input_tokens, attempt.output_tokens),
+        (Some(5), Some(7)),
+        "the attempt's row carries the usage the decoded answer named"
+    );
+}
+
+#[tokio::test]
+async fn a_deflated_response_arrives_as_identity_with_its_usage_read_whatever_the_caller_accepts() {
+    let (coding, body, complete, attempt) =
+        one_coded_answer("deflate", deflate(ANSWER_WITH_USAGE)).await;
+    assert_eq!(
+        coding, None,
+        "a caller that reads deflate still gets the answer decoded"
+    );
+    assert_eq!(body.as_ref(), ANSWER_WITH_USAGE);
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.interruption
+        ),
+        (phoebis_bus::Outcome::Succeeded, None, None)
+    );
+    assert_eq!(
+        (attempt.input_tokens, attempt.output_tokens),
+        (Some(5), Some(7)),
+        "the attempt's row carries the usage the decoded answer named"
+    );
+}
+
+/// A committed JSON answer served as `body` under `coding` to a caller whose `Accept-Encoding` names that coding: the
+/// coding the client was answered in, the body it read, the completion the bus carried and the attempt row the ledger
+/// files from the request's events.
+async fn one_coded_answer(
+    coding: &str,
+    body: Vec<u8>,
+) -> (
+    Option<String>,
+    Bytes,
+    phoebis_bus::RequestComplete,
+    phoebis_ledger::AttemptRecord,
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![("Content-Encoding".into(), coding.into())],
+            body,
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let mut request = common::stream_request(common::KEY);
+    common::set_header(&mut request, "accept-encoding", coding);
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let answered_in = resp
+        .headers()
+        .get("content-encoding")
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let events = common::drain_until_complete(&mut sub).await;
+    let complete = events
+        .iter()
+        .find_map(|e| match e {
+            phoebis_bus::Event::RequestComplete(complete) => Some(complete.clone()),
+            _ => None,
+        })
+        .expect("the request completed");
+    let mut assembler = phoebis_ledger::Assembler::new(std::sync::Arc::new(|| 0));
+    let attempt = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .find_map(|record| match record {
+            phoebis_ledger::Record::Request { mut attempts, .. } => attempts.pop(),
+            _ => None,
+        })
+        .expect("the request's ledger row with its attempt");
     up.shutdown().await;
+    (answered_in, body, complete, attempt)
 }
 
 #[tokio::test]
@@ -476,6 +658,16 @@ fn gzip(payload: &[u8]) -> Vec<u8> {
     encoder.finish().expect("the encoder flushes into the Vec")
 }
 
+/// `payload` under the HTTP `deflate` coding, which is the zlib format.
+fn deflate(payload: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(payload)
+        .expect("a Vec never fails a write");
+    encoder.finish().expect("the encoder flushes into the Vec")
+}
+
 #[tokio::test]
 async fn a_dead_pooled_connection_is_discarded_rather_than_handed_out() {
     let up = FakeUpstream::start(vec![Rule {
@@ -487,8 +679,15 @@ async fn a_dead_pooled_connection_is_discarded_rather_than_handed_out() {
         },
     }])
     .await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-    let first = app
+    // The relay's own count, since the fake's accepts would count a connect another process on the host opened.
+    let h = common::one_account_harness(
+        phoebis_store::AccountKind::Oauth,
+        &up,
+        common::default_limits(),
+    )
+    .await;
+    let first = h
+        .app
         .clone()
         .oneshot(common::stream_request("phoebis-testkey"))
         .await
@@ -497,12 +696,14 @@ async fn a_dead_pooled_connection_is_discarded_rather_than_handed_out() {
     // A connection returns to the pool only once its body has been read to the end.
     first.into_body().collect().await.unwrap();
     assert_eq!(
-        up.connections(),
+        h.relay.connections_opened(),
         1,
         "the first request opened one connection"
     );
     up.close_idle_and_wait().await;
-    let second = app
+    let second = h
+        .app
+        .clone()
         .oneshot(common::stream_request("phoebis-testkey"))
         .await
         .unwrap();
@@ -518,7 +719,7 @@ async fn a_dead_pooled_connection_is_discarded_rather_than_handed_out() {
         "the dead pooled connection carried nothing, so the upstream saw the second request once"
     );
     assert_eq!(
-        up.connections(),
+        h.relay.connections_opened(),
         2,
         "the pool opened a connection rather than handing out the dead one"
     );
@@ -676,15 +877,16 @@ async fn a_timeout_with_the_request_in_the_socket_is_not_retried() {
 }
 
 #[tokio::test]
-async fn a_stalled_handshake_answers_502_within_two_connect_bounds() {
+async fn a_stalled_handshake_answers_502_within_two_connect_bounds_and_the_wait() {
     // The listener accepts and never answers the ClientHello. Real time rather than the test clock: the bound
     // under test is a timer racing a socket, and a paused clock would jump straight past the socket wait.
     let up = FakeUpstream::start_silent().await;
+    let connect_timeout = Duration::from_secs(1);
     let app = common::relay_with_limits(
         phoebis_store::AccountKind::ApiKey,
         &up,
         phoebis_relay::Limits {
-            connect_timeout: Duration::from_secs(1),
+            connect_timeout,
             head_timeout: Duration::from_secs(60),
             ..common::default_limits()
         },
@@ -696,18 +898,68 @@ async fn a_stalled_handshake_answers_502_within_two_connect_bounds() {
         app.oneshot(common::stream_request("phoebis-testkey")),
     )
     .await
-    .expect("two connect bounds end the request long before the head timeout")
+    .expect("two connect bounds and the wait end the request long before the head timeout")
     .unwrap();
-    eprintln!("a stalled handshake answered after {:?}", started.elapsed());
+    let elapsed = started.elapsed();
+    eprintln!("a stalled handshake answered after {elapsed:?}");
     assert_eq!(resp.status(), 502);
     assert_eq!(
         resp.headers().get("x-phoebis-error-code").unwrap(),
         "upstream_unreachable"
     );
+    assert!(
+        elapsed >= 2 * connect_timeout + CONNECT_RETRY_WAIT,
+        "each dial waits out the connect bound, with the wait between them, answered after {elapsed:?}"
+    );
     assert_eq!(
         up.connections(),
         2,
         "the first dial and the one retry on a fresh connection"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_handshake_stalled_past_the_head_bound_answers_502_within_two_head_bounds_and_the_wait() {
+    // The head bound is the shorter one here, so it expires while the handshake is still running and nothing was
+    // sent: a connection that could not be opened, as the connect bound's expiry is.
+    let up = FakeUpstream::start_silent().await;
+    let head_timeout = Duration::from_secs(1);
+    let app = common::relay_with_limits(
+        phoebis_store::AccountKind::ApiKey,
+        &up,
+        phoebis_relay::Limits {
+            connect_timeout: Duration::from_secs(60),
+            head_timeout,
+            ..common::default_limits()
+        },
+    )
+    .await;
+    let started = Instant::now();
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.oneshot(common::stream_request("phoebis-testkey")),
+    )
+    .await
+    .expect("two head bounds and the wait end the request long before the connect timeout")
+    .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(resp.status(), 502);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "upstream_unreachable"
+    );
+    assert!(
+        elapsed >= 2 * head_timeout + CONNECT_RETRY_WAIT,
+        "each dial waits out the head bound, with the wait between them, answered after {elapsed:?}"
+    );
+    let outcome = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .expect("a relayed response carries its outcome");
+    assert!(
+        !outcome.written,
+        "nothing was sent before either bound expired"
     );
     up.shutdown().await;
 }
@@ -731,58 +983,6 @@ async fn the_upstreams_request_id_rides_on_the_outcome_of_the_committed_attempt(
     assert_eq!(
         common::outcome(&resp).upstream_request_id.as_deref(),
         Some("req_up_0001")
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn an_explicit_refusal_beats_the_wildcard_whatever_the_order_or_the_line() {
-    for accept in ["gzip;q=0, *;q=1", "*;q=1, gzip;q=0"] {
-        let up = gzip_upstream(gzip(COMPRESSIBLE)).await;
-        let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-        let mut request = common::stream_request("phoebis-testkey");
-        common::set_header(&mut request, "accept-encoding", accept);
-        let resp = app.oneshot(request).await.unwrap();
-        assert!(
-            resp.headers().get("content-encoding").is_none(),
-            "{accept}: decoded for the caller"
-        );
-        assert_eq!(
-            resp.into_body()
-                .collect()
-                .await
-                .unwrap()
-                .to_bytes()
-                .as_ref(),
-            COMPRESSIBLE
-        );
-        up.shutdown().await;
-    }
-    // Two header lines, the browser's and a proxy's, combined before the rule applies.
-    let up = gzip_upstream(gzip(COMPRESSIBLE)).await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-    let mut request = common::stream_request("phoebis-testkey");
-    request.headers_mut().append(
-        axum::http::header::ACCEPT_ENCODING,
-        axum::http::HeaderValue::from_static("*"),
-    );
-    request.headers_mut().append(
-        axum::http::header::ACCEPT_ENCODING,
-        axum::http::HeaderValue::from_static("gzip;q=0"),
-    );
-    let resp = app.oneshot(request).await.unwrap();
-    assert!(
-        resp.headers().get("content-encoding").is_none(),
-        "two lines: decoded for the caller"
-    );
-    assert_eq!(
-        resp.into_body()
-            .collect()
-            .await
-            .unwrap()
-            .to_bytes()
-            .as_ref(),
-        COMPRESSIBLE
     );
     up.shutdown().await;
 }
@@ -1143,7 +1343,7 @@ fn committed_then_gated() -> Respond {
 }
 
 #[tokio::test]
-async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_account_cancelled() {
+async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_account_canceled() {
     let captured = common::Captured::default();
     let _log = captured.install();
     let up = FakeUpstream::start(vec![Rule {
@@ -1168,12 +1368,12 @@ async fn a_stream_its_accounts_removal_ends_after_the_head_warns_once_with_accou
     let complete = completion(&mut sub).await;
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
-        (phoebis_bus::Outcome::Canceled, Some("account_cancelled"))
+        (phoebis_bus::Outcome::Canceled, Some("account_canceled"))
     );
     assert_cut_warned(
         &captured.text(),
         &complete,
-        "account_cancelled",
+        "account_canceled",
         "io: the bound account was disconnected",
     );
     up.release();
@@ -1208,6 +1408,101 @@ async fn a_client_that_leaves_mid_stream_is_warned_of_nothing_and_carries_no_int
         !captured.text().contains(CUT_WARNING),
         "{}",
         captured.text()
+    );
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stream_the_router_s_shutdown_cuts_after_the_head_carries_router_shutdown_and_no_interruption(
+) {
+    let captured = common::Captured::default();
+    let _log = captured.install();
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: committed_then_gated(),
+    }])
+    .await;
+    let bus = phoebis_bus::Bus::new();
+    let mut sub = bus.subscribe("test", phoebis_bus::Delivery::Durable);
+    let mark = phoebis_relay::ShutdownMark::default();
+    let h = common::harness_with_shutdown_mark(
+        &up,
+        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        common::PoolSpec::default(),
+        bus,
+        common::default_limits(),
+        mark.clone(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    mark.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(resp);
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.interruption
+        ),
+        (
+            phoebis_bus::Outcome::Canceled,
+            Some("router_shutdown"),
+            None
+        ),
+        "the router cut the stream, so nothing ended short and its own code names the cut"
+    );
+    assert!(
+        !captured.text().contains(CUT_WARNING),
+        "{}",
+        captured.text()
+    );
+    up.release();
+    up.shutdown().await;
+}
+
+/// The mark attached and unset, as it is while the router serves, so the stream arm keeps the caller's own code.
+#[tokio::test]
+async fn a_client_that_leaves_mid_stream_under_an_unset_mark_keeps_client_gone() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: committed_then_gated(),
+    }])
+    .await;
+    let bus = phoebis_bus::Bus::new();
+    let mut sub = bus.subscribe("test", phoebis_bus::Delivery::Durable);
+    let h = common::harness_with_shutdown_mark(
+        &up,
+        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        common::PoolSpec::default(),
+        bus,
+        common::default_limits(),
+        phoebis_relay::ShutdownMark::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    drop(resp);
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.error_code.as_deref(),
+            complete.interruption
+        ),
+        (phoebis_bus::Outcome::Canceled, Some("client_gone"), None),
+        "the client left while the mark was unset"
     );
     up.release();
     up.shutdown().await;
@@ -1433,9 +1728,9 @@ fn gzipped_stream(events: &[SseEvent]) -> Respond {
 }
 
 #[tokio::test]
-async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_the_bus_copy() {
-    // The caller takes the upstream's coding, so the bus decodes a copy of its own; that decoder flushes every
-    // piece it is fed, so a message_stop cannot sit unread in its tail at the end.
+async fn a_gzipped_stream_decoded_for_the_client_is_read_for_its_message_stop_on_the_bus_copy() {
+    // The bus copy reads the pieces the forward decoded, and that decoder flushes every piece it is fed, so a
+    // message_stop cannot sit unread in its tail at the end.
     let events = [
         message_start_event(),
         text_delta_event("hi"),
@@ -1453,8 +1748,12 @@ async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_t
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
-    resp.into_body().collect().await.unwrap();
+    assert!(
+        resp.headers().get("content-encoding").is_none(),
+        "the fixture's caller reads gzip and still gets the stream decoded"
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(String::from_utf8(body.to_vec()).unwrap(), rendered(&events));
     let complete = completion(&mut sub).await;
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
@@ -1467,7 +1766,7 @@ async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_t
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    assert!(resp.headers().get("content-encoding").is_none());
     resp.into_body().collect().await.unwrap();
     let complete = completion(&mut sub).await;
     assert_eq!(
@@ -1476,104 +1775,6 @@ async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_t
         "the same stream without its stop"
     );
     up.shutdown().await;
-}
-
-/// One streamed `200` answered by `respond` to `request`: the coding the client was answered in, the body it read to
-/// the end, and the completion the bus carried.
-async fn one_coded_stream(
-    respond: Respond,
-    request: Request<Body>,
-) -> (Option<String>, Bytes, phoebis_bus::RequestComplete) {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond,
-    }])
-    .await;
-    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
-    let resp = h.app.clone().oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), 200);
-    let coding = resp
-        .headers()
-        .get("content-encoding")
-        .map(|value| value.to_str().unwrap().to_string());
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let complete = completion(&mut sub).await;
-    up.shutdown().await;
-    (coding, body, complete)
-}
-
-#[tokio::test]
-async fn a_gzip_stream_passed_through_whose_copy_does_not_decode_records_as_succeeded_naming_its_coding(
-) {
-    // The client takes the coding, so it reads the bytes as sent: only the router's own copy fails to inflate
-    // them, which says nothing of the answer the client received.
-    let events = [
-        message_start_event(),
-        text_delta_event("hi"),
-        message_stop_event(),
-    ];
-    let wire = corrupt_gzip(rendered(&events).as_bytes());
-    let (coding, body, complete) = one_coded_stream(
-        Respond::Chunked {
-            status: 200,
-            headers: vec![
-                ("Content-Type".into(), "text/event-stream".into()),
-                ("Content-Encoding".into(), "gzip".into()),
-            ],
-            body: wire.clone(),
-        },
-        common::stream_request(common::KEY),
-    )
-    .await;
-    assert_eq!(coding.as_deref(), Some("gzip"));
-    assert_eq!(
-        body.as_ref(),
-        wire.as_slice(),
-        "the client reads the bytes as sent"
-    );
-    assert_eq!(
-        (complete.outcome, complete.error_code.as_deref()),
-        (phoebis_bus::Outcome::Succeeded, None)
-    );
-    assert_eq!(
-        (complete.passthrough.as_deref(), complete.interruption),
-        (Some("gzip"), None),
-        "the completion names the coding and no cut"
-    );
-}
-
-#[tokio::test]
-async fn a_gzip_stream_passed_through_whose_copy_decodes_names_its_coding_on_the_completion() {
-    let events = [
-        message_start_event(),
-        text_delta_event("hi"),
-        message_stop_event(),
-    ];
-    let (coding, _, complete) =
-        one_coded_stream(gzipped_stream(&events), common::stream_request(common::KEY)).await;
-    assert_eq!(coding.as_deref(), Some("gzip"));
-    assert_eq!(
-        (complete.outcome, complete.passthrough.as_deref()),
-        (phoebis_bus::Outcome::Succeeded, Some("gzip")),
-        "the hold's decoder carries the copy, and the client still took the coding as sent"
-    );
-}
-
-#[tokio::test]
-async fn a_gzip_stream_the_relay_decodes_for_the_caller_names_no_pass_through() {
-    let events = [
-        message_start_event(),
-        text_delta_event("hi"),
-        message_stop_event(),
-    ];
-    let (coding, body, complete) =
-        one_coded_stream(gzipped_stream(&events), identity_request()).await;
-    assert_eq!(coding, None, "the relay drops the coding it decoded");
-    assert_eq!(String::from_utf8(body.to_vec()).unwrap(), rendered(&events));
-    assert_eq!(
-        (complete.outcome, complete.passthrough),
-        (phoebis_bus::Outcome::Succeeded, None)
-    );
 }
 
 #[tokio::test]
@@ -1618,7 +1819,7 @@ fn corrupt_gzip(payload: &[u8]) -> Vec<u8> {
     body
 }
 
-/// The stream request from a caller that takes no content coding, so the relay decodes the answer for it.
+/// The stream request from a caller that takes no content coding.
 fn identity_request() -> Request<Body> {
     let mut request = common::stream_request(common::KEY);
     common::set_header(&mut request, "accept-encoding", "identity");
@@ -1663,18 +1864,72 @@ const UNDECODABLE: &str = "the upstream response could not be decoded after its 
 async fn an_answer_in_a_coding_the_relay_cannot_read_answers_502_upstream_undecodable_and_files_stream_undecodable(
 ) {
     // `compress` is a registered coding outside the five the relay decodes.
-    let (status, code, message, complete) = one_refusal(
-        Respond::Json {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
             status: 200,
             headers: vec![("Content-Encoding".into(), "compress".into())],
             body: COMPRESSIBLE.to_vec(),
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let code = resp
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let refusal: serde_json::Value =
+        serde_json::from_slice(&body).expect("the body is the relay's own error document");
+    assert_eq!(
+        (
+            status,
+            code.as_deref(),
+            refusal["error"]["message"].as_str()
+        ),
+        (502, Some("upstream_undecodable"), Some(UNDECODABLE))
+    );
+    assert!(
+        !body
+            .windows(COMPRESSIBLE.len())
+            .any(|window| window == COMPRESSIBLE),
+        "no byte of the upstream's body reaches the client"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_undecodable"))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_answer_whose_codings_sit_in_two_fields_answers_502_upstream_undecodable_and_files_stream_undecodable(
+) {
+    // Two fields read as the list `gzip, gzip`, which the relay refuses as it refuses that list in one field.
+    let (status, code, message, complete) = one_refusal(
+        Respond::Json {
+            status: 200,
+            headers: vec![
+                ("Content-Encoding".into(), "gzip".into()),
+                ("Content-Encoding".into(), "gzip".into()),
+            ],
+            body: gzip(&gzip(COMPRESSIBLE)),
         },
         common::stream_request(common::KEY),
     )
     .await;
     assert_eq!(
         (status, code.as_deref(), message.as_deref()),
-        (502, Some("upstream_undecodable"), Some(UNDECODABLE))
+        (502, Some("upstream_undecodable"), Some(UNDECODABLE)),
+        "the body is the relay's own error document, with no byte of the upstream's"
     );
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
@@ -1907,7 +2162,8 @@ async fn a_stall_after_the_head_answers_502_upstream_stalled() {
 }
 
 #[tokio::test]
-async fn a_gzip_stream_the_client_takes_as_it_is_is_decoded_once_and_keeps_its_message_start() {
+async fn a_gzip_stream_decoded_for_the_client_builds_the_holds_decoder_alone_and_keeps_its_message_start(
+) {
     let message_start = SseEvent {
         event: "message_start".into(),
         data: r#"{"type":"message_start","message":{"id":"msg_gz","usage":{"input_tokens":5,"cache_read_input_tokens":2}}}"#.into(),
@@ -1926,13 +2182,14 @@ async fn a_gzip_stream_the_client_takes_as_it_is_is_decoded_once_and_keeps_its_m
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
-    resp.into_body().collect().await.unwrap();
+    assert!(resp.headers().get("content-encoding").is_none());
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(String::from_utf8(body.to_vec()).unwrap(), rendered(&events));
     let complete = completion(&mut sub).await;
     assert_eq!(
         h.relay.decoders_built() - before,
         1,
-        "the hold's decoder reads the stream to its end for the bus copy"
+        "the hold's decoder alone: past the commit the bus copy reads the pieces the forward decoded"
     );
     assert_eq!(
         (complete.outcome, complete.message_id.as_deref()),
@@ -1948,9 +2205,9 @@ async fn a_gzip_stream_the_client_takes_as_it_is_is_decoded_once_and_keeps_its_m
 }
 
 #[tokio::test]
-async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
-    // A non-portable request's 429 past the bound, forwarded as it came: no bus, no pin, no hook and no
-    // conversation report read its body, so nothing decodes a copy of it.
+async fn a_forwarded_coded_rejection_past_the_bound_reaches_the_client_decoded_prefix_and_rest() {
+    // A non-portable request's 429 past the bound, decoded for the client as it is forwarded: no bus, no pin, no
+    // hook and no conversation report read its body, so no copy of it is decoded beside the forward.
     let mut state: u32 = 0x9e37_79b9;
     let noise: String = (0..160 * 1024)
         .map(|_| {
@@ -1960,10 +2217,9 @@ async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
             char::from(b'a' + (state % 26) as u8)
         })
         .collect();
-    let body = gzip(
-        format!(r#"{{"type":"error","error":{{"type":"rate_limit_error","message":"{noise}"}}}}"#)
-            .as_bytes(),
-    );
+    let rejection =
+        format!(r#"{{"type":"error","error":{{"type":"rate_limit_error","message":"{noise}"}}}}"#);
+    let body = gzip(rejection.as_bytes());
     assert!(body.len() > 64 * 1024, "past the bound on the wire");
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -1988,21 +2244,24 @@ async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 429);
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    assert!(resp.headers().get("content-encoding").is_none());
     let forwarded = resp.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        forwarded.as_ref(),
-        body.as_slice(),
-        "the prefix, then the rest"
+    // Compared without `assert_eq!`, whose failure would print both 160 KiB bodies.
+    assert!(
+        forwarded.as_ref() == rejection.as_bytes(),
+        "the prefix, then the rest, both decoded"
     );
+    // The counter counts the hold's decoders, and no hold reads a rejection, so the forward's own decoder leaves it
+    // at zero.
     assert_eq!(h.relay.decoders_built() - before, 0);
     up.shutdown().await;
 }
 
 #[tokio::test]
-async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus() {
+async fn a_held_stream_whose_hold_copy_overflowed_reaches_the_bus_whole_from_the_forwards_decode() {
     // The first event decodes past the hold's inspection bound in one wire chunk, so the hold commits on its
-    // overflow with a copy that no longer follows the stream; the bus copy reads the stream from its start.
+    // overflow with a copy that no longer follows the stream, and the bus copy reads the stream from its start in
+    // the pieces the forward decoded.
     let message_start = SseEvent {
         event: "message_start".into(),
         data: r#"{"type":"message_start","message":{"id":"msg_ov","usage":{"input_tokens":5}}}"#
@@ -2011,14 +2270,13 @@ async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus(
     let events = [
         SseEvent {
             event: "weird_future_event".into(),
-            // Past `INSPECT_BUFFER`, and under the 1 MiB the bus copy decodes of one wire chunk.
+            // Past `INSPECT_BUFFER`, and under the 1 MiB a decoder hands back for one wire chunk.
             data: "y".repeat(600 * 1024),
         },
         message_start,
         text_delta_event("hi"),
         message_stop_event(),
     ];
-    let wire = gzip(rendered(&events).as_bytes());
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: gzipped_stream(&events),
@@ -2032,12 +2290,12 @@ async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus(
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    assert!(resp.headers().get("content-encoding").is_none());
     let client = resp.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        client.as_ref(),
-        wire.as_slice(),
-        "the client reads the upstream's bytes"
+    // Compared without `assert_eq!`, whose failure would print both 600 KiB bodies.
+    assert!(
+        client.as_ref() == rendered(&events).as_bytes(),
+        "the client reads the stream decoded"
     );
     let published = common::drain_until_complete(&mut sub).await;
     let chunks: Vec<u8> = published
@@ -2066,8 +2324,8 @@ async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus(
     );
     assert_eq!(
         h.relay.decoders_built() - before,
-        2,
-        "the hold's decoder and the bus copy's own"
+        1,
+        "the hold's decoder alone: the bus copy builds none of its own"
     );
     up.shutdown().await;
 }

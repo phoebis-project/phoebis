@@ -308,8 +308,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(42), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that flags the router's refusals before any account"
+        (Some(43), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that records the attempt's class and keys the samples by source"
     );
     assert_eq!(
         (
@@ -367,6 +367,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             "pin_released",
             "pin_renewed",
             "sample",
+            "spend_head",
             "usage",
         ],
         "every kind of routing report, in name order"
@@ -1003,6 +1004,11 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                 disabled_reason: None,
                 overage_reset: None,
                 source: "poll".into(),
+                spend_limit_minor: None,
+                spend_used_minor: None,
+                spend_percent: None,
+                spend_currency: None,
+                spend_exponent: None,
             }),
         )
         .unwrap();
@@ -2400,6 +2406,54 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
             &serde_json::json!(false),
         ),
         "a bucket with tokens and no plan row reads a zero 20x equivalent, and a fast row marks no estimate: {point}"
+    );
+}
+
+/// A usage-based seat spends dollars at the API rates and draws no plan window, so its burn group charts in `usd` as an
+/// API key account's does.
+#[tokio::test]
+async fn a_usage_based_seats_burn_group_charts_in_dollars() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .store
+        .set_profile(
+            "business",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    parts.ledger.record(record(
+        "burn-seat",
+        common::NOW - HOUR,
+        "claude-opus-5-5",
+        "s1",
+    ));
+    landed(&parts, &["burn-seat"]).await;
+    let burn = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let units: std::collections::BTreeSet<&str> = burn["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["group"] == "business")
+        .filter_map(|p| p["unit"].as_str())
+        .collect();
+    assert_eq!(
+        units,
+        std::collections::BTreeSet::from(["usd"]),
+        "the seat's group charts in dollars: {burn}"
     );
 }
 
@@ -4813,6 +4867,117 @@ async fn the_routing_log_filters_on_the_stream_interrupted_kind() {
 }
 
 #[tokio::test]
+async fn the_routing_log_filters_on_the_plan_ended_kind() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let free = serde_json::json!({"organization": {
+        "organization_type": "claude_free",
+        "rate_limit_tier": "default_claude_ai",
+        "subscription_status": "canceled",
+    }});
+    parts.ledger.record(phoebis_ledger::plan_ended(
+        "direct",
+        now - 3_000,
+        "usage_403",
+        &free,
+    ));
+    parts.ledger.record(phoebis_ledger::plan_restored(
+        "direct",
+        now - 2_000,
+        "pairing",
+        &free,
+    ));
+    let route = |kinds: &str| {
+        format!(
+            "/admin/routing-log?from={}&to={}&kinds={kinds}",
+            now - 10_000,
+            now - 1
+        )
+    };
+    let first = get(&parts.app, &route("plan_ended"), Some(&cookie)).await;
+    let status = first.status();
+    assert_eq!(status, 200, "{}", json(first).await);
+    // Both rows landed before the filtered read, so the restore's absence is the filter's.
+    wait_json(
+        &parts.app,
+        &route("plan_ended,plan_restored"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let page = json(get(&parts.app, &route("plan_ended"), Some(&cookie)).await).await;
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row["kind"].as_str(), row["detail"]["source"].as_str()))
+            .collect::<Vec<_>>(),
+        [(Some("plan_ended"), Some("usage_403"))],
+        "the flag's row alone, the restore left out"
+    );
+    assert_eq!(
+        rows[0]["detail"],
+        serde_json::json!({
+            "source": "usage_403",
+            "organization_type": "claude_free",
+            "rate_limit_tier": "default_claude_ai",
+            "subscription_status": "canceled",
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_routing_log_filters_on_the_poll_failed_kind() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    parts.ledger.record(phoebis_ledger::poll_failed(
+        "direct",
+        now - 2_000,
+        &phoebis_oauth::PollFault {
+            endpoint: "usage",
+            status: Some(403),
+            transport: false,
+            text: "usage request rejected with status 403".into(),
+        },
+    ));
+    parts
+        .ledger
+        .record(routing_event(now - 1_000, "cooldown_set"));
+    let route = |kinds: &str| {
+        format!(
+            "/admin/routing-log?from={}&to={}&kinds={kinds}",
+            now - 10_000,
+            now - 1
+        )
+    };
+    let first = get(&parts.app, &route("poll_failed"), Some(&cookie)).await;
+    let status = first.status();
+    assert_eq!(status, 200, "{}", json(first).await);
+    // Both rows landed before the filtered read, so the cooldown's absence is the filter's.
+    wait_json(
+        &parts.app,
+        &route("cooldown_set,poll_failed"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let page = json(get(&parts.app, &route("poll_failed"), Some(&cookie)).await).await;
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row["type"].as_str(), row["kind"].as_str()))
+            .collect::<Vec<_>>(),
+        [(Some("event"), Some("poll_failed"))],
+        "the fault's row alone, the cooldown left out"
+    );
+    assert_eq!(
+        (&rows[0]["detail"]["endpoint"], &rows[0]["detail"]["status"]),
+        (&serde_json::json!("usage"), &serde_json::json!(403))
+    );
+}
+
+#[tokio::test]
 async fn an_empty_kinds_reads_as_every_kind() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -5264,6 +5429,16 @@ async fn the_routing_log_reads_a_rewrite_hold_and_the_request_it_waited_for() {
         "the renewal names the wait it followed: {renewal}"
     );
     assert_eq!(renewal["outcome"]["hold"], serde_json::Value::Null);
+    assert_eq!(
+        renewal["outcome"]["cohort_hold"],
+        serde_json::json!({
+            "waited_on": [hold["account_id"]],
+            "cohort": hold["cohort"],
+            "held_ms": 1_000,
+            "waits": [{"reason": "rewrite", "held_ms": 1_000}],
+        }),
+        "the renewal sums the wait it followed on the account and in the cohort the hold named: {renewal}"
+    );
 }
 
 #[tokio::test]
@@ -5306,4 +5481,67 @@ async fn the_system_page_counts_the_refusals_the_router_s_mailbox_refused() {
     let cookie = login(&parts.app, "admin-secret").await;
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
     assert_eq!(system["router"]["dropped_refusals"], 0);
+}
+
+#[tokio::test]
+async fn the_dashboard_answers_one_fable_week_row_per_account_under_seven_day_fable_the_newest_bucket_winning(
+) {
+    use phoebis_ledger::QuotaSampleRecord;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let row = |account: &str, window: &str, utilization: f64, at: i64| QuotaSampleRecord {
+        account_id: account.into(),
+        bucket: phoebis_ledger::bucket_of(at),
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: Some(now + 86_400_000),
+        source: if window == "seven_day_fable" {
+            "poll"
+        } else {
+            "head"
+        }
+        .into(),
+        observed_at: Some(at),
+    };
+    parts
+        .db
+        .insert_samples(
+            &[
+                row("business", "five_hour", 0.2, now - 60_000),
+                row("business", "seven_day_fable", 0.11, now - 1_200_000),
+                row("business", "seven_day_overage_included", 0.12, now - 60_000),
+                row("other", "seven_day_overage_included", 0.21, now - 1_200_000),
+                row("other", "seven_day_fable", 0.22, now - 60_000),
+            ],
+            None,
+        )
+        .unwrap();
+    let board = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
+    let windows = |account: &str| -> Vec<(String, f64)> {
+        entry_of(&board["accounts"], "account_id", serde_json::json!(account))["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                (
+                    w["id"].as_str().unwrap().to_string(),
+                    w["utilization"].as_f64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        windows("business"),
+        [
+            ("five_hour".to_string(), 0.2),
+            ("seven_day_fable".to_string(), 0.12)
+        ],
+        "the head's overage-included week is the Fable week, its newer bucket answering: {board}"
+    );
+    assert_eq!(
+        windows("other"),
+        [("seven_day_fable".to_string(), 0.22)],
+        "the poll's newer Fable week answers over an older head row: {board}"
+    );
 }

@@ -18,8 +18,8 @@ use utoipa::ToSchema;
 
 use crate::openapi::{ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure};
 use crate::routes::{
-    account, account_json, double_option, failure, failure_with_code, fence_revision, present,
-    reload_or_refuse, store_failure, CreatedId,
+    account, account_json, double_option, failure, failure_with_code, fence_revision, parse_object,
+    present, reload_or_refuse, store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -44,8 +44,8 @@ pub(crate) struct CreateAccountInput {
 
 /// The fields to edit, all optional. A member the route does not name is ignored. Every field the body names lands
 /// in one write, fenced against `expected_revision` when the body carries it and against the row the route read
-/// otherwise, so an edit lands whole or not at all. `subscription_ends_at` needs `cancelled` set on the resulting
-/// row, and `cancelled` needs an end on it, stored or given. A bare `cancelled: false` drops the stored end.
+/// otherwise, so an edit lands whole or not at all. `subscription_ends_at` needs `canceled` set on the resulting
+/// row, and `canceled` needs an end on it, stored or given. A bare `canceled: false` drops the stored end.
 #[derive(serde::Deserialize, ToSchema)]
 pub(crate) struct PatchAccountInput {
     /// At most 256 bytes.
@@ -57,9 +57,9 @@ pub(crate) struct PatchAccountInput {
     /// credential against the upstream first, and a check that does not succeed refuses the edit whole.
     #[serde(default)]
     pub secret: Option<String>,
-    /// Only an oauth account accepts `cancelled`.
+    /// Only an oauth account accepts `canceled`.
     #[serde(default)]
-    pub cancelled: Option<bool>,
+    pub canceled: Option<bool>,
     /// Unix milliseconds, or null to drop the stored end.
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<i64>, nullable)]
@@ -81,7 +81,7 @@ pub(crate) struct PatchAccountInput {
 const TEXT_MAX_BYTES: usize = 256;
 
 /// Refuses `value` past `TEXT_MAX_BYTES`, naming `field`, before anything is written.
-// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn within_text_bound(field: &str, value: Option<&str>) -> Result<(), Response> {
@@ -114,7 +114,7 @@ pub(crate) fn valid_slug(id: &str) -> bool {
     request_body(content = CreateAccountInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The account's fields, the same shape `GET /admin/accounts/{id}` answers.", body = crate::routes::Account),
-        (status = 400, description = "- `body must carry id, kind, and label`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `kind must be oauth or api_key`\n- `an oauth account is paired, not keyed`\n- `an api_key account needs a secret`\n- `credential rejected by the upstream`", body = ErrorBody, example = json!({"error": "body must carry id, kind, and label"})),
+        (status = 400, description = "- `body must be a JSON object`\n- `body must carry id, kind, and label`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `label is at most 256 bytes`\n- `kind must be oauth or api_key`\n- `an oauth account is paired, not keyed`\n- `an api_key account needs a secret`\n- `credential rejected by the upstream`", body = ErrorBody, example = json!({"error": "body must carry id, kind, and label"})),
         (status = 404, description = "`account not found`: the row left between the create and its read-back.", body = ErrorBody, example = json!({"error": "account not found"})),
         (status = 409, description = "`an account with this id exists`", body = ErrorBody, example = json!({"error": "an account with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -123,6 +123,11 @@ pub(crate) fn valid_slug(id: &str) -> bool {
     ),
 )]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
+    // `IgnoredAny` reads any value, so the check refuses a non-object alone, and an object the struct read refuses
+    // keeps the create's own sentence.
+    if let Err(refusal) = parse_object::<serde::de::IgnoredAny>(&body) {
+        return refusal;
+    }
     let Ok(input) = serde_json::from_slice::<CreateAccountInput>(&body) else {
         return failure(
             StatusCode::BAD_REQUEST,
@@ -242,7 +247,7 @@ async fn verify_staged(
     request_body(content = PatchAccountInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The account's fields, the same shape as `GET /admin/accounts/{id}`.", body = crate::routes::Account),
-        (status = 400, description = "- `body must be a JSON object`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `only an api_key account has a secret`\n- `only an oauth account is cancelled`\n- `subscription_ends_at needs cancelled`\n- `cancelled needs subscription_ends_at`\n- `credential rejected by the upstream`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `label is at most 256 bytes`\n- `only an api_key account has a secret`\n- `only an oauth account is canceled`\n- `subscription_ends_at needs canceled`\n- `canceled needs subscription_ends_at`\n- `credential rejected by the upstream`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
@@ -259,6 +264,9 @@ pub(crate) async fn patch(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
+    if let Err(refusal) = parse_object::<serde::de::IgnoredAny>(&body) {
+        return refusal;
+    }
     let Ok(input) = serde_json::from_slice::<PatchAccountInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
@@ -280,35 +288,32 @@ pub(crate) async fn patch(
         );
     }
     // Validated against the resulting row, not just the edited field: an end saved earlier and a bare
-    // `cancelled: false` today must not leave the end standing without the flag that gates it.
-    let cancellation = if input.cancelled.is_some() || input.subscription_ends_at.is_some() {
+    // `canceled: false` today must not leave the end standing without the flag that gates it.
+    let cancellation = if input.canceled.is_some() || input.subscription_ends_at.is_some() {
         let term = match state.store.subscription_term(&id) {
             Ok(term) => term.unwrap_or_default(),
             Err(error) => return store_failure(error),
         };
-        let cancelled = input.cancelled.unwrap_or(term.cancelled);
+        let canceled = input.canceled.unwrap_or(term.canceled);
         let ends_at = input.subscription_ends_at.unwrap_or(term.ends_at);
-        if cancelled && row.kind == AccountKind::ApiKey {
-            return failure(
-                StatusCode::BAD_REQUEST,
-                "only an oauth account is cancelled",
-            );
+        if canceled && row.kind == AccountKind::ApiKey {
+            return failure(StatusCode::BAD_REQUEST, "only an oauth account is canceled");
         }
         // The stored end alone never trips this: a write drops it the moment the flag goes off, so only an end
         // this patch itself asked for can conflict with an uncancel it also asked for.
-        if !cancelled && input.subscription_ends_at.flatten().is_some() {
+        if !canceled && input.subscription_ends_at.flatten().is_some() {
             return failure(
                 StatusCode::BAD_REQUEST,
-                "subscription_ends_at needs cancelled",
+                "subscription_ends_at needs canceled",
             );
         }
-        if cancelled && ends_at.is_none() {
+        if canceled && ends_at.is_none() {
             return failure(
                 StatusCode::BAD_REQUEST,
-                "cancelled needs subscription_ends_at",
+                "canceled needs subscription_ends_at",
             );
         }
-        Some((cancelled, ends_at))
+        Some((canceled, ends_at))
     } else {
         None
     };

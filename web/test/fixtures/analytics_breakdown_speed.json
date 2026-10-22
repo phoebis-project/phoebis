@@ -389,36 +389,36 @@
       {
         "key": "standard",
         "label": "standard",
-        "requests": 7,
-        "succeeded": 5,
+        "requests": 8,
+        "succeeded": 6,
         "rate_limited": 0,
         "failed": 1,
         "exhausted": 0,
         "rejected": 0,
-        "attempts": 8,
+        "attempts": 9,
         "failovers": 0,
         "incomplete": 1,
-        "cache_hits": 7,
+        "cache_hits": 8,
         "cache_misses": 0,
         "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
-          "cache_read": 4000,
+          "cache_read": 4500,
           "cache_write_1h": 0,
-          "cache_write_5m": 1600,
-          "output": 800,
-          "thinking": 320,
-          "uncached_input": 8000,
+          "cache_write_5m": 1800,
+          "output": 900,
+          "thinking": 360,
+          "uncached_input": 9000,
           "web_fetch": 0,
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.0004,
-          "cache_write": 0.0035,
-          "input": 0.014,
-          "output": 0.007
+          "cache_read": 0.00045,
+          "cache_write": 0.004,
+          "input": 0.016,
+          "output": 0.008
         },
-        "cost_usd": 0.0249,
+        "cost_usd": 0.02845,
         "errors": {
           "stream_incomplete": 1,
           "upstream_error": 1
@@ -429,7 +429,7 @@
           "guardrail_blocked": 1
         },
         "cache_miss_reasons": {
-          "none": 6,
+          "none": 7,
           "pending": 1
         },
         "histograms": {
@@ -471,7 +471,7 @@
             0,
             0,
             0,
-            7,
+            8,
             0,
             0,
             0,
@@ -528,7 +528,7 @@
             0,
             0,
             0,
-            7,
+            8,
             0,
             0,
             0,
@@ -592,7 +592,7 @@
             0,
             0,
             0,
-            7,
+            8,
             0,
             0,
             0,
@@ -663,7 +663,7 @@
             0,
             0,
             0,
-            7,
+            8,
             0,
             0,
             0,
@@ -775,12 +775,12 @@
         "saving_usd": 0.0,
         "saving_shares": null,
         "saving_equivalent": {},
-        "billed_usd": 0.00715,
+        "billed_usd": 0.010700000000000001,
         "billed": {
-          "cache_read": 0.00015000000000000001,
-          "cache_write": 0.001,
-          "input": 0.004,
-          "output": 0.002
+          "cache_read": 0.0002,
+          "cache_write": 0.0015,
+          "input": 0.006,
+          "output": 0.003
         },
         "equivalent_split": {
           "input": 7.288888888888889e-6,

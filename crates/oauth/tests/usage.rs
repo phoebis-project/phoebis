@@ -1,25 +1,29 @@
 mod common;
 
-use phoebis_oauth::parse_usage;
+use phoebis_oauth::{parse_usage, SpendReading};
 use phoebis_profile::fixtures::{control_response, ControlFixture};
 
 #[test]
 #[allow(clippy::bool_assert_comparison)]
 fn the_synthetic_usage_body_parses_into_windows() {
-    let (windows, fable, extra, raw) =
+    let (windows, fable, extra, spend, raw) =
         parse_usage(control_response(ControlFixture::Usage)).unwrap();
     let five = windows.iter().find(|w| w.key == "five_hour").unwrap();
     assert_eq!(five.utilization, Some(12.5));
     assert!(five.resets_at.is_some());
     assert!(fable.is_none());
     assert_eq!(extra.unwrap().is_enabled, false);
+    assert_eq!(
+        spend, None,
+        "no spend object and no amounts to build one from"
+    );
     assert!(raw.contains(&"seven_day".to_string()));
 }
 
 #[test]
 fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
     let body = br#"{"five_hour":{"utilization":0.1,"resets_at":"2026-09-13T15:00:00+00:00"},"cinder_cove":{"utilization":0.9,"resets_at":null},"limits":[{"kind":"weekly_scoped","group":"weekly","percent":42,"resets_at":"2026-09-18T00:00:00+00:00","scope":{"model":{"display_name":"Fable"}}}],"extra_usage":{"is_enabled":true,"monthly_limit":5000,"used_credits":1234,"utilization":0.2468,"currency":"USD"}}"#;
-    let (windows, fable, extra, _) = parse_usage(body).unwrap();
+    let (windows, fable, extra, spend, _) = parse_usage(body).unwrap();
     let f = fable.unwrap();
     assert_eq!(f.utilization, Some(42.0));
     assert!(
@@ -42,11 +46,131 @@ fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
         Some(0.2468),
         "the provider's value is passed through unscaled"
     );
+    assert_eq!(
+        spend, None,
+        "no spend object, and amounts without their exponent build none"
+    );
+}
+
+#[test]
+fn the_captured_usage_based_seat_body_parses_into_no_window_and_a_spend_reading() {
+    let (windows, fable, extra, spend, raw) =
+        parse_usage(include_bytes!("fixtures/usage_based_seat.json")).unwrap();
+    assert!(windows.is_empty(), "every window key is null");
+    assert!(fable.is_none(), "limits is empty and the aliases are null");
+    let extra = extra.expect("the body carries extra usage");
+    assert!(extra.is_enabled);
+    assert_eq!(
+        (extra.used_credits, extra.monthly_limit),
+        (Some(102_500), Some(250_000))
+    );
+    assert_eq!(extra.currency.as_deref(), Some("USD"));
+    assert_eq!(extra.decimal_places, Some(2));
+    assert_eq!(
+        spend,
+        Some(SpendReading {
+            used_minor: 102_500,
+            limit_minor: Some(250_000),
+            currency: "USD".into(),
+            exponent: 2,
+            percent: Some(41.0),
+            from_spend: true,
+        })
+    );
+    assert!(raw.contains(&"spend".to_string()));
+}
+
+#[test]
+fn a_null_spend_limit_reads_as_no_limit() {
+    let body = br#"{"spend":{"used":{"amount_minor":4200,"currency":"USD","exponent":2},"limit":null,"percent":null}}"#;
+    let spend = parse_usage(body)
+        .unwrap()
+        .3
+        .expect("the spend object gives a reading");
+    assert_eq!(spend.used_minor, 4_200);
+    assert_eq!(spend.limit_minor, None, "the seat spends without a cap");
+    assert!(spend.from_spend);
+}
+
+#[test]
+fn a_body_without_a_spend_object_builds_the_reading_from_the_extra_usage_amounts() {
+    let body = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":50000,"used_credits":12500,"utilization":25.0,"currency":"EUR","decimal_places":2}}"#;
+    assert_eq!(
+        parse_usage(body).unwrap().3,
+        Some(SpendReading {
+            used_minor: 12_500,
+            limit_minor: Some(50_000),
+            currency: "EUR".into(),
+            exponent: 2,
+            percent: Some(25.0),
+            from_spend: false,
+        }),
+        "the extra-usage amounts build the reading, marked as not the object's"
+    );
+}
+
+#[test]
+fn a_spend_object_without_a_currency_or_a_whole_exponent_falls_back_to_the_extra_usage_amounts() {
+    let extra = r#""extra_usage":{"is_enabled":true,"monthly_limit":50000,"used_credits":12500,"utilization":25.0,"currency":"EUR","decimal_places":2}"#;
+    let fallback = Some(SpendReading {
+        used_minor: 12_500,
+        limit_minor: Some(50_000),
+        currency: "EUR".into(),
+        exponent: 2,
+        percent: Some(25.0),
+        from_spend: false,
+    });
+    for used in [
+        r#"{"amount_minor":4200,"exponent":2}"#,
+        r#"{"amount_minor":4200,"currency":"USD"}"#,
+        r#"{"amount_minor":4200,"currency":"USD","exponent":300}"#,
+    ] {
+        let body = format!(r#"{{"spend":{{"used":{used},"percent":8}},{extra}}}"#);
+        assert_eq!(
+            parse_usage(body.as_bytes()).unwrap().3,
+            fallback,
+            "a spend object whose used is {used} reads as no spend object"
+        );
+    }
+}
+
+#[test]
+fn extra_usage_amounts_with_a_fraction_part_round_to_the_nearest_minor_unit() {
+    let body = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":2499.4,"used_credits":102500.6,"utilization":41.0,"currency":"USD"}}"#;
+    let extra = parse_usage(body)
+        .expect("an amount with a fraction part parses")
+        .2
+        .expect("the body carries extra usage");
+    assert_eq!(extra.used_credits, Some(102_501));
+    assert_eq!(extra.monthly_limit, Some(2_499));
+}
+
+#[test]
+fn a_parse_failure_carries_serdes_message_after_the_colon() {
+    let body = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":"x","utilization":41.0,"currency":"USD"}}"#;
+    let error = parse_usage(body).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        r#"control response is not valid JSON: invalid type: string "x", expected f64"#
+    );
+}
+
+#[test]
+fn a_null_alias_key_without_limits_yields_no_fable_window() {
+    let parsed = parse_usage(br#"{"five_hour":null,"cinder_cove":null}"#).unwrap();
+    assert!(parsed.0.is_empty(), "a null key is no window");
+    assert!(
+        parsed.1.is_none(),
+        "the alias fallback finds nothing to take"
+    );
 }
 
 mod service {
     use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
-    use phoebis_oauth::{Clock, CredentialManager, PollOutcome, UsageService};
+    use phoebis_oauth::{
+        Clock, CredentialManager, PollFault, PollIssue, PollOutcome, Refused, UsageError,
+        UsageService,
+    };
     use phoebis_profile::{
         claude_code_2_1_269_linux_x64,
         fixtures::{control_response, ControlFixture},
@@ -714,6 +838,61 @@ mod service {
     }
 
     #[tokio::test]
+    async fn a_failed_poll_keeps_the_previous_spend_reading_and_its_instant() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: include_bytes!("fixtures/usage_based_seat.json").to_vec(),
+            },
+        }])
+        .await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+
+        let clean = service.poll("a").await.unwrap();
+        let reading = clean.spend.expect("the captured body gives a reading");
+        assert_eq!(clean.fetched_at, 1_000_000);
+
+        up.set_rule_after(0, "/api/oauth/usage", rate_limited_bare().respond);
+        now.store(1_002_000, Ordering::SeqCst);
+        let limited = service.poll("a").await.unwrap();
+        assert_eq!(limited.error.as_deref(), Some("usage request rate-limited"));
+        assert_eq!(
+            limited.spend.as_ref(),
+            Some(&reading),
+            "a 429 keeps the reading"
+        );
+        assert_eq!(limited.fetched_at, 1_000_000, "read when it was read");
+
+        up.set_rule_after(
+            0,
+            "/api/oauth/usage",
+            Respond::Json {
+                status: 500,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        );
+        // Past the 429's two-minute hold, so the poll reaches the endpoint again.
+        now.store(1_125_000, Ordering::SeqCst);
+        let failed = service.poll("a").await.unwrap();
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("usage request rejected with status 500")
+        );
+        assert_eq!(
+            failed.spend.as_ref(),
+            Some(&reading),
+            "a failed fetch keeps the reading"
+        );
+        assert_eq!(failed.fetched_at, 1_000_000, "read when it was read");
+        assert_eq!(usage_requests(&up), 3, "each poll reached the endpoint");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn a_profile_429_sets_the_last_error_to_its_hold_with_or_without_a_reading_held() {
         let now = Arc::new(AtomicI64::new(1_000_000));
         let up = FakeUpstream::start(vec![
@@ -1168,5 +1347,309 @@ mod service {
             0,
             "held, not fetched"
         );
+    }
+
+    /// An answer of `status` with an empty object for its body.
+    fn answering(status: u16) -> Respond {
+        Respond::Json {
+            status,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        }
+    }
+
+    /// Commits the credential after the stored one, as a re-pair does, and answers its generation.
+    fn commit_next_credential(store: &Store) -> u64 {
+        let stored = store.credentials("a").unwrap().unwrap().generation;
+        store
+            .commit_credentials(
+                "a",
+                1,
+                1,
+                Some(stored),
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-NEXT"),
+                    refresh_token: Some(Secret::new("rt-next")),
+                    issued_at: 1_000_000,
+                    expires_at: 1_000_000 + 86_400_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_usage_401_answers_the_re_pair_issue_fenced_on_the_tokens_generation_and_the_lineage()
+    {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: answering(401),
+        }])
+        .await;
+        let store = store_with_bundle_until(1_000_000 + 86_400_000);
+        let generation = commit_next_credential(&store);
+        assert_eq!(
+            generation, 2,
+            "the token the poll acquires is the second credential"
+        );
+        let service = service_for(&up, store, &now);
+        let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
+        assert_eq!(
+            issue,
+            Some(PollIssue::Unauthorized(Refused {
+                incarnation: 1,
+                lifecycle_generation: 1,
+                credential_generation: 2,
+            })),
+            "the 401 names the credential it refused under the lineage the fetch started on"
+        );
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("usage request rejected with status 401"),
+            "the snapshot keeps the text every refused status writes"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_usage_403_a_500_and_a_transport_failure_answer_a_passing_fault_with_their_status_and_text(
+    ) {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: answering(403),
+        }])
+        .await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let fault = |status: u16| {
+            Some(PollIssue::Fault(PollFault {
+                endpoint: "usage",
+                status: Some(status),
+                transport: false,
+                text: format!("usage request rejected with status {status}"),
+            }))
+        };
+        assert_eq!(service.poll_reporting("a").await.unwrap().1, fault(403));
+        up.set_rule_after(0, "/api/oauth/usage", answering(500));
+        assert_eq!(service.poll_reporting("a").await.unwrap().1, fault(500));
+        up.set_rule_after(0, "/api/oauth/usage", Respond::CloseAfterRequest);
+        let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
+        let Some(PollIssue::Fault(fault)) = issue else {
+            panic!("a transport failure is a passing fault: {issue:?}");
+        };
+        assert_eq!(
+            (fault.endpoint, fault.status, fault.transport),
+            ("usage", None, true)
+        );
+        assert!(fault.text.starts_with("transport: "), "{}", fault.text);
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some(fault.text.as_str()),
+            "the fault's text is the snapshot's"
+        );
+        assert_eq!(usage_requests(&up), 3, "no fault holds the account back");
+        up.shutdown().await;
+    }
+
+    /// The usage endpoint's 403 for an organization that holds no plan, as the live read of an ended plan answered it.
+    const PLAN_REFUSED_BODY: &[u8] = br#"{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization.","details":{"error_code":"oauth_not_allowed_for_organization","error_visibility":"user_facing"}}}"#;
+
+    #[tokio::test]
+    async fn a_usage_403_naming_the_organizations_refusal_answers_its_own_issue_and_any_other_403_a_fault(
+    ) {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 403,
+                headers: vec![("x-should-retry".into(), "false".into())],
+                body: PLAN_REFUSED_BODY.to_vec(),
+            },
+        }])
+        .await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let fault = PollFault {
+            endpoint: "usage",
+            status: Some(403),
+            transport: false,
+            text: "usage request rejected with status 403".into(),
+        };
+        let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
+        assert_eq!(
+            issue,
+            Some(PollIssue::PlanRefused {
+                fault: fault.clone(),
+                code: "oauth_not_allowed_for_organization".into(),
+            }),
+            "the code the organization's refusal names rides the issue"
+        );
+        assert_eq!(snapshot.error.as_deref(), Some(fault.text.as_str()));
+        assert_eq!(
+            service.poll_status("a").unwrap().next_attempt_at,
+            None,
+            "the refusal arms no hold"
+        );
+        up.set_rule_after(
+            0,
+            "/api/oauth/usage",
+            Respond::Json {
+                status: 403,
+                headers: vec![],
+                body: br#"{"type":"error","error":{"type":"permission_error","message":"no"}}"#
+                    .to_vec(),
+            },
+        );
+        assert_eq!(
+            service.poll_reporting("a").await.unwrap().1,
+            Some(PollIssue::Fault(fault)),
+            "a 403 without the code is a passing fault"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_caller_joined_to_another_callers_fetch_reads_its_snapshot_and_no_issue() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Gated(Box::new(answering(500))),
+        }])
+        .await;
+        let service = Arc::new(service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            &now,
+        ));
+        let starting = {
+            let service = service.clone();
+            tokio::spawn(async move { service.poll_reporting("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (usage_requests(&up) == 1).then_some(())
+        })
+        .await;
+        let mut joined = std::pin::pin!(service.poll_reporting("a"));
+        assert!(
+            futures::poll!(joined.as_mut()).is_pending(),
+            "the second caller joins the fetch still out"
+        );
+        up.release();
+        let (joined_snapshot, joined_issue) = joined.await.unwrap();
+        let (started_snapshot, started_issue) = starting.await.unwrap().unwrap();
+        assert!(
+            matches!(started_issue, Some(PollIssue::Fault(_))),
+            "the caller that started the fetch reads its fault: {started_issue:?}"
+        );
+        assert_eq!(joined_issue, None, "one fetch reports once");
+        assert_eq!(joined_snapshot.error, started_snapshot.error);
+        assert_eq!(usage_requests(&up), 1);
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_usage_429_answers_no_issue_and_keeps_the_ladder() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![rate_limited_bare()]).await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
+        assert_eq!(issue, None, "a 429 is the ladder's, never a fault");
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("usage request rate-limited")
+        );
+        let status = service.poll_status("a").unwrap();
+        assert_eq!(
+            (
+                status.last_outcome,
+                status.rate_limited_in_a_row,
+                status.next_attempt_at
+            ),
+            (PollOutcome::RateLimited, 1, Some(1_000_000 + 120_000)),
+            "the ladder's first step"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_profile_500_and_a_profile_transport_failure_answer_the_fault_with_the_refreshs_text()
+    {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/profile".into(),
+            respond: answering(500),
+        }])
+        .await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let refused = service.profile("a").await.unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "profile request rejected with status 500"
+        );
+        let UsageError::Fault(fault) = refused else {
+            panic!("a profile 500 is a passing fault: {refused:?}");
+        };
+        assert_eq!(
+            fault,
+            PollFault {
+                endpoint: "profile",
+                status: Some(500),
+                transport: false,
+                text: "profile request rejected with status 500".into(),
+            }
+        );
+        up.set_rule_after(0, "/api/oauth/profile", Respond::CloseAfterRequest);
+        let lost = service.profile("a").await.unwrap_err();
+        let text = lost.to_string();
+        assert!(text.starts_with("transport: "), "{text}");
+        let UsageError::Fault(fault) = lost else {
+            panic!("a profile transport failure is a passing fault: {lost:?}");
+        };
+        assert_eq!(
+            (fault.endpoint, fault.status, fault.transport, fault.text),
+            ("profile", None, true, text)
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_re_pair_mark_of_a_replaced_credential_lands_nothing_and_the_current_one_lands_auth_failed(
+    ) {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![]).await;
+        let store = store_with_bundle_until(1_000_000 + 86_400_000);
+        let current = commit_next_credential(&store);
+        let service = service_for(&up, store.clone(), &now);
+        let fence = |credential_generation: u64| Refused {
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation,
+        };
+        assert_eq!(
+            service.mark_auth_failed("a", fence(current - 1)),
+            None,
+            "a 401 on the credential the re-pair replaced lands nothing"
+        );
+        let row = store.account("a").unwrap().unwrap();
+        assert_eq!(row.state, AccountState::Ready);
+        let mark = service
+            .mark_auth_failed("a", fence(current))
+            .expect("a 401 on the current credential lands the mark");
+        assert_eq!(
+            (mark.state, mark.cause, mark.credential_generation),
+            (
+                AccountState::ReauthRequired,
+                StateCause::AuthFailed,
+                current
+            )
+        );
+        let row = store.account("a").unwrap().unwrap();
+        assert_eq!(
+            (row.state, row.state_cause),
+            (AccountState::ReauthRequired, StateCause::AuthFailed)
+        );
+        up.shutdown().await;
     }
 }

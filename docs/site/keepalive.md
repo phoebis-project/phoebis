@@ -30,6 +30,9 @@ held as `paused` before it is sent, as one on a disabled account is. A 429 on th
 overage under `never`, an account that is disconnected or unpaired, and the pool's move rules move it as they move a
 real request.
 
+A usage-based Enterprise seat's probes hold under its member budget as an API-key member's do, and never for overage:
+the router reads no overage on such a seat ([Overage](routing.md#overage)).
+
 A probe costs a cache read at list price, which its own row in the request ledger carries under the kind `probe`. A
 later request that read the entry a probe kept, a probe that rewrote the entry included, is counted as kept warm, per
 pool and per hour.
@@ -72,7 +75,8 @@ lapsed, with the time the mod stopped reporting, and `none` for a session the ro
 the router still pins and whose requests it still sees. The router reads the owner header the mod has the client send on
 every model request of its process, `X-Keepalive-Owner-Id`, to tell that process's requests from another process's on
 the same session id, leaving the session's recipes as they were and counting the mismatch when the header names another
-owner, and strips the header before a request leaves.
+owner, and strips the header before a request leaves. Once the holder's lease has lapsed, a real request naming another
+owner takes the session over for that owner.
 
 ## Turning it on
 
@@ -116,10 +120,12 @@ and it goes to the probe whose entry that request read, a probe that rewrote the
 covered the entry taking it over a later one that did not cover it. An auxiliary or a foreign request may still read a
 warm cache, but it never resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no
 evidence about the cache, so a retry inside the probe's entry earns the credit the failed turn could not, its gap
-measured from the last turn that answered. Probes on one model, speed and account form a chain while each later probe
-reads the whole entry back, since that read extends the entry, and a probe that reads nothing or only part of the prefix
-starts a chain of its own. A request on that model, speed and account that reads the cache inside the chain's last
-entry answers every probe of the chain, and one that arrives past that entry settles them all `expired`.
+measured from the last turn that answered. A turn whose completion the engine missed, whether the next request's arrival
+or a bus gap ends it, counts as a turn that answered at its start. Probes on one model, speed and account form a chain
+while each later probe reads the whole entry back, since that read extends the entry, and a probe that reads nothing or
+only part of the prefix starts a chain of its own. A request on that model, speed and account that reads the cache
+inside the chain's last entry answers every probe of the chain, and one that arrives past that entry settles them all
+`expired`.
 
 A request a guardrail blocks is a refused request to the engine. A blocked `main` or `subagent` request, or one with no
 class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does. A blocked `compaction`
@@ -159,17 +165,18 @@ the policy does not hold, is refused with `keepalive is not a policy object: {de
 
 For the console, `GET /admin/pools` also answers each pool's `keepalive_resolved`: the break-even and the three ceilings
 in seconds and the idle window's cost as a share of one re-write, each as the lowest and the highest figure over the
-pool's combinations. An OAuth member brings the cost model's factors and an API-key member the price table's. The pool's
-cache TTL policy gives the main conversation's TTL under each, and a policy that leaves the markers as sent brings both
-TTLs. The models are the price table's and those the cache TTL policy's per-model rows and the model rules' entries
-without a wildcard name, which carry the catalog's dated ids, each kept where the pool's model rules allow it. Rules
-that allow none of them leave a model priced nowhere. An undated price row the router's catalog maps to a dated id is
-judged under that id, as a request on the model is, so a deny entry naming the dated id drops the row. On a router
-without a catalog reading the row is judged under its own id, and a deny entry naming a dated id leaves the model's
-undated price row in the range, so for a model the catalog lists only dated, such as Haiku, the range keeps a figure no
-request on the pool reaches. A pool with no member answers `null`. A fast recipe is dollar-funded at the fast cells
-whatever funds the account, and `keepalive_resolved` describes standard speed, so a fast recipe's break-even reads the
-fast cells and not the figures the pool dialog shows.
+pool's combinations. An OAuth member brings the cost model's factors and an API-key member the price table's. A
+usage-based seat brings the price table's too, since its probes settle in dollars. The pool's cache TTL policy gives the
+main conversation's TTL under each, and a policy that leaves the markers as sent brings both TTLs. The models are the
+price table's and those the cache TTL policy's per-model rows and the model rules' entries without a wildcard name,
+which carry the catalog's dated ids, each kept where the pool's model rules allow it. Rules that allow none of them
+leave a model priced nowhere. An undated price row the router's catalog maps to a dated id is judged under that id, as a
+request on the model is, so a deny entry naming the dated id drops the row. On a router without a catalog reading the
+row is judged under its own id, and a deny entry naming a dated id leaves the model's undated price row in the range, so
+for a model the catalog lists only dated, such as Haiku, the range keeps a figure no request on the pool reaches. A pool
+with no member answers `null`. A fast recipe is dollar-funded at the fast cells whatever funds the account, and
+`keepalive_resolved` describes standard speed, so a fast recipe's break-even reads the fast cells and not the figures
+the pool dialog shows.
 
 The schedule's numbers are fixed. A probe is due 60 seconds before a five-minute entry expires and 360 seconds before a
 one-hour entry, less a random jitter of up to 5 and 30 seconds that spreads a pool's probes so one tick never bursts. At
@@ -371,11 +378,12 @@ read, at the dearest listed cells for a model the price table does not know, and
 landed on a different account than the recipe's. `wasted_probes` counts the probes settled wasted by one of the reasons
 above, and `wasted_probe_reasons` counts them by the reason. The wasted probes' five token counts sit on the hourly
 rollup beside their count, priced the same way. Each wasted probe files beside its own cost row, in the hour the relay
-received the probe and under the funding that row took (the kind of the account that served it, the speed its answer
-reported and whether its answer reported overage in use), so the wasted part of a probe share reads the plan-funded
-probes' waste against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than
-sending, for example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
-`503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
+received the probe and under the funding that row took (the kind of the account that served it, whether that account is
+a usage-based seat, the speed its answer reported and whether its answer reported overage in use), so the wasted part of
+a probe share reads the plan-funded probes' waste against their own cost. `probes_skipped` counts a due probe a gate or
+a lapsed entry withheld rather than sending, for example because a cooldown already held the recipe. `probes_held`
+counts a probe the router refused with `503 ledger_behind` while its ledger caught up and sent again, outside the failed
+probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
 `plan_ok`, `skipped`, where `plan_ok` counts the answered probes a subscription window paid for, inside `ok`), and per

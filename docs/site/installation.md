@@ -73,9 +73,9 @@ environment file as root. A proxy listener that serves the LAN takes `--proxy-li
 `stats.subscription_costs_path`. Leave both files uninstalled: the shipped files carry every revision and a release adds
 the next, and a copy at either path would shadow every later release's revisions until it was copied again.
 
-A router that already runs from a file in your home directory moves under the unit after every line of the block but
-`init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700` (`useradd --system`
-creates no home directory), move the bootstrap file to `/etc/phoebis/config.yaml`, the key file to
+A router that already runs from a file in your home directory moves under the unit after every line of the install block
+but `init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700`
+(`useradd --system` creates no home directory), move the bootstrap file to `/etc/phoebis/config.yaml`, the key file to
 `/etc/phoebis/storage.key`, the two price files to `/etc/phoebis/` (`api_prices.yaml` and `subscription_costs.yaml`
 beside the bootstrap file, where `init` pointed their path keys, each where it exists, in place of the shipped
 revisions) and the data directory's contents into `/var/lib/phoebis`, give the key file, that directory
@@ -114,6 +114,39 @@ The service, `status` and `tls reload` refuse an unset secret, and the start, `c
 refuse a secret of another shape with the line [Environment variables](#environment-variables) gives. `phoebis health`
 loads the file without resolving its secrets and refuses none. Once the check is clean, the owner warnings for what
 `phoebis` owns aside, since root runs the check, `sudo systemctl enable --now phoebis`.
+
+The block below is the shipped `deploy/phoebis.service`, quoted whole:
+
+```ini title="deploy/phoebis.service"
+[Unit]
+Description=Phoebis Router
+Documentation=https://daystrom-labs.github.io/phoebis/operations/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=phoebis
+Group=phoebis
+WorkingDirectory=/var/lib/phoebis
+EnvironmentFile=/etc/phoebis/phoebis.env
+ExecStart=/usr/local/bin/phoebis --config /etc/phoebis/config.yaml
+# The router's shutdown budget is 35 seconds after SIGTERM, and the stop timeout leaves five more.
+KillSignal=SIGTERM
+TimeoutStopSec=40
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+StateDirectory=phoebis
+StateDirectoryMode=0700
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ## Run the container
 
@@ -183,7 +216,7 @@ subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` th
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then stops within 35 seconds. |
 | `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
-| `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary: exit 0 once the accounts are marked ([The storage key](operations.md#the-storage-key)). |
+| `phoebis recover-key --config ./config.yaml` | Discards the registry's secrets after a lost key and seals a new canary, or seals the canary of a registry that has none when the key opens its rows: exit 0 once the accounts are marked or the canary is sealed ([The storage key](operations.md#the-storage-key)). |
 | `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |

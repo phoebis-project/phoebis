@@ -24,13 +24,12 @@ use crate::record::{
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, entrypoint_of,
     load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms,
-    slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment, BurnUnit, CreditsState,
-    MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier,
-    WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WEEK_MS,
+    slow_down, slow_down_hold_ms, slow_down_stretch_ms, warm, BandSegment, BurnUnit, MemberSpend,
+    PinPace, PinRef, PinUsage, Reservation, RoutingState, StateWrite, Tier, WindowReading,
+    FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, MODEL_WINDOWS};
-use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
+use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 
 /// Who sent the request: `claude-code/*` is Claude Code, everything else is not.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -612,7 +611,7 @@ enum Obstacle {
     Credits {
         reason: String,
     },
-    /// Cancelled and past the saved end.
+    /// Canceled and past the saved end.
     Ended,
     Operator,
 }
@@ -673,6 +672,19 @@ fn budget_unknown(
     state.accounting_degraded() && budgeted_member(snapshot, pool_id, account_id).is_some()
 }
 
+/// The prompt size a pin's burn is divided by and its move rewrites: the pin's own prompt where a conversation call
+/// renewed it last, the request's own body where a classifier call did or no call has renewed it with usage, zero for
+/// a classifier request.
+fn prompt_size(pin: &PinRow, request: &SelectRequest) -> u64 {
+    if pin.last_input_tokens > 0 && !pin.last_classifier {
+        pin.last_input_tokens
+    } else if request.classifier {
+        0
+    } else {
+        request.body_tokens
+    }
+}
+
 /// The rewrite a selection prices for the pin's next write: its last context, or the body's estimate for a fresh
 /// session, a pin never renewed with usage or a pin a classifier call renewed last, as one cache write at the lane's
 /// TTL (five minutes until a pin reports one). The gate's booking and the pick's figure price the same tokens through
@@ -690,10 +702,7 @@ pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> Pi
     // renewed last holds a classifier body as its context, which the plan windows never see either, so a move or a
     // round prices the request's own body there, zero for a classifier request.
     let (tokens, ttl_ms) = match pin {
-        Some(pin) if pin.last_input_tokens > 0 && !pin.last_classifier => {
-            (pin.last_input_tokens, pin.cache_ttl_ms)
-        }
-        Some(pin) => (body, pin.cache_ttl_ms),
+        Some(pin) => (prompt_size(pin, request), pin.cache_ttl_ms),
         None => (body, 300_000),
     };
     if ttl_ms >= 3_600_000 {
@@ -863,8 +872,23 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
 /// for a model with a week of its own, that week and both shared plan windows, since its requests draw on the
 /// shared windows too; both shared plan windows otherwise. A prediction at 1.0 is spent. No sample, or a sample
 /// that never read the window, counts as allowance (an api_key account, whose sample carries no plan window of
-/// its own, always holds it here); a reading past its reset, or one a newer head lowered, no longer excludes.
-fn holds_allowance(state: &RoutingState, account_id: &str, window: &str, now: i64) -> bool {
+/// its own, always holds it here). A reading past its reset, or one a newer head lowered, no longer excludes. A
+/// usage-based account at its spend cap (`spend_spent`) has none whatever the request's window, since the spend funds
+/// every model, and below it holds allowance whatever its plan-window readings say: the spend is its one hold, and a
+/// reading it kept from before the class, or a head's family it still records, stops no request.
+fn holds_allowance(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    window: &str,
+    now: i64,
+) -> bool {
+    if spend_spent(state, snapshot, account_id, now).is_some() {
+        return false;
+    }
+    if snapshot.usage_based(account_id) {
+        return true;
+    }
     let spent = |name: &str| {
         state
             .predicted(account_id, name, now)
@@ -877,22 +901,43 @@ fn holds_allowance(state: &RoutingState, account_id: &str, window: &str, now: i6
     }
 }
 
-/// The spent windows `holds_allowance` reads for `window`, each with its reset, `None` for one that names none.
+/// The spent windows `holds_allowance` reads for `window`, each with its reset, `None` for one that names none, and
+/// the window `spend` at its reset where `spend_spent` holds the account out. A usage-based account lists no plan
+/// window, as `holds_allowance` reads none for it.
 fn spent_windows<'a>(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
     account_id: &str,
     window: &'a str,
     now: i64,
 ) -> Vec<(Option<i64>, &'a str)> {
+    let usage_based = snapshot.usage_based(account_id);
     [window, FIVE_HOUR, SEVEN_DAY]
         .into_iter()
+        .filter(|_| !usage_based)
         .filter_map(|name| {
             state
                 .predicted(account_id, name, now)
                 .filter(|r| r.utilization >= 1.0)
                 .map(|r| (r.reset, name))
         })
+        .chain(spend_spent(state, snapshot, account_id, now).map(|reset| (Some(reset), "spend")))
         .collect()
+}
+
+/// The spend window's reset where a usage-based account's share reads at or above one at `now`: the one read the
+/// candidate's obstacle, the allowance and the spent windows share, so the hold and its deadline never disagree.
+fn spend_spent(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    now: i64,
+) -> Option<i64> {
+    let window = state.spend_window(snapshot, account_id, now)?;
+    window
+        .utilization
+        .is_some_and(|share| share >= 1.0)
+        .then_some(window.reset)
 }
 
 /// The latest reset among the spent windows that name one, with that window's key: the deadline an exhaustion
@@ -900,11 +945,12 @@ fn spent_windows<'a>(
 /// spent on a dated and an undated window still dates the answer. `None` when no spent window names a reset.
 fn spent_until<'a>(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
     account_id: &str,
     window: &'a str,
     now: i64,
 ) -> Option<(i64, &'a str)> {
-    spent_windows(state, account_id, window, now)
+    spent_windows(state, snapshot, account_id, window, now)
         .into_iter()
         .filter_map(|(reset, name)| reset.map(|reset| (reset, name)))
         .max_by_key(|(reset, _)| *reset)
@@ -915,17 +961,18 @@ fn spent_until<'a>(
 /// with that window still spent.
 fn refunded_at<'a>(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
     account_id: &str,
     window: &'a str,
     now: i64,
 ) -> Option<(i64, &'a str)> {
-    if spent_windows(state, account_id, window, now)
+    if spent_windows(state, snapshot, account_id, window, now)
         .iter()
         .any(|(reset, _)| reset.is_none())
     {
         return None;
     }
-    spent_until(state, account_id, window, now)
+    spent_until(state, snapshot, account_id, window, now)
 }
 
 /// The pool's affinity in milliseconds, saturating for a value no clock reaches.
@@ -951,7 +998,7 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// (the account no longer serves the model for this key: it left the pool, the model was deselected, or the
 /// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
 /// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
-/// `subscription_ended` (cancelled and past its saved end), `cooldown` (a live row blocks the model on the
+/// `subscription_ended` (canceled and past its saved end), `cooldown` (a live row blocks the model on the
 /// account), `fast_rate_limit` or `fast_credits` for a fast request (one of the fast lane's two rows, or the
 /// poll's credits state, blocks it), `budget_unknown` (the member carries a budget while the ledger is degraded) or
 /// else `budget` (the member's spend is at or above its configured budget), `overage` (in overage under a policy
@@ -1019,11 +1066,11 @@ pub fn release_reasons(
             .any(|row| row.scope == "fast_credits")
     };
     let credits_state = || {
-        snapshot
-            .account(&pin.account_id)
-            .and_then(|account| state.credits_of(&pin.account_id, account.incarnation))
-            .and_then(CreditsState::blocked)
-            .is_some()
+        snapshot.account(&pin.account_id).is_some_and(|account| {
+            state
+                .credits_blocked(snapshot, &pin.account_id, account.incarnation, request.now)
+                .is_some()
+        })
     };
     if request.fast && !reasons.contains(&FAST_CREDITS_REASON) && (credits_row() || credits_state())
     {
@@ -1048,6 +1095,7 @@ pub fn release_reasons(
     if !request.fast
         && !holds_allowance(
             state,
+            snapshot,
             &pin.account_id,
             window_for(&request.canonical_model),
             request.now,
@@ -1798,11 +1846,13 @@ fn run(
         let mut left: Vec<&Candidate> = Vec::new();
         let mut dropped = 0;
         for c in selection_set.iter().copied() {
-            if holds_allowance(state, &c.account_id, window, request.now) {
+            if holds_allowance(state, snapshot, &c.account_id, window, request.now) {
                 left.push(c);
                 continue;
             }
-            if let Some((until, spent)) = spent_until(state, &c.account_id, window, request.now) {
+            if let Some((until, spent)) =
+                spent_until(state, snapshot, &c.account_id, window, request.now)
+            {
                 spent_deadlines.push((
                     c.account_id.clone(),
                     Obstacle::Cooldown {
@@ -1815,10 +1865,11 @@ fn run(
             // Extra usage funds every model, so under `allow` a spent window goes on in overage unless the poll read
             // the account's extra usage as blocked. A state the poll has not read is no refusal.
             let funded = pool.overage_policy == OveragePolicy::Allow
-                && snapshot
-                    .account(&c.account_id)
-                    .and_then(|a| state.credits_of(&c.account_id, a.incarnation))
-                    .is_none_or(|credits| credits.blocked().is_none());
+                && snapshot.account(&c.account_id).is_none_or(|a| {
+                    state
+                        .credits_blocked(snapshot, &c.account_id, a.incarnation, request.now)
+                        .is_none()
+                });
             if funded {
                 spent_model.push(c.account_id.clone());
                 left.push(c);
@@ -2033,7 +2084,8 @@ fn run(
             // The cohort-aware hold is a cap exemption and nothing more: a session already on an account under
             // any agent lands there rather than waiting, and a still-held subagent waits where its own cohort
             // is rather than on the strategy's unrelated choice. A token count never gets here: it is never held.
-            let session_pin = any_agent_pin(state, request, &allowed, window, ttl_ms, rec);
+            let session_pin =
+                any_agent_pin(state, snapshot, request, &allowed, window, ttl_ms, rec);
             if let Some(candidate) = session_pin {
                 rec.step(
                     "hold",
@@ -2943,9 +2995,9 @@ pub(crate) fn fit_of(
         read.verdict = "ending";
         return read;
     }
-    if snapshot.account(candidate).map(|a| a.kind) == Some(AccountKind::ApiKey) {
-        // A bucket refills within its minute, so a line under 1.0 says the account has room and there is nothing
-        // to project.
+    if paid_source(snapshot, candidate) {
+        // A paid source holds no plan window to project: an api_key bucket refills within its minute, so a line under
+        // 1.0 says the account has room, and a usage-based seat reads no bucket at all.
         let room = state
             .sample(candidate)
             .and_then(|s| s.worst_bucket(now))
@@ -3224,9 +3276,10 @@ pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, end: Option<i64>, a
     })
 }
 
-/// Whether the account's allowance is known: an api_key account has no plan window to read, and a subscription
-/// account holds a prediction of every window `holds_allowance` reads for the request: the model's own week and
-/// both shared windows for a model with a week of its own, both shared windows otherwise.
+/// Whether the account's allowance is known: a paid source (an api_key account or a usage-based seat) has no plan
+/// window to read, and a subscription account holds a prediction of every window `holds_allowance` reads for the
+/// request: the model's own week and both shared windows for a model with a week of its own, both shared windows
+/// otherwise.
 fn allowance_known(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3235,7 +3288,7 @@ fn allowance_known(
     now: i64,
 ) -> bool {
     let known = |name: &str| state.predicted(account_id, name, now).is_some();
-    snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey)
+    paid_source(snapshot, account_id)
         || if window != SEVEN_DAY {
             known(window) && known(FIVE_HOUR) && known(SEVEN_DAY)
         } else {
@@ -3319,7 +3372,9 @@ fn gate<'a>(
         .filter(|c| c.account_id != current.account_id && keep(c))
         // An account with no allowance left in the model's own window is no destination: step 6 drops it, so
         // releasing the pin for a set of them would strand the request on nothing.
-        .filter(|c| window == SEVEN_DAY || holds_allowance(state, &c.account_id, window, now))
+        .filter(|c| {
+            window == SEVEN_DAY || holds_allowance(state, snapshot, &c.account_id, window, now)
+        })
         .collect();
     let reads: Vec<(String, FitRead)> = set
         .iter()
@@ -3440,7 +3495,7 @@ fn move_of<'a>(
             "no",
             vec![Fact::bool("migrate_when_spent", false)],
         );
-    } else if holds_allowance(state, &current.account_id, window, now) {
+    } else if holds_allowance(state, snapshot, &current.account_id, window, now) {
         rec.step(RULES[0], "no", vec![Fact::bool("holds_allowance", true)]);
     } else {
         // A reset inside the retry bound costs less than a cold rewrite: the request waits for it in place and the
@@ -3465,7 +3520,7 @@ fn move_of<'a>(
                 hold.account_id == current.account_id && matches!(hold.reason, "cap" | "reset")
             });
         if let Some((reset, spent_window, until)) =
-            refunded_at(state, &current.account_id, window, now)
+            refunded_at(state, snapshot, &current.account_id, window, now)
                 .filter(|_| !held_on)
                 .map(|(reset, spent_window)| {
                     (
@@ -3499,7 +3554,7 @@ fn move_of<'a>(
             eligible,
             window,
             &|c| {
-                holds_allowance(state, &c.account_id, window, now)
+                holds_allowance(state, snapshot, &c.account_id, window, now)
                     && allowance_known(state, snapshot, &c.account_id, window, now)
                     && !(prefer_plan && state.in_overage(&c.account_id, now, fallback_ms))
             },
@@ -3552,8 +3607,9 @@ fn move_of<'a>(
                     window,
                     &|c| {
                         kind(&c.account_id) == Some(AccountKind::Oauth)
+                            && !paid_source(snapshot, &c.account_id)
                             && !state.in_overage(&c.account_id, now, fallback_ms)
-                            && holds_allowance(state, &c.account_id, window, now)
+                            && holds_allowance(state, snapshot, &c.account_id, window, now)
                     },
                     false,
                     rec,
@@ -3567,13 +3623,13 @@ fn move_of<'a>(
         }
     }
 
-    // An api_key member bills every token, so a pin on one returns to plan quota as `return_to_plan` says: at
-    // once when cold under `always` or `when_cold`, after the return dwell when warm under `always`, and never
-    // under `never`. A move writes a fresh row, so `created_at` is the landing here. The member names no reset,
-    // so no grace applies.
+    // A paid source bills every token in dollars (an api_key member, or a usage-based seat against its spend cap),
+    // so a pin on one returns to plan quota as `return_to_plan` says: at once when cold under `always` or
+    // `when_cold`, after the return dwell when warm under `always`, and never under `never`. A move writes a fresh
+    // row, so `created_at` is the landing here. The member names no reset, so no grace applies.
     let dwell_age_ms = now - current.created_at;
     let mode = pool.failover.return_to_plan;
-    if current_kind != Some(AccountKind::ApiKey) {
+    if !paid_source(snapshot, &current.account_id) {
         rec.step(
             RULES[2],
             "no",
@@ -3616,8 +3672,9 @@ fn move_of<'a>(
                 window,
                 &|c| {
                     kind(&c.account_id) == Some(AccountKind::Oauth)
+                        && !paid_source(snapshot, &c.account_id)
                         && !state.in_overage(&c.account_id, now, fallback_ms)
-                        && holds_allowance(state, &c.account_id, window, now)
+                        && holds_allowance(state, snapshot, &c.account_id, window, now)
                 },
                 false,
                 rec,
@@ -4228,7 +4285,7 @@ fn no_destination(
 }
 
 /// The unit the account's burn is shed in: the plan window's share on a subscription account on plan quota,
-/// dollars on an api_key account or one in overage.
+/// dollars on an api_key account, a usage-based seat or one in overage.
 fn burn_unit(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -4239,7 +4296,11 @@ fn burn_unit(
     let kind = snapshot
         .account(account_id)
         .map_or(AccountKind::Oauth, |a| a.kind);
-    BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms))
+    BurnUnit::of(
+        kind,
+        snapshot.usage_based(account_id),
+        state.in_overage(account_id, now, fallback_ms),
+    )
 }
 
 /// What fired a round: the first plan window, in the trigger's order, whose test read over past its wait. `excess` is
@@ -4546,7 +4607,9 @@ fn destination_of(
             !(pin.shed_from.as_deref() == Some(c.account_id.as_str())
                 && pin.shed_at.is_some_and(|at| now - at < dwell_ms))
         })
-        .filter(|c| window == SEVEN_DAY || holds_allowance(state, &c.account_id, window, now))
+        .filter(|c| {
+            window == SEVEN_DAY || holds_allowance(state, snapshot, &c.account_id, window, now)
+        })
         .filter(|c| state.in_flight().account(&c.account_id) < cap)
         .collect();
     let reads: Vec<(String, FitRead)> = set
@@ -4618,7 +4681,20 @@ fn shed_round(
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
     let in_pool = in_pool(snapshot, pool);
     let average_ms = burn_average_ms(pool);
-    let (mut pins, _) = state.burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms);
+    // A window-share round orders by the walk's own figure, which `share_of` fills below, so it lists its pins
+    // unpriced.
+    let mut pins: Vec<(PinRow, Option<f64>)> = match unit {
+        BurnUnit::WindowShare => state
+            .pins_on(account_id, &in_pool)
+            .into_iter()
+            .map(|p| (p.clone(), None))
+            .collect(),
+        BurnUnit::Usd => {
+            state
+                .burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms)
+                .0
+        }
+    };
     let is_current = |p: &PinRow| p.key() == current.key();
     let is_cold = |p: &PinRow| {
         if is_current(p) {
@@ -4692,6 +4768,18 @@ fn shed_round(
         })
         .collect();
     let share_of = |p: &PinRow| shares.get(&p.key()).copied().flatten();
+    // Each pin's rewrite cost read off its own request in the round, as `rewrite_write` reads it, so a pin a classifier
+    // call renewed last never ranks by a classifier body.
+    let prompts: HashMap<PinKey, u64> = pins
+        .iter()
+        .map(|(p, _)| {
+            (
+                p.key(),
+                prompt_size(p, &pin_request(request, p, is_current(p))),
+            )
+        })
+        .collect();
+    let prompt_of = |p: &PinRow| prompts.get(&p.key()).copied().unwrap_or_default().max(1) as f64;
     // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the record
     // lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at `now`, which counts
     // the fast and classifier usage the account pays for beside the row's copy.
@@ -4711,8 +4799,7 @@ fn shed_round(
             (None, None) => Ordering::Equal,
         };
     // A pin with no prompt size reported yet ranks as the cheapest rewrite.
-    let per_rewrite =
-        |(p, burn): &(PinRow, Option<f64>)| burn.map(|b| b / p.last_input_tokens.max(1) as f64);
+    let per_rewrite = |(p, burn): &(PinRow, Option<f64>)| burn.map(|b| b / prompt_of(p));
     let by_rewrite = |a: &(PinRow, Option<f64>), b: &(PinRow, Option<f64>)| {
         priced_first(&per_rewrite(a), &per_rewrite(b), |x, y| y.total_cmp(&x))
     };
@@ -4908,7 +4995,7 @@ fn shed_round(
             cold: is_cold(p),
             burn,
             last_input_tokens: p.last_input_tokens,
-            per_rewrite: burn.map(|b| b / p.last_input_tokens.max(1) as f64),
+            per_rewrite: burn.map(|b| b / prompt_of(p)),
             marked: mark.is_some() || mark_holds(p),
             rewrite: read.and_then(|read| read.rewrite),
             rewrite_window: read.and_then(|read| read.rewrite_window),
@@ -5042,9 +5129,8 @@ fn obstacle(
         {
             return Some(cooldown(row));
         }
-        if let Some(reason) = state
-            .credits_of(&candidate.account_id, account.incarnation)
-            .and_then(CreditsState::blocked)
+        if let Some(reason) =
+            state.credits_blocked(snapshot, &candidate.account_id, account.incarnation, now)
         {
             return Some(Obstacle::Credits {
                 reason: reason.into(),
@@ -5065,6 +5151,15 @@ fn obstacle(
     }
     if let Some(row) = fast_limited {
         return Some(cooldown(row));
+    }
+    // The spend funds every model and the fast lane alike, so a seat at its cap is out of the set for any request,
+    // a live pin's renewal included, until the window resets.
+    if let Some(reset) = spend_spent(state, snapshot, &candidate.account_id, now) {
+        return Some(Obstacle::Cooldown {
+            reason: "spent".into(),
+            until: reset,
+            window: "spend".into(),
+        });
     }
     // Plan overage is a plan window's state, which a fast request does not draw.
     if !fast && pool.overage_policy == OveragePolicy::Never {
@@ -5251,13 +5346,14 @@ fn narrow<'a>(
 /// window.
 fn admits(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
     allowed: &[&Candidate],
     window: &str,
     account_id: &str,
     now: i64,
 ) -> bool {
     allowed.iter().any(|c| c.account_id == account_id)
-        && holds_allowance(state, account_id, window, now)
+        && holds_allowance(state, snapshot, account_id, window, now)
 }
 
 fn account_ok(
@@ -5287,7 +5383,7 @@ fn account_refusal(
     } else if snapshot.account(&entry.account_id).map(|a| a.incarnation) != Some(entry.incarnation)
     {
         Some("incarnation")
-    } else if !admits(state, allowed, window, &entry.account_id, now) {
+    } else if !admits(state, snapshot, allowed, window, &entry.account_id, now) {
         Some("not_admitted")
     } else {
         None
@@ -5431,7 +5527,7 @@ fn placement_of<'a>(
         }
         let refusal = if now - pin.last_used_at > affinity_ttl_ms(pool) {
             Some("pin_idle")
-        } else if !admits(state, allowed, window, &pin.account_id, now) {
+        } else if !admits(state, snapshot, allowed, window, &pin.account_id, now) {
             Some("not_admitted")
         } else {
             None
@@ -5575,6 +5671,7 @@ fn record_lookups(rec: &mut Recorder, walk: &RungWalk<'_>, now: i64, content: bo
 /// one of another, so every pin of the session is checked rather than just the first the sort finds.
 fn any_agent_pin<'a>(
     state: &RoutingState,
+    snapshot: &RegistrySnapshot,
     request: &SelectRequest,
     allowed: &[&'a Candidate],
     window: &str,
@@ -5586,7 +5683,7 @@ fn any_agent_pin<'a>(
         .session_pins(&request.key_id, session_id, &request.canonical_model)
         .find(|p| {
             request.now - p.last_used_at <= idle_ms
-                && admits(state, allowed, window, &p.account_id, request.now)
+                && admits(state, snapshot, allowed, window, &p.account_id, request.now)
         })?
         .account_id
         .clone();
@@ -5638,8 +5735,9 @@ const WEEK_HOURS: f64 = 168.0;
 
 /// Pace's remaining allowance for a candidate at `now`, and the predicted reading's reset when it came from the
 /// candidate's own `window` (an api_key account's worst-bucket reset never enters the score). A subscription
-/// window nobody has read, an api_key account with every bucket refunded or aged, or an account never sampled,
-/// all read as untouched: remaining 1, no reset. A reading past its reset reads as the router's own use since it.
+/// window nobody has read, an api_key account with every bucket refunded or aged, a usage-based seat, which holds
+/// neither, or an account never sampled, all read as untouched: remaining 1, no reset. A reading past its reset
+/// reads as the router's own use since it.
 fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> (f64, Option<i64>) {
     if let Some(reading) = state.predicted(account_id, window, now) {
         return ((1.0 - reading.utilization).max(0.0), reading.reset);
@@ -5654,11 +5752,12 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
 /// earlier of the window's reset and the account's end less the demand of the pool's pins on the account on
 /// that window (their burn over the account's realized speed), in share per hour. An account that runs out sooner is
 /// spent first, and one whose sessions already spend its allowance ranks below an idle one. The score reads negative
-/// where the account spends faster than its pace allows. An untiered account prices no burn. An api_key account
-/// scores by its worst live bucket alone (a bucket refills within a minute, so Pace degrades to least utilized on it,
-/// and neither the bucket's own reset nor a burn enters the score). `choose` ranks by this score and the record
-/// carries the rest, so the two cannot disagree. `own` is the request's pin key on a placement's own score, whose row
-/// the demand leaves out as the placement's fit does, and `None` on every other read.
+/// where the account spends faster than its pace allows. An untiered account prices no burn. A paid source scores by
+/// its remaining share alone: an api_key account by its worst live bucket (a bucket refills within a minute, so Pace
+/// degrades to least utilized on it, and neither the bucket's own reset nor a burn enters the score), a usage-based
+/// seat, which reads no plan window, as untouched. `choose` ranks by this score and the record carries the rest, so
+/// the two cannot disagree. `own` is the request's pin key on a placement's own score, whose row the demand leaves
+/// out as the placement's fit does, and `None` on every other read.
 pub(crate) fn pace_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -5669,7 +5768,7 @@ pub(crate) fn pace_of(
     own: Option<&PinKey>,
 ) -> PaceFacts {
     let (remaining, reset) = remaining(state, &candidate.account_id, window, now);
-    if snapshot.account(&candidate.account_id).map(|a| a.kind) == Some(AccountKind::ApiKey) {
+    if paid_source(snapshot, &candidate.account_id) {
         return PaceFacts {
             remaining,
             reset,
@@ -5724,14 +5823,15 @@ pub(crate) fn pace_of(
 }
 
 /// `choose`'s sort key for a candidate: under the kind order, group one is oauth with plan quota, two oauth in
-/// overage, three api_key. The split holds under any overage_policy, because it orders by cost, not eligibility:
-/// `allow` still demotes an overage oauth account behind a plan-quota one. `overage_policy` governs eligibility
-/// everywhere and orders the tier itself only when the kind order is off, through the overage bit. The kind order
-/// puts the group ahead of the priority. Within a group, `prefer_plan` still orders an overage account behind a
-/// plan-quota one, group three (api_key) included. A candidate step 6 kept on extra usage with a spent window
-/// (`spent_model`) bills as an account in overage does, so every plan-funded sibling goes ahead of it
-/// whatever the priorities: it joins the overage group under the kind order and leads the key otherwise. The third
-/// element is the overage bit under either order, which the selection trace reads.
+/// overage, three a paid source (an api_key account or a usage-based seat). The split holds under any
+/// overage_policy, because it orders by cost, not eligibility: `allow` still demotes an overage oauth account behind
+/// a plan-quota one. `overage_policy` governs eligibility everywhere and orders the tier itself only when the kind
+/// order is off, through the overage bit. The kind order puts the group ahead of the priority. Within a group,
+/// `prefer_plan` still orders an overage account behind a plan-quota one, group three (the paid sources) included. A
+/// candidate step 6 kept on extra usage with a spent window (`spent_model`) bills as an account in overage does, so
+/// every plan-funded sibling goes ahead of it whatever the priorities: it joins the overage group under the kind order
+/// and leads the key otherwise. The third element is the overage bit under either order, which the selection trace
+/// reads.
 fn tier_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -5746,13 +5846,10 @@ fn tier_of(
     let overage_bit =
         u8::from(spent || (pool.overage_policy == OveragePolicy::PreferPlan && in_overage));
     if pool.kind_ordered() {
-        let group = match (
-            snapshot.account(&candidate.account_id).map(|a| a.kind),
-            in_overage || spent,
-        ) {
-            (Some(AccountKind::ApiKey), _) => 2,
-            (_, true) => 1,
-            (_, false) => 0,
+        let group = if paid_source(snapshot, &candidate.account_id) {
+            2
+        } else {
+            u8::from(in_overage || spent)
         };
         (group, candidate.priority, overage_bit)
     } else {
@@ -6099,11 +6196,12 @@ fn in_flight_fact(in_flight: u32, cap: u32) -> Fact {
     Fact::text("in_flight", format!("{in_flight}/{cap}")).unit("count")
 }
 
-/// Pace scores a subscription account per hour of its window and an api_key one by its remaining share alone.
+/// Pace scores a subscription account per hour of its window and a paid source by its remaining share alone.
 fn score_unit(snapshot: &RegistrySnapshot, account_id: &str) -> &'static str {
-    match snapshot.account(account_id).map(|a| a.kind) {
-        Some(AccountKind::ApiKey) => "percent",
-        _ => "percent_per_hour",
+    if paid_source(snapshot, account_id) {
+        "percent"
+    } else {
+        "percent_per_hour"
     }
 }
 
@@ -6357,6 +6455,30 @@ fn candidate_facts(
             }
         }
     }
+    // Drawn while a share is held: the entry's share is a figure, so a lapsed or unread share leaves no entry.
+    if let Some((spend, utilization)) = state
+        .spend_window(snapshot, id, now)
+        .and_then(|spend| spend.utilization.map(|u| (spend, u)))
+    {
+        let observed_at = spend.observed_at.unwrap_or(now);
+        windows.insert(
+            "spend".to_string(),
+            WindowFacts {
+                utilization,
+                reset: Some(spend.reset),
+                // A poll names no reset, so a share and a reset share a reading only where one head named both, and
+                // the reset's source then reads `head` as the share's does: the reset's source answers every case.
+                source: spend.reset_source.as_str(),
+                observed_at,
+                age_ms: now - observed_at,
+                ahead: None,
+                projection: None,
+                horizon: None,
+                demand: None,
+                reserved: 0.0,
+            },
+        );
+    }
     if let Some(reading) = sample.and_then(|s| s.worst_bucket(now)) {
         windows.insert(
             "worst_bucket".to_string(),
@@ -6405,20 +6527,21 @@ fn candidate_facts(
         })
         .collect();
     cooldowns.sort_by(|a, b| a.scope.cmp(&b.scope));
-    let credits = account
-        .filter(|_| request.fast)
-        .and_then(|a| state.credits_of(id, a.incarnation))
-        .map(|c| CreditsFacts {
+    let credits = account.filter(|_| request.fast).and_then(|a| {
+        state.credits_of(id, a.incarnation).map(|c| CreditsFacts {
             enabled: c.enabled,
             disabled_reason: c.disabled_reason.clone(),
             utilization: c.utilization,
             observed_at: c.observed_at,
-            blocked: c.blocked().map(String::from),
-        });
+            blocked: state
+                .credits_blocked(snapshot, id, a.incarnation, now)
+                .map(String::from),
+        })
+    });
     let term = snapshot.term(id).map(|t| TermFacts {
         since: t.since,
         trial_ends_at: t.trial_ends_at,
-        cancelled: t.cancelled,
+        canceled: t.canceled,
         ends_at: t.ends_at,
         winding_down: term::winding_down(t, now, pool.failover.wind_down_minutes),
         ended: term::ended(t, now),
@@ -7363,9 +7486,11 @@ mod banded_tests {
                     account_id: "b".into(),
                     since: None,
                     trial_ends_at: None,
-                    cancelled: false,
+                    canceled: false,
                     ends_at: None,
                     tier: Some("default_claude_max_20x".into()),
+                    usage_based: false,
+                    plan_ended_at: None,
                 }],
                 ..RegistryLoad::default()
             },
@@ -7526,9 +7651,11 @@ mod banded_tests {
                     account_id: "b".into(),
                     since: None,
                     trial_ends_at: None,
-                    cancelled: true,
+                    canceled: true,
                     ends_at: Some(T - HOUR),
                     tier: Some(tier.into()),
+                    usage_based: false,
+                    plan_ended_at: None,
                 }],
                 ..RegistryLoad::default()
             },

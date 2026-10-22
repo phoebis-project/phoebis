@@ -3,7 +3,7 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 use rusqlite::{params, OptionalExtension, Row};
 
-use crate::registry::SubscriptionTerm;
+use crate::registry::{usage_based_of, SubscriptionTerm};
 use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -591,18 +591,18 @@ impl Store {
 
     /// The operator's answer alone: the flag and the end together, the end dropped when the flag is off;
     /// bumps `revision` so the next reload publishes it.
-    pub fn set_cancelled(
+    pub fn set_canceled(
         &self,
         id: &str,
-        cancelled: bool,
+        canceled: bool,
         ends_at: Option<i64>,
     ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         if conn.execute(
-            "UPDATE accounts SET cancelled = ?2, \
+            "UPDATE accounts SET canceled = ?2, \
              subscription_ends_at = CASE WHEN ?2 THEN ?3 ELSE NULL END, \
              revision = revision + 1, updated_at = ?4 WHERE id = ?1",
-            params![id, cancelled, ends_at, self.now_ms()],
+            params![id, canceled, ends_at, self.now_ms()],
         )? == 0
         {
             return Err(StoreError::AccountNotFound(id.to_string()));
@@ -614,6 +614,44 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         subscription_term_in(&conn, id)
     }
+
+    /// Flags the account's plan as ended at `at` unless a flag already stands, and answers whether this write set it.
+    /// Bumps `revision` so the next reload publishes it, as the operator's end does.
+    pub fn set_plan_ended(&self, id: &str, at: i64) -> Result<bool, StoreError> {
+        self.write_plan_ended(
+            id,
+            "UPDATE accounts SET plan_ended_at = ?2, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1 AND plan_ended_at IS NULL",
+            Some(at),
+        )
+    }
+
+    /// Clears the account's plan-ended flag and answers whether one stood, bumping `revision` as setting it does.
+    pub fn clear_plan_ended(&self, id: &str) -> Result<bool, StoreError> {
+        self.write_plan_ended(
+            id,
+            "UPDATE accounts SET plan_ended_at = ?2, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1 AND plan_ended_at IS NOT NULL",
+            None,
+        )
+    }
+
+    /// One conditional write of the flag, telling an unknown id from a row whose flag already read as asked.
+    fn write_plan_ended(
+        &self,
+        id: &str,
+        statement: &str,
+        at: Option<i64>,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        if conn.execute(statement, params![id, at, self.now_ms()])? == 1 {
+            return Ok(true);
+        }
+        match account_in(&conn, id)? {
+            Some(_) => Ok(false),
+            None => Err(StoreError::AccountNotFound(id.to_string())),
+        }
+    }
 }
 
 /// Shared by `Store::subscription_term` and the account edit, which reads the flag and the end it changes inside its
@@ -623,17 +661,23 @@ pub(crate) fn subscription_term_in(
     id: &str,
 ) -> Result<Option<SubscriptionTerm>, StoreError> {
     conn.query_row(
-        "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
-         subscription_tier FROM accounts WHERE id = ?1",
+        "SELECT id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
+         subscription_tier, kind, profile_json, plan_ended_at FROM accounts WHERE id = ?1",
         params![id],
         |row| {
+            let tier: Option<String> = row.get(5)?;
+            let profile_json: Option<String> = row.get(7)?;
+            let usage_based = row.get::<_, AccountKind>(6)? == AccountKind::Oauth
+                && usage_based_of(tier.as_deref(), profile_json.as_deref());
             Ok(SubscriptionTerm {
                 account_id: row.get(0)?,
                 since: row.get(1)?,
                 trial_ends_at: row.get(2)?,
-                cancelled: row.get(3)?,
+                canceled: row.get(3)?,
                 ends_at: row.get(4)?,
-                tier: row.get(5)?,
+                tier,
+                usage_based,
+                plan_ended_at: row.get(8)?,
             })
         },
     )

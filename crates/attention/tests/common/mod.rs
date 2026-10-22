@@ -366,7 +366,6 @@ pub fn complete(
         message_id: None,
         skipped_events: 0,
         interruption: None,
-        passthrough: None,
         finished_at: at,
     })
 }

@@ -12,7 +12,7 @@ mod build_support;
 #[path = "../router/build_commit.rs"]
 mod build_commit;
 
-use build_support::{bundle_stale, node_supported, parse_node_version, NODE_RANGES};
+use build_support::{bundle_stale, node_supported, parse_node_version, NODE_FLOOR};
 
 const PLACEHOLDER_MARKER: &str = "<!-- phoebis-ui placeholder -->";
 
@@ -25,7 +25,7 @@ const COMMIT_STAMP: &str = "phoebis-bundle-commit";
 fn newest(path: &Path) -> Option<SystemTime> {
     let meta = std::fs::metadata(path).ok()?;
     // A directory's own mtime moves when an entry is created, deleted, or renamed, which no surviving file's
-    // mtime records; without it a deleted source leaves the bundle looking fresh.
+    // mtime records. Without it a deleted source leaves the bundle looking fresh.
     let mut newest = meta.modified().ok();
     if meta.is_file() {
         return newest;
@@ -64,9 +64,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PHOEBIS_SKIP_UI_BUILD");
     // The router's build script names the same commit from the same inputs, so the binary and the bundle it embeds
     // name one commit, and a commit that changes no file under `web/` still rebuilds the bundle.
-    let forced = std::env::var("PHOEBIS_BUILD_COMMIT")
-        .ok()
-        .filter(|value| !value.is_empty());
+    let forced = std::env::var("PHOEBIS_BUILD_COMMIT").ok();
     let (commit, git_inputs) = build_commit::build_commit(&web, forced.as_deref());
     println!("cargo:rerun-if-env-changed=PHOEBIS_BUILD_COMMIT");
     for input in git_inputs {
@@ -78,7 +76,7 @@ fn main() {
     let built = newest(&dist.join("index.html"));
     let sources = inputs.iter().filter_map(|i| newest(&web.join(i))).max();
     // A placeholder is newer than every source the moment it is copied, so freshness alone would keep it for
-    // ever; the marker makes it stale on every run that may build.
+    // ever. The marker makes it stale on every run that may build.
     let placeholder = std::fs::read_to_string(dist.join("index.html"))
         .is_ok_and(|page| page.contains(PLACEHOLDER_MARKER));
     let stale = bundle_stale(placeholder, built, sources, stamped.as_deref(), &commit);
@@ -101,7 +99,7 @@ fn main() {
             _ => false,
         };
         // Another Node fails deep inside the bundler with a message that names nothing an operator can act on, so
-        // the ranges are checked and named before npm runs.
+        // the floor is checked and named before npm runs.
         let version = Command::new("node")
             .arg("--version")
             .output()
@@ -116,7 +114,7 @@ fn main() {
         };
         assert!(
             parse_node_version(&version).is_some_and(node_supported),
-            "the console build needs Node {NODE_RANGES}, and {found} was found"
+            "the console build needs Node {NODE_FLOOR}, and {found} was found"
         );
         // `npm ci` needs the network only when the lockfile's packages are not in the npm cache.
         let modules = from_this_lockfile || {

@@ -867,8 +867,11 @@ pub const EVENT_KINDS: &[&str] = &[
     "pin_expired",
     "pin_migrated",
     "pin_released",
+    "plan_ended",
+    "plan_restored",
     "poll_backoff_ended",
     "poll_backoff_started",
+    "poll_failed",
     "refresh_failed",
     "refresh_succeeded",
     "refresh_uncertain",
@@ -1821,8 +1824,8 @@ pub struct SeriesPoint {
 }
 
 /// Which rows a read keeps by who paid for them, off the funding each row was recorded under: `Billed` the billed,
-/// overage and fast rows, `Plan` the plan rows. The two partition the rows, so their sums add up to the unfiltered
-/// sum, and the registry's later state moves no row.
+/// overage, fast and usage-based rows, `Plan` the plan rows. The two partition the rows, so their sums add up to the
+/// unfiltered sum, and the registry's later state moves no row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FundingFilter {
@@ -2017,16 +2020,16 @@ pub fn group_of(
     }
 }
 
-/// The label of a group under any dimension but the key: the group key itself, `unattributed` for the reserved id,
-/// and "no model" for the model grouping's empty key, the requests the router rejected before routing, whose key
-/// stays empty so a filter on it keeps working.
+/// The label of a group under any dimension but the key: the group key itself, `none` for the classifier grouping's
+/// reserved id, the requests with no classifier call, as the Requests facet names them, `unattributed` for the
+/// reserved id under every other dimension, and "no model" for the model grouping's empty key, the requests the router
+/// rejected before routing. Each of these groups keeps its key, so a filter on it keeps working.
 fn label_of(key: &str, group_by: &str) -> String {
-    if key == UNATTRIBUTED {
-        "unattributed".into()
-    } else if key.is_empty() && group_by == "model" {
-        "no model".into()
-    } else {
-        key.into()
+    match (key, group_by) {
+        (UNATTRIBUTED, "classifier") => "none".into(),
+        (UNATTRIBUTED, _) => "unattributed".into(),
+        ("", "model") => "no model".into(),
+        _ => key.into(),
     }
 }
 
@@ -2741,14 +2744,20 @@ impl GroupSums {
                 entry.dollars.billed.add(&usd);
             }
         }
+        // Keyed as `priced` keys the row, since the group's shares come from `ShareSums::add` and a tier would price
+        // share windows nothing reads.
+        let price_key = RowKey {
+            tier: None,
+            ..row_key(row)
+        };
         if tokens_of(row.wasted_usage()) > 0 {
-            let wasted = price_row(prices, costs, &row_key(row), row.wasted_usage());
+            let wasted = price_row(prices, costs, &price_key, row.wasted_usage());
             entry.dollars.wasted_usd += wasted.usd.map_or(0.0, |usd| usd.total());
             entry.plan.estimated |= plan && wasted.estimated;
             entry.plan.probe_estimated |= plan_probe && wasted.estimated;
         }
         if tokens_of(row.kept_warm_usage()) > 0 {
-            let kept = price_row(prices, costs, &row_key(row), row.kept_warm_usage());
+            let kept = price_row(prices, costs, &price_key, row.kept_warm_usage());
             entry.dollars.saving_usd += kept
                 .usd
                 .map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);
@@ -3201,12 +3210,14 @@ pub fn hourly_window_samples(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The newest row of the last day per account, one row each. A head and a poll may share the newest bucket, and the
+/// head row answers for it, as the insert ranks a head the newest truth of its bucket.
 pub fn latest_extra_usage(
     conn: &Connection,
     now: i64,
 ) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
     let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source FROM extra_usage_samples e WHERE bucket >= ?1 AND bucket = (SELECT MAX(bucket) FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1) ORDER BY account_id")?;
+    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND rowid = (SELECT rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 ORDER BY bucket DESC, source = 'head' DESC LIMIT 1) ORDER BY account_id")?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(ExtraUsageSampleRecord {
             account_id: r.get(0)?,
@@ -3220,6 +3231,73 @@ pub fn latest_extra_usage(
             disabled_reason: r.get(8)?,
             overage_reset: r.get(9)?,
             source: r.get(10)?,
+            spend_limit_minor: r.get(11)?,
+            spend_used_minor: r.get(12)?,
+            spend_percent: r.get(13)?,
+            spend_currency: r.get(14)?,
+            spend_exponent: r.get(15)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The newest extra-usage row of the last day per account whose source is `poll`: the row that carries the amounts,
+/// which a later head row never hides.
+pub fn latest_extra_usage_polled(
+    conn: &Connection,
+    now: i64,
+) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
+    let since = now / 1_000 - 86_400;
+    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND source = 'poll' AND rowid = (SELECT rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 AND source = 'poll' ORDER BY bucket DESC LIMIT 1) ORDER BY account_id")?;
+    let rows = stmt.query_map(params![since], |r| {
+        Ok(ExtraUsageSampleRecord {
+            account_id: r.get(0)?,
+            bucket: r.get(1)?,
+            is_enabled: r.get(2)?,
+            in_use: r.get(3)?,
+            monthly_limit: r.get(4)?,
+            used_credits: r.get(5)?,
+            utilization: r.get(6)?,
+            currency: r.get(7)?,
+            disabled_reason: r.get(8)?,
+            overage_reset: r.get(9)?,
+            source: r.get(10)?,
+            spend_limit_minor: r.get(11)?,
+            spend_used_minor: r.get(12)?,
+            spend_percent: r.get(13)?,
+            spend_currency: r.get(14)?,
+            spend_exponent: r.get(15)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The newest extra-usage row of the last day per account that carries a share, ranked as `latest_extra_usage` ranks
+/// a bucket's rows: a head that names the overage reset alone writes a row with none, which hides no earlier share.
+pub fn latest_extra_usage_share(
+    conn: &Connection,
+    now: i64,
+) -> Result<Vec<ExtraUsageSampleRecord>, LedgerError> {
+    let since = now / 1_000 - 86_400;
+    let mut stmt = conn.prepare("SELECT account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent FROM extra_usage_samples e WHERE bucket >= ?1 AND utilization IS NOT NULL AND rowid = (SELECT rowid FROM extra_usage_samples WHERE account_id = e.account_id AND bucket >= ?1 AND utilization IS NOT NULL ORDER BY bucket DESC, source = 'head' DESC LIMIT 1) ORDER BY account_id")?;
+    let rows = stmt.query_map(params![since], |r| {
+        Ok(ExtraUsageSampleRecord {
+            account_id: r.get(0)?,
+            bucket: r.get(1)?,
+            is_enabled: r.get(2)?,
+            in_use: r.get(3)?,
+            monthly_limit: r.get(4)?,
+            used_credits: r.get(5)?,
+            utilization: r.get(6)?,
+            currency: r.get(7)?,
+            disabled_reason: r.get(8)?,
+            overage_reset: r.get(9)?,
+            source: r.get(10)?,
+            spend_limit_minor: r.get(11)?,
+            spend_used_minor: r.get(12)?,
+            spend_percent: r.get(13)?,
+            spend_currency: r.get(14)?,
+            spend_exponent: r.get(15)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -3501,7 +3579,7 @@ fn activity(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// The model one agent of a session named on its newest client request, as the client spelled it.
+/// The model one agent of a session named on its newest conversation request, as the client spelled it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentModel {
     pub key_id: String,
@@ -3515,14 +3593,16 @@ pub struct AgentModel {
     pub model: String,
 }
 
-/// The newest client request's own model spelling per (key, key generation, session, agent) since `since`,
+/// The newest conversation request's own model spelling per (key, key generation, session, agent) since `since`,
 /// over the window and the requests `session_activity` reads, newest first, so a session's first row is its newest
-/// request.
+/// conversation request. A conversation request is every request whose class is not `auxiliary`, a raw caller's
+/// request with no class among them, since an auxiliary request names a model of its own.
 pub fn agent_models(conn: &Connection, since: i64) -> Result<Vec<AgentModel>, LedgerError> {
     let mut stmt = conn.prepare(&format!(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, agent_id, received_at, model \
          FROM requests \
-         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
+         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1 \
+         AND (request_class IS NULL OR request_class != 'auxiliary')), \
          ranked AS (SELECT recent.*, \
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp, agent_id ORDER BY received_at DESC, id DESC) \
          AS nth FROM recent WHERE grp IS NOT NULL) \
@@ -3660,19 +3740,19 @@ pub struct BudgetedMember {
     pub pool_id: String,
     pub account_id: String,
     pub period: BudgetPeriod,
-    /// Sum the metered rows alone, those filed under `overage` or `fast`: a subscription member's plan-funded traffic
-    /// is no spend.
+    /// Sum the metered rows alone, those filed under `overage` or `fast` and a usage-based seat's under
+    /// `usage_based`: a subscription member's plan-funded traffic is no spend.
     pub metered_only: bool,
 }
 
 /// One budgeted period's spend of one member in its current period, summed from the hourly rollups and priced at
 /// read time, a keepalive probe's cost included since it draws real money from an API-key member's budget the same
 /// as any other request's. With `metered_only`, a subscription member's metered rows alone count, those filed under
-/// `overage` or `fast`. The row names the period kind and its UTC bounds in ms (`period_end` is the next day or month
-/// boundary). Grouped by `canonical_model`, `speed` and `band`, one query per span of `revision_spans(prices, None,
-/// ..)`, each group priced through `estimate_banded` at its band on `prices.in_force(span.at)`, so a band row prices
-/// exactly at the cells its attempts selected and a budget moves with the revision in force. A model the revision
-/// lacks adds nothing.
+/// `overage` or `fast`, and a usage-based seat's under `usage_based`. The row names the period kind and its UTC bounds
+/// in ms (`period_end` is the next day or month boundary). Grouped by `canonical_model`, `speed` and `band`, one query
+/// per span of `revision_spans(prices, None, ..)`, each group priced through `estimate_banded` at its band on
+/// `prices.in_force(span.at)`, so a band row prices exactly at the cells its attempts selected and a budget moves with
+/// the revision in force. A model the revision lacks adds nothing.
 pub fn member_spends(
     conn: &Connection,
     members: &[BudgetedMember],
@@ -3686,7 +3766,7 @@ pub fn member_spends(
         "SELECT canonical_model, speed, band, SUM(input_tokens), SUM(cache_read_tokens), \
          SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
          WHERE pool_id = ?1 AND account_id = ?2 AND hour >= ?3 AND hour < ?4 \
-         AND (?5 = 0 OR funding IN ('overage', 'fast')) \
+         AND (?5 = 0 OR funding IN ('overage', 'fast', 'usage_based')) \
          GROUP BY canonical_model, speed, band",
     )?;
     for BudgetedMember {
@@ -4055,7 +4135,7 @@ pub(crate) struct UsageRow<'a> {
     /// Milliseconds, the instant that names the revisions the row prices at: the row's own hour for a rollup row and
     /// the request's `received_at` for a session attempt.
     pub(crate) received_at: i64,
-    /// Who paid for the row: a rollup row's key word, an attempt's three facts. Never the rollup's speed, which
+    /// Who paid for the row: a rollup row's key word, an attempt's four facts. Never the rollup's speed, which
     /// also files a request that asked for fast mode and was served without it.
     pub(crate) funding: Funding,
     /// The cells the row's dollars price at: a rollup row's key words, an attempt's reported speed and its own
@@ -4631,8 +4711,10 @@ struct SessionAttempt {
     received_at: i64,
     /// `attempts.speed`, the speed the answer reported.
     speed: Option<String>,
-    /// `attempts.account_kind` and `attempts.overage_in_use`, the two facts beside the speed that say who paid.
+    /// `attempts.account_kind`, `attempts.usage_based` and `attempts.overage_in_use`, the three facts beside the speed
+    /// that say who paid.
     account_kind: String,
+    usage_based: bool,
     overage_in_use: Option<bool>,
     /// `requests.kind`, so a probe's attempt prices as a probe row does.
     kind: String,
@@ -4658,7 +4740,7 @@ fn session_attempts_statement(
          COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
          a.output_tokens, r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client, \
-         r.classifier \
+         r.classifier, a.usage_based \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
          AND r.received_at >= ? AND r.received_at < ?"
@@ -4706,6 +4788,7 @@ fn read_session_attempts(
             tier: row.get(15)?,
             client: row.get(16)?,
             classifier: row.get(17)?,
+            usage_based: row.get(18)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -4790,7 +4873,12 @@ pub fn session_burn_series(
                 output_tokens: a.output_tokens,
                 at: a.completed_at,
                 received_at: a.received_at,
-                funding: funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()),
+                funding: funding_of(
+                    &a.account_kind,
+                    a.usage_based,
+                    a.overage_in_use,
+                    a.speed.as_deref(),
+                ),
                 speed: Speed::of(a.speed.as_deref()),
                 band,
                 kind: &a.kind,

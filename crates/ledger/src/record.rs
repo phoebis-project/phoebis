@@ -169,10 +169,12 @@ pub struct AttemptRecord {
     pub cleared_input_tokens: Option<u64>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
-    /// The trace as stored, `cache_read` and `passthrough` folded in at completion.
+    /// The trace as stored, `cache_read` folded in at completion.
     pub selection: Option<String>,
     /// When the relay flushed the request body to this attempt's upstream, as the response head reported it.
     pub written_at: Option<i64>,
+    /// The serving account's class as the registry held it at the attempt, false on a row from before the column.
+    pub usage_based: bool,
 }
 
 impl AttemptRecord {
@@ -346,6 +348,13 @@ pub struct ExtraUsageSampleRecord {
     pub disabled_reason: Option<String>,
     pub overage_reset: Option<i64>,
     pub source: String,
+    /// The poll's `spend` object as the body gave it: the cap and the spend in minor units, the percent on the
+    /// percent scale, the currency and its exponent. Null on a head row and on a poll whose body carried no object.
+    pub spend_limit_minor: Option<i64>,
+    pub spend_used_minor: Option<i64>,
+    pub spend_percent: Option<f64>,
+    pub spend_currency: Option<String>,
+    pub spend_exponent: Option<u8>,
 }
 
 /// What the keepalive engine adds to one rollup row: the credit of a kept-warm request, a probe's migration mark, or
@@ -395,6 +404,9 @@ pub struct KeepaliveDelta {
     /// settlement and the skip), `None` there where the registry no longer holds the account, and `None` on a delta
     /// built by default.
     pub account_kind: Option<AccountKind>,
+    /// The serving account's class beside its kind, which files a usage-based account's row under `usage_based`
+    /// beside its request row. False on a delta built by default.
+    pub usage_based: bool,
     /// Whether the serving answer reported overage in use, the fact its request row files under, so the row keys the
     /// same funding. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
     /// settlement and the skip), and `None` on a delta built by default.

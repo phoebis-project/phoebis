@@ -229,10 +229,11 @@ mod tests {
 
     // The fast block's input is 20 per million, the standard cell 10.
     #[test]
-    fn a_fast_an_overage_and_an_api_key_row_answer_dollars_alone() {
+    fn a_fast_an_overage_a_usage_based_and_an_api_key_row_answer_dollars_alone() {
         for (funding, speed, per_million) in [
             (Funding::Fast, Speed::Fast, 20.0),
             (Funding::Overage, Speed::Standard, 10.0),
+            (Funding::UsageBased, Speed::Standard, 10.0),
             (Funding::ApiKey, Speed::Standard, 10.0),
         ] {
             let priced = price(
@@ -289,8 +290,9 @@ mod tests {
     }
 
     #[test]
-    fn an_overage_and_an_api_key_row_of_a_classifier_call_answer_their_dollars_and_no_reason() {
-        for funding in [Funding::Overage, Funding::ApiKey] {
+    fn an_overage_a_usage_based_and_an_api_key_row_of_a_classifier_call_answer_their_dollars_and_no_reason(
+    ) {
+        for funding in [Funding::Overage, Funding::UsageBased, Funding::ApiKey] {
             let row = RowKey {
                 funding,
                 ..plan_row()

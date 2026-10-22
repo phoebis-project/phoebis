@@ -286,9 +286,9 @@ async fn a_pairing_started_under_a_kept_login_completes_under_each_renewed_cooki
     );
     let cookie = renewal_of(&shown, "the pairing's show");
     assert_eq!(json(shown).await["status"], "pending");
-    let cancelled = delete(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await;
-    assert_eq!(cancelled.status(), 204);
-    renewal_of(&cancelled, "the pairing's cancel");
+    let canceled = delete(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await;
+    assert_eq!(canceled.status(), 204);
+    renewal_of(&canceled, "the pairing's cancel");
 }
 
 #[tokio::test]
@@ -1144,6 +1144,969 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
             "ends_at": null,
         }),
         "the confirm stored the plan and the start with no poll having run"
+    );
+}
+
+#[tokio::test]
+async fn a_pairing_confirm_clears_the_plan_ended_flag_and_writes_plan_restored_from_the_pairing() {
+    use common::{json, login, post};
+    let h = common::admin_parts_full().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    assert!(h
+        .store
+        .set_plan_ended("business", common::NOW - 60_000)
+        .unwrap());
+    let id = common::exchanged_session_for(&h.app, &cookie, "business").await;
+    let confirmed = post(
+        &h.app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 200, "{}", json(confirmed).await);
+    assert_eq!(
+        h.store
+            .subscription_term("business")
+            .unwrap()
+            .unwrap()
+            .plan_ended_at,
+        None,
+        "the confirm's write clears the flag"
+    );
+    let restored = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "plan_restored")
+    })
+    .await;
+    let detail: serde_json::Value =
+        serde_json::from_str(restored.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (
+            restored.account_id.as_deref(),
+            detail["source"].as_str(),
+            detail["organization_type"].as_str()
+        ),
+        (Some("business"), Some("pairing"), Some("claude_max")),
+        "the row names the pairing and the profile it confirmed"
+    );
+}
+
+#[tokio::test]
+async fn the_account_row_answers_the_plan_ended_flag_as_an_instant_or_null() {
+    use common::{get, json, login};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let flag = |answer: &serde_json::Value| answer["plan_ended_at"].clone();
+    let listed = |list: &serde_json::Value| {
+        list["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "business")
+            .cloned()
+            .unwrap()
+    };
+    let list = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    assert_eq!(
+        flag(&listed(&list)),
+        serde_json::Value::Null,
+        "a plan stands"
+    );
+    assert!(store.set_plan_ended("business", 1_234_567).unwrap());
+    let list = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let one = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        (flag(&listed(&list)), flag(&one)),
+        (serde_json::json!(1_234_567), serde_json::json!(1_234_567)),
+        "the list row and the single account answer the flag's instant"
+    );
+}
+
+#[tokio::test]
+async fn the_refresh_reads_the_profile_first_while_the_plan_ended_flag_stands() {
+    use common::{json, login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let refresh = "/admin/accounts/business/usage/refresh";
+    let asked = |path: &str| {
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with(&format!("GET {path}")))
+            .count()
+    };
+    let flag = || {
+        h.store
+            .subscription_term("business")
+            .unwrap()
+            .unwrap()
+            .plan_ended_at
+    };
+    assert!(h
+        .store
+        .set_plan_ended("business", common::NOW - 60_000)
+        .unwrap());
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid","has_claude_max":false,"has_claude_pro":false},"organization":{"uuid":"o","organization_type":"claude_free","rate_limit_tier":"default_claude_ai","subscription_status":"canceled","billing_type":"none"}}"#
+                .to_vec(),
+        },
+    );
+    let paused = post(&h.app, refresh, "", Some(&cookie)).await;
+    assert_eq!(paused.status(), 200);
+    let paused = json(paused).await;
+    assert_eq!(
+        (
+            asked("/api/oauth/profile"),
+            asked("/api/oauth/usage"),
+            paused["poll"]["last_error"].as_str(),
+            flag()
+        ),
+        (1, 0, Some("plan ended"), Some(common::NOW - 60_000)),
+        "a profile with no plan sends no usage request and the answer names the pause: {paused}"
+    );
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: phoebis_profile::fixtures::control_response(
+                phoebis_profile::fixtures::ControlFixture::Profile,
+            )
+            .to_vec(),
+        },
+    );
+    let resumed = json(post(&h.app, refresh, "", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            asked("/api/oauth/profile"),
+            asked("/api/oauth/usage"),
+            resumed["error"].as_str(),
+            flag()
+        ),
+        (2, 1, None, None),
+        "a profile with a plan clears the flag and the usage poll answers its reading: {resumed}"
+    );
+    let restored = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "plan_restored")
+    })
+    .await;
+    assert!(
+        restored
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains(r#""source":"profile""#)),
+        "{restored:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_account_view_reads_the_extra_usage_flag_from_the_organization_alone() {
+    use common::{get, json, login};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    // A document can carry the flag under `account` as well, and the client reads the organization's, so the view
+    // ignores the account's copy.
+    store
+        .set_profile(
+            "business",
+            r#"{"account":{"has_extra_usage_enabled":true},"organization":{"has_extra_usage_enabled":false}}"#,
+            &phoebis_store::SubscriptionRow::default(),
+        )
+        .unwrap();
+    let both = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    store
+        .set_profile(
+            "business",
+            r#"{"account":{"has_extra_usage_enabled":true},"organization":{}}"#,
+            &phoebis_store::SubscriptionRow::default(),
+        )
+        .unwrap();
+    let account_only = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            both["profile"].get("has_extra_usage_enabled"),
+            account_only["profile"].get("has_extra_usage_enabled"),
+        ),
+        (
+            Some(&serde_json::json!(false)),
+            Some(&serde_json::Value::Null)
+        ),
+        "the organization's flag answers over the account's, and a flag under the account alone answers null"
+    );
+}
+
+#[tokio::test]
+async fn a_usage_based_account_answers_its_class_and_no_overage_whatever_a_head_or_an_older_row_says(
+) {
+    use common::{get, json, login};
+    use phoebis_ledger::ExtraUsageSampleRecord;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    parts
+        .store
+        .insert_account(&phoebis_store::AccountRow {
+            id: "seat".into(),
+            kind: phoebis_store::AccountKind::Oauth,
+            label: "Seat".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: phoebis_store::AccountState::Ready,
+            state_cause: phoebis_store::StateCause::Paired,
+        })
+        .unwrap();
+    parts
+        .store
+        .set_profile(
+            "seat",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    // The overage family of a head as a leg reports it for a plan seat, on the seat and on the plan account alike,
+    // and a head row from before the class whose flag reads in use.
+    let bucket = phoebis_ledger::bucket_of(now - 60_000);
+    for account in ["seat", "business"] {
+        parts
+            .router
+            .report(phoebis_routing::Report::Overage {
+                account_id: account.into(),
+                evidence: phoebis_routing::OverageEvidence {
+                    in_use: true,
+                    since: Some(now - 60_000),
+                    reset: Some(now + 3_600_000),
+                    observed_at: now - 60_000,
+                    source: phoebis_routing::EvidenceSource::Head,
+                    incarnation: 1,
+                },
+                incarnation: 1,
+            })
+            .await;
+        parts
+            .db
+            .insert_samples(
+                &[],
+                Some(&ExtraUsageSampleRecord {
+                    account_id: account.into(),
+                    bucket,
+                    is_enabled: true,
+                    in_use: Some(true),
+                    monthly_limit: None,
+                    used_credits: None,
+                    utilization: Some(0.4),
+                    currency: None,
+                    disabled_reason: None,
+                    overage_reset: Some(now + 3_600_000),
+                    source: "head".into(),
+                    spend_limit_minor: None,
+                    spend_used_minor: None,
+                    spend_percent: None,
+                    spend_currency: None,
+                    spend_exponent: None,
+                }),
+            )
+            .unwrap();
+    }
+    // A query queues behind the reports, so the views below read the folded state.
+    parts.router.overages().await.unwrap();
+    let listed = json(get(&parts.app, "/admin/accounts", Some(&cookie)).await).await;
+    let row = |id: &str| {
+        listed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {id} row: {listed}"))
+    };
+    let seat = row("seat");
+    assert_eq!(
+        (
+            &seat["usage_based"],
+            &seat["overage"],
+            &seat["extra_usage"]["in_use"]
+        ),
+        (
+            &serde_json::json!(true),
+            &serde_json::Value::Null,
+            &serde_json::Value::Null
+        ),
+        "the seat is classed and never reads as in overage: {seat}"
+    );
+    assert_eq!(
+        seat["extra_usage"]["utilization"],
+        serde_json::json!(0.4),
+        "the row's share still answers: {seat}"
+    );
+    let plan = row("business");
+    assert_eq!(
+        (
+            &plan["usage_based"],
+            &plan["overage"]["in_use"],
+            &plan["extra_usage"]["in_use"]
+        ),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(true),
+            &serde_json::json!(true)
+        ),
+        "a plan account keeps its evidence and its row's flag: {plan}"
+    );
+    assert_eq!(
+        row("direct")["usage_based"],
+        serde_json::json!(false),
+        "an api_key account is never classed"
+    );
+    let shown = json(get(&parts.app, "/admin/accounts/seat", Some(&cookie)).await).await;
+    assert_eq!(
+        (&shown["usage_based"], &shown["overage"]),
+        (&serde_json::json!(true), &serde_json::Value::Null),
+        "the single account answers as its row does: {shown}"
+    );
+}
+
+/// Inserts the paired OAuth account `id`, a usage-based seat by its stored profile where `seat` holds. The router
+/// reads the class at its next reload.
+fn insert_oauth(parts: &common::Full, id: &str, seat: bool) {
+    parts
+        .store
+        .insert_account(&phoebis_store::AccountRow {
+            id: id.into(),
+            kind: phoebis_store::AccountKind::Oauth,
+            label: id.into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: phoebis_store::AccountState::Ready,
+            state_cause: phoebis_store::StateCause::Paired,
+        })
+        .unwrap();
+    if seat {
+        parts
+            .store
+            .set_profile(
+                id,
+                r#"{"organization":{"rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}}"#,
+                &phoebis_store::SubscriptionRow {
+                    tier: Some("default_claude_zero".into()),
+                    ..phoebis_store::SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    }
+}
+
+/// A poll's extra-usage row of `account` in the bucket of `at`: the `extra_usage` amounts and share as the poll
+/// stores them, and the body's `spend` object as `(limit_minor, used_minor, percent)` where it carried one.
+fn polled_row(
+    account: &str,
+    at: i64,
+    amounts: (i64, i64),
+    utilization: f64,
+    spend: Option<(Option<i64>, i64, Option<f64>)>,
+) -> phoebis_ledger::ExtraUsageSampleRecord {
+    phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: account.into(),
+        bucket: phoebis_ledger::bucket_of(at),
+        is_enabled: true,
+        in_use: None,
+        monthly_limit: Some(amounts.0),
+        used_credits: Some(amounts.1),
+        utilization: Some(utilization),
+        currency: Some("USD".into()),
+        disabled_reason: None,
+        overage_reset: None,
+        source: "poll".into(),
+        spend_limit_minor: spend.and_then(|(limit, _, _)| limit),
+        spend_used_minor: spend.map(|(_, used, _)| used),
+        spend_percent: spend.and_then(|(_, _, percent)| percent),
+        spend_currency: spend.map(|_| "USD".into()),
+        spend_exponent: spend.map(|_| 2),
+    }
+}
+
+/// A head's extra-usage row of `account` in the bucket of `at`, its flag as the head named it.
+fn head_row(
+    account: &str,
+    at: i64,
+    in_use: Option<bool>,
+    utilization: f64,
+    reset: i64,
+) -> phoebis_ledger::ExtraUsageSampleRecord {
+    phoebis_ledger::ExtraUsageSampleRecord {
+        account_id: account.into(),
+        bucket: phoebis_ledger::bucket_of(at),
+        is_enabled: true,
+        in_use,
+        utilization: Some(utilization),
+        overage_reset: Some(reset),
+        source: "head".into(),
+        ..Default::default()
+    }
+}
+
+/// `id` as `GET /admin/accounts/{id}` answers it.
+async fn account_of(app: &axum::Router, cookie: &str, id: &str) -> serde_json::Value {
+    common::json(common::get(app, &format!("/admin/accounts/{id}"), Some(cookie)).await).await
+}
+
+/// `id`'s row of the account list.
+async fn listed_row(app: &axum::Router, cookie: &str, id: &str) -> serde_json::Value {
+    let listed = common::json(common::get(app, "/admin/accounts", Some(cookie)).await).await;
+    listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == id)
+        .cloned()
+        .unwrap_or_else(|| panic!("no {id} row: {listed}"))
+}
+
+#[tokio::test]
+async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_under_a_newer_heads_share_and_reset(
+) {
+    use common::{get, json, login, month_end, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    insert_oauth(&parts, "seat", true);
+    parts.router.reload().await.unwrap();
+    let (polled_at, headed_at, reset) = (NOW - 600_000, NOW - 60_000, NOW + 3_600_000);
+    // The amounts beside the object are a minor unit apart from it, so each amount names the column it came from.
+    let rows = [
+        polled_row(
+            "seat",
+            polled_at,
+            (250_001, 102_501),
+            0.41,
+            Some((Some(250_000), 102_500, Some(41.0))),
+        ),
+        head_row("seat", headed_at, None, 0.42, reset),
+    ];
+    for row in &rows {
+        parts.db.insert_samples(&[], Some(row)).unwrap();
+    }
+    parts
+        .router
+        .report(phoebis_routing::Report::SpendHead {
+            account_id: "seat".into(),
+            utilization: Some(0.42),
+            reset: Some(reset),
+            observed_at: headed_at,
+            incarnation: 1,
+        })
+        .await;
+    parts.router.spend_windows().await.unwrap();
+    let polled_bucket = phoebis_ledger::bucket_of(polled_at) * 1_000;
+    let headed_bucket = phoebis_ledger::bucket_of(headed_at) * 1_000;
+    let amounts = serde_json::json!({
+        "currency": "USD", "exponent": 2, "limit_minor": 250_000, "used_minor": 102_500, "polled_at": polled_bucket
+    });
+    let seat = json(get(&parts.app, "/admin/accounts/seat", Some(&cookie)).await).await;
+    assert_eq!(
+        seat["spend"],
+        serde_json::json!({
+            "amounts": amounts, "utilization": 0.42, "resets_at": reset, "reset_source": "head",
+            "observed_at": headed_bucket
+        }),
+        "the polled row's spend figures under the newer head's share and reset: {seat}"
+    );
+    assert_eq!(
+        seat["extra_usage"],
+        serde_json::json!({
+            "currency": "USD", "disabled_reason": null, "in_use": null, "is_enabled": true,
+            "monthly_limit": 250_001, "used_credits": 102_501, "utilization": 0.42, "observed_at": headed_bucket
+        }),
+        "the amounts come from the polled row and the rest from the newest: {seat}"
+    );
+    assert_eq!(
+        listed_row(&parts.app, &cookie, "seat").await["spend"],
+        seat["spend"],
+        "the list answers the seat as its own read does"
+    );
+
+    // Built again over the same store, with the same rows in its ledger: the router's memory of the head's reset is
+    // gone, so the reset reads the estimate while every member the ledger answers stands.
+    let again = common::admin_parts_full_on(parts.store.clone()).await;
+    for row in &rows {
+        again.db.insert_samples(&[], Some(row)).unwrap();
+    }
+    let cookie_again = login(&again.app, "admin-secret").await;
+    let restarted = json(get(&again.app, "/admin/accounts/seat", Some(&cookie_again)).await).await;
+    assert_eq!(
+        restarted["spend"],
+        serde_json::json!({
+            "amounts": amounts, "utilization": 0.42, "resets_at": month_end(), "reset_source": "estimated",
+            "observed_at": headed_bucket
+        }),
+        "after a restart the amounts and the newest row's share stand, the reset the estimate: {restarted}"
+    );
+    assert_eq!(
+        again
+            .router
+            .spend_windows()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(id, window)| (id, window.reset_source))
+            .collect::<Vec<_>>(),
+        [(
+            "seat".to_string(),
+            phoebis_routing::SpendResetSource::Estimated
+        )],
+        "the estimate is the restarted router's own window, not the view's fallback"
+    );
+
+    common::step(
+        &parts,
+        std::time::Duration::from_millis((reset - NOW + 1) as u64),
+    );
+    // The step passes the session's idle deadline, so the case logs in again.
+    let cookie = login(&parts.app, "admin-secret").await;
+    let lapsed = json(get(&parts.app, "/admin/accounts/seat", Some(&cookie)).await).await;
+    assert_eq!(
+        lapsed["spend"],
+        serde_json::json!({
+            "amounts": amounts, "utilization": null, "resets_at": month_end(), "reset_source": "estimated",
+            "observed_at": headed_bucket
+        }),
+        "past the head's reset with no newer row the share lapses and the amounts stay: {lapsed}"
+    );
+}
+
+#[tokio::test]
+async fn a_usage_based_accounts_spend_falls_back_to_the_polls_amounts_reads_no_limit_the_body_set_none_and_none_without_a_poll(
+) {
+    use common::{login, month_end, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for seat in ["amounts", "object", "open", "unpolled"] {
+        insert_oauth(&parts, seat, true);
+    }
+    parts.router.reload().await.unwrap();
+    let at = NOW - 120_000;
+    let bucket = phoebis_ledger::bucket_of(at) * 1_000;
+    for row in [
+        polled_row("amounts", at, (250_000, 102_500), 0.41, None),
+        polled_row(
+            "object",
+            at,
+            (250_001, 102_501),
+            0.41,
+            Some((Some(250_000), 102_500, Some(41.0))),
+        ),
+        polled_row(
+            "open",
+            at,
+            (300_000, 5_000),
+            0.0167,
+            Some((None, 5_000, None)),
+        ),
+        head_row("unpolled", at, None, 0.3, NOW + 3_600_000),
+    ] {
+        parts.db.insert_samples(&[], Some(&row)).unwrap();
+    }
+    let shown = |id: &'static str| account_of(&parts.app, &cookie, id);
+    assert_eq!(
+        shown("amounts").await["spend"],
+        serde_json::json!({
+            "amounts": {"currency": "USD", "exponent": 2, "limit_minor": 250_000, "used_minor": 102_500,
+                        "polled_at": bucket},
+            "utilization": 0.41, "resets_at": month_end(), "reset_source": "estimated", "observed_at": bucket
+        }),
+        "a poll with no spend object answers its extra-usage amounts and share, the reset estimated before any head"
+    );
+    let object = shown("object").await;
+    assert_eq!(
+        (
+            &object["spend"]["amounts"]["used_minor"],
+            &object["spend"]["amounts"]["limit_minor"],
+            &object["spend"]["utilization"]
+        ),
+        (
+            &serde_json::json!(102_500),
+            &serde_json::json!(250_000),
+            &serde_json::json!(0.41)
+        ),
+        "the object's amounts win over the extra-usage ones, and the share is the row's stored one, which the \
+         router's hold reads too, never the object's rounded percent: {object}"
+    );
+    let open = shown("open").await;
+    assert_eq!(
+        (
+            &open["spend"]["amounts"]["limit_minor"],
+            &open["spend"]["amounts"]["used_minor"]
+        ),
+        (&serde_json::Value::Null, &serde_json::json!(5_000)),
+        "a body that sets no limit answers the spend alone: {open}"
+    );
+    assert_eq!(
+        open["extra_usage"]["monthly_limit"],
+        serde_json::json!(300_000),
+        "whatever limit the extra-usage row carries"
+    );
+    let unpolled = shown("unpolled").await;
+    assert_eq!(
+        (
+            &unpolled["spend"]["amounts"],
+            &unpolled["spend"]["utilization"]
+        ),
+        (&serde_json::Value::Null, &serde_json::json!(0.3)),
+        "with no polled row of the day the head's share stands and no amounts answer: {unpolled}"
+    );
+    assert_eq!(
+        (
+            &unpolled["extra_usage"]["monthly_limit"],
+            &unpolled["extra_usage"]["used_credits"],
+            &unpolled["extra_usage"]["currency"]
+        ),
+        (
+            &serde_json::Value::Null,
+            &serde_json::Value::Null,
+            &serde_json::Value::Null
+        ),
+        "nor does the extra usage: {unpolled}"
+    );
+}
+
+/// A head row that names the overage reset alone, its share unread.
+fn reset_only_head_row(
+    account: &str,
+    at: i64,
+    reset: i64,
+) -> phoebis_ledger::ExtraUsageSampleRecord {
+    phoebis_ledger::ExtraUsageSampleRecord {
+        utilization: None,
+        ..head_row(account, at, None, 0.0, reset)
+    }
+}
+
+#[tokio::test]
+async fn a_head_row_that_names_the_reset_alone_hides_no_earlier_share_from_the_spend_window_or_the_extra_usage(
+) {
+    use common::{login, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for seat in ["capped", "headed"] {
+        insert_oauth(&parts, seat, true);
+    }
+    parts.router.reload().await.unwrap();
+    let reset = NOW + 3_600_000;
+    for row in [
+        polled_row("capped", NOW - 600_000, (300_000, 300_000), 1.0, None),
+        reset_only_head_row("capped", NOW - 60_000, reset),
+        polled_row("headed", NOW - 1_200_000, (300_000, 150_000), 0.5, None),
+        head_row("headed", NOW - 600_000, None, 0.9, reset),
+        reset_only_head_row("headed", NOW - 60_000, reset),
+    ] {
+        parts.db.insert_samples(&[], Some(&row)).unwrap();
+    }
+    for (seat, share, which) in [
+        ("capped", 1.0, "the poll's share at one"),
+        ("headed", 0.9, "the head's share, newer than the poll's"),
+    ] {
+        let account = account_of(&parts.app, &cookie, seat).await;
+        assert_eq!(
+            (
+                &account["spend"]["utilization"],
+                &account["extra_usage"]["utilization"],
+                &account["spend"]["observed_at"]
+            ),
+            (
+                &serde_json::json!(share),
+                &serde_json::json!(share),
+                &serde_json::json!(phoebis_ledger::bucket_of(NOW - 60_000) * 1_000)
+            ),
+            "{seat}: {which} stands under the newer reset-only head, which still dates the window: {account}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_head_row_naming_the_reset_alone_keeps_the_share_of_a_head_at_the_cap_in_its_bucket() {
+    use common::{login, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    insert_oauth(&parts, "seat", true);
+    parts.router.reload().await.unwrap();
+    let reset = NOW + 3_600_000;
+    // The head at the cap and the reset-only head after it share one bucket, the poll an earlier one.
+    let bucket_start = phoebis_ledger::bucket_of(NOW - 60_000) * 1_000;
+    for row in [
+        polled_row("seat", NOW - 600_000, (300_000, 75_000), 0.25, None),
+        head_row("seat", bucket_start, None, 1.0, reset),
+        reset_only_head_row("seat", NOW - 60_000, reset),
+    ] {
+        parts.db.insert_samples(&[], Some(&row)).unwrap();
+    }
+    let account = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        (
+            &account["spend"]["utilization"],
+            &account["extra_usage"]["utilization"]
+        ),
+        (&serde_json::json!(1.0), &serde_json::json!(1.0)),
+        "the head's share at one stands under the reset-only head of its bucket: {account}"
+    );
+}
+
+#[tokio::test]
+async fn a_usage_based_accounts_spend_reads_the_estimate_where_the_router_answers_no_window() {
+    use common::{login, month_end, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    insert_oauth(&parts, "seat", true);
+    parts.router.reload().await.unwrap();
+    let reset = NOW + 3_600_000;
+    parts
+        .db
+        .insert_samples(&[], Some(&head_row("seat", NOW - 60_000, None, 0.4, reset)))
+        .unwrap();
+    parts
+        .router
+        .report(phoebis_routing::Report::SpendHead {
+            account_id: "seat".into(),
+            utilization: Some(0.4),
+            reset: Some(reset),
+            observed_at: NOW - 60_000,
+            incarnation: 1,
+        })
+        .await;
+    parts.router.spend_windows().await.unwrap();
+    let reset_of = |account: &serde_json::Value| {
+        (
+            account["spend"]["resets_at"].clone(),
+            account["spend"]["reset_source"].clone(),
+        )
+    };
+    let held = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        reset_of(&held),
+        (serde_json::json!(reset), serde_json::json!("head")),
+        "the running router answers the head's reset: {held}"
+    );
+    parts.router.shutdown().await.unwrap();
+    let stopped = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        reset_of(&stopped),
+        (serde_json::json!(month_end()), serde_json::json!("estimated")),
+        "a stopped router answers no window, so the view reads the estimate over its own clock: {stopped}"
+    );
+    assert_eq!(
+        stopped["spend"]["utilization"],
+        serde_json::json!(0.4),
+        "the share is the ledger row's whatever the router answers"
+    );
+}
+
+#[tokio::test]
+async fn a_plan_accounts_spend_is_null_and_its_extra_usage_keeps_the_polls_amounts_under_a_newer_head_row(
+) {
+    use common::{get, json, login, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let headed_at = NOW - 60_000;
+    for row in [
+        polled_row("business", NOW - 600_000, (5_000, 1_234), 0.25, None),
+        head_row("business", headed_at, Some(true), 0.4, NOW + 3_600_000),
+    ] {
+        parts.db.insert_samples(&[], Some(&row)).unwrap();
+    }
+    let business = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        business["extra_usage"],
+        serde_json::json!({
+            "currency": "USD", "disabled_reason": null, "in_use": true, "is_enabled": true,
+            "monthly_limit": 5_000, "used_credits": 1_234, "utilization": 0.4,
+            "observed_at": phoebis_ledger::bucket_of(headed_at) * 1_000
+        }),
+        "the head row answers the flag and the share while the poll's amounts stand: {business}"
+    );
+    assert_eq!(
+        business["spend"],
+        serde_json::Value::Null,
+        "a plan account has no spend window"
+    );
+    let direct = json(get(&parts.app, "/admin/accounts/direct", Some(&cookie)).await).await;
+    assert_eq!(direct["spend"], serde_json::Value::Null, "{direct}");
+}
+
+#[tokio::test]
+async fn the_account_view_answers_the_fable_week_under_one_id_from_a_head_row_a_poll_row_and_a_held_reading_the_newest_winning(
+) {
+    use common::{login, NOW};
+    use phoebis_ledger::QuotaSampleRecord;
+    use phoebis_routing::{
+        Report, UtilizationSample, WindowReading, WindowSource, SEVEN_DAY_FABLE,
+    };
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for id in ["held", "headed", "polled"] {
+        insert_oauth(&parts, id, false);
+    }
+    parts.router.reload().await.unwrap();
+    let quota = |account: &str, window: &str, utilization: f64, at: i64| QuotaSampleRecord {
+        account_id: account.into(),
+        bucket: phoebis_ledger::bucket_of(at),
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: Some(NOW + 86_400_000),
+        source: if window == "seven_day_fable" {
+            "poll"
+        } else {
+            "head"
+        }
+        .into(),
+        observed_at: Some(at),
+    };
+    let held = |account: &str, utilization: f64, at: i64| Report::Sample {
+        account_id: account.into(),
+        sample: UtilizationSample::default().with(
+            SEVEN_DAY_FABLE,
+            WindowReading {
+                utilization,
+                reset: Some(NOW + 86_400_000),
+                observed_at: at,
+                source: WindowSource::Poll,
+            },
+        ),
+        incarnation: 1,
+        source_request_id: None,
+    };
+    parts
+        .db
+        .insert_samples(
+            &[
+                quota("held", "seven_day_overage_included", 0.31, NOW - 1_200_000),
+                quota("headed", "seven_day_overage_included", 0.42, NOW - 60_000),
+                quota(
+                    "polled",
+                    "seven_day_overage_included",
+                    0.51,
+                    NOW - 1_200_000,
+                ),
+                quota("polled", "seven_day_fable", 0.53, NOW - 60_000),
+            ],
+            None,
+        )
+        .unwrap();
+    parts.router.report(held("held", 0.33, NOW - 30_000)).await;
+    parts
+        .router
+        .report(held("headed", 0.44, NOW - 1_800_000))
+        .await;
+    parts.router.samples().await.unwrap();
+    for (id, utilization, newest) in [
+        ("held", 0.33, "the router's held reading"),
+        ("headed", 0.42, "the head row's overage-included week"),
+        ("polled", 0.53, "the poll row's Fable week"),
+    ] {
+        let account = account_of(&parts.app, &cookie, id).await;
+        let fable: Vec<(&str, f64)> = account["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| w["id"] != "five_hour" && w["id"] != "seven_day")
+            .map(|w| {
+                (
+                    w["id"].as_str().unwrap(),
+                    w["utilization"].as_f64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            fable,
+            [("seven_day_fable", utilization)],
+            "{id}: one Fable-week row, {newest} the newest: {account}"
+        );
+    }
+}
+
+/// An attempt answers the class the ledger stored for it, true on a usage-based seat's attempt and false on a plan
+/// account's, on the request list and on the request's own answer alike.
+#[tokio::test]
+async fn an_attempt_on_a_usage_based_seat_answers_its_class_and_one_on_a_plan_account_answers_false(
+) {
+    use common::{get, json, login, wait_json};
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let served = |id: &str, account: &str, usage_based: bool| Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: now - 1_000,
+            finished_at: Some(now - 500),
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: "oauth".into(),
+            started_at: now - 1_000,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            usage_based,
+            ..Default::default()
+        }],
+        bodies: None,
+    };
+    parts.ledger.record(served("r-seat", "seat", true));
+    parts.ledger.record(served("r-plan", "business", false));
+    let listed = wait_json(&parts.app, "/admin/requests", &cookie, |v| {
+        v["requests"].as_array().is_some_and(|rows| rows.len() >= 2)
+    })
+    .await;
+    let class_of = |id: &str| {
+        listed["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .map(|r| r["attempts"][0]["usage_based"].clone())
+            .unwrap_or_else(|| panic!("no {id} row: {listed}"))
+    };
+    assert_eq!(
+        (class_of("r-seat"), class_of("r-plan")),
+        (serde_json::json!(true), serde_json::json!(false)),
+        "each attempt answers the class its row stored: {listed}"
+    );
+    let shown = json(get(&parts.app, "/admin/requests/r-seat", Some(&cookie)).await).await;
+    assert_eq!(
+        shown["request"]["attempts"][0]["usage_based"],
+        serde_json::json!(true),
+        "the request's own answer carries the member as the list does: {shown}"
     );
 }
 
@@ -2340,15 +3303,27 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
             source_request_id: None,
         })
         .await;
-    wait_json(&h.app, "/admin/accounts/business/usage", &cookie, |v| {
+    let usage = wait_json(&h.app, "/admin/accounts/business/usage", &cookie, |v| {
         v["error"].is_null()
     })
     .await;
+    assert_eq!(
+        (
+            &usage["fable_window"]["key"],
+            usage["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w["key"] == "seven_day_fable")
+        ),
+        (&serde_json::json!("fable"), false),
+        "the usage answer keeps the Fable week under its own key, apart from its windows: {usage}"
+    );
     // Each window reads as the router stored it, the 5-hour window's passed reset with it, while the projection reads
     // the router's prediction, which empties that window until the next reading names a reset. No pin burns, so each
     // window projects its prediction at its horizon: five hours on, the weekly windows' resets lying further out. The
-    // Fable week reads under the endpoint's key, mapped from the routing name, and its lead paces it as the week the
-    // routing name says it is.
+    // Fable week reads under the one id `seven_day_fable`, and its lead paces it as the week the routing name says it
+    // is.
     let lead = |window: &str, utilization: f64, reset: Option<i64>| {
         utilization - phoebis_routing::elapsed_share_at(window, reset, None, NOW)
     };
@@ -2359,7 +3334,7 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         { "id": "seven_day", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.5,
           "projection": 0.5, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
           "lead": lead(SEVEN_DAY, 0.5, Some(NOW + 72 * HOUR)) },
-        { "id": "fable", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.2,
+        { "id": "seven_day_fable", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.2,
           "projection": 0.2, "horizon": NOW + 5 * HOUR, "burn": 0.0, "demand": 0.0,
           "lead": lead(SEVEN_DAY_FABLE, 0.2, Some(NOW + 72 * HOUR)) },
     ]);
@@ -3196,7 +4171,7 @@ fn a_record_discarded_twice_leaves_one_lifetime_after_its_first_discard() {
         None,
     );
     vault.discard("pairing", common::NOW);
-    // A callback whose exchange returns after the owner cancelled discards the record a second time.
+    // A callback whose exchange returns after the owner canceled discards the record a second time.
     vault.discard("pairing", common::NOW + 300_000);
     assert_eq!(vault.sweep(common::NOW + 600_000 - 1), 0);
     assert_eq!(
@@ -3230,7 +4205,7 @@ async fn a_second_start_by_the_owning_session_replaces_its_standing_pairing() {
         .await,
     )
     .await;
-    assert_eq!(shown["status"], "cancelled");
+    assert_eq!(shown["status"], "canceled");
     let shown = json(
         get(
             &app,
@@ -6081,5 +7056,60 @@ async fn an_array_body_is_refused_as_no_object_on_the_pool_and_key_routes() {
         json(get(&app, "/admin/keys", Some(&cookie)).await).await,
         keys,
         "no refused key write landed"
+    );
+}
+
+#[tokio::test]
+async fn an_array_body_is_refused_as_no_object_on_the_account_create_and_edit() {
+    use common::{get, json, login, patch, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let accounts = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    // Serde's sequence form reads a filled array positionally, and every edit member defaults, so a parse that took
+    // one would create the account or land the edit.
+    let requests = [
+        ("POST", "/admin/accounts", "[]"),
+        (
+            "POST",
+            "/admin/accounts",
+            r#"["arrayed","oauth","Arrayed"]"#,
+        ),
+        ("PATCH", "/admin/accounts/business", "[]"),
+        (
+            "PATCH",
+            "/admin/accounts/business",
+            r#"["Relabeled",false]"#,
+        ),
+    ];
+    let mut answers = Vec::new();
+    for (method, route, body) in requests {
+        let response = match method {
+            "POST" => post(&app, route, body, Some(&cookie)).await,
+            _ => patch(&app, route, body, Some(&cookie)).await,
+        };
+        let status = response.status().as_u16();
+        let answer = json(response).await;
+        answers.push((
+            format!("{method} {route} {body}"),
+            status,
+            answer["error"].clone(),
+            answer["label"].clone(),
+        ));
+    }
+    assert_eq!(
+        answers,
+        requests
+            .map(|(method, route, body)| (
+                format!("{method} {route} {body}"),
+                400,
+                serde_json::json!("body must be a JSON object"),
+                serde_json::Value::Null,
+            ))
+            .to_vec()
+    );
+    assert_eq!(
+        json(get(&app, "/admin/accounts", Some(&cookie)).await).await,
+        accounts,
+        "no refused account write landed"
     );
 }

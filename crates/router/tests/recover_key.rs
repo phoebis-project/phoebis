@@ -1,7 +1,8 @@
 //! `phoebis recover-key` from the outside: the binary against a registry the test seals under one key, run under
-//! another. It refuses a registry another process holds, a key file that opens the registry, a missing registry and an
-//! `--owner` it cannot hand a key to, generates a missing key file, prints what it discards and asks before it does,
-//! and leaves a registry the new key opens with every secret gone and every account marked.
+//! another. It refuses a registry another process holds, a key file that opens the registry's canary, a missing
+//! registry and an `--owner` it cannot hand a key to, seals the canary of a registry without one under a key file that
+//! opens its sealed rows, generates a missing key file, prints what it discards and asks before it does, and leaves a
+//! registry the new key opens with every secret gone and every account marked.
 
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -310,25 +311,55 @@ fn a_key_file_that_opens_the_registrys_canary_is_refused_as_nothing_to_recover()
     assert_untouched(&registry(dir.path()), &old);
 }
 
+/// The one line a recovery prints when it seals the canary of a registry without one, over the `readable` sealed rows
+/// the key opens.
+fn sealed_canary_line(readable: u64) -> String {
+    let rows = if readable == 1 { "row" } else { "rows" };
+    format!(
+        "the storage key opens {readable} sealed {rows} and the registry has no canary, so a canary was sealed under \
+         it and nothing was discarded"
+    )
+}
+
+// Run without `--yes` on an empty input, which a prompt would read as a refusal, so the one line and exit 0 show the
+// run never asked.
 #[test]
-fn a_key_file_that_opens_a_sealed_row_of_a_registry_without_a_canary_is_refused_as_nothing_to_recover(
+fn a_key_file_that_opens_the_rows_of_a_registry_without_a_canary_seals_one_without_the_prompt_and_discards_nothing(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path());
     let old = key(OLD_KEY);
-    seed(&registry(dir.path()), &old);
+    let seeded = seed(&registry(dir.path()), &old);
     Store::open(&registry(dir.path()), &old)
         .unwrap()
         .debug_drop_canary()
         .unwrap();
     std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
+    let out = recover_key(&config, &[], b"");
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert_eq!(
+        stdout_lines(&out),
+        [sealed_canary_line(4)],
+        "two credential bundles, an API-key secret and a recipe body open: {}",
+        printed(&out)
+    );
+    assert_no_key(&out, &[OLD_KEY]);
+    assert_untouched(&registry(dir.path()), &old);
+    let store = Store::open(&registry(dir.path()), &old).unwrap();
+    assert!(
+        store.credentials("claude-b").unwrap().is_some(),
+        "the second bundle is kept as well"
+    );
+    assert_eq!(store.accounts().unwrap(), seeded, "no account was marked");
+    // Released before the second run, which takes the registry's lock.
+    drop(store);
     let out = recover_key(&config, &["--yes"], b"");
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
-    assert_eq!(stdout_lines(&out), [MATCH_LINE], "{}", printed(&out));
     assert_eq!(
-        Store::read_canary(&registry(dir.path()), &old).unwrap(),
-        CanaryRead::SealedRowMatches,
-        "the refused run sealed no canary"
+        stdout_lines(&out),
+        [MATCH_LINE],
+        "a key that opens the canary is nothing to recover: {}",
+        printed(&out)
     );
 }
 
@@ -887,7 +918,7 @@ fn a_corrupt_canary_over_rows_the_key_still_opens_is_refused_with_their_count_an
 }
 
 #[test]
-fn a_registry_without_a_canary_whose_one_readable_row_follows_32_that_do_not_open_is_nothing_to_recover(
+fn a_registry_without_a_canary_whose_one_readable_row_follows_32_unreadable_ones_gets_a_canary_the_next_start_opens(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path());
@@ -912,15 +943,35 @@ fn a_registry_without_a_canary_whose_one_readable_row_follows_32_that_do_not_ope
             [],
         )
         .unwrap();
+    assert!(
+        matches!(
+            Store::open(&registry(dir.path()), &old),
+            Err(StoreError::KeyMismatch { .. })
+        ),
+        "the bounded proof refuses the right key at the start"
+    );
     std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
     let out = recover_key(&config, &["--yes"], b"");
-    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
-    assert_eq!(stdout_lines(&out), [MATCH_LINE], "{}", printed(&out));
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert_eq!(
+        stdout_lines(&out),
+        [sealed_canary_line(1)],
+        "{}",
+        printed(&out)
+    );
     let left: i64 = rusqlite::Connection::open(registry(dir.path()))
         .unwrap()
         .query_row("SELECT COUNT(*) FROM credentials", [], |row| row.get(0))
         .unwrap();
     assert_eq!(left, 33, "nothing was discarded");
+    assert_eq!(
+        Store::read_canary(&registry(dir.path()), &old).unwrap(),
+        CanaryRead::Matches
+    );
+    assert!(
+        Store::open(&registry(dir.path()), &old).is_ok(),
+        "the start the bounded proof refused passes through the canary"
+    );
 }
 
 #[test]
@@ -947,10 +998,10 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     drop(store);
     std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();
     let out = recover_key(&config, &["--yes"], b"");
-    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
     assert_eq!(
         stdout_lines(&out),
-        [MATCH_LINE],
+        [sealed_canary_line(1)],
         "the body opens under the key: {}",
         printed(&out)
     );
@@ -967,8 +1018,16 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }
 
-/// The reverse of the registry's newest migration, the pin's shed reason column gone, as `crates/store/tests` replays
-/// it.
+/// The reverse of the registry's newest migration, the plan-ended column gone, as `crates/store/tests` replays it.
+const UNDO_V61: &str = "ALTER TABLE accounts DROP COLUMN plan_ended_at; \
+     UPDATE meta SET value = '60' WHERE key = 'schema_version';";
+
+/// The reverse of the step before it, the flag's column back under its old name. The marker last, since it restores an
+/// old name, and the trailing `\n` ends the marker's comment.
+const UNDO_V60: &str = "ALTER TABLE accounts RENAME COLUMN canceled TO cancelled; \
+     UPDATE meta SET value = '59' WHERE key = 'schema_version'; -- rollback\n";
+
+/// The reverse of the step before it, the pin's shed reason column gone.
 const UNDO_V59: &str =
     "ALTER TABLE pins DROP COLUMN shed_reason; UPDATE meta SET value = '58' WHERE key = 'schema_version';";
 
@@ -1008,7 +1067,7 @@ fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_f
     rusqlite::Connection::open(registry(dir.path()))
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55}"
+            "{UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55}"
         ))
         .unwrap();
     std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();

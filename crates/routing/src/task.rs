@@ -31,9 +31,10 @@ use crate::select::{
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
     entrypoint_of, is_plan_window, mark_holds, plan_windows, shed_dwell_ms, slow_down_hold_ms,
-    AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence,
-    PinRef, PinUsage, RateTable, RoutingState, SharePricer, SlowDownEdge, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    spend_reset_estimate, AccountTicket, BurnUnit, CreditsState, EvidenceSource, InFlight,
+    MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
+    SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::{resolve, term, window_for, Candidate, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -253,7 +254,8 @@ pub enum RouterEvent {
         held_ms: i64,
         at: i64,
     },
-    /// `blocked()` answered differently before and after a credits reading landed.
+    /// The credits read answered differently before and after a credits reading landed: `blocked_before` as the
+    /// selector read the held state at the fold's clock, `blocked_after` the reading's own `blocked()`.
     FastCreditsChanged {
         account_id: String,
         before: Option<CreditsState>,
@@ -272,9 +274,10 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
-    /// A plan window read under 1.0 after a reading at 1.0 or above under the same reset: the readings before and
-    /// after and the unchanged reset, nothing of why, since a reset grant and an upstream correction read alike
-    /// and the router infers no cause.
+    /// A plan window read under 1.0 after a reading at 1.0 or above, or after a wall the prediction announced, under
+    /// the same reset: the figure before, the stored reading's or the prediction's, the reading after and the
+    /// unchanged reset, nothing of why, since a reset grant and an upstream correction read alike and the router
+    /// infers no cause.
     WindowCleared {
         account_id: String,
         window: String,
@@ -502,6 +505,8 @@ pub struct SelectAnswer {
     /// The selected account's in-flight ticket, taken where the selection read the count, for the request's
     /// first wire attempt on it; `None` for any other answer.
     pub ticket: Option<AccountTicket>,
+    /// The funding ordinal the claim answered for a `funding_required` account's attempt, `None` for any other.
+    pub funding_ordinal: Option<u64>,
 }
 
 /// Every report that names an account names its holder too: an id is reusable, and a report whose
@@ -519,9 +524,10 @@ pub enum Report {
         cause: StateCause,
         /// The upstream error's message where the verdict read one.
         detail: Option<String>,
-        /// When the attempt went out, on a funding retry's success alone. An attempt sent before the account's newest
-        /// funding mark says nothing about the balance that mark's refusal found, so its success clears nothing.
-        dispatched_at: Option<i64>,
+        /// The funding ordinal the attempt was dispatched under, on a funding retry's success alone. An attempt
+        /// dispatched under an older mark than the account's newest says nothing about the balance that mark's refusal
+        /// found, so its success clears nothing.
+        dispatched_ordinal: Option<u64>,
     },
     /// The ledger's standing: `degraded` from a failed batch until one lands and the spend is read again. A replacing
     /// reading.
@@ -608,6 +614,17 @@ pub enum Report {
         /// The request whose response head carried the reading, or `None` for the usage poll's.
         source_request_id: Option<String>,
     },
+    /// A head on a usage-based account: the overage family read as the spend window's share and reset, no overage
+    /// evidence. Coalesced per account, holder and the members the head names.
+    SpendHead {
+        account_id: String,
+        /// `anthropic-ratelimit-unified-overage-utilization`, a fraction.
+        utilization: Option<f64>,
+        /// `anthropic-ratelimit-unified-overage-reset`, epoch milliseconds.
+        reset: Option<i64>,
+        observed_at: i64,
+        incarnation: u64,
+    },
     /// A finished inference or probe answer's typed tokens on the account that served it, pinned or not: what the
     /// prediction adds to the account's last reading until the next one lands.
     Usage {
@@ -646,6 +663,7 @@ impl Report {
         "pin_released",
         "pin_renewed",
         "sample",
+        "spend_head",
         "usage",
     ];
 
@@ -666,6 +684,7 @@ impl Report {
             Report::PinReleased { .. } => "pin_released",
             Report::PinRenewed { .. } => "pin_renewed",
             Report::Sample { .. } => "sample",
+            Report::SpendHead { .. } => "spend_head",
             Report::Usage { .. } => "usage",
         }
     }
@@ -694,6 +713,14 @@ enum CoalesceKey {
         account_id: String,
         incarnation: u64,
         windows: Vec<String>,
+    },
+    /// The members the head names, so a head that names the reset alone never replaces one that carries a share:
+    /// each header is its own reading, which the fold's own age tests order.
+    SpendHead {
+        account_id: String,
+        incarnation: u64,
+        share: bool,
+        reset: bool,
     },
 }
 
@@ -762,6 +789,18 @@ impl Report {
                 incarnation: *incarnation,
                 windows: sample.windows.keys().cloned().collect(),
             }),
+            Report::SpendHead {
+                account_id,
+                utilization,
+                reset,
+                incarnation,
+                ..
+            } => Some(CoalesceKey::SpendHead {
+                account_id: account_id.clone(),
+                incarnation: *incarnation,
+                share: utilization.is_some(),
+                reset: reset.is_some(),
+            }),
             Report::Affinity(_)
             | Report::Cooldown { .. }
             | Report::Ended { .. }
@@ -793,7 +832,7 @@ impl Report {
                     state,
                     lifecycle_generation,
                     credential_generation,
-                    dispatched_at,
+                    dispatched_ordinal,
                     ..
                 },
                 Report::AccountState {
@@ -808,7 +847,7 @@ impl Report {
                 let stale_retry = generations == held_generations
                     && *held_state == AccountState::FundingRequired
                     && *state != AccountState::FundingRequired
-                    && dispatched_at.is_some();
+                    && dispatched_ordinal.is_some();
                 !stale_retry && generations >= held_generations
             }
             (Report::Credits { state, .. }, Report::Credits { state: held, .. }) => {
@@ -817,6 +856,12 @@ impl Report {
             (Report::Overage { evidence, .. }, Report::Overage { evidence: held, .. }) => {
                 evidence.observed_at >= held.observed_at
             }
+            (
+                Report::SpendHead { observed_at, .. },
+                Report::SpendHead {
+                    observed_at: held, ..
+                },
+            ) => observed_at >= held,
             // One sequential producer, the ledger writer, sends both, so the later arrival is the later reading.
             (Report::Accounting { .. }, Report::Accounting { .. })
             | (Report::MemberSpend(_), Report::MemberSpend(_)) => true,
@@ -947,6 +992,9 @@ enum Command {
     },
     ReportedSamples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
+    },
+    SpendWindows {
+        reply: oneshot::Sender<Vec<(String, SpendWindow)>>,
     },
     /// The funding marks a writer wake finished, sent ahead of the reload a landed one asks for.
     FundingWritten {
@@ -1497,6 +1545,10 @@ impl RouterHandle {
     pub async fn reported_samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::ReportedSamples { reply }).await
     }
+    /// Every usage-based account's spend window at the router's clock.
+    pub async fn spend_windows(&self) -> Result<Vec<(String, SpendWindow)>, RouterGone> {
+        self.ask(|reply| Command::SpendWindows { reply }).await
+    }
     /// `rotated_at` is the key's rotation the caller authenticated under, so a touch that lands after a later
     /// rotation stamps nothing on the new grace. Waits for a slot as a report does; a stopped task takes none.
     pub async fn touch_key(&self, key_id: &str, presented: Presented, rotated_at: Option<i64>) {
@@ -1746,6 +1798,26 @@ pub fn spawn(
         now,
     );
     let mut state = RoutingState::from_load(load);
+    state.drop_usage_based_overage(&snapshot.read().expect("snapshot lock poisoned"));
+    // A restored wall keeps the anchor its stored pair gives it: without the seed every within-margin head after a
+    // restart would move the clamp's anchor onto its own instant and hold the account spent past the window's length.
+    let spent_announced: HashMap<(String, String), (Option<i64>, i64)> = state
+        .samples()
+        .into_iter()
+        .flat_map(|(account_id, sample)| {
+            sample
+                .windows
+                .into_iter()
+                .filter_map(move |(window, reading)| {
+                    (is_plan_window(&window) && reading.utilization >= 1.0).then(|| {
+                        (
+                            (account_id.clone(), window),
+                            (reading.reset, reading.observed_at),
+                        )
+                    })
+                })
+        })
+        .collect();
     // One table, shared by the handle (the relay's synchronous permits and tickets) and the state (the
     // selector's cap partition), so a count is exact wherever it is read.
     let in_flight = InFlight::default();
@@ -1848,7 +1920,7 @@ pub fn spawn(
         reset_announced: HashMap::new(),
         revision: 1,
         snapshot,
-        spent_announced: HashMap::new(),
+        spent_announced,
         state,
         store,
         touched_at: HashMap::new(),
@@ -1949,12 +2021,12 @@ struct MovedState {
     detail: Option<String>,
 }
 
-/// A funding mark's write as the writer finished it, for the retry the loop stamped at `stamped_at`: the row's
-/// revision after it, `None` when the fences refused it.
+/// A funding mark's write as the writer finished it, for the retry entry `ordinal` names: the row's revision after
+/// it, `None` when the fences refused it.
 struct FundingWritten {
     account_id: String,
     incarnation: u64,
-    stamped_at: i64,
+    ordinal: u64,
     revision: Option<u64>,
 }
 
@@ -1984,7 +2056,7 @@ impl Marks {
             incarnation,
             cause,
             detail,
-            marked_at,
+            marked_ordinal,
             ..
         } = write
         else {
@@ -1994,9 +2066,9 @@ impl Marks {
             .then(|| FundingWritten {
                 account_id: account_id.clone(),
                 incarnation: *incarnation,
-                // An unstamped mark, a superseded verdict's, names no entry: the loop's clock reads epoch
-                // milliseconds, so no entry carries the stamp 0 and `funding_written` credits nothing for it.
-                stamped_at: marked_at.unwrap_or(0),
+                // An unstamped mark, a superseded verdict's, names no entry: an account's ordinals start at 1, so
+                // no entry carries the ordinal 0 and `funding_written` credits nothing for it.
+                ordinal: marked_ordinal.unwrap_or(0),
                 revision: answer.map(|(revision, _)| revision),
             })
             .into_iter()
@@ -2811,6 +2883,7 @@ impl Task {
             result: SelectResult::Refused(refusal),
             cancel: CancellationToken::new(),
             ticket: None,
+            funding_ordinal: None,
         });
     }
 
@@ -3148,7 +3221,7 @@ impl Task {
                         );
                     }
                 }
-                let (cancel, ticket) = match &result {
+                let (cancel, ticket, funding_ordinal) = match &result {
                     // Charged here, in the one place selections are serialized, so the count the next selection
                     // reads already holds this one: a ticket taken at the dial, awaits later, would let every
                     // selection answered in between read the same count and land over the cap. A token count
@@ -3161,26 +3234,32 @@ impl Task {
                         });
                         // The placed attempt's ticket is the funding retry's claim, so the one slot frees when that
                         // attempt ends, however long its head takes.
-                        if let (Some(ticket), AccountState::FundingRequired) =
-                            (&ticket, selection.account.state)
-                        {
-                            self.state.claim_funding_retry(
-                                &selection.account.id,
-                                selection.account.incarnation,
-                                ticket.id(),
-                                request.now,
-                            );
-                        }
-                        (self.token(&selection.account.id).child_token(), ticket)
+                        let funding_ordinal = match (&ticket, selection.account.state) {
+                            (Some(ticket), AccountState::FundingRequired) => {
+                                Some(self.state.claim_funding_retry(
+                                    &selection.account.id,
+                                    selection.account.incarnation,
+                                    ticket.id(),
+                                    request.now,
+                                ))
+                            }
+                            _ => None,
+                        };
+                        (
+                            self.token(&selection.account.id).child_token(),
+                            ticket,
+                            funding_ordinal,
+                        )
                     }
                     SelectResult::Exhausted(_)
                     | SelectResult::Held { .. }
-                    | SelectResult::Refused(_) => (CancellationToken::new(), None),
+                    | SelectResult::Refused(_) => (CancellationToken::new(), None, None),
                 };
                 let _ = reply.send(SelectAnswer {
                     result,
                     cancel,
                     ticket,
+                    funding_ordinal,
                 });
             }
             Command::Report(report, seq) => self.numbered_report(report, seq),
@@ -3192,7 +3271,7 @@ impl Task {
                     self.state.funding_written(
                         &row.account_id,
                         row.incarnation,
-                        row.stamped_at,
+                        row.ordinal,
                         row.revision,
                     );
                 }
@@ -3405,6 +3484,24 @@ impl Task {
             Command::ReportedSamples { reply } => {
                 let _ = reply.send(self.state.samples());
             }
+            Command::SpendWindows { reply } => {
+                let now = (self.clock)();
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let mut windows: Vec<(String, SpendWindow)> = snapshot
+                    .accounts()
+                    .filter_map(|account| {
+                        self.state
+                            .spend_window(&snapshot, &account.id, now)
+                            .map(|window| (account.id.clone(), window))
+                    })
+                    .collect();
+                windows.sort_by(|a, b| a.0.cmp(&b.0));
+                let _ = reply.send(windows);
+            }
             Command::Touch {
                 key_id,
                 presented,
@@ -3615,17 +3712,26 @@ impl Task {
                 let observed_at = state.observed_at;
                 let room = state.blocked().is_none();
                 let row = RoutingState::credits_row(&account_id, &state);
-                // Read before the fold replaces it, and the holder's own: another holder's state is no edge.
+                // Read before the fold replaces it, and the holder's own: another holder's state is no edge. The edge's
+                // before is the state the selector read at this clock, a lapsed spend share included.
                 let before = self.state.credits_of(&account_id, incarnation).cloned();
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let blocked_before = self
+                    .state
+                    .credits_blocked(&snapshot, &account_id, incarnation, (self.clock)())
+                    .map(String::from);
                 let after = state.clone();
                 if !self.state.record_credits(&account_id, state) {
                     return;
                 }
+                if snapshot.usage_based(&account_id) {
+                    self.state.record_poll_share(&account_id, observed_at);
+                }
                 self.write(vec![StateWrite::UpsertCredits(row)]);
-                let blocked_before = before
-                    .as_ref()
-                    .and_then(CreditsState::blocked)
-                    .map(String::from);
                 let blocked_after = after.blocked().map(String::from);
                 if blocked_before != blocked_after {
                     self.emit(RouterEvent::FastCreditsChanged {
@@ -3671,6 +3777,16 @@ impl Task {
                 if self.moved_past(&account_id, incarnation) {
                     return;
                 }
+                // A usage-based seat's overage family is its spend window, which `Report::SpendHead` carries. A leg
+                // that read its snapshot before the class landed still reports it here, and it records nothing.
+                if self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .usage_based(&account_id)
+                {
+                    return;
+                }
                 evidence.incarnation = incarnation;
                 let at = evidence.observed_at;
                 let (was, since) = match self.state.overage(&account_id) {
@@ -3706,6 +3822,50 @@ impl Task {
                             incarnation: current.incarnation,
                         })]);
                     }
+                }
+            }
+            Report::SpendHead {
+                account_id,
+                utilization,
+                reset,
+                observed_at,
+                incarnation,
+            } => {
+                if self.moved_past(&account_id, incarnation) {
+                    return;
+                }
+                // A head on a usage-based seat is no overage episode, so the fold emits no event. The share persists as
+                // the poll's does, and the reset stays in memory.
+                let held = self.state.spend_head(&account_id);
+                let moved = self.state.record_spend_head(
+                    &account_id,
+                    utilization,
+                    reset,
+                    observed_at,
+                    incarnation,
+                );
+                // Once per instant: every head of the month repeats the reset, and only a new one is news.
+                if let Some((head_reset, at)) = self
+                    .state
+                    .spend_head(&account_id)
+                    .filter(|(head_reset, _)| held.is_none_or(|(before, _)| before != *head_reset))
+                {
+                    let estimate = spend_reset_estimate(at);
+                    if head_reset != estimate {
+                        tracing::info!(
+                            account = %account_id,
+                            head_reset,
+                            estimate,
+                            "a head named a spend reset apart from the estimate"
+                        );
+                    }
+                }
+                if !moved {
+                    return;
+                }
+                if let Some(state) = self.state.credits_of(&account_id, incarnation) {
+                    let row = RoutingState::credits_row(&account_id, state);
+                    self.write(vec![StateWrite::UpsertCredits(row)]);
                 }
             }
             Report::PinInvalidated {
@@ -3945,6 +4105,15 @@ impl Task {
                     })
                     .collect();
                 let now = (self.clock)();
+                // Read before the fold as the stored readings are, since a wall the prediction announced clears from
+                // the figure the prediction read over them.
+                let predicted: HashMap<String, f64> = stored
+                    .keys()
+                    .filter_map(|window| {
+                        let reading = self.state.predicted(&account_id, window, now)?;
+                        Some((window.clone(), reading.utilization))
+                    })
+                    .collect();
                 let sample = self.held_at_the_wall(&account_id, sample, &stored, now);
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
@@ -3966,6 +4135,7 @@ impl Task {
                             &account_id,
                             window,
                             stored.get(window).copied(),
+                            predicted.get(window).copied(),
                             reading,
                             source_request_id.as_deref(),
                             now,
@@ -4031,10 +4201,12 @@ impl Task {
                     .read()
                     .expect("snapshot lock poisoned")
                     .clone();
-                // An api_key account bills its tokens and has no plan window to charge, and an account whose tier
-                // the profile has not named yet has no factor to price through.
+                // An api_key account bills its tokens and a usage-based seat its spend window, so neither has a plan
+                // window to charge, whatever tier the seat's profile names, and an account whose tier the profile has
+                // not named yet has no factor to price through.
                 if snapshot.account(&account_id).map(|a| a.kind)
                     != Some(phoebis_store::AccountKind::Oauth)
+                    || snapshot.usage_based(&account_id)
                 {
                     return;
                 }
@@ -4086,21 +4258,22 @@ impl Task {
                 credential_generation,
                 cause,
                 detail,
-                dispatched_at,
+                dispatched_ordinal,
             } => {
                 if state != AccountState::FundingRequired
-                    && dispatched_at
-                        .is_some_and(|at| self.state.funding_stamped_after(&account_id, at))
+                    && dispatched_ordinal.is_some_and(|ordinal| {
+                        self.state.funding_marked_since(&account_id, ordinal)
+                    })
                 {
                     tracing::debug!(
                         account = %account_id,
-                        "a funding retry's success predates the account's newest mark and clears nothing"
+                        "a funding retry's success went out under an older mark than the newest and clears nothing"
                     );
                     return;
                 }
                 // The store keeps no instant for a mark, so the retry is stamped here. A verdict about a holder the
                 // id no longer has moves no retry, as its write moves no state.
-                let mut marked_at = None;
+                let mut marked_ordinal = None;
                 if !self.superseded(
                     &account_id,
                     incarnation,
@@ -4110,7 +4283,7 @@ impl Task {
                     if state == AccountState::FundingRequired {
                         let interval = i64::try_from(self.config.funding_retry.as_millis())
                             .unwrap_or(i64::MAX);
-                        marked_at = Some(self.state.funding_marked(
+                        marked_ordinal = Some(self.state.funding_marked(
                             &account_id,
                             incarnation,
                             (self.clock)(),
@@ -4134,7 +4307,7 @@ impl Task {
                     credential_generation,
                     cause,
                     detail,
-                    marked_at,
+                    marked_ordinal,
                 }]);
             }
         }
@@ -4449,13 +4622,17 @@ impl Task {
 
     /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
     /// reset names, or no reset on a reading taken past it, then the window cleared, which a reading under 1.0 names
-    /// over one at 1.0 or above with no reset passed, or the window spent, which a reading at 1.0 or above names over
-    /// one under it, or over any one where it names the next reset after a passed one.
+    /// over one at 1.0 or above with no reset passed, or over a wall the prediction announced in the reading's cycle,
+    /// from `predicted`, the stored reading's prediction before this one replaced it, or the window spent, which a
+    /// reading at 1.0 or above names over one under it, or over any one where it names the next reset after a passed
+    /// one.
+    #[allow(clippy::too_many_arguments)]
     fn window_edges(
         &mut self,
         account_id: &str,
         window: &str,
         stored: Option<WindowReading>,
+        predicted: Option<f64>,
         reading: WindowReading,
         source_request_id: Option<&str>,
         now: i64,
@@ -4519,6 +4696,29 @@ impl Task {
                     utilization: reading.utilization,
                     // A reading that names no reset before the stored one passed stands under the stored reset.
                     reset: reading.reset.or(stored.reset),
+                    source: reading.source,
+                    source_request_id: source_request_id.map(String::from),
+                    at: now,
+                });
+            }
+        } else if reading.utilization < 1.0 {
+            // A wall the prediction announced over a stored reading under it clears as a stored reading's fall does,
+            // from the prediction's figure, once a reading of the announced cycle reads the window under its limit. The
+            // announcement a reading below the wall left standing past its reset is another cycle's and clears nothing.
+            let key = (account_id.to_string(), window.to_string());
+            let reset = reset_under(stored.as_ref(), &reading);
+            let announced = self
+                .spent_announced
+                .get(&key)
+                .is_some_and(|announced| same_cycle(*announced, reset, now, window));
+            if let Some(before) = predicted.filter(|_| announced) {
+                self.spent_announced.remove(&key);
+                self.emit(RouterEvent::WindowCleared {
+                    account_id: account_id.to_string(),
+                    window: window.to_string(),
+                    utilization_before: before,
+                    utilization: reading.utilization,
+                    reset,
                     source: reading.source,
                     source_request_id: source_request_id.map(String::from),
                     at: now,
@@ -4698,7 +4898,7 @@ impl Task {
                 let Some(term) = snapshot.term(&member.account_id) else {
                     continue;
                 };
-                // A cancelled term past its end still reads as winding down. Its account has ended, which is no start.
+                // A canceled term past its end still reads as winding down. Its account has ended, which is no start.
                 let Some(ends_at) = term::end_of(term, now)
                     .filter(|_| term::winding_down(term, now, minutes) && !term::ended(term, now))
                 else {
@@ -4711,7 +4911,7 @@ impl Task {
                         pool_id: pool.id.clone(),
                         ends_at,
                         wind_down_minutes: minutes,
-                        end_source: if term.cancelled { "cancelled" } else { "trial" },
+                        end_source: if term.canceled { "canceled" } else { "trial" },
                         restored,
                         at: now,
                     });
@@ -4911,7 +5111,25 @@ impl Deferred {
     fn fold(&mut self, writes: Vec<StateWrite>) {
         for write in writes {
             match rows_of(write) {
-                Ok(rows) => self.open.extend(rows),
+                Ok(rows) => {
+                    for (key, mut write) in rows {
+                        // An account-state write that carries no ordinal, a superseded verdict's, keeps the ordinal of
+                        // the write it replaces, so the writer's acknowledgment still names the entry that write's
+                        // mark stamped and a load that reads the row past it drops that entry.
+                        if let StateWrite::AccountState { marked_ordinal, .. } = &mut write {
+                            if marked_ordinal.is_none() {
+                                if let Some(StateWrite::AccountState {
+                                    marked_ordinal: held,
+                                    ..
+                                }) = self.open.get(&key)
+                                {
+                                    *marked_ordinal = *held;
+                                }
+                            }
+                        }
+                        self.open.insert(key, write);
+                    }
+                }
                 Err(rekey) => {
                     let rows = std::mem::take(&mut self.open);
                     self.closed.push((rows, *rekey));
@@ -4951,7 +5169,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             credential_generation,
             cause,
             detail,
-            marked_at,
+            marked_ordinal,
         } => one(
             DeferredKey::AccountState {
                 account_id: account_id.clone(),
@@ -4967,7 +5185,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 credential_generation,
                 cause,
                 detail,
-                marked_at,
+                marked_ordinal,
             },
         ),
         StateWrite::DeleteAffinity(keys) => Ok(keys

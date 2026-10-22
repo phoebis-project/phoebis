@@ -52,9 +52,11 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             account_id: "x".into(),
             since: Some(500),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000),
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
         ..Default::default()
     }
@@ -98,9 +100,11 @@ fn term_answers_the_account_it_was_loaded_for_and_none_for_any_other() {
             account_id: "x".into(),
             since: Some(500),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000),
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         })
     );
     assert_eq!(s.term("y"), None);

@@ -1142,6 +1142,182 @@ async fn the_system_and_about_answers_declare_the_build_beside_the_version() {
 }
 
 #[tokio::test]
+async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_null() {
+    let (_app, _up, document) = document().await;
+    let account = &document["components"]["schemas"]["Account"];
+    let member = &account["properties"]["usage_based"];
+    assert_eq!(member["type"], "boolean", "{account}");
+    assert!(
+        account["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "usage_based")),
+        "every account answer carries the member: {account}"
+    );
+    let description = member["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert!(
+        description.as_deref().is_some_and(|text| {
+            text.contains("`default_claude_zero`")
+                && text.contains("`enterprise_usage_based`")
+                && text.contains("`overage` answers null")
+        }),
+        "the member names the two tier words and the null overage: {member}"
+    );
+}
+
+#[tokio::test]
+async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_three_refusals() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let account = &schemas["Account"];
+    assert_eq!(
+        account["properties"]["canceled"]["type"], "boolean",
+        "{account}"
+    );
+    assert!(
+        account["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "canceled")),
+        "every account answer carries the flag: {account}"
+    );
+    let input = &schemas["PatchAccountInput"]["properties"]["canceled"];
+    assert!(
+        types_of(input).contains(&"boolean"),
+        "the edit takes the flag: {input}"
+    );
+    let (_, _, edit) = operations(&document)
+        .into_iter()
+        .find(|(_, _, operation)| operation["operationId"] == "account_patch")
+        .expect("the account edit");
+    let refusals = edit["responses"]["400"]["description"]
+        .as_str()
+        .unwrap_or_default();
+    for refusal in [
+        "only an oauth account is canceled",
+        "subscription_ends_at needs canceled",
+        "canceled needs subscription_ends_at",
+    ] {
+        assert!(
+            refusals.contains(&format!("`{refusal}`")),
+            "the edit's 400 lists {refusal}: {refusals}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_account_create_lists_the_object_refusal_and_the_members_route_the_missing_list() {
+    let (_app, _up, document) = document().await;
+    let refusals = |id: &str| {
+        let (_, _, operation) = operations(&document)
+            .into_iter()
+            .find(|(_, _, operation)| operation["operationId"] == id)
+            .unwrap_or_else(|| panic!("the operation {id}"));
+        operation["responses"]["400"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    for (id, refusal) in [
+        ("accounts_create", "body must be a JSON object"),
+        ("pool_members_put", "body must carry a members list"),
+    ] {
+        let listed = refusals(id);
+        assert!(
+            listed.contains(&format!("`{refusal}`")),
+            "{id}'s 400 lists {refusal}: {listed}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_account_declares_its_spend_window_with_the_resets_two_sources_and_its_nullable_amounts(
+) {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    assert!(
+        admits_null(&schemas["Account"]["properties"]["spend"]),
+        "an account the class does not hold answers null: {}",
+        schemas["Account"]
+    );
+    let members = |schema: &str| -> BTreeSet<String> {
+        schemas[schema]["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        members("Spend"),
+        BTreeSet::from(
+            [
+                "amounts",
+                "observed_at",
+                "reset_source",
+                "resets_at",
+                "utilization"
+            ]
+            .map(String::from)
+        )
+    );
+    assert_eq!(
+        members("SpendAmounts"),
+        BTreeSet::from(
+            [
+                "currency",
+                "exponent",
+                "limit_minor",
+                "polled_at",
+                "used_minor"
+            ]
+            .map(String::from)
+        )
+    );
+    let spend = &schemas["Spend"]["properties"];
+    assert!(
+        admits_null(&spend["amounts"])
+            && admits_null(&schemas["SpendAmounts"]["properties"]["limit_minor"]),
+        "no polled row answers no amounts, and a body with no limit no limit: {}",
+        schemas["Spend"]
+    );
+    let description = spend["reset_source"]["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert!(
+        description
+            .as_deref()
+            .is_some_and(|text| text.contains("`head`") && text.contains("`estimated`")),
+        "the reset's source names its two words: {}",
+        spend["reset_source"]
+    );
+}
+
+#[tokio::test]
+async fn the_attempt_declares_the_serving_accounts_usage_based_class() {
+    let (_app, _up, document) = document().await;
+    let attempt = &document["components"]["schemas"]["Attempt"];
+    let member = &attempt["properties"]["usage_based"];
+    assert_eq!(member["type"], "boolean", "{attempt}");
+    assert!(
+        attempt["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "usage_based")),
+        "every attempt answer carries the member: {attempt}"
+    );
+    let description = member["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert_eq!(
+        description.as_deref(),
+        Some(
+            "The serving account's class at the attempt, false on a row from before the router recorded it."
+        ),
+        "{member}"
+    );
+}
+
+#[tokio::test]
 async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_account_answers_none()
 {
     let (_app, _up, document) = document().await;
@@ -1163,6 +1339,29 @@ async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_ac
     assert_eq!(
         windows["type"], "array",
         "the member stays an array, empty for the two states: {windows}"
+    );
+}
+
+#[tokio::test]
+async fn the_guardrail_counts_describe_the_range_on_the_body_and_one_row_per_guardrail_on_its_member(
+) {
+    let (_app, _up, document) = document().await;
+    let counts = &document["components"]["schemas"]["GuardrailCounts"];
+    let description = |schema: &Value| {
+        schema["description"]
+            .as_str()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    assert_eq!(
+        (
+            description(counts).as_deref(),
+            description(&counts["properties"]["guardrails"]).as_deref()
+        ),
+        (
+            Some("The guardrail matches of the range."),
+            Some("One row per guardrail that matched a request in the range, ordered by id.")
+        ),
+        "{counts}"
     );
 }
 

@@ -1351,7 +1351,7 @@ async fn a_member_past_its_saved_subscription_end_is_unavailable_and_its_pool_ex
             &parts.app,
             "/admin/accounts/business",
             &format!(
-                r#"{{"cancelled":true,"subscription_ends_at":{}}}"#,
+                r#"{{"canceled":true,"subscription_ends_at":{}}}"#,
                 common::NOW - 1
             ),
             Some(&cookie),
@@ -3625,6 +3625,57 @@ async fn a_list_with_a_repeat_and_a_foreign_member_is_refused_for_the_repeat() {
             json(put_refused).await["error"].clone()
         ),
         refusal
+    );
+}
+
+#[tokio::test]
+async fn the_members_route_names_a_missing_list_apart_from_a_body_that_is_no_object() {
+    let (app, _up) = common::admin_app().await;
+    let app = &app;
+    let cookie = &login(app, "admin-secret").await;
+    direct_in_main(app, cookie).await;
+    let main = || async move {
+        json(get(app, "/admin/pools", Some(cookie)).await).await["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "main")
+            .unwrap()
+            .clone()
+    };
+    let before = main().await;
+    let missing = "body must carry a members list";
+    let no_object = "body must be a JSON object";
+    let cases = [
+        ("{}", missing),
+        (r#"{"members":null}"#, missing),
+        (r#"{"members":5}"#, missing),
+        (r#"{"members":{}}"#, missing),
+        ("[]", no_object),
+        (
+            r#"{"members":[{"account_id":"direct","weight":1}]}"#,
+            no_object,
+        ),
+        (r#"{"members":[5]}"#, no_object),
+        (r#"{"members":[],"members":[]}"#, no_object),
+    ];
+    let mut answers = Vec::new();
+    for (body, _) in cases {
+        let refused = put(app, "/admin/pools/main/members", body, Some(cookie)).await;
+        let status = refused.status().as_u16();
+        answers.push((body, status, json(refused).await["error"].clone()));
+    }
+    assert_eq!(
+        answers,
+        cases
+            .map(|(body, sentence)| (body, 400, serde_json::json!(sentence)))
+            .to_vec()
+    );
+    let after = main().await;
+    assert_eq!(
+        (&after["members"], &after["updated_at"]),
+        (&before["members"], &before["updated_at"]),
+        "no refused list landed"
     );
 }
 

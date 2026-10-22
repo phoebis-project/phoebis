@@ -8,8 +8,8 @@ use phoebis_routing::{
     OverageEvidence, PinKeyFacts, PinRef, PinShed, Placement, RateTable, Rates, RefusalFacts,
     RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation, RoutingState,
     SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead, SlowDownState,
-    StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading,
+    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
     MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
@@ -131,7 +131,7 @@ fn snapshot_with(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> Regi
 }
 
 /// As `snapshot_with`, but with a `SubscriptionTerm` per account, for a test over the end, the wind-down, or
-/// the cancelled obstacle.
+/// the canceled obstacle.
 fn snapshot_with_terms(pool: Pool, terms: Vec<SubscriptionTerm>) -> RegistrySnapshot {
     let mut load = load_of(pool, &[]);
     load.terms = terms;
@@ -1716,14 +1716,14 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read
         RegistrySnapshot::from_load(load, [0; 32], 3_000, 2)
     };
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
+    let ordinal = st.funding_marked("a", 1, 2_000, 300_000);
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
     assert_eq!(
         st.funding_retries(),
         vec![("a".to_string(), 302_000)],
         "the writer has not acknowledged the mark, so the load may predate its write"
     );
-    st.funding_written("a", 1, stamp, Some(5));
+    st.funding_written("a", 1, ordinal, Some(5));
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 4));
     assert_eq!(
         st.funding_retries().len(),
@@ -1737,15 +1737,15 @@ fn a_reload_drops_a_funding_retry_its_snapshot_reads_off_the_mark_unless_it_read
         st.funding_retries().is_empty(),
         "the id names another holder, whose mark is its own"
     );
-    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
-    st.funding_written("a", 1, stamp, Some(5));
+    let ordinal = st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, ordinal, Some(5));
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 6));
     assert!(
         st.funding_retries().is_empty(),
         "the operator cleared the mark"
     );
-    let stamp = st.funding_marked("a", 1, 2_000, 300_000);
-    st.funding_written("a", 1, stamp, None);
+    let ordinal = st.funding_marked("a", 1, 2_000, 300_000);
+    st.funding_written("a", 1, ordinal, None);
     st.reconcile_funding_retries(&marked_under(AccountState::Ready, 1, 1));
     assert!(
         st.funding_retries().is_empty(),
@@ -3592,6 +3592,7 @@ fn a_seven_day_opus_reading_at_its_limit_is_kept_in_the_sample_and_drops_nothing
             extra_usage: None,
             raw_keys: Vec::new(),
             error: None,
+            spend: None,
         },
         1,
     );
@@ -4461,9 +4462,11 @@ fn a_probe_on_a_pin_whose_subscription_ended_answers_the_obstacle_and_moves_noth
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_500),
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let (result, writes, pinned) = probe_after_a_pin_on_a(&snapshot(a_before_b()), &ended, &[]);
@@ -5584,9 +5587,11 @@ fn the_blocker_refuses_a_winding_down_account_for_the_static_tier() {
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -6194,9 +6199,11 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         account_id: "a".into(),
         since: Some(0),
         trial_ends_at: None,
-        cancelled: true,
+        canceled: true,
         ends_at: Some(at),
         tier: None,
+        usage_based: false,
+        plan_ended_at: None,
     };
     // No runway: b outranks a, so only the bypass can land the request there.
     scenario(
@@ -8099,9 +8106,11 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
         account_id: account.into(),
         since: Some(0),
         trial_ends_at: None,
-        cancelled: true,
+        canceled: true,
         ends_at: Some(at),
         tier: None,
+        usage_based: false,
+        plan_ended_at: None,
     };
     let pool = || Pool {
         members: vec![("a", 0), ("b", 1)],
@@ -8211,7 +8220,7 @@ fn an_unread_window_is_skipped_for_a_placement_and_reads_least_bad_for_a_move() 
     // a winds down toward its end with a cold pin the drain rule moves, b reads its 5-hour window alone, and c reads
     // both shared windows, every member on the tier.
     let mut terms = tier_terms(&["a", "b", "c"]);
-    terms[0].cancelled = true;
+    terms[0].canceled = true;
     terms[0].ends_at = Some(T + 10 * MINUTE);
     let s = snapshot_with_terms(gate_pool(), terms);
     let state = || {
@@ -8486,9 +8495,11 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8531,9 +8542,11 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }];
         let failover = Failover {
             wind_down_minutes: 30,
@@ -8577,7 +8590,7 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
 }
 
 #[test]
-fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_subscription_ended() {
+fn a_canceled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_subscription_ended() {
     let s = snapshot_with_terms(
         Pool {
             members: vec![("a", 0), ("b", 1)],
@@ -8596,9 +8609,11 @@ fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_su
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8641,6 +8656,64 @@ fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_su
 }
 
 #[test]
+fn an_account_flagged_plan_ended_is_the_obstacle_subscription_ended_as_one_past_its_saved_end_is() {
+    let pool = || Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            wind_down_minutes: 0,
+            ..Failover::default()
+        },
+        affinity: 86_400,
+        ..Pool::default()
+    };
+    // A running plan with no saved end, flagged by the profile read at 1 500.
+    let term = |plan_ended_at: Option<i64>| SubscriptionTerm {
+        account_id: "a".into(),
+        since: Some(0),
+        trial_ends_at: None,
+        canceled: false,
+        ends_at: None,
+        tier: None,
+        usage_based: false,
+        plan_ended_at,
+    };
+    let running = snapshot_with_terms(pool(), vec![term(None)]);
+    let flagged = snapshot_with_terms(pool(), vec![term(Some(1_500))]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &running,
+                &request(&running, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "a"
+    );
+    let pin = st
+        .pin(&pin_key("s1"))
+        .cloned()
+        .expect("the first select pinned a");
+    let after_flag = request(&flagged, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    assert!(
+        release_reasons(&st, &flagged, &pin, &after_flag).contains(&"subscription_ended"),
+        "the flag reads as an end that has passed"
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &flagged, &after_flag, &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(sel.account.id, "b", "the pin moves off the flagged account");
+    let fresh = request(&flagged, Some("s2"), "claude-sonnet-5", true, &[], 2_000);
+    assert_eq!(
+        picked(&select(&mut st, &flagged, &fresh, &mut rng()).0),
+        "b",
+        "a fresh session places nothing on the flagged account"
+    );
+}
+
+#[test]
 fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone() {
     let pool = || Pool {
         members: vec![("a", 0), ("b", 1)],
@@ -8656,9 +8729,11 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: Some(1_000 + 10 * 60_000),
-            cancelled: false,
+            canceled: false,
             ends_at: None,
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -8674,9 +8749,11 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: Some(500),
-            cancelled: false,
+            canceled: false,
             ends_at: None,
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st2 = RoutingState::from_load(RoutingLoad::default());
@@ -9564,6 +9641,81 @@ fn a_loaded_pin_whose_last_refresh_is_its_creation_is_flagged_and_reads_warm_by_
     assert!(
         !st.pin_warm(&pinned(&st, "s2"), T),
         "refreshed an hour ago, the other pin is cold"
+    );
+}
+
+/// Both pins placed an hour before `T` and used a second before it: `flagged` last refreshed at its placement, so a
+/// load flags it, and `clear` a second after it.
+fn a_flagged_and_a_clear_pin(flagged_burn: f64, clear_burn: f64) -> (PinRow, PinRow) {
+    let flagged = PinRow {
+        last_refresh_at: T - HOUR,
+        ..burning("flagged", "a", flagged_burn, true, T)
+    };
+    let clear = PinRow {
+        last_refresh_at: T - HOUR + 1_000,
+        ..burning("clear", "a", clear_burn, true, T)
+    };
+    assert!(
+        warm(&flagged, true, T) && !warm(&flagged, false, T) && !warm(&clear, false, T),
+        "the flag alone decides the flagged pin's warmth, and the clear pin reads cold by its last refresh"
+    );
+    (flagged, clear)
+}
+
+#[test]
+fn a_fresh_sessions_prior_counts_a_flagged_pin_warm_by_its_last_use_and_leaves_out_a_clear_one() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let (flagged, clear) = a_flagged_and_a_clear_pin(10_000.0, 30_000.0);
+    let mut st = loaded(vec![flagged.clone(), clear.clone()]);
+    assert!(st.auxiliary_only(&flagged.key()) && !st.auxiliary_only(&clear.key()));
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    let fresh = SelectRequest {
+        body_tokens: 1_000,
+        ..request(&s, Some("s9"), "claude-sonnet-5", true, &[], T)
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &fresh, &mut rng()).0),
+        ("a".into(), None)
+    );
+    let booked = st.reservation("r-1").expect("the placement books");
+    assert!(
+        close(
+            booked.burn.get(FIVE_HOUR).copied().unwrap_or(0.0),
+            10_000.0 / 10_000_000.0
+        ),
+        "the flagged pin's burn alone is the prior, the clear pin cold: {booked:?}"
+    );
+}
+
+#[test]
+fn the_shed_round_reads_a_flagged_pin_warm_by_its_last_use_and_a_clear_one_cold() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    let (flagged, clear) = a_flagged_and_a_clear_pin(4.0, 3.0);
+    let mut st = rounding(vec![
+        flagged.clone(),
+        clear.clone(),
+        burning("current", "a", 1.0, true, T),
+    ]);
+    assert!(st.auxiliary_only(&flagged.key()) && !st.auxiliary_only(&clear.key()));
+    over_a_fitting_b(&mut st, T - 500);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &main_turn(&s, "current", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    let cold = |session: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session)
+            .map(|p| p.cold)
+    };
+    assert_eq!(
+        (cold("flagged"), cold("clear")),
+        (Some(false), Some(true)),
+        "the round reads the flagged pin by its last use and the clear one by its last refresh: {round:?}"
     );
 }
 
@@ -11595,9 +11747,11 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(T + 10 * MINUTE),
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = loaded(vec![
@@ -11619,7 +11773,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
     // ending, while the drain's gate reads no candidate inside the wind-down, so its line names no list.
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms {
-        term.cancelled = true;
+        term.canceled = true;
         term.ends_at = Some(T + 2 * HOUR);
     }
     let s = snapshot_with_terms(wind_down_gate_pool(180), terms);
@@ -11769,7 +11923,7 @@ fn a_return_to_plan_move_prefers_a_fitting_sibling() {
 #[test]
 fn a_drain_move_prefers_a_fitting_sibling() {
     let mut terms = tier_terms(&["a", "b", "c"]);
-    terms[0].cancelled = true;
+    terms[0].canceled = true;
     terms[0].ends_at = Some(T + 10 * MINUTE);
     let s = snapshot_with_terms(b_outranks_c_pool(vec![]), terms);
     let mut st = priced(vec![PinRow {
@@ -11952,6 +12106,634 @@ fn an_api_key_sibling_fits_while_its_bucket_holds_room() {
             .iter()
             .all(|f| f.account_id.as_deref() != Some("b")),
         "a cooled sibling never reaches the gate"
+    );
+}
+
+/// The term of a usage-based Enterprise seat, the class the registry derives from the stored profile.
+fn usage_based_seat(id: &str) -> SubscriptionTerm {
+    SubscriptionTerm {
+        account_id: id.into(),
+        tier: Some("default_claude_zero".into()),
+        usage_based: true,
+        ..SubscriptionTerm::default()
+    }
+}
+
+#[test]
+fn a_usage_based_seat_sorts_with_the_api_key_members_under_the_kind_order_and_by_priority_under_the_other_policies(
+) {
+    let pool = |prefer_subscription: bool| Pool {
+        strategy: Strategy::Priority,
+        prefer_subscription,
+        members: vec![("a", 1), ("b", 0), ("c", 2)],
+        kinds: vec![("c", AccountKind::ApiKey)],
+        ..Pool::default()
+    };
+    let ordered = snapshot_with_terms(pool(true), vec![usage_based_seat("b")]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let d = decide(
+        &mut st,
+        &ordered,
+        &request(&ordered, None, "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&d.result),
+        "a",
+        "plan quota serves ahead of every paid source whatever the priorities"
+    );
+    assert_eq!(
+        (
+            candidate(&d.record, "b").tier,
+            candidate(&d.record, "c").tier
+        ),
+        ((2, 0, 0), (2, 2, 0)),
+        "the seat sorts in the paid group beside the api_key member, by priority inside it"
+    );
+    let by_priority = snapshot_with_terms(pool(false), vec![usage_based_seat("b")]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &by_priority,
+                &request(&by_priority, None, "claude-sonnet-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "b",
+        "with the kind order off the priority decides"
+    );
+}
+
+#[test]
+fn a_usage_based_seat_reads_no_overage_reason_and_no_never_hold_over_evidence_a_row_from_before_the_class_left(
+) {
+    for policy in [OveragePolicy::PreferPlan, OveragePolicy::Never] {
+        let s = snapshot_with_terms(
+            Pool {
+                policy,
+                members: vec![("a", 1), ("b", 0)],
+                ..Pool::default()
+            },
+            vec![usage_based_seat("b")],
+        );
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        let req = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+        assert_eq!(
+            picked(&select(&mut st, &s, &req(1_000), &mut rng()).0),
+            "b",
+            "{policy:?}: the seat leads by its priority"
+        );
+        let pin = pinned(&st, "s1");
+        // The head's overage family as the evidence a row stored before the class carries.
+        st.record_overage("b", overage(true, 1_000, Some(1_000 + 10 * HOUR)));
+        st.purge(&s, 1_500);
+        assert!(
+            !st.in_overage("b", 2_000, FALLBACK_MS),
+            "{policy:?}: the purge drops the seat's evidence"
+        );
+        assert_eq!(
+            st.overage_deadline("b", FALLBACK_MS),
+            None,
+            "{policy:?}: no never hold reads the seat"
+        );
+        assert!(
+            !release_reasons(&st, &s, &pin, &req(2_000)).contains(&"overage"),
+            "{policy:?}: the pin reads no overage reason"
+        );
+        assert_eq!(
+            picked(&select(&mut st, &s, &req(2_000), &mut rng()).0),
+            "b",
+            "{policy:?}: the pin renews on the seat"
+        );
+    }
+}
+
+#[test]
+fn a_usage_based_seat_is_traced_with_no_window_and_no_pace_figure_and_reads_the_paid_units() {
+    let s = snapshot_with_terms(
+        Pool {
+            strategy: Strategy::Pace,
+            members: vec![("a", 0), ("b", 0)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", refreshing(0.2, T + HOUR, T + 24 * HOUR, T - 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    let seat = candidate(&d.record, "b");
+    assert!(
+        seat.windows.is_empty(),
+        "the seat holds no plan window: {:?}",
+        seat.windows
+    );
+    let pace = seat.pace.as_ref().expect("a Pace member's facts");
+    assert_eq!(
+        (
+            pace.hours,
+            pace.window.as_deref(),
+            pace.deadline,
+            pace.burn,
+            pace.score
+        ),
+        (None, None, None, 0.0, 1.0),
+        "the seat scores its remaining allowance alone, as an api_key member does: {pace:?}"
+    );
+    let unit_of = |account: &str| {
+        line(&d.record, "pick")
+            .facts
+            .iter()
+            .find(|f| f.key == "score" && f.account_id.as_deref() == Some(account))
+            .and_then(|f| f.unit)
+    };
+    assert_eq!(
+        (unit_of("a"), unit_of("b")),
+        (Some("percent_per_hour"), Some("percent")),
+        "the plan member scores per hour of its window, the seat by its remaining share"
+    );
+    assert_eq!(
+        BurnUnit::of(AccountKind::Oauth, true, false),
+        BurnUnit::Usd,
+        "the seat's burn reads dollars, as the selector and the Sessions route take it"
+    );
+    assert_eq!(
+        BurnUnit::of(AccountKind::Oauth, false, false),
+        BurnUnit::WindowShare,
+        "a plan seat on its quota keeps the window share"
+    );
+}
+
+#[test]
+fn return_to_plan_lands_no_pin_on_a_usage_based_seat_and_a_pin_on_one_finds_no_paid_destination() {
+    let pool = |kinds: Vec<(&'static str, AccountKind)>| Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds,
+        failover: Failover {
+            return_to_plan: ReturnToPlan::Always,
+            return_to_plan_dwell_seconds: 600,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    };
+    let cold_on_a = || {
+        loaded(vec![PinRow {
+            created_at: T - MINUTE,
+            ..burning("cold", "a", 0.0, false, T)
+        }])
+    };
+    let keyed = snapshot_with_terms(
+        pool(vec![("a", AccountKind::ApiKey)]),
+        vec![usage_based_seat("b")],
+    );
+    let mut st = cold_on_a();
+    assert_eq!(
+        landed(select(&mut st, &keyed, &auxiliary(&keyed, "cold", T), &mut rng()).0),
+        ("a".into(), None),
+        "the seat beside the api_key member is no plan quota to return to"
+    );
+    let seats = snapshot_with_terms(
+        pool(vec![]),
+        vec![usage_based_seat("a"), usage_based_seat("b")],
+    );
+    let mut st = cold_on_a();
+    let d = decide(&mut st, &seats, &auxiliary(&seats, "cold", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "a pin on a seat returns as an api_key pin does, and its sibling seat is no destination"
+    );
+    let rule = line(&d.record, "move:return_to_plan");
+    assert_eq!(
+        (rule.verdict, fact(rule, "no_destination")),
+        ("no", &FactValue::Bool(true)),
+        "the rule ran on the seat's pin and found no destination: {:?}",
+        rule.facts
+    );
+}
+
+#[test]
+fn a_shedding_rounds_destination_read_fits_a_usage_based_seat_as_it_fits_an_api_key_sibling() {
+    let mut terms = tier_terms(&["a", "c"]);
+    terms.push(usage_based_seat("b"));
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1), ("c", 2)],
+            ..Pool::default()
+        },
+        terms,
+    );
+    // `a` at 0.94 with its pins burning 0.05 of the window an hour projects to 0.99, so its round runs and marks s1.
+    let mut st = rounding(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    st.record_sample("a", refreshing(0.94, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("c", weekly(0.3, 0.5, 4, T - 500));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let fit = line(&d.record, "fit");
+    assert_eq!(
+        fact_of(fit, "verdict", "b"),
+        &FactValue::Text("fits".into()),
+        "the seat's absent buckets leave it room, as an api_key sibling's do: {:?}",
+        fit.facts
+    );
+}
+
+#[test]
+fn the_spent_move_lands_a_pin_on_a_usage_based_seat_with_no_reading_as_on_an_api_key_sibling() {
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "the seat holds no plan window to read, so its allowance is known as an api_key sibling's is"
+    );
+    assert!(candidate(&d.record, "b").allowance_known);
+}
+
+/// 1970-02-01T00:00:00Z: the first of the month after the one `T` falls in, the spend window's estimated reset there.
+const SPEND_ESTIMATE: i64 = 2_678_400_000;
+
+/// The models of the two weeks a usage-based seat's spend funds alike: the shared week's and the Fable week's.
+const SPEND_MODELS: [&str; 2] = ["claude-sonnet-5", "claude-fable-5-1"];
+
+/// The usage-based seat `b` among `members`.
+fn spend_pool(members: Vec<(&'static str, u32)>) -> RegistrySnapshot {
+    snapshot_with_terms(
+        Pool {
+            members,
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    )
+}
+
+/// The main agent's pin of `session` on `model`.
+fn pinned_on(st: &RoutingState, session: &str, model: &str) -> PinRow {
+    st.pin(&PinKey {
+        model: model.into(),
+        ..pin_key(session)
+    })
+    .cloned()
+    .expect("the session holds a pin on the model")
+}
+
+#[test]
+fn a_usage_based_seat_at_a_share_of_one_is_held_out_on_the_window_spend_until_the_reset_for_every_model(
+) {
+    for model in SPEND_MODELS {
+        let lone = spend_pool(vec![("b", 0)]);
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_credits("b", credits(true, None, Some(1.0), T - 500));
+        let d = decide(
+            &mut st,
+            &lone,
+            &request(&lone, None, model, true, &[], T),
+            &mut rng(),
+        );
+        assert_eq!(
+            d.result,
+            SelectResult::Exhausted(Exhaustion::Timed {
+                deadline: SPEND_ESTIMATE,
+                window: "spend".into()
+            }),
+            "{model}: the pool's lone member answers an exhaustion dated at the spend window's reset"
+        );
+        let obstacle = candidate(&d.record, "b")
+            .obstacle
+            .as_ref()
+            .expect("the seat is out of the set");
+        assert_eq!(
+            (
+                obstacle.reason.as_deref(),
+                obstacle.window.as_deref(),
+                obstacle.until
+            ),
+            (Some("spent"), Some("spend"), Some(SPEND_ESTIMATE)),
+            "{model}: the obstacle is the spent window `spend` until its reset"
+        );
+        st.record_credits("b", credits(true, None, Some(0.99), T - 400));
+        assert_eq!(
+            picked(
+                &select(
+                    &mut st,
+                    &lone,
+                    &request(&lone, None, model, true, &[], T),
+                    &mut rng()
+                )
+                .0
+            ),
+            "b",
+            "{model}: a share just under one admits the seat"
+        );
+
+        let pair = spend_pool(vec![("b", 0), ("a", 1)]);
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_credits("b", credits(true, None, Some(0.5), T - 1_000));
+        let req = |now: i64| request(&pair, Some("s1"), model, true, &[], now);
+        assert_eq!(
+            picked(&select(&mut st, &pair, &req(T - 900), &mut rng()).0),
+            "b",
+            "{model}: the seat leads by its priority"
+        );
+        let pin = pinned_on(&st, "s1", model);
+        st.record_credits("b", credits(true, None, Some(1.0), T - 500));
+        assert!(
+            release_reasons(&st, &pair, &pin, &req(T)).contains(&"spent"),
+            "{model}: the seat's pin reads no allowance left"
+        );
+        assert_eq!(
+            picked(&select(&mut st, &pair, &req(T), &mut rng()).0),
+            "a",
+            "{model}: the live pin on the seat is not renewed"
+        );
+    }
+}
+
+#[test]
+fn a_usage_based_seats_plan_week_read_before_the_class_holds_no_request_and_refuses_no_placement() {
+    // The week a plan seat read at its cap before it converted, which the routing state keeps across the class.
+    let spent_week = sample(0.1, 1.0, T - 500).with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: 1.0,
+            reset: Some(T + 5 * 24 * HOUR),
+            observed_at: T - 500,
+            source: WindowSource::Poll,
+        },
+    );
+    let lone = snapshot_with_terms(
+        Pool {
+            policy: OveragePolicy::PreferPlan,
+            members: vec![("b", 0)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(0.2), T - 500));
+    st.record_sample("b", spent_week.clone());
+    let d = decide(
+        &mut st,
+        &lone,
+        &request(&lone, None, "claude-fable-5-1", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&d.result),
+        "b",
+        "the seat under its spend cap serves a model with a week of its own"
+    );
+
+    let pair = snapshot_with_terms(
+        Pool {
+            policy: OveragePolicy::PreferPlan,
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        },
+        vec![usage_based_seat("b")],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(0.2), T - 500));
+    st.record_sample("b", spent_week);
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &pair,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "b",
+            T - 1_000,
+            HOUR,
+            800,
+            "root",
+        )],
+    );
+    let req = placement_req(
+        request(&pair, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &["m1"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &pair, &req, &mut rng()).0 else {
+        panic!("the request is placed")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.placement),
+        (
+            "b",
+            Some(Placement {
+                rung: "content",
+                depth: 1,
+                prefix_tokens: 800,
+            })
+        ),
+        "the entry's seat admits the placement, the old week holding nothing"
+    );
+}
+
+#[test]
+fn a_usage_based_seats_spend_hold_lifts_once_the_clock_passes_its_reset_and_once_a_head_reads_the_share_under_one(
+) {
+    let reset = T + HOUR;
+    for model in SPEND_MODELS {
+        let s = spend_pool(vec![("b", 0)]);
+        let req = |now: i64| request(&s, None, model, true, &[], now);
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_spend_head("b", Some(1.0), Some(reset), T - 500, 1);
+        assert_eq!(
+            select(&mut st, &s, &req(T), &mut rng()).0,
+            SelectResult::Exhausted(Exhaustion::Timed {
+                deadline: reset,
+                window: "spend".into()
+            }),
+            "{model}: the head's reset dates the hold"
+        );
+        let d = decide(&mut st, &s, &req(reset + 1), &mut rng());
+        assert_eq!(
+            picked(&d.result),
+            "b",
+            "{model}: past the reset with no newer reading the share reads unknown and holds nothing"
+        );
+        assert!(
+            !candidate(&d.record, "b").windows.contains_key("spend"),
+            "{model}: a lapsed share draws no spend entry"
+        );
+
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_spend_head("b", Some(1.0), Some(reset), T - 500, 1);
+        st.record_spend_head("b", Some(0.5), Some(reset), T - 100, 1);
+        assert_eq!(
+            picked(&select(&mut st, &s, &req(T), &mut rng()).0),
+            "b",
+            "{model}: a head under one lifts the hold before the reset"
+        );
+    }
+}
+
+#[test]
+fn a_usage_based_seats_candidate_facts_carry_the_spend_entry_estimated_under_no_head_and_heads_after_one(
+) {
+    let s = spend_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(0.4), T - 500));
+    st.record_credits("a", credits(true, None, Some(0.4), T - 500));
+    let facts = |st: &mut RoutingState| {
+        let d = decide(
+            st,
+            &s,
+            &request(&s, None, "claude-sonnet-5", true, &[], T),
+            &mut rng(),
+        );
+        (
+            candidate(&d.record, "a").windows.get("spend").cloned(),
+            candidate(&d.record, "b").windows.get("spend").cloned(),
+        )
+    };
+    let (plan, seat) = facts(&mut st);
+    assert_eq!(plan, None, "a plan member's credits draw no spend entry");
+    assert_eq!(
+        seat,
+        Some(WindowFacts {
+            utilization: 0.4,
+            reset: Some(SPEND_ESTIMATE),
+            source: "estimated",
+            observed_at: T - 500,
+            age_ms: 500,
+            ahead: None,
+            projection: None,
+            horizon: None,
+            demand: None,
+            reserved: 0.0,
+        }),
+        "under no head the poll's share reads against the estimated reset"
+    );
+    st.record_spend_head("b", Some(0.6), Some(T + HOUR), T - 100, 1);
+    let (_, seat) = facts(&mut st);
+    assert_eq!(
+        seat,
+        Some(WindowFacts {
+            utilization: 0.6,
+            reset: Some(T + HOUR),
+            source: "head",
+            observed_at: T - 100,
+            age_ms: 100,
+            ahead: None,
+            projection: None,
+            horizon: None,
+            demand: None,
+            reserved: 0.0,
+        }),
+        "a head's share and reset name the head"
+    );
+}
+
+#[test]
+fn a_fast_request_on_a_usage_based_seat_at_its_cap_reads_the_credits_obstacle_until_the_reset_and_places_past_it(
+) {
+    let s = spend_pool(vec![("b", 0)]);
+    let at = |now: i64| fast(request(&s, Some("s1"), "claude-sonnet-5", true, &[], now));
+    let past = SPEND_ESTIMATE + 1;
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("b", credits(true, None, Some(1.0), T - 500));
+    let d = decide(&mut st, &s, &at(T), &mut rng());
+    assert_eq!(
+        d.result,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "org_spend_cap_reached".into()
+        }),
+        "before the share's reset the cap refuses the fast lane"
+    );
+    assert_eq!(
+        candidate(&d.record, "b").obstacle.as_ref().map(|o| o.name),
+        Some("credits")
+    );
+    let d = decide(&mut st, &s, &at(past), &mut rng());
+    assert_eq!(
+        picked(&d.result),
+        "b",
+        "past the reset with no new poll or head the share blocks nothing"
+    );
+    assert_eq!(
+        candidate(&d.record, "b")
+            .credits
+            .as_ref()
+            .map(|c| c.blocked.clone()),
+        Some(None),
+        "the candidate's credits read past the reset names no block"
+    );
+    let pin = pinned(&st, "s1");
+    assert!(
+        !release_reasons(&st, &s, &pin, &at(past)).contains(&FAST_CREDITS_REASON),
+        "and the pin reads no credits reason"
+    );
+    for (state, reason) in [
+        (
+            credits(false, None, Some(1.0), T - 500),
+            "extra_usage_disabled",
+        ),
+        (
+            credits(true, Some("member_limit"), Some(1.0), T - 500),
+            "member_limit",
+        ),
+    ] {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_credits("b", state);
+        assert_eq!(
+            select(&mut st, &s, &at(past), &mut rng()).0,
+            SelectResult::Exhausted(Exhaustion::FastCredits {
+                reason: reason.into()
+            }),
+            "{reason} blocks past the reset as before it"
+        );
+    }
+    let plan = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("a", credits(true, None, Some(1.0), T - 500));
+    assert_eq!(
+        select(
+            &mut st,
+            &plan,
+            &fast(request(&plan, None, "claude-sonnet-5", true, &[], past)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "org_spend_cap_reached".into()
+        }),
+        "a plan account's credits share reads as it was stored"
     );
 }
 
@@ -12339,15 +13121,6 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
         burning("warm-2", "a", 2.0, true, T),
         burning("warm-1", "a", 1.0, true, T),
     ]);
-    // Sonnet's measured-scale share per token: one table's rate scales every pin of the account alike, so the
-    // order and the share of the sum read as the token counts would.
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-sonnet-5", Some(0.0454e-6))]),
-            ..RegimeRates::unit()
-        },
-        ..BurnRates::default()
-    });
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     assert_eq!(
@@ -12400,14 +13173,8 @@ fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_rounds_burn_sum() {
         burning("warm-4", "a", 4.0, true, T),
         burning("warm-1", "a", 1.0, true, T),
     ]);
-    // The guess model's input rate is unknown, so its two pins burn nine tokens a second that price to nothing.
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
-            ..RegimeRates::unit()
-        },
-        ..BurnRates::default()
-    });
+    // The round's pricer prices the guess model at nothing, so the nine tokens a second each guess pin burns weigh no
+    // share.
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
@@ -12804,13 +13571,6 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
             ..burning("fast-2", "a", 2.0, false, T)
         },
     ]);
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
-            ..RegimeRates::unit()
-        },
-        ..BurnRates::default()
-    });
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "cold-5", T), &mut rng());
@@ -12988,13 +13748,6 @@ fn warm_sessions_never_marks_no_warm_pin_when_an_unpriced_cold_pin_leaves_the_co
         burning("warm-4", "a", 4.0, true, T),
         burning("warm-1", "a", 1.0, true, T),
     ]);
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
-            ..RegimeRates::unit()
-        },
-        ..BurnRates::default()
-    });
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     assert_eq!(
@@ -14408,7 +15161,7 @@ fn a_source_ending_inside_the_weeks_horizon_projects_to_its_end_and_runs_no_roun
     // Both pins are warm, so the drain rule leaves the ending account's pins to the shed rule.
     let run = |a_ends: Option<i64>| {
         let mut terms = tier_terms(&["a", "b"]);
-        terms[0].cancelled = a_ends.is_some();
+        terms[0].canceled = a_ends.is_some();
         terms[0].ends_at = a_ends;
         let s = snapshot_with_terms(shedding_pool(Shedding::default()), terms);
         let mut st = rounding(vec![
@@ -16339,9 +17092,11 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
             account_id: (*id).into(),
             since: None,
             trial_ends_at: None,
-            cancelled: false,
+            canceled: false,
             ends_at: None,
             tier: Some(TIER.into()),
+            usage_based: false,
+            plan_ended_at: None,
         })
         .collect();
     snapshot_with_terms(pool, terms)
@@ -17033,6 +17788,97 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
     assert!(marked(&st, "heavy") && !marked(&st, "light") && !marked(&st, "small"));
 }
 
+/// Three warm pins on `a`, two of them last renewed by a classifier call with a prompt of 400 000 tokens: `current`,
+/// whose request the round runs on, burning twenty, `other` a tenth, and `plain`, whose last prompt of 10 000 tokens is
+/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection over the ceiling.
+fn classifier_renewed_round() -> RoutingState {
+    let mut st = rounding(vec![
+        PinRow {
+            last_input_tokens: 400_000,
+            last_classifier: true,
+            ..burning("current", "a", 20.0, true, T)
+        },
+        PinRow {
+            last_input_tokens: 400_000,
+            last_classifier: true,
+            ..burning("other", "a", 0.1, true, T)
+        },
+        PinRow {
+            last_input_tokens: 10_000,
+            ..burning("plain", "a", 0.4, true, T)
+        },
+    ]);
+    st.record_sample("a", refreshing(0.747, T + HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500));
+    st
+}
+
+/// The round `current`'s request of a 2 000 token body runs, a classifier call when `classifier` is set.
+fn classifier_renewed_round_on(classifier: bool) -> phoebis_routing::ShedRoundFacts {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = classifier_renewed_round();
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let req = SelectRequest {
+        body_tokens: 2_000,
+        classifier,
+        ..auxiliary(&s, "current", T)
+    };
+    decide(&mut st, &s, &req, &mut rng())
+        .shed_round
+        .expect("the round ran")
+        .facts
+}
+
+#[test]
+fn a_shed_rounds_order_ranks_a_pin_a_classifier_call_renewed_last_by_its_own_requests_body() {
+    // The order divides each warm pin's burn by the prompt a move would rewrite: the request's own body of 2 000
+    // tokens for `current`, nothing for `other`, which ranks as the cheapest, and `plain`'s own 10 000 tokens. Divided
+    // by the classifier prompt, `current` would lead and `other` trail.
+    let order = |round: &phoebis_routing::ShedRoundFacts| {
+        round
+            .pins
+            .iter()
+            .map(|p| p.session_id.clone())
+            .collect::<Vec<_>>()
+    };
+    let round = classifier_renewed_round_on(false);
+    assert_eq!(
+        order(&round),
+        ["other", "current", "plain"],
+        "ranked by the prompt each move rewrites: {round:?}"
+    );
+    // A classifier request rewrites nothing on its own pin either, so `current` divides its burn by nothing too.
+    let round = classifier_renewed_round_on(true);
+    assert_eq!(
+        order(&round),
+        ["current", "other", "plain"],
+        "a classifier request's own pin ranks by its burn alone: {round:?}"
+    );
+}
+
+#[test]
+fn a_shed_rounds_per_rewrite_figure_divides_a_pin_a_classifier_call_renewed_last_by_its_own_requests_body(
+) {
+    for (classifier, current) in [(false, 2_000.0), (true, 1.0)] {
+        let round = classifier_renewed_round_on(classifier);
+        let divisor = |session: &str| {
+            let p = round
+                .pins
+                .iter()
+                .find(|p| p.session_id == session)
+                .unwrap_or_else(|| panic!("the round read {session}: {round:?}"));
+            p.burn.unwrap() / p.per_rewrite.unwrap()
+        };
+        for (session, expected) in [("current", current), ("other", 1.0), ("plain", 10_000.0)] {
+            assert!(
+                close(divisor(session), expected),
+                "{session}'s burn per rewrite divides by {expected} on a request with classifier {classifier}: \
+                 {round:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_hold_books_nothing_and_the_selection_after_it_books_for_the_request() {
     let s = tiered(Pool {
@@ -17253,9 +18099,11 @@ fn tier_terms(ids: &[&str]) -> Vec<SubscriptionTerm> {
             account_id: (*id).into(),
             since: None,
             trial_ends_at: None,
-            cancelled: false,
+            canceled: false,
             ends_at: None,
             tier: Some(TIER.into()),
+            usage_based: false,
+            plan_ended_at: None,
         })
         .collect()
 }
@@ -17610,7 +18458,7 @@ fn a_candidate_inside_its_wind_down_is_no_destination_for_a_move() {
         let mut terms = tier_terms(&["a", "b", "c"]);
         for term in &mut terms {
             if ids.contains(&term.account_id.as_str()) {
-                term.cancelled = true;
+                term.canceled = true;
                 term.ends_at = Some(T + 2 * HOUR);
             }
         }
@@ -17681,7 +18529,7 @@ fn a_candidate_inside_its_wind_down_is_no_destination_for_a_move() {
 /// `wind_down_minutes`. By its figures `c` fits, its runway running far past its reset three hours out.
 fn spent_beside_an_end(wind_down_minutes: u32, end: i64, now: i64) -> Decided {
     let mut terms = tier_terms(&["a", "b", "c"]);
-    terms[2].cancelled = true;
+    terms[2].canceled = true;
     terms[2].ends_at = Some(end);
     let s = snapshot_with_terms(wind_down_gate_pool(wind_down_minutes), terms);
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
@@ -17741,7 +18589,7 @@ fn a_destination_inside_the_wind_down_is_out_of_every_order_and_the_spent_rule_d
     // b and c end six hours out, after their 5-hour resets and inside a ten-hour wind-down. By their figures both fit.
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms[1..] {
-        term.cancelled = true;
+        term.canceled = true;
         term.ends_at = Some(T + 6 * HOUR);
     }
     let s = snapshot_with_terms(wind_down_gate_pool(600), terms);
@@ -18063,7 +18911,7 @@ fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms {
         if term.account_id != "a" {
-            term.cancelled = true;
+            term.canceled = true;
             term.ends_at = Some(T + 2 * HOUR);
         }
     }
@@ -18104,7 +18952,7 @@ fn a_failed_over_landing_whose_candidates_all_end_lands_on_the_fourth_rung() {
     // short of the three hours to the reset.
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms[1..] {
-        term.cancelled = true;
+        term.canceled = true;
         term.ends_at = Some(T + 6 * HOUR);
     }
     let s = snapshot_with_terms(wind_down_gate_pool(600), terms);
@@ -18328,7 +19176,7 @@ fn an_api_key_candidate_fits_with_no_runway_under_a_full_bucket_and_reads_least_
 fn a_candidate_without_a_reading_on_a_drawn_window_or_without_a_tier_reads_least_bad() {
     // a winds down toward its end, so the drain rule moves its cold pin, and c carries no tier.
     let mut terms = tier_terms(&["a", "b"]);
-    terms[0].cancelled = true;
+    terms[0].canceled = true;
     terms[0].ends_at = Some(T + 10 * MINUTE);
     let s = snapshot_with_terms(gate_pool(), terms);
     let mut st = priced(vec![PinRow {
@@ -18821,7 +19669,7 @@ fn a_moved_row_reads_the_fired_rules_fit_step_when_an_earlier_rule_read_the_gate
     // b is inside its wind-down and c holds no reading: the spent rule's keep admits b alone, which the gate reads
     // ending, and the overage rule's keep admits both, where c reads least bad and takes the move.
     let mut terms = tier_terms(&["a", "b"]);
-    terms[1].cancelled = true;
+    terms[1].canceled = true;
     terms[1].ends_at = Some(T + 2 * HOUR);
     let s = snapshot_with_terms(wind_down_gate_pool(180), terms);
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
@@ -19329,27 +20177,6 @@ fn two_pins_of_equal_burn_project_half_the_share_for_the_pin_under_the_test_regi
 fn the_order_ranks_a_pin_by_the_rate_of_its_own_regime() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
     let mut st = a_desk_pin_and_a_base_pin();
-    let half = Rates {
-        input: Some(0.5),
-        cache_read: Some(0.5),
-        write_5m: Some(0.5),
-        write_1h: Some(0.5),
-        output: Some(0.5),
-    };
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: RateTable::unit(),
-            regimes: HashMap::from([(
-                "desk".to_string(),
-                RateTable {
-                    fallback: half,
-                    ..RateTable::unit()
-                },
-            )]),
-            entrypoints: HashMap::from([("desk".to_string(), "desk".to_string())]),
-        },
-        ..BurnRates::default()
-    });
     past_the_wait(&mut st, &s, "p", "a", T);
     let desk_turn = SelectRequest {
         entrypoint: Some("desk".into()),
@@ -20012,9 +20839,11 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             account_id: id.into(),
             since: None,
             trial_ends_at: None,
-            cancelled: false,
+            canceled: false,
             ends_at,
             tier: Some(TIER.into()),
+            usage_based: false,
+            plan_ended_at: None,
         })
         .to_vec();
         RegistrySnapshot::from_load(load, [0; 32], 0, 1)
@@ -24350,9 +25179,11 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
                     account_id: id.into(),
                     since: None,
                     trial_ends_at: None,
-                    cancelled: false,
+                    canceled: false,
                     ends_at: None,
                     tier: Some(tier.into()),
+                    usage_based: false,
+                    plan_ended_at: None,
                 })
                 .collect(),
         );
@@ -24660,9 +25491,11 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
             account_id: id.into(),
             since: None,
             trial_ends_at: None,
-            cancelled: false,
+            canceled: false,
             ends_at,
             tier: Some(TIER.into()),
+            usage_based: false,
+            plan_ended_at: None,
         })
         .to_vec();
         RegistrySnapshot::from_load(load, [0; 32], 0, 1)
@@ -26433,9 +27266,11 @@ fn a_pin_released_past_its_saved_end_names_the_account_it_left() {
             account_id: "a".into(),
             since: Some(0),
             trial_ends_at: None,
-            cancelled: true,
+            canceled: true,
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
+            usage_based: false,
+            plan_ended_at: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());

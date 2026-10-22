@@ -1487,7 +1487,7 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
     assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
     let sent = r.up.requests().len();
     r.h.store
-        .set_cancelled("a", true, Some(r.now() + 1_000))
+        .set_canceled("a", true, Some(r.now() + 1_000))
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
@@ -1505,6 +1505,15 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
             .iter()
             .any(|p| p.session_id == "session" && p.account_id == "a"),
         "the pin still names a"
+    );
+}
+
+/// The word a stored probe row and the analytics read for a probe the engine's shutdown or quiesce ended.
+#[test]
+fn a_probe_the_engine_ended_in_flight_is_filed_under_the_word_canceled() {
+    assert_eq!(
+        phoebis_keepalive::ProbeOutcome::Canceled.as_str(),
+        "canceled"
     );
 }
 
@@ -1667,6 +1676,7 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
             attempt: 1,
             account_id: "a".into(),
             account_kind: "api_key".into(),
+            usage_based: false,
             pin_epoch: Some(1),
             started_at: r.now(),
             cache_ttl_ms: Some(ONE_HOUR_MS),

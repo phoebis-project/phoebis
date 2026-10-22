@@ -195,7 +195,7 @@ test('the preview names every member over the ceiling, and says no sibling has r
 });
 
 test("a sibling whose plan ends inside the pool's wind-down has no runway, whatever its projection", () => {
-  const ending = (hours) => ({ ...cool, cancelled: true, subscription: { endsAt: at(NOW + hours * HOUR), trialEndsAt: null } });
+  const ending = (hours) => ({ ...cool, canceled: true, subscription: { endsAt: at(NOW + hours * HOUR), trialEndsAt: null } });
   const marked = '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway.';
   const stranded = '1 member projects over the ceiling: hot. No sibling has runway for them, so nothing would be marked.';
   assert.equal(line([hot, ending(4)], three, { windDownMinutes: 180 }), marked, 'an end four hours out lies past a three-hour wind-down');

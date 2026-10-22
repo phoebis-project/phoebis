@@ -130,13 +130,13 @@ refused at start and by `check-config` with `the storage key does not match the 
 before the canary existed is proved against its sealed rows instead, the first 32 of each kind (credential bundles and
 API-key secrets), passing when any of them opens, and the next start seals its canary. `check-config` names such a
 registry with `registry at {path} has no key canary yet. A sealed row opens under the key, and the next start seals
-one`. The proof's scope, the first 32 credential bundles and the first 32 API-key secrets, leaves a dead end in two
-shapes: a registry without a canary whose readable credential or API-key rows all sit past the 32nd of their kind
-refuses the right key at the start, and so does one whose readable rows sit only among the keepalive recipe bodies,
-which the proof never reads, beside credential or API-key rows that do not open. `phoebis recover-key` scans every
-sealed row, so it reads the right key as matching and refuses to discard, and it seals no canary, so no command leads
-out of either shape with the rows kept: a registry in one needs a backup taken after its canary was sealed, or a
-recovery under a new key, which discards every sealed row.
+one`. The proof's scope, the first 32 credential bundles and the first 32 API-key secrets, leaves two shapes of a
+registry without a canary refusing the right key at the start: one whose readable credential or API-key rows all sit
+past the 32nd of their kind, and one whose readable rows sit only among the keepalive recipe bodies, which the proof
+never reads, beside credential or API-key rows that do not open. `phoebis recover-key` is the way out of both: it scans
+every sealed row, so on a registry in either shape it seals the canary under the key that opens the rows and exits 0
+with `the storage key opens {readable_rows} sealed {rows} and the registry has no canary, so a canary was sealed under
+it and nothing was discarded`, keeping every row, and the next start passes through the canary.
 
 `init` refuses a key file that exists with `{path} already exists, and init never replaces a key, since every stored
 credential is sealed under it`, and refuses a data directory that already holds a registry, so a lost key is never
@@ -168,24 +168,27 @@ service layout, as root:
    question for a script.
 
 It refuses with `the registry is locked, stop the service first` while a router holds the registry, with `the storage
-key matches the registry, nothing to recover` when the key file still opens the registry's canary (or, without one, any
-of its sealed rows), with `the storage key opens {readable_rows} sealed {rows} but not the corrupt canary, so nothing
-was discarded: restore the canary from a backup` (`{rows}` reading `row` or `rows`) when the canary alone does not open,
-since the canary is then the corrupt part and a backup restores it, and with `no registry at {path}, nothing to recover`
-when the registry does not exist. Before it discards anything it tries every sealed row, never a sample. Each refusal
-exits 1. Past them it prepares the registry's schema, running every migration above the stored version, and a
-preparation that fails prints `the registry's schema could not be prepared for the recovery, so nothing was discarded:
-{error}` and exits 1. A run that stops before the preparation leaves the registry at the schema version it found, and
-one whose preparation fails leaves it at the step it reached, since each migration step commits alone. A run that exits
-1 or 2 removes the key file it wrote, with any directory it created for it, and names it in the line `removed the key
-file {path} this run created`, with a line after it for each it could not remove. Every run keeps the registry's lock
-file, a refused open included, since a start that opened the file while the run held it goes on to lock that same file,
-and a file created again in its place would let a later start lock a second one beside it. Then it runs the sequence
-under [What it runs](#what-it-runs) as one transaction, seals a new canary under the new key in that same transaction,
-prints the counts again under `discarded what the old key sealed:` and `and marked the accounts:`, then `sealed a new
-canary under the key at {path}`, then `start the service, then:` over the three steps that remain, and exits 0 once the
-accounts are marked, keeping the key file and the lock file for the service's next start. It prints counts and paths,
-never a key. Then start the service, and:
+key matches the registry, nothing to recover` when the key file still opens the registry's canary, with `the storage key
+opens {readable_rows} sealed {rows} but not the corrupt canary, so nothing was discarded: restore the canary from a
+backup` (`{rows}` reading `row` or `rows`) when the canary alone does not open, since the canary is then the corrupt
+part and a backup restores it, and with `no registry at {path}, nothing to recover` when the registry does not exist.
+Before it discards anything it tries every sealed row, never a sample. Each refusal exits 1. A key file that opens the
+sealed rows of a registry without a canary is no refusal: the run seals the canary under its key in one transaction,
+prints `the storage key opens {readable_rows} sealed {rows} and the registry has no canary, so a canary was sealed under
+it and nothing was discarded` and exits 0, without the summary, the prompt or the discard. Otherwise it prepares the
+registry's schema, running every migration above the stored version, and a preparation that fails prints `the registry's
+schema could not be prepared for the recovery, so nothing was discarded: {error}` and exits 1. A run that stops before
+the preparation leaves the registry at the schema version it found, and one whose preparation fails leaves it at the
+step it reached, since each migration step commits alone. A run that exits 1 or 2 removes the key file it wrote, with
+any directory it created for it, and names it in the line `removed the key file {path} this run created`, with a line
+after it for each it could not remove. Every run keeps the registry's lock file, a refused open included, since a start
+that opened the file while the run held it goes on to lock that same file, and a file created again in its place would
+let a later start lock a second one beside it. Then it runs the sequence under [What it runs](#what-it-runs) as one
+transaction, seals a new canary under the new key in that same transaction, prints the counts again under `discarded
+what the old key sealed:` and `and marked the accounts:`, then `sealed a new canary under the key at {path}`, then
+`start the service, then:` over the three steps that remain, and exits 0 once the accounts are marked, keeping the key
+file and the lock file for the service's next start. It prints counts and paths, never a key. Then start the service,
+and:
 
 - Re-enter every API-key secret in the console.
 - Pair every OAuth account again in the console.
@@ -275,10 +278,11 @@ pins (one per session, the main agent's)
 The header carries the version and the uptime from `GET /admin/system` and one of three readings: `ready`, `not ready:`
 with each dead component (`ledger`, `router`, `store`), or `proxy down:` with the probe's line when the proxy listener
 did not answer `200`, which wins over the other two. The line under it names the build as `build {commit}` from the same
-answer, the full commit the router was built from or `unknown` for a build that had none. When the admin API could not
-be read, the header carries the binary's own version and `readiness unknown`, unless the proxy is down, and the line
-under it the binary's own build. The listeners follow with their schemes as the file names them. Under them, a
-listener's certificate whose leaf expires within 30 days prints
+answer, the full commit the router was built from or `unknown` for a build that had none. A build run with
+`PHOEBIS_BUILD_COMMIT` set names that value, trimmed and lowercased, in place of the checkout's commit, and a blank
+value reads as unset. When the admin API could not be read, the header carries the binary's own version and
+`readiness unknown`, unless the proxy is down, and the line under it the binary's own build. The listeners follow with
+their schemes as the file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
 `proxy.tls.cert_file {path} expires in {n} days ({date})` (or `admin.tls.cert_file`), and a certificate file the loader
 refuses when the operator reads it prints the loader's line for it
 ([TLS on the listeners](installation.md#tls-on-the-listeners)). The running router keeps the pair it loaded until
@@ -294,8 +298,12 @@ off on it), the member's eligibility, the five-hour and seven-day windows in who
 Fable week when the account has one, then the nearest reset as `resets {HH:MM}` or, under a cooldown, `until {HH:MM}
 {reason}`, with the scope ahead of the reason (`fast`, `fast_credits`, `model:{canonical}`) when the cooldown holds less
 than the whole account. A member in the `disconnected` or `reauth_required` state prints `-` under both windows, since
-the router answers it none. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts
-no pool holds, with their state, and is left out when there are none.
+the router answers it none. A usage-based seat prints its spend window in place of the windows, after its eligibility
+and outside the other members' columns: `spend {NN}%`, the spend and its cap in whole major units (`$1025 of $2500`, the
+spend alone without a cap, `-` without amounts, a currency other than USD by its code), then `resets {HH:MM}` for a
+head's reset, `resets {MM-DD} est` for the estimate on the first of the next month in UTC, or a cooldown as above. The
+block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts no pool holds, with their state,
+and is left out when there are none.
 
 The pins block is the sessions route's answer, one line per session that holds a pin: the route groups pins by key
 generation and session and prefers the main agent's pin, so a session whose subagent is pinned to another account shows
@@ -396,8 +404,8 @@ until a reload lands and `certificate_expiring` from 30 days before a loaded lea
 
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
-rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 59 and the
-ledger at schema 42. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
+rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 60 and the
+ledger at schema 43. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
 {found} is newer than this build supports ({supported}), so restore the backup taken before the upgrade`, and the ledger
 with the same words after `the ledger's schema version`. `phoebis check-config` reads both versions read-only, taking no
 lock, and refuses first with `the registry at {path} is at schema {found}, newer than the {supported} this build reads`

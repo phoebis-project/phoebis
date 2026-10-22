@@ -10,15 +10,16 @@ use phoebis_routing::{
     DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, KeyRefusal, LongContextRates,
     MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented, RateTable, Rates,
     Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, Report, ResolveError,
-    RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
-    UtilizationSample, WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
-    WRITER_DEPTH,
+    RouterConfig, RouterHandle, RoutingState, SelectAnswer, SelectRequest, SelectResult,
+    SharePricer, SpendResetSource, SpendWindow, UtilizationSample, WindowReading, WindowSource,
+    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
-    MemberWrite, ModelRule, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding,
-    StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    MemberWrite, ModelRule, OveragePolicy, OverageRow, PinBurn, PinKey, PinRow, PoolRow,
+    RoutingLoad, RulesMode, Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow,
+    WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -653,7 +654,7 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -836,7 +837,7 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             credential_generation: credential,
             cause: StateCause::AuthFailed,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     // The previous lifecycle's verdict, under a credential generation the reconnect has not reached again.
@@ -849,7 +850,7 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             credential_generation: credential + 2,
             cause: StateCause::FundingRefused,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     drop(park);
@@ -883,7 +884,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             credential_generation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         },
         Report::Accounting { degraded: true },
         Report::Affinity(affinity_report(&handle, "a", 1_000)),
@@ -929,6 +930,13 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         },
         renewal(pin, 1_000, PinUsage::default(), "client", 0),
         observed("a", sample(1_000)),
+        Report::SpendHead {
+            account_id: "a".into(),
+            utilization: Some(0.5),
+            reset: None,
+            observed_at: 1_000,
+            incarnation: 1,
+        },
         a_million_input("a", 1_000),
     ];
     for report in &reports {
@@ -948,6 +956,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             | Report::PinReleased { .. }
             | Report::PinRenewed { .. }
             | Report::Sample { .. }
+            | Report::SpendHead { .. }
             | Report::Usage { .. } => {}
         }
     }
@@ -979,7 +988,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     // The verdict named the key the store has since replaced, so the writer fences it out.
@@ -996,7 +1005,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             incarnation: 1,
             cause: StateCause::AuthFailed,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     wait_for(WRITTEN, || {
@@ -1929,10 +1938,12 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
             used_credits: None,
             utilization: None,
             currency: None,
+            decimal_places: None,
             disabled_reason: None,
         }),
         raw_keys: vec![],
         error: None,
+        spend: None,
     };
     let (sample, overage) = sample_from_usage(&snapshot(100.0, 40.0, true), 1);
     assert_eq!(
@@ -2269,7 +2280,7 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
             incarnation: 1,
             cause: StateCause::FundingRefused,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     handle
@@ -2304,7 +2315,7 @@ fn funding_mark(account_id: &str) -> Report {
         incarnation: 1,
         cause: StateCause::FundingRefused,
         detail: None,
-        dispatched_at: None,
+        dispatched_ordinal: None,
     }
 }
 
@@ -2407,6 +2418,11 @@ async fn a_funding_refusal_queued_beside_an_older_retry_s_success_keeps_the_acco
     handle.report(funding_mark("a")).await;
     snapshot_marked(&handle, "a").await;
     now.store(301_000, Ordering::SeqCst);
+    let retry = handle
+        .select(request(&handle, None, 301_000))
+        .await
+        .unwrap();
+    assert_eq!(placed_on(&retry), Some("a"), "the retry is due");
     // The retry went out when it was due and answered 200, and a request after it was refused again. The refusal's
     // report reaches the queue first, the retry's success after it.
     let parked = handle.park_loop().await;
@@ -2420,10 +2436,11 @@ async fn a_funding_refusal_queued_beside_an_older_retry_s_success_keeps_the_acco
             incarnation: 1,
             cause: StateCause::FundingRetry,
             detail: None,
-            dispatched_at: Some(301_000),
+            dispatched_ordinal: retry.funding_ordinal,
         })
         .await;
     drop(parked);
+    drop(retry);
     assert_eq!(
         handle.funding_retries().await.unwrap(),
         vec![("a".to_string(), 301_000 + 300_000)],
@@ -2508,7 +2525,7 @@ async fn a_superseded_verdicts_refused_write_leaves_the_newer_funding_mark_unack
             incarnation: 1,
             cause: StateCause::FundingRefused,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     assert_eq!(
@@ -2582,7 +2599,7 @@ async fn a_verdict_superseded_at_handling_writes_no_stamp_and_its_refused_write_
             incarnation: 1,
             cause: StateCause::FundingRefused,
             detail: None,
-            dispatched_at: None,
+            dispatched_ordinal: None,
         })
         .await;
     wait_for(WRITTEN, || first.is_parked().then_some(())).await;
@@ -2624,6 +2641,232 @@ async fn a_verdict_superseded_at_handling_writes_no_stamp_and_its_refused_write_
         .unwrap();
     handle.reload().await.unwrap();
     assert!(handle.funding_retries().await.unwrap().is_empty());
+}
+
+/// A retry's success clears the account's retry while the mark's write still waits in the writer, the clock steps back
+/// to the mark's instant, and a second mark stamps a new retry there. The first mark's acknowledgment names its own
+/// entry, so it credits nothing, a load that reads the account `Ready` between the success's commit and the second
+/// mark's keeps the second mark's retry, and the second mark's own acknowledgment is the one that credits it.
+#[tokio::test]
+async fn a_funding_marks_acknowledgment_credits_no_later_mark_stamped_at_the_same_instant_after_a_clock_stepped_back(
+) {
+    let store = keyed_a();
+    // The registry holds the mark from before the start, so a selection claims the first mark's retry while that
+    // mark's write still waits.
+    store
+        .set_state(
+            "a",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(10_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 310_000)]
+    );
+    now.store(310_000, Ordering::SeqCst);
+    let retry = handle
+        .select(request(&handle, None, 310_000))
+        .await
+        .unwrap();
+    assert_eq!(placed_on(&retry), Some("a"), "the retry is due");
+    assert_eq!(
+        retry.funding_ordinal,
+        Some(1),
+        "the claim answers the first mark's ordinal"
+    );
+    now.store(310_500, Ordering::SeqCst);
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::Ready,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+            cause: StateCause::FundingRetry,
+            detail: None,
+            dispatched_ordinal: retry.funding_ordinal,
+        })
+        .await;
+    drop(retry);
+    assert!(
+        handle.funding_retries().await.unwrap().is_empty(),
+        "the success cleared the first mark's retry"
+    );
+    // The mark's and the success's writes share the wake after the purge's, which parks here before its commit.
+    let between = store.debug_hold_next_routing_write();
+    hold.release();
+    wait_for(WRITTEN, || between.is_parked().then_some(())).await;
+    now.store(10_000, Ordering::SeqCst);
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 310_000)],
+        "the second mark's retry runs from the clock it read"
+    );
+    let last = store.debug_hold_next_routing_write();
+    between.release();
+    // The second mark's wake parks only once the writer has handed the loop the first wake's acknowledgment.
+    wait_for(WRITTEN, || last.is_parked().then_some(())).await;
+    handle.reload().await.unwrap();
+    assert_eq!(
+        handle.snapshot().account("a").map(|a| a.state),
+        Some(AccountState::Ready),
+        "the load read the success's commit before the second mark's"
+    );
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 310_000)],
+        "the first mark's acknowledgment names its own entry, so the load before the second mark's commit drops nothing"
+    );
+    last.release();
+    snapshot_marked(&handle, "a").await;
+    assert_eq!(
+        placed_on(&handle.select(request(&handle, None, 10_000)).await.unwrap()),
+        None,
+        "the five-minute wait from the second mark holds"
+    );
+    now.store(310_000, Ordering::SeqCst);
+    let second = handle
+        .select(request(&handle, None, 310_000))
+        .await
+        .unwrap();
+    assert_eq!(
+        second.funding_ordinal,
+        Some(2),
+        "the second mark took the first one's ordinal plus one"
+    );
+    drop(second);
+    // The operator's Clear: the second mark's own acknowledgment credited the retry, so a load at a later revision
+    // drops it.
+    store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(handle.funding_retries().await.unwrap().is_empty());
+}
+
+/// A mark whose write waits in the writer's backlog, then a verdict about the key the operator replaced since, which
+/// the loop finds superseded and stamps nothing for: the later write takes the held one's row in the backlog and keeps
+/// its stamp, so the refused write's acknowledgment still credits the mark's retry, and a load that reads the account
+/// `Ready` drops it.
+#[tokio::test]
+async fn a_later_unstamped_funding_write_in_the_backlog_keeps_the_held_marks_stamp_so_no_stale_retry_stands(
+) {
+    let store = seeded(&["a", "b"]);
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    for index in 0..WRITER_DEPTH {
+        fill(&handle, index).await;
+    }
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 301_000)]
+    );
+    assert_eq!(
+        handle.writer_status().deferred,
+        1,
+        "the mark's write waits in the backlog"
+    );
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k2"))
+        .unwrap();
+    handle.reload().await.unwrap();
+    let held = handle.writer_status().deferred;
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 301_000)],
+        "the verdict about the replaced key stamps nothing"
+    );
+    assert_eq!(
+        handle.writer_status().deferred,
+        held,
+        "the later write takes the held one's row"
+    );
+    hold.release();
+    // Both writes name the replaced key, so the one that lands is refused, and no load moves the account's revision.
+    wait_for_async(DRAINED, || {
+        let handle = handle.clone();
+        async move {
+            handle.reload().await.unwrap();
+            handle
+                .funding_retries()
+                .await
+                .unwrap()
+                .is_empty()
+                .then_some(())
+        }
+    })
+    .await;
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::Ready
+    );
+}
+
+/// A retry the selection placed under one mark stays in flight while two later refusals mark the account again, the
+/// clock stepped back between them, so the second one's instant falls behind the retry's dispatch. The retry was
+/// dispatched under an older mark than the account's newest, so its success clears neither.
+#[tokio::test]
+async fn a_funding_retrys_success_dispatched_under_an_older_mark_clears_nothing_across_a_clock_stepped_back(
+) {
+    let store = keyed_a();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(funding_mark("a")).await;
+    snapshot_marked(&handle, "a").await;
+    now.store(301_000, Ordering::SeqCst);
+    let retry = handle
+        .select(request(&handle, None, 301_000))
+        .await
+        .unwrap();
+    assert_eq!(placed_on(&retry), Some("a"), "the retry is due");
+    assert_eq!(retry.funding_ordinal, Some(1));
+    now.store(302_000, Ordering::SeqCst);
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 302_000 + 300_000)]
+    );
+    now.store(200_000, Ordering::SeqCst);
+    handle.report(funding_mark("a")).await;
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 200_000 + 300_000)],
+        "the third mark's retry runs from the stepped-back clock"
+    );
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::Ready,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+            cause: StateCause::FundingRetry,
+            detail: None,
+            dispatched_ordinal: retry.funding_ordinal,
+        })
+        .await;
+    drop(retry);
+    assert_eq!(
+        handle.funding_retries().await.unwrap(),
+        vec![("a".to_string(), 200_000 + 300_000)],
+        "the success went out under the first mark, so the newest mark stands"
+    );
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::FundingRequired
+    );
 }
 
 #[tokio::test]
@@ -5112,10 +5355,12 @@ fn credits_at(
             used_credits: None,
             utilization,
             currency: None,
+            decimal_places: None,
             disabled_reason: reason.map(String::from),
         }),
         raw_keys: vec![],
         error: None,
+        spend: None,
     };
     Report::Credits {
         account_id: "a".into(),
@@ -5660,6 +5905,545 @@ async fn older_overage_and_credits_readings_never_replace_newer_pending_ones() {
             .then_some(())
     })
     .await;
+}
+
+/// Stores a profile for `account` whose rate-limit tier classes it a usage-based Enterprise seat.
+fn usage_based_seat(store: &Store, account: &str) {
+    store
+        .set_profile(
+            account,
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero"}}"#,
+            &SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+}
+
+/// A head on the usage-based seat `a` carrying the overage family at `utilization` and `reset`.
+fn spend_head(utilization: f64, reset: i64, observed_at: i64) -> Report {
+    Report::SpendHead {
+        account_id: "a".into(),
+        utilization: Some(utilization),
+        reset: Some(reset),
+        observed_at,
+        incarnation: 1,
+    }
+}
+
+/// The persisted credits row of `a` once it reads `utilization`.
+async fn credits_row_reads(store: &Store, utilization: f64) -> phoebis_store::CreditsRow {
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .credits
+            .into_iter()
+            .find(|row| row.account_id == "a" && row.utilization == Some(utilization))
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_spend_head_moves_the_credits_share_with_no_overage_edge_and_an_older_one_changes_nothing(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(spend_head(0.4, 30 * HOUR, 1_000)).await;
+    let row = credits_row_reads(&store, 0.4).await;
+    assert_eq!(
+        (row.enabled, row.disabled_reason, row.observed_at),
+        (true, None, 1_000),
+        "a head before any poll builds the credits state, enabled and with no reason"
+    );
+    handle.report(spend_head(0.9, 31 * HOUR, 900)).await;
+    stays_for(NOT_WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .credits
+            .iter()
+            .all(|row| row.utilization == Some(0.4))
+    })
+    .await;
+    assert_eq!(
+        handle.overage("a").await.unwrap(),
+        None,
+        "the head records no overage evidence"
+    );
+    // A later poll replaces the head's state by its age, as any poll does.
+    handle
+        .report(credits_at(true, None, Some(10.0), 2_000))
+        .await;
+    credits_row_reads(&store, 0.1).await;
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event, phoebis_routing::RouterEvent::OverageStarted { .. }),
+            "a spend head starts no overage episode: {event:?}"
+        );
+    }
+}
+
+#[test]
+fn a_spend_head_keeps_its_reset_beside_the_share_and_an_older_reading_moves_neither() {
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(st.spend_head("a"), None, "no head has named a reset yet");
+    assert!(st.record_spend_head("a", Some(0.4), Some(9 * HOUR), 1_000, 1));
+    assert_eq!(st.spend_head("a"), Some((9 * HOUR, 1_000)));
+    let credits = |st: &RoutingState| {
+        st.credits_of("a", 1).map(|c| {
+            (
+                c.enabled,
+                c.disabled_reason.clone(),
+                c.utilization,
+                c.observed_at,
+            )
+        })
+    };
+    assert_eq!(credits(&st), Some((true, None, Some(0.4), 1_000)));
+    assert!(
+        !st.record_spend_head("a", Some(0.9), Some(8 * HOUR), 900, 1),
+        "an older head moves nothing"
+    );
+    assert_eq!(st.spend_head("a"), Some((9 * HOUR, 1_000)));
+    assert_eq!(credits(&st), Some((true, None, Some(0.4), 1_000)));
+    // The poll's flag and reason stand under a newer head's share.
+    st.record_credits(
+        "a",
+        CreditsState {
+            enabled: true,
+            disabled_reason: Some("member_limit".into()),
+            utilization: Some(0.5),
+            observed_at: 2_000,
+            incarnation: 1,
+        },
+    );
+    assert!(st.record_spend_head("a", Some(0.6), None, 3_000, 1));
+    assert_eq!(
+        credits(&st),
+        Some((true, Some("member_limit".into()), Some(0.6), 3_000))
+    );
+    assert_eq!(
+        st.spend_head("a"),
+        Some((9 * HOUR, 1_000)),
+        "a head that names no reset leaves the held one"
+    );
+}
+
+#[tokio::test]
+async fn two_pending_spend_heads_of_one_account_fold_to_the_newer() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let park = handle.park_loop().await;
+    // The newer reading arrives first, so only the merge rule keeps it.
+    handle.report(spend_head(0.7, 30 * HOUR, 3_000)).await;
+    handle.report(spend_head(0.2, 30 * HOUR, 2_000)).await;
+    drop(park);
+    let row = credits_row_reads(&store, 0.7).await;
+    assert_eq!(row.observed_at, 3_000);
+}
+
+#[tokio::test]
+async fn a_pending_reset_only_spend_head_keeps_an_older_pending_heads_share_at_the_cap() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .report(credits_at(true, None, Some(50.0), 1_000))
+        .await;
+    credits_row_reads(&store, 0.5).await;
+    let park = handle.park_loop().await;
+    handle.report(spend_head(1.0, 30 * HOUR, 2_000)).await;
+    handle
+        .report(Report::SpendHead {
+            account_id: "a".into(),
+            utilization: None,
+            reset: Some(30 * HOUR),
+            observed_at: 3_000,
+            incarnation: 1,
+        })
+        .await;
+    drop(park);
+    let row = credits_row_reads(&store, 1.0).await;
+    assert_eq!(
+        row.observed_at, 2_000,
+        "the head with a share lands beside the newer head that names the reset alone"
+    );
+    assert_eq!(
+        handle
+            .select(request(&handle, None, 1_000))
+            .await
+            .unwrap()
+            .result,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 30 * HOUR,
+            window: "spend".into()
+        }),
+        "the seat the upstream reported at its cap is held out until the reset"
+    );
+}
+
+/// 2026-10-10T00:00:00Z, 2026-10-15T00:00:00Z, 2026-11-01T00:00:00Z and 2026-12-01T00:00:00Z in epoch milliseconds.
+const OCT_10: i64 = 1_791_590_400_000;
+const OCT_15: i64 = 1_792_022_400_000;
+const NOV_1: i64 = 1_793_491_200_000;
+const DEC_1: i64 = 1_796_083_200_000;
+
+/// The seat's one spend window as the handle answers it.
+async fn spend_window_of(handle: &RouterHandle) -> SpendWindow {
+    let windows = handle.spend_windows().await.unwrap();
+    assert_eq!(
+        windows
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["a"],
+        "the usage-based seat alone has a spend window: {windows:?}"
+    );
+    windows.into_iter().next().unwrap().1
+}
+
+#[tokio::test]
+async fn a_spend_windows_reset_is_the_heads_while_ahead_then_rolls_to_the_next_months_first_and_the_share_read_under_it_lapses(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: None,
+            share_source: None,
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: None,
+        },
+        "before any reading the window is the estimate with no share"
+    );
+    // A head that names the 15th, apart from the estimate's first of the month, replaces it.
+    handle.report(spend_head(0.6, OCT_15, OCT_10)).await;
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.6),
+            share_source: Some("head"),
+            reset: OCT_15,
+            reset_source: SpendResetSource::Head,
+            observed_at: Some(OCT_10),
+        },
+        "the head's share and its reset while that is ahead"
+    );
+    now.store(OCT_15 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: None,
+            share_source: Some("head"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_10),
+        },
+        "past the head's reset with no newer head the window rolls to the estimate and the share read under it \
+         lapses"
+    );
+    handle
+        .report(credits_at(true, None, Some(30.0), OCT_15 + HOUR))
+        .await;
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.3),
+            share_source: Some("poll"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_15 + HOUR),
+        },
+        "a newer reading keeps a share, read under the estimate"
+    );
+}
+
+/// What `handle` answers a plain request and a fast one at `at`.
+async fn standard_and_fast(handle: &RouterHandle, at: i64) -> (SelectResult, SelectResult) {
+    let fast = SelectRequest {
+        fast: true,
+        lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+        ..request(handle, None, at)
+    };
+    (
+        handle
+            .select(request(handle, None, at))
+            .await
+            .unwrap()
+            .result,
+        handle.select(fast).await.unwrap().result,
+    )
+}
+
+#[tokio::test]
+async fn a_share_at_one_persisted_in_october_lapses_after_a_restart_on_the_first_and_one_persisted_on_the_first_keeps_holding(
+) {
+    for (persisted_at, holds) in [(NOV_1 - HOUR, false), (NOV_1 + 1_000, true)] {
+        let store = seeded_oauth(&["a"]);
+        usage_based_seat(&store, "a");
+        let now = Arc::new(AtomicI64::new(persisted_at));
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        handle
+            .report(credits_at(true, None, Some(100.0), persisted_at))
+            .await;
+        credits_row_reads(&store, 1.0).await;
+        handle.shutdown().await.unwrap();
+        now.store(NOV_1 + 6 * HOUR, Ordering::SeqCst);
+        let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        let window = spend_window_of(&again).await;
+        let (standard, fast) = standard_and_fast(&again, NOV_1 + 6 * HOUR).await;
+        if holds {
+            assert_eq!(
+                (window.utilization, window.share_source),
+                (Some(1.0), None),
+                "the share persisted this month stands, with no source the row could keep"
+            );
+            assert_eq!(
+                (standard, fast),
+                (
+                    SelectResult::Exhausted(Exhaustion::Timed {
+                        deadline: DEC_1,
+                        window: "spend".into()
+                    }),
+                    SelectResult::Exhausted(Exhaustion::FastCredits {
+                        reason: "org_spend_cap_reached".into()
+                    })
+                ),
+                "it holds the seat out until the next month's first, the fast lane's credits read alike"
+            );
+        } else {
+            let answered = |result: &SelectResult| match result {
+                SelectResult::Selected(selection) => format!("selected {}", selection.account.id),
+                other => format!("{other:?}"),
+            };
+            assert_eq!(
+                (
+                    window.utilization,
+                    window.share_source,
+                    window.reset,
+                    answered(&standard),
+                    answered(&fast)
+                ),
+                (None, None, DEC_1, "selected a".into(), "selected a".into()),
+                "October's share lapsed at the first, read under the estimate over its own instant, so it holds \
+                 nothing, the fast lane's credits read included"
+            );
+        }
+    }
+}
+
+/// The usage body a usage-based Enterprise seat answered, as captured, its extra usage on the percent scale.
+const CAPTURED_SEAT_USAGE: &[u8] = include_bytes!("../../oauth/tests/fixtures/usage_based_seat.json");
+
+#[tokio::test]
+async fn the_captured_seats_poll_moves_the_spend_share_to_its_extra_usage_utilization_over_a_hundred(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let (windows, fable_window, extra_usage, spend, raw_keys) =
+        phoebis_oauth::parse_usage(CAPTURED_SEAT_USAGE).unwrap();
+    let snapshot = UsageSnapshot {
+        account_id: "a".into(),
+        identity_generation: 1,
+        fetched_at: OCT_10,
+        windows,
+        fable_window,
+        extra_usage,
+        raw_keys,
+        error: None,
+        spend,
+    };
+    handle
+        .report(Report::Credits {
+            account_id: "a".into(),
+            state: credits_from_usage(&snapshot, 1).expect("the capture carries extra usage"),
+            incarnation: 1,
+        })
+        .await;
+    let share = spend_window_of(&handle)
+        .await
+        .utilization
+        .expect("the poll set a share");
+    // The body's 41.0 percent, which its `spend.percent` carries as 41.
+    assert!(
+        (share - 0.41).abs() < 1e-9,
+        "the share is extra usage's utilization over a hundred, the one figure the view reads too: {share}"
+    );
+}
+
+#[tokio::test]
+async fn a_poll_at_one_after_a_lapsed_share_reads_the_credits_edge_from_no_block() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(credits_at(true, None, Some(100.0), OCT_10))
+        .await;
+    assert!(
+        matches!(
+            next_event(&mut events).await,
+            RouterEvent::FastCreditsChanged { .. }
+        ),
+        "the first poll at one blocks the fast lane"
+    );
+    // Past the first the October share has lapsed, so the selector reads no block before the next poll lands.
+    now.store(NOV_1 + HOUR, Ordering::SeqCst);
+    handle
+        .report(credits_at(true, None, Some(100.0), NOV_1 + HOUR))
+        .await;
+    match next_event(&mut events).await {
+        RouterEvent::FastCreditsChanged {
+            blocked_before,
+            blocked_after,
+            ..
+        } => assert_eq!(
+            (blocked_before, blocked_after.as_deref()),
+            (None, Some("org_spend_cap_reached")),
+            "the edge runs from the lapsed share the selector read to the new cap"
+        ),
+        other => panic!("one credits change, not {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_usage_based_seat_starts_out_of_overage_over_a_stored_in_use_row_and_records_none_from_a_head(
+) {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.overage_policy = OveragePolicy::Never;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    // The row a head left before the class existed, its reset a day out.
+    store
+        .upsert_overage(&OverageRow {
+            account_id: "a".into(),
+            in_use: true,
+            since: Some(500),
+            reset: Some(25 * HOUR),
+            observed_at: 500,
+            source: "head".into(),
+            incarnation: 1,
+        })
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        handle.overage("a").await.unwrap(),
+        None,
+        "the start drops the seat's stored evidence"
+    );
+    let placed = |answer: SelectAnswer| match answer.result {
+        SelectResult::Selected(selection) => (selection.account.id, selection.in_overage),
+        other => panic!("the seat serves under never, not {other:?}"),
+    };
+    assert_eq!(
+        placed(
+            handle
+                .select(request(&handle, Some("s1"), 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), false),
+        "no never hold reads the seat and its pin reads no overage"
+    );
+    handle.reload().await.unwrap();
+    assert_eq!(
+        handle.overage("a").await.unwrap(),
+        None,
+        "a reload keeps it so"
+    );
+    handle
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(2_000),
+                reset: Some(25 * HOUR),
+                observed_at: 2_000,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
+    assert_eq!(
+        handle.overage("a").await.unwrap(),
+        None,
+        "a leg that reported the overage family as evidence records nothing"
+    );
+    assert_eq!(
+        placed(
+            handle
+                .select(request(&handle, Some("s1"), 3_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), false)
+    );
+    assert_eq!(
+        store
+            .load_routing()
+            .unwrap()
+            .overage
+            .iter()
+            .map(|row| (row.account_id.as_str(), row.observed_at))
+            .collect::<Vec<_>>(),
+        [("a", 500)],
+        "the registry's row stays as written"
+    );
+}
+
+#[tokio::test]
+async fn a_usage_based_seat_under_a_priced_tier_name_is_charged_no_plan_window_share() {
+    let store = seeded_oauth(&["a"]);
+    store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_max_5x","seat_tier":"enterprise_usage_based"}}"#,
+            &SubscriptionRow {
+                tier: Some(TIER.into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(3_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+        ))
+        .await;
+    handle.report(a_million_input("a", 2_000)).await;
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.5),
+        "the seat's spend is billed in dollars, so its usage charges no plan window whatever tier its profile names"
+    );
 }
 
 #[tokio::test]
@@ -9124,6 +9908,144 @@ async fn a_reading_at_the_limit_after_a_clear_emits_window_spent_again_under_the
     }
 }
 
+/// A wall the prediction announced over a stored reading under it: a later head that reads the window under its limit
+/// under the same reset clears it as a stored reading's fall does, from the prediction's figure, and takes the
+/// announcement with it, so the next head at the limit announces the wall anew.
+#[tokio::test]
+async fn a_head_under_the_limit_after_a_predicted_spent_edge_emits_window_cleared_from_the_predictions_figure(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(2_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.99, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // The 200 000 token body books 0.02, which takes the 0.99 reading past the wall before any usage lands.
+    handle
+        .select(placement(&handle, "r-1", "s1", 2_000))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_window_edge(&mut events).await,
+        RouterEvent::WindowSpent {
+            source: WindowSource::Predicted,
+            ..
+        }
+    ));
+    let predicted = predicted_reading(&handle, FIVE_HOUR).await.utilization;
+    assert!(
+        predicted >= 1.0,
+        "the booking holds the prediction at {predicted}"
+    );
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .report(head_reading(3_000, 0.5, Some(reset), "r-2"))
+        .await;
+    handle.samples().await.unwrap();
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            predicted,
+            0.5,
+            Some(reset),
+            WindowSource::Head,
+            Some("r-2")
+        )),
+        "{event:?}"
+    );
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(head_reading(4_000, 1.0, Some(reset), "r-3"))
+        .await;
+    handle.samples().await.unwrap();
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowSpent {
+            utilization,
+            reset: spent_reset,
+            source,
+            source_request_id,
+            ..
+        } => assert_eq!(
+            (
+                utilization,
+                spent_reset,
+                source,
+                source_request_id.as_deref()
+            ),
+            (1.0, Some(reset), WindowSource::Head, Some("r-3"))
+        ),
+        other => panic!("the window spent anew, not {other:?}"),
+    }
+}
+
+/// A reading below the wall that reads the announced reset passed leaves that cycle's announcement standing, and a
+/// later head of the next cycle under the limit clears no wall of the cycle that already reset.
+#[tokio::test]
+async fn a_head_under_the_limit_clears_no_wall_whose_announcement_is_of_a_cycle_that_already_reset()
+{
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    // Held, so no clock walk announces the passed reset ahead of the reading that reads it passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 2 * HOUR;
+    let next_reset = reset + 5 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    let passed = reset + HOUR;
+    now.store(passed, Ordering::SeqCst);
+    handle
+        .report(head_reading(passed, 0.5, Some(next_reset), "r-1"))
+        .await;
+    assert!(matches!(
+        next_window_edge(&mut events).await,
+        RouterEvent::WindowReset { reset_at, .. } if reset_at == reset
+    ));
+    let later = passed + HOUR;
+    now.store(later, Ordering::SeqCst);
+    handle
+        .report(head_reading(later, 0.4, Some(next_reset), "r-2"))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
 #[tokio::test]
 async fn a_clear_whose_reading_names_no_reset_carries_the_stored_reset() {
     use phoebis_routing::RouterEvent;
@@ -9231,7 +10153,7 @@ async fn a_member_entering_its_wind_down_emits_once() {
     let store = seeded(&["a"]);
     // Forty minutes out, ten more than the pool's thirty-minute wind-down.
     let end = 1_000 + 40 * 60_000;
-    store.set_cancelled("a", true, Some(end)).unwrap();
+    store.set_canceled("a", true, Some(end)).unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),
@@ -9266,11 +10188,88 @@ async fn a_member_entering_its_wind_down_emits_once() {
                 restored,
                 at
             ),
-            ("a", "p", end, 30, "cancelled", false, inside)
+            ("a", "p", end, 30, "canceled", false, inside)
         ),
         other => panic!("the wind-down's start, not {other:?}"),
     }
     no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_member_entering_its_wind_down_before_its_trial_ends_names_the_trial_as_the_end() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    // Forty minutes out, ten more than the pool's thirty-minute wind-down, with no flag set.
+    let end = 1_000 + 40 * 60_000;
+    store
+        .set_profile(
+            "a",
+            "{}",
+            &SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some("default_claude_max_5x".into()),
+                since: Some(1),
+                trial_ends_at: Some(end),
+            },
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    no_further_event(&mut events).await;
+    now.store(end - 20 * 60_000, Ordering::SeqCst);
+    match next_event(&mut events).await {
+        RouterEvent::WindDownStarted {
+            account_id,
+            ends_at,
+            end_source,
+            ..
+        } => assert_eq!(
+            (account_id.as_str(), ends_at, end_source),
+            ("a", end, "trial")
+        ),
+        other => panic!("the wind-down's start, not {other:?}"),
+    }
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_decision_records_a_canceled_members_term_under_the_canceled_key() {
+    let store = seeded(&["a"]);
+    // Ten minutes before the pool's thirty-minute wind-down opens, so the member stays the pick.
+    let end = 1_000 + 40 * 60_000;
+    store.set_canceled("a", true, Some(end)).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let (_, record) = next_decision(&mut events).await;
+    let record = serde_json::to_value(&record).unwrap();
+    let candidate = &record["candidates"][0];
+    assert_eq!(
+        (
+            &candidate["account_id"],
+            &candidate["term"]["canceled"],
+            &candidate["term"]["ends_at"]
+        ),
+        (
+            &serde_json::json!("a"),
+            &serde_json::json!(true),
+            &serde_json::json!(end)
+        ),
+        "the record names the operator's flag as the account view does: {candidate}"
+    );
 }
 
 #[tokio::test]
@@ -9279,7 +10278,7 @@ async fn the_first_purge_after_the_start_marks_the_wind_downs_it_finds_as_restor
     let store = seeded(&["a"]);
     // Ten minutes out under the pool's thirty-minute wind-down: inside the window before the router starts.
     let end = 1_000 + 10 * 60_000;
-    store.set_cancelled("a", true, Some(end)).unwrap();
+    store.set_canceled("a", true, Some(end)).unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
@@ -9298,10 +10297,10 @@ async fn the_first_purge_after_the_start_marks_the_wind_downs_it_finds_as_restor
 }
 
 #[tokio::test]
-async fn a_member_past_its_cancelled_end_emits_no_wind_down() {
+async fn a_member_past_its_canceled_end_emits_no_wind_down() {
     let store = seeded(&["a"]);
     // The subscription ended an hour before the router starts: past its end, not entering a wind-down.
-    store.set_cancelled("a", true, Some(1_000 - HOUR)).unwrap();
+    store.set_canceled("a", true, Some(1_000 - HOUR)).unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),
@@ -9461,7 +10460,7 @@ async fn a_moved_account_state_emits_the_relay_s_cause() {
         credential_generation: 1,
         cause: StateCause::AuthFailed,
         detail: Some("invalid x-api-key".into()),
-        dispatched_at: None,
+        dispatched_ordinal: None,
     };
     handle.report(verdict()).await;
     match next_event(&mut events).await {
@@ -10880,10 +11879,18 @@ async fn a_wall_read_by_a_head_that_names_no_reset_is_stored_under_the_stored_re
     handle.samples().await.unwrap();
     now.store(2_000, Ordering::SeqCst);
     handle.report(head_reading(2_000, 1.0, None, "r-1")).await;
-    assert!(matches!(
-        next_window_edge(&mut events).await,
-        RouterEvent::WindowSpent { at: 2_000, .. }
-    ));
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowSpent {
+            at,
+            reset: announced,
+            ..
+        } => assert_eq!(
+            (at, announced),
+            (2_000, Some(reset)),
+            "the wall is announced under the stored reset"
+        ),
+        other => panic!("the head at the wall reads spent, not {other:?}"),
+    }
     let spent = predicted_reading(&handle, FIVE_HOUR).await;
     assert_eq!(
         (spent.utilization, spent.reset),
@@ -11253,6 +12260,158 @@ async fn a_wall_that_outlives_its_reset_is_held_for_the_windows_length_from_the_
         } => assert_eq!((reset, source, at), (None, WindowSource::Head, again)),
         other => panic!("the next wall is announced anew, not {other:?}"),
     }
+}
+
+/// A wall with no reset that a restart restores from its row keeps the anchor the row's instant gives it: hourly heads
+/// within the margin after the restart are held for the window's length from that instant, and the first past it lands
+/// as read and clears the wall once.
+#[tokio::test]
+async fn a_restored_wall_keeps_its_anchor_across_a_restart_so_heads_within_the_margin_are_held_for_the_windows_length(
+) {
+    let store = seeded_oauth(&["a"]);
+    let t0 = 2_000;
+    let now = Arc::new(AtomicI64::new(t0));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .report(observed("a", sample_with(t0, FIVE_HOUR, 1.0, None)))
+        .await;
+    let rows = wait_for(WRITTEN, || {
+        let windows = store.load_routing().unwrap().windows;
+        (!windows.is_empty()).then_some(windows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.window.as_str(), r.utilization, r.reset, r.observed_at))
+            .collect::<Vec<_>>(),
+        vec![(FIVE_HOUR, 1.0, None, t0)],
+        "the wall's row is on disk"
+    );
+    handle.shutdown().await.unwrap();
+    let again = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = again.subscribe_events();
+    for hour in 1..=5 {
+        let at = t0 + hour * HOUR;
+        now.store(at, Ordering::SeqCst);
+        again
+            .report(head_reading(at, 0.99, None, &format!("r-{hour}")))
+            .await;
+        assert_eq!(
+            predicted_reading(&again, FIVE_HOUR).await.utilization,
+            1.0,
+            "a head {hour} hours after the restored wall's instant is held at the wall"
+        );
+    }
+    no_further_event(&mut events).await;
+    let past = t0 + 6 * HOUR;
+    now.store(past, Ordering::SeqCst);
+    again.report(head_reading(past, 0.99, None, "r-6")).await;
+    assert_eq!(
+        predicted_reading(&again, FIVE_HOUR).await.utilization,
+        0.99,
+        "a head past the window's length from the restored wall's instant lands as read"
+    );
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.99,
+            None,
+            WindowSource::Head,
+            Some("r-6")
+        )),
+        "{event:?}"
+    );
+    no_further_event(&mut events).await;
+}
+
+/// A head within the margin of a wall a poll announced with its reset, taken inside the slack past that reset and
+/// naming none: it is held at the wall, reads the reset passed, and re-bases the wall's announcement on its own reset
+/// and instant, so later heads within the margin are held for the window's length from that instant and the first past
+/// it clears the wall once.
+#[tokio::test]
+async fn a_head_within_the_margin_inside_the_slack_past_the_announced_reset_re_bases_the_wall_on_its_own_instant(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(2_000));
+    // Held, so no clock walk announces the passed reset ahead of the reading that reads it passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 2 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    assert!(matches!(
+        next_spent(&mut events).await,
+        RouterEvent::WindowSpent { at: 2_000, .. }
+    ));
+    let headed = reset + 1_000;
+    now.store(headed, Ordering::SeqCst);
+    handle.report(head_reading(headed, 0.99, None, "r-0")).await;
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowReset {
+            reset_at,
+            next_reset,
+            observed,
+            at,
+            ..
+        } => assert_eq!(
+            (reset_at, next_reset, observed, at),
+            (reset, None, "sample", headed)
+        ),
+        other => panic!("the announced reset reads passed, not {other:?}"),
+    }
+    assert_eq!(
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
+        1.0,
+        "the head within the margin inside the slack is held at the wall"
+    );
+    for hour in 1..=5 {
+        let at = headed + hour * HOUR;
+        now.store(at, Ordering::SeqCst);
+        handle
+            .report(head_reading(at, 0.99, None, &format!("r-{hour}")))
+            .await;
+        assert_eq!(
+            predicted_reading(&handle, FIVE_HOUR).await.utilization,
+            1.0,
+            "a head {hour} hours after the re-basing head is held at the wall"
+        );
+    }
+    no_further_event(&mut events).await;
+    let past = headed + 6 * HOUR;
+    now.store(past, Ordering::SeqCst);
+    handle.report(head_reading(past, 0.99, None, "r-6")).await;
+    let event = next_window_edge(&mut events).await;
+    assert_eq!(
+        cleared_of(&event),
+        Some((
+            "a",
+            FIVE_HOUR,
+            1.0,
+            0.99,
+            None,
+            WindowSource::Head,
+            Some("r-6")
+        )),
+        "a head past the window's length from the re-basing head lands as read and clears the wall: {event:?}"
+    );
+    no_further_event(&mut events).await;
 }
 
 /// A wall the prediction announced ends at its reset: a poll past that reset that names the next one at the wall is the

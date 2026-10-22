@@ -273,26 +273,28 @@ it." The actions, with the dialog each opens:
 | "Disconnect" | "Disconnect account" | `Deletes {label}'s credential. Pool memberships and request history stay, and re-pairing stores the credential again.` |
 | "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.` |
 
-"Identity" lists, for a subscription account, Type ("OAuth login"), Plan by its tier with its start (`Max 20x since
-{date}`), Rate-limit tier, Ends and Trial ends where known, Organization and Billing type, and "Edit end" opens the end
-editor: the checkbox "Cancelled", the field `Ends ({zone})`, whose label names the browser's time zone, with the hint
-"The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The
-time is in this browser's zone.", Save and Cancel, and "Reload" where the row changed under the editor. The card closes
-on "Renewal date is not reported by the provider." For an API-key account it lists Type ("API key") and Windows ("None
-reported, billed per token"). "Usage" ("Remaining share of each window") draws the three windows as the Quota view does,
-the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this month" with its spend meter and an
-"in use" badge, the reason the provider gave for disabling extra usage, and a "Fast mode" line with the share of the
-fast lane's input and output buckets used and a chip while the fast lane cools, or reads "This account does not report
-quota windows.", or "The first quota reading is in flight" from a pairing's confirm until the account's first reading
-lands. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day
-windows of a subscription account, or "No samples yet" with "Quota samples appear after the first successful quota
-fetch." "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the model), Reason and Until
-with a Clear button per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The account becomes eligible
-immediately. If the account is still rate limited, the next request re-enters cooldown." "Pool" links the pool with
-`priority {n}`, or reads "Not a member of a pool." "Credential" lists Access token, Refresh token, Last refresh and Last
-error for a subscription account, and Secret ("stored encrypted at rest") and Last error for an API-key account.
-"Requests" reads Last 24h, Last 7d and Lifetime, with a "Routing log" link that opens the log on the account's rows over
-the last hour.
+"Identity" lists, for a subscription account, Type ("OAuth login"), Plan by its tier with its start
+(`Max 20x since {date}`), Rate-limit tier, Ends and Trial ends where known, Organization and Billing type, and "Edit
+end" opens the end editor: the checkbox "Cancelled", the field `Ends ({zone})`, whose label names the browser's time
+zone, with the hint "The date the plan's billing settings show as its end. An annual plan is marked canceled in its
+final month only. The time is in this browser's zone.", Save and Cancel, and "Reload" where the row changed under the
+editor. Beside the saved end the row answers `plan_ended_at`, the instant a profile read found the account's
+organization holding no plan, which the router reads as an end that has passed until a profile read or a pairing finds a
+plan again ([Account states](pairing.md#account-states)). The card closes on "Renewal date is not reported by the
+provider." For an API-key account it lists Type ("API key") and Windows ("None reported, billed per token"). "Usage"
+("Remaining share of each window") draws the three windows as the Quota view does, the speed chip beside the 5-hour
+bar's label on a slowed account, "Extra usage this month" with its spend meter and an "in use" badge, the reason the
+provider gave for disabling extra usage, and a "Fast mode" line with the share of the fast lane's input and output
+buckets used and a chip while the fast lane cools, or reads "This account does not report quota windows.", or "The first
+quota reading is in flight" from a pairing's confirm until the account's first reading lands. "7-day trend"
+("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a
+subscription account, or "No samples yet" with "Quota samples appear after the first successful quota fetch." "Cooling
+down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the model), Reason and Until with a Clear button
+per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The account becomes eligible immediately. If the
+account is still rate limited, the next request re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads
+"Not a member of a pool." "Credential" lists Access token, Refresh token, Last refresh and Last error for a subscription
+account, and Secret ("stored encrypted at rest") and Last error for an API-key account. "Requests" reads Last 24h, Last
+7d and Lifetime, with a "Routing log" link that opens the log on the account's rows over the last hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
 tokens, Output tokens and Effort levels, or "The upstream lists no models."
@@ -770,7 +772,8 @@ offers Account, Classifier, Client, Key, Effort, Kind, Model, Pool, Request clas
 only)", the last the Burn section's own grouping. While it reads User agent, "Groups (N)" opens the "User agent groups"
 box with one pattern per line, N the patterns it holds, where each pattern names a group and every other agent groups
 under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user agent grouping reads the agent's first
-product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`.
+product token, `claude-cli/2.1.269` for `claude-cli/2.1.269 (external, cli)`. The classifier grouping lists the requests
+with no classifier call under `none`, as the Requests view's Classifier filter names them.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
 out of the page's address. At each interval it reads the account list again and, once a new bucket of the range has
@@ -1229,12 +1232,15 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | pin expired | A pin was released, idle past the pin window or for the reasons it lists. |
 | pin moved | A rule or a failover moved a session's pin to another account, with the destination's fit and runway where a rule's gate read it and the failover's cause. |
 | pin released | An operator released a session's pin by hand. |
+| plan ended | A profile read found the account's organization holding no plan, so the account is flagged plan ended, with the read's source (the profile read, or the usage 403 that made it due) and the profile's organization type, rate-limit tier and subscription status. |
+| plan restored | The account's plan-ended flag cleared, with its source (a profile read that found a plan, or a pairing confirm) and the profile's organization type, rate-limit tier and subscription status. |
 | poll backoff ended | The usage poll answered cleanly again after backing off. |
 | poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
+| poll failed | The usage or the profile endpoint answered a passing fault, with the endpoint, the status or the transport failure and the text. |
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |
-| registry changed | An operator changed an account, a guardrail, a key or a pool: a creation records the row's snapshot, an account's, a key's or a pool's update each changed field with its value before and after (a list, such as a pool's guardrails, as its items joined by commas, or `none` when empty), a guardrail's update its snapshot with the pools and keys it is attached to, a deletion or a revocation nothing more, a change of a pool's members the new member list, and a key's rotation the new secret's prefix with the instant the retired secret stops being accepted. |
+| registry changed | An operator changed an account, a guardrail, a key or a pool: a creation records the row's snapshot, an account's, a key's or a pool's update each changed field with its value before and after (a list, such as a pool's guardrails, as its items joined by commas, or `none` when empty), a guardrail's update each changed field with its value before and after, its pools and keys among them, a deletion or a revocation nothing more, a change of a pool's members the new member list, and a key's rotation the new secret's prefix with the instant the retired secret stops being accepted. |
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round ran on an account whose projection on a plan window read over the ceiling at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |

@@ -7,8 +7,8 @@ on the client page, so a route added or removed in the router fails the build un
 
 `check-config` compares the lines the binary's `check-config` arm prints with the installation page's list, `codes`
 the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the client page's table,
-`example` the installation page's quoted example with the file, and `prose` holds the mechanical content rules of the
-site's prose.
+`example` the installation page's quoted example with the file, `unit` the installation page's quoted unit with
+`deploy/phoebis.service`, and `prose` holds the mechanical content rules of the site's prose.
 """
 import functools
 import html.parser
@@ -30,6 +30,7 @@ CLIENT_MD = ROOT / "docs/site/client.md"
 MAIN_RS = ROOT / "crates/router/src/main.rs"
 INSTALLATION_MD = ROOT / "docs/site/installation.md"
 EXAMPLE_YAML = ROOT / "deploy/config.example.yaml"
+UNIT_FILE = ROOT / "deploy/phoebis.service"
 # Every file whose refusals carry a code in the `x-phoebis-error-code` header on the proxy listener, and the bus
 # constant the body-shape code is spelled by. A file listed here that does not exist fails the check rather than
 # narrowing it.
@@ -385,6 +386,41 @@ def check_example(example_yaml, installation_md):
     return 0
 
 
+UNIT_FENCE = '```ini title="deploy/phoebis.service"'
+
+
+def check_unit(unit_file, installation_md):
+    """The installation page's quoted unit against the file, line for line, a trailing newline aside."""
+    if missing([unit_file, installation_md]):
+        return 1
+    expected = unit_file.read_text(encoding="utf-8").splitlines()
+    lines = installation_md.read_text(encoding="utf-8").splitlines()
+    opens = [i for i, line in enumerate(lines) if line.strip() == UNIT_FENCE]
+    if len(opens) != 1:
+        print(f"{installation_md.name}: {len(opens)} fenced blocks titled deploy/phoebis.service, expected one")
+        return 1
+    start = opens[0] + 1
+    close = next((i for i in range(start, len(lines)) if lines[i].strip() == "```"), None)
+    if close is None:
+        print(f"{installation_md.name}:{start + 1}: the unit block has no closing fence")
+        return 1
+    quoted = lines[start:close]
+    for offset, (page, file) in enumerate(zip(quoted, expected)):
+        if page != file:
+            print(
+                f"{installation_md.name}:{start + offset + 1}: differs from {unit_file.name}:{offset + 1}:"
+                f" {page!r} vs {file!r}"
+            )
+            return 1
+    if len(quoted) != len(expected):
+        print(
+            f"{installation_md.name}:{start + 1}: the block has {len(quoted)} lines and"
+            f" {unit_file.name} {len(expected)}"
+        )
+        return 1
+    return 0
+
+
 CHECK_CONFIG_ARM = "Some(Command::CheckConfig) => {"
 PRINTLN = re.compile(r"\bprintln!\(")
 PLACEHOLDER = re.compile(r"\{[^{}]*\}")
@@ -686,7 +722,7 @@ def check_prose(files):
 USAGE = (
     "usage: check-docs.py links [SITE_DIR] | client [ROUTE_RS... CLIENT_MD]"
     " | check-config [MAIN_RS INSTALLATION_MD] | codes [RS_FILE... CLIENT_MD]"
-    " | example [EXAMPLE_YAML INSTALLATION_MD] | prose [FILE...]"
+    " | example [EXAMPLE_YAML INSTALLATION_MD] | unit [UNIT_FILE INSTALLATION_MD] | prose [FILE...]"
 )
 
 
@@ -723,6 +759,13 @@ def main(argv):
         example = pathlib.Path(argv[2]) if len(argv) == 4 else EXAMPLE_YAML
         page = pathlib.Path(argv[3]) if len(argv) == 4 else INSTALLATION_MD
         return check_example(example, page)
+    if len(argv) >= 2 and argv[1] == "unit":
+        if len(argv) not in (2, 4):
+            print(USAGE)
+            return 2
+        unit = pathlib.Path(argv[2]) if len(argv) == 4 else UNIT_FILE
+        page = pathlib.Path(argv[3]) if len(argv) == 4 else INSTALLATION_MD
+        return check_unit(unit, page)
     if len(argv) >= 2 and argv[1] == "prose":
         return check_prose([pathlib.Path(p) for p in argv[2:]] or prose_files())
     print(USAGE)

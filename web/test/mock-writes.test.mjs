@@ -448,15 +448,15 @@ test('an account patch is refused where the account route refuses it, and a canc
   const api = await signedIn();
   const end = '2026-10-19T09:15:00.000Z';
   const before = await api.listAccounts();
-  await assert.rejects(() => api.updateAccount('overflow', { cancelled: true, subscriptionEndsAt: end }), refusedAs(400, 'only an oauth account is cancelled'));
-  await assert.rejects(() => api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: end }), refusedAs(400, 'subscription_ends_at needs cancelled'));
-  await assert.rejects(() => api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: null }), refusedAs(400, 'cancelled needs subscription_ends_at'));
+  await assert.rejects(() => api.updateAccount('overflow', { cancelled: true, subscriptionEndsAt: end }), refusedAs(400, 'only an oauth account is canceled'));
+  await assert.rejects(() => api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: end }), refusedAs(400, 'subscription_ends_at needs canceled'));
+  await assert.rejects(() => api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: null }), refusedAs(400, 'canceled needs subscription_ends_at'));
   await assert.rejects(() => api.updateAccount('nobody', { cancelled: false, subscriptionEndsAt: null }), refusedAs(404, 'account not found'));
   assert.deepEqual(await api.listAccounts(), before, 'a refused patch stores nothing');
-  const cancelled = await api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: end });
-  assert.deepEqual([cancelled.cancelled, cancelled.subscription.endsAt], [true, end]);
+  const canceled = await api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: end });
+  assert.deepEqual([canceled.canceled, canceled.subscription.endsAt], [true, end]);
   const restored = await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
-  assert.deepEqual([restored.cancelled, restored.subscription.endsAt], [false, null], 'the end leaves with the flag');
+  assert.deepEqual([restored.canceled, restored.subscription.endsAt], [false, null], 'the end leaves with the flag');
   const unpaired = await api.updateAccount('spare', { cancelled: true, subscriptionEndsAt: end });
   assert.equal(unpaired.subscription?.endsAt, end, 'a disconnected OAuth account still reports the end it was cancelled with');
 });
@@ -472,7 +472,7 @@ test('an account save over a revision the row no longer carries is refused as st
   await assert.rejects(() => api.updateAccount('primary', patch, before.revision + 1), staleAs(ACCOUNT_STALE));
   assert.deepEqual(await api.listAccounts(), listed, 'a stale save stores nothing');
   const landed = await api.updateAccount('primary', patch, before.revision);
-  assert.deepEqual([landed.cancelled, landed.revision], [true, before.revision + 1]);
+  assert.deepEqual([landed.canceled, landed.revision], [true, before.revision + 1]);
   await assert.rejects(() => api.updateAccount('primary', patch, before.revision), staleAs(ACCOUNT_STALE), 'the counter moved past the sent revision');
   await assert.rejects(() => api.renameAccount('primary', 'x', landed.revision + 1), staleAs(ACCOUNT_STALE));
   assert.equal((await storyAccount(api, 'primary')).label, before.label);
@@ -491,7 +491,7 @@ test('an editor opened before its account was deleted and created again is refus
   await assert.rejects(() => api.renameAccount('fresh', 'stale', first.revision), staleAs(ACCOUNT_STALE));
   await assert.rejects(() => api.updateAccount('fresh', { cancelled: true, subscriptionEndsAt: '2026-10-19T09:15:00.000Z' }, first.revision), staleAs(ACCOUNT_STALE));
   const stored = await storyAccount(api, 'fresh');
-  assert.deepEqual([stored.label, stored.cancelled, stored.revision], ['again', replacement.cancelled, replacement.revision], 'the stale saves stored nothing');
+  assert.deepEqual([stored.label, stored.canceled, stored.revision], ['again', replacement.canceled, replacement.revision], 'the stale saves stored nothing');
 });
 
 test('a pairing started for a new account writes its row at the confirm and none at a cancel', async () => {
@@ -521,7 +521,7 @@ test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect 
   let read = await storyAccount(api, 'primary');
   await api.renameAccount('primary', 'x');
   await assert.rejects(() => api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: end }, read.revision), staleAs(ACCOUNT_STALE), 'after a rename');
-  assert.equal((await storyAccount(api, 'primary')).cancelled, read.cancelled);
+  assert.equal((await storyAccount(api, 'primary')).canceled, read.canceled);
   read = await storyAccount(api, 'primary');
   await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
   await assert.rejects(() => api.renameAccount('primary', 'y', read.revision), staleAs(ACCOUNT_STALE), 'after an end edit');
@@ -531,7 +531,7 @@ test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect 
   await assert.rejects(() => api.updateAccount('secondary', { cancelled: false, subscriptionEndsAt: null }, secondary.revision), staleAs(ACCOUNT_STALE), 'an end edit after a pause');
   await assert.rejects(() => api.renameAccount('secondary', 'y', secondary.revision), staleAs(ACCOUNT_STALE), 'a rename after a pause');
   const paused = await storyAccount(api, 'secondary');
-  assert.deepEqual([paused.cancelled, paused.label], [secondary.cancelled, secondary.label]);
+  assert.deepEqual([paused.canceled, paused.label], [secondary.canceled, secondary.label]);
   await api.resumeAccount('secondary');
   await assert.rejects(() => api.renameAccount('secondary', 'y', paused.revision), staleAs(ACCOUNT_STALE), 'a rename after a resume');
   assert.equal((await storyAccount(api, 'secondary')).label, secondary.label);

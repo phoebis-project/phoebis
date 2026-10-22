@@ -86,13 +86,16 @@ fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
             if !s.eat(b'[') {
                 return None;
             }
-            for _ in 0..index {
-                s.value(false).ok()?;
-                s.ws();
-                if !s.eat(b',') {
-                    return None;
+            s.inside(|s| {
+                for _ in 0..index {
+                    s.value(false).ok()?;
+                    s.ws();
+                    if !s.eat(b',') {
+                        return None;
+                    }
                 }
-            }
+                Some(())
+            })?;
             s.ws();
         } else {
             scan_object(s, |member| member == key.as_bytes())?;
@@ -327,17 +330,19 @@ pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(us
     if !s.eat(b'[') {
         return None;
     }
-    for _ in 0..index {
-        s.value(false).ok()?;
-        s.ws();
-        if !s.eat(b',') {
-            return None;
+    s.inside(|s| {
+        for _ in 0..index {
+            s.value(false).ok()?;
+            s.ws();
+            if !s.eat(b',') {
+                return None;
+            }
         }
-    }
-    s.ws();
-    let start = s.pos;
-    s.value(false).ok()?;
-    Some((start, s.pos))
+        s.ws();
+        let start = s.pos;
+        s.value(false).ok()?;
+        Some((start, s.pos))
+    })
 }
 
 /// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one
@@ -356,8 +361,10 @@ pub fn empty_array_member_end(body: &[u8], path: &[&str]) -> Option<usize> {
     if !s.eat(b'[') {
         return None;
     }
-    s.ws();
-    (s.body.get(s.pos) == Some(&b']')).then_some(s.pos)
+    s.inside(|s| {
+        s.ws();
+        (s.body.get(s.pos) == Some(&b']')).then_some(s.pos)
+    })
 }
 
 /// Raw span of the whole member (key quote to value end) at `path`, so a caller can insert a sibling before it.
@@ -743,25 +750,27 @@ fn each_first_block_member<'a>(
         return s.value(false);
     }
     s.pos += 1;
-    s.ws();
-    if s.eat(b']') {
-        return Ok(());
-    }
-    if s.body.get(s.pos) == Some(&b'{') {
-        each_decoded_member(s, member)?;
-    } else {
-        s.value(false)?;
-    }
-    loop {
+    s.inside(|s| {
         s.ws();
         if s.eat(b']') {
             return Ok(());
         }
-        if !s.eat(b',') {
-            return Err(CchError::Json(s.pos));
+        if s.body.get(s.pos) == Some(&b'{') {
+            each_decoded_member(s, member)?;
+        } else {
+            s.value(false)?;
         }
-        s.value(false)?;
-    }
+        loop {
+            s.ws();
+            if s.eat(b']') {
+                return Ok(());
+            }
+            if !s.eat(b',') {
+                return Err(CchError::Json(s.pos));
+            }
+            s.value(false)?;
+        }
+    })
 }
 
 /// Whether a string token, quotes included, is a billing line claiming a hash once decoded. A token a strict
@@ -1251,6 +1260,70 @@ mod tests {
         assert!(
             verdicts.contains(&true) && verdicts.contains(&false),
             "the range holds a depth serde reads and one it refuses: {verdicts:?}"
+        );
+    }
+
+    /// `depth` nested arrays around a number, the element of an array a walker eats the `[` of itself. The walker
+    /// counts that array as `value` counts each container it enters, so it refuses the element at the depth a read
+    /// of the whole array through `value` refuses it, with no top-level key walk ahead of it.
+    fn arrays(depth: usize) -> String {
+        format!("{}1{}", "[".repeat(depth), "]".repeat(depth))
+    }
+
+    #[test]
+    fn the_array_element_span_counts_the_array_it_walks_toward_the_depth_bound() {
+        let body = format!(r#"{{"system":[{}]}}"#, arrays(MAX_DEPTH - 1)).into_bytes();
+        assert_eq!(
+            array_member_span(&body, &["system"], 0),
+            None,
+            "the walked array and the arrays of its element reach the bound"
+        );
+    }
+
+    #[test]
+    fn a_numeric_path_segment_counts_the_array_it_skips_through_toward_the_depth_bound() {
+        let body =
+            format!(r#"{{"system":[{},{{"text":"x"}}]}}"#, arrays(MAX_DEPTH - 1)).into_bytes();
+        assert_eq!(
+            string_member_span(&body, &["system", "1", "text"]),
+            None,
+            "the walked array and the arrays of the skipped element reach the bound"
+        );
+    }
+
+    /// The empty array's own walk reads no element, so the depth it counts decides nothing there, and the vector
+    /// reaches the empty array past an element its path skips.
+    #[test]
+    fn the_empty_array_end_behind_a_numeric_segment_counts_the_skipped_array_toward_the_depth_bound(
+    ) {
+        let body = format!(r#"{{"system":[{},[]]}}"#, arrays(MAX_DEPTH - 1)).into_bytes();
+        assert_eq!(
+            empty_array_member_end(&body, &["system", "1"]),
+            None,
+            "the walked array and the arrays of the skipped element reach the bound"
+        );
+    }
+
+    /// The root counts here, as the member walk enters it through `inside`, so the system array's count brings the
+    /// walk to the depth serde reads.
+    #[test]
+    fn the_first_system_block_walk_counts_the_system_array_toward_the_depth_bound() {
+        let at_the_bound =
+            format!(r#"{{"system":[{{"text":"x"}},{}]}}"#, arrays(MAX_DEPTH - 2)).into_bytes();
+        assert!(serde_json::from_slice::<serde_json::Value>(&at_the_bound).is_err());
+        assert!(
+            matches!(
+                first_system_block_member_count(&at_the_bound, "text"),
+                Err(CchError::TooDeep(_))
+            ),
+            "the root, the system array and the element's arrays reach the bound"
+        );
+        let under_it =
+            format!(r#"{{"system":[{{"text":"x"}},{}]}}"#, arrays(MAX_DEPTH - 3)).into_bytes();
+        assert!(serde_json::from_slice::<serde_json::Value>(&under_it).is_ok());
+        assert!(
+            matches!(first_system_block_member_count(&under_it, "text"), Ok(1)),
+            "one level less reads as serde reads it"
         );
     }
 

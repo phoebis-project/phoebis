@@ -1,7 +1,7 @@
 //! The codes that flag a request row as refused, and the ledger's reading of a row against them. Each code names a
 //! refusal the router issues before it asks any account, for the client's or a policy's cause.
 //!
-//! The codes that stay in the figures and off the list are `account_cancelled`, `accounts_unavailable`,
+//! The codes that stay in the figures and off the list are `account_canceled`, `accounts_unavailable`,
 //! `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, since the router's own standing
 //! caused them, and `accounts_exhausted`, `model_rejected` and every upstream code, since an account was asked.
 
@@ -19,6 +19,8 @@ use crate::rollup::{
 use crate::LedgerError;
 
 const DAY_MS: i64 = 86_400_000;
+const DAY_S: i64 = 86_400;
+const HOUR_S: i64 = 3_600;
 
 /// The `meta` key holding the mark `{"done_at": <ms>}` once the stored refusals were moved into the map.
 pub const REFUSALS_BACKFILL_KEY: &str = "refusals_backfill";
@@ -98,10 +100,15 @@ struct Cursor {
 /// flagged row a page meets was folded before the flag existed. A row landed later folds under the map at once and
 /// meets no page, since the mark stands by then. The cursor is the refold's rule: a start that fails after a page
 /// committed resumes after that page rather than taking its contribution out a second time.
+///
+/// `retention_days` 0 keeps the requests for good, so the walk is bounded by the rollup retention instead, the
+/// purge's own cutoff rounded up to the first hour the purge keeps, since it drops whole hours: a request whose hour
+/// the rollup purge removed meets no page and writes no map-only row into that hour. Both 0 walks from the start.
 pub fn refold_refusals(
     db: &LedgerDb,
     prices: &PriceRevisions,
     retention_days: u32,
+    rollup_retention_days: u32,
     now: i64,
 ) -> Result<usize, LedgerError> {
     let (mark, mut after) = db.write(|c| {
@@ -113,11 +120,18 @@ pub fn refold_refusals(
     if mark.is_some() {
         return Ok(0);
     }
-    // The retention purge's own arithmetic: a zero keeps the requests for good, so nothing is cut off.
-    let from = if retention_days == 0 {
-        i64::MIN
-    } else {
-        now - i64::from(retention_days) * DAY_MS
+    // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
+    // since the configuration holds a nonzero rollup retention at least as long as the request one.
+    let from = match (retention_days, rollup_retention_days) {
+        (0, 0) => i64::MIN,
+        (0, days) => {
+            // The rollup purge cuts in seconds and drops every hour that starts before its cutoff.
+            let cutoff = now / 1_000 - i64::from(days) * DAY_S;
+            let hour = cutoff.div_euclid(HOUR_S) * HOUR_S;
+            let first_kept = if hour < cutoff { hour + HOUR_S } else { hour };
+            first_kept * 1_000
+        }
+        (days, _) => now - i64::from(days) * DAY_MS,
     };
     let page = page_size();
     let mut moved = 0;
@@ -449,7 +463,7 @@ mod tests {
             "the old arithmetic booked the refusals as rejected requests"
         );
         let now = JANUARY_2026 + DAY_MS;
-        assert_eq!(refold_refusals(&db, &api_prices(), 0, now).unwrap(), 3);
+        assert_eq!(refold_refusals(&db, &api_prices(), 0, 0, now).unwrap(), 3);
         let after = rows(&db);
         assert_eq!(
             (
@@ -483,11 +497,60 @@ mod tests {
         );
         assert_eq!(meta(&db, REFUSALS_BACKFILL_CURSOR_KEY), None);
         assert_eq!(
-            refold_refusals(&db, &api_prices(), 0, now + DAY_MS).unwrap(),
+            refold_refusals(&db, &api_prices(), 0, 0, now + DAY_MS).unwrap(),
             0,
             "the mark stands"
         );
         assert_eq!(rows(&db), after, "the second pass moved nothing");
+    }
+
+    /// A request retention of 0 keeps the requests for good while a rollup retention of one day drops whole hours:
+    /// the pass starts at the first hour the purge keeps, so a refusal two days old and one received after the
+    /// purge's cutoff inside the hour the cutoff splits are not walked and write no row into their purged hours, while
+    /// a refusal inside the kept hours moves into the map.
+    #[test]
+    fn under_a_zero_request_retention_the_pass_starts_at_the_first_hour_the_rollup_purge_keeps() {
+        const HOUR_MS: i64 = 3_600_000;
+        let db = LedgerDb::open_in_memory().unwrap();
+        // The purge's cutoff, a day back from `now`, falls half an hour into `split_hour`.
+        let split_hour = JANUARY_2026 + 2 * DAY_MS;
+        let now = split_hour + DAY_MS + HOUR_MS / 2;
+        let old = refusal("old", now - 2 * DAY_MS);
+        let split = refusal("split", split_hour + 3 * HOUR_MS / 4);
+        let kept = refusal("kept", split_hour + HOUR_MS + 60_000);
+        for request in [&old, &split, &kept] {
+            land(&db, request, &[]);
+        }
+        flag(&db, &["old", "split", "kept"]);
+        let config = crate::LedgerConfig {
+            retention_days: 0,
+            rollup_retention_days: 1,
+            ..crate::LedgerConfig::default()
+        };
+        crate::bodies::run_retention_blocking(&db, &config, now, &[]).unwrap();
+        let kept_hour = crate::rollup::hour_of(kept.received_at);
+        assert_eq!(
+            rows(&db).iter().map(|r| r.hour).collect::<Vec<_>>(),
+            [kept_hour],
+            "the purge removed the two older hours and kept the last"
+        );
+        assert_eq!(
+            refold_refusals(&db, &api_prices(), 0, 1, now).unwrap(),
+            1,
+            "the refusal in the kept hour alone"
+        );
+        assert_eq!(
+            rows(&db)
+                .into_iter()
+                .map(|r| (r.hour, r.requests, r.refusals))
+                .collect::<Vec<_>>(),
+            [(
+                kept_hour,
+                0,
+                BTreeMap::from([("guardrail_blocked".to_string(), 1)])
+            )],
+            "no row in a purged hour, and the kept hour's refusal in the map alone"
+        );
     }
 
     /// A pass of three flagged requests at a page of one commits a cursor after each page, and a pass interrupted
@@ -505,7 +568,10 @@ mod tests {
         let now = JANUARY_2026 + DAY_MS;
         let whole = LedgerDb::open_in_memory().unwrap();
         seed(&whole);
-        assert_eq!(refold_refusals(&whole, &api_prices(), 0, now).unwrap(), 3);
+        assert_eq!(
+            refold_refusals(&whole, &api_prices(), 0, 0, now).unwrap(),
+            3
+        );
         let interrupted = LedgerDb::open_in_memory().unwrap();
         seed(&interrupted);
         let cursor = |db: &LedgerDb| {
@@ -518,7 +584,7 @@ mod tests {
         };
         TEST_PAGE.set(Some(1));
         FAIL_AFTER_PAGES.set(Some(1));
-        let failed = refold_refusals(&interrupted, &api_prices(), 0, now);
+        let failed = refold_refusals(&interrupted, &api_prices(), 0, 0, now);
         FAIL_AFTER_PAGES.set(None);
         assert!(failed.is_err(), "the injected failure after the first page");
         assert_eq!(
@@ -532,7 +598,7 @@ mod tests {
             "no mark yet"
         );
         FAIL_AFTER_PAGES.set(Some(1));
-        let failed = refold_refusals(&interrupted, &api_prices(), 0, now);
+        let failed = refold_refusals(&interrupted, &api_prices(), 0, 0, now);
         FAIL_AFTER_PAGES.set(None);
         assert!(
             failed.is_err(),
@@ -544,7 +610,7 @@ mod tests {
             "the cursor after page 2"
         );
         assert_eq!(
-            refold_refusals(&interrupted, &api_prices(), 0, now).unwrap(),
+            refold_refusals(&interrupted, &api_prices(), 0, 0, now).unwrap(),
             1,
             "the third pass moves the request after the cursor"
         );
@@ -591,7 +657,7 @@ mod tests {
         let now = JANUARY_2026 + DAY_MS;
         TEST_PAGE.set(Some(1));
         FAIL_AFTER_PAGES.set(Some(1));
-        let failed = refold_refusals(&db, &api_prices(), 0, now);
+        let failed = refold_refusals(&db, &api_prices(), 0, 0, now);
         FAIL_AFTER_PAGES.set(None);
         assert!(failed.is_err(), "the injected failure after the first page");
         assert_eq!(
@@ -600,7 +666,7 @@ mod tests {
             "the first page took the first refusal out of the row that holds it"
         );
         assert_eq!(
-            refold_refusals(&db, &api_prices(), 0, now).unwrap(),
+            refold_refusals(&db, &api_prices(), 0, 0, now).unwrap(),
             1,
             "the resumed pass moves the second refusal alone"
         );
@@ -633,7 +699,7 @@ mod tests {
         land(&db, &request, &attempts);
         let before = rows(&db);
         let now = JANUARY_2026 + DAY_MS;
-        assert_eq!(refold_refusals(&db, &api_prices(), 0, now).unwrap(), 0);
+        assert_eq!(refold_refusals(&db, &api_prices(), 0, 0, now).unwrap(), 0);
         assert_eq!(
             meta(&db, REFUSALS_BACKFILL_KEY).expect("the mark")["done_at"].as_i64(),
             Some(now)
