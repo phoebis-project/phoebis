@@ -1179,6 +1179,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | pin released | An operator released a session's pin by hand. |
 | poll backoff ended | The usage poll answered cleanly again after backing off. |
 | poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
+| poll failed | The usage or the profile endpoint answered a passing fault, with the endpoint, the status or the transport failure and the text. |
 | refresh failed | An access-token refresh failed. |
 | refresh succeeded | An access-token refresh succeeded. |
 | refresh uncertain | An access-token refresh ended without a clear answer. |

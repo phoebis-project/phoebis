@@ -167,7 +167,10 @@ fn a_null_alias_key_without_limits_yields_no_fable_window() {
 
 mod service {
     use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
-    use phoebis_oauth::{Clock, CredentialManager, PollOutcome, UsageService};
+    use phoebis_oauth::{
+        Clock, CredentialManager, PollFault, PollIssue, PollOutcome, Refused, UsageError,
+        UsageService,
+    };
     use phoebis_profile::{
         claude_code_2_1_269_linux_x64,
         fixtures::{control_response, ControlFixture},
@@ -1344,5 +1347,253 @@ mod service {
             0,
             "held, not fetched"
         );
+    }
+
+    /// An answer of `status` with an empty object for its body.
+    fn answering(status: u16) -> Respond {
+        Respond::Json {
+            status,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        }
+    }
+
+    /// Commits the credential after the stored one, as a re-pair does, and answers its generation.
+    fn commit_next_credential(store: &Store) -> u64 {
+        let stored = store.credentials("a").unwrap().unwrap().generation;
+        store
+            .commit_credentials(
+                "a",
+                1,
+                1,
+                Some(stored),
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-NEXT"),
+                    refresh_token: Some(Secret::new("rt-next")),
+                    issued_at: 1_000_000,
+                    expires_at: 1_000_000 + 86_400_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_usage_401_answers_the_re_pair_issue_fenced_on_the_tokens_generation_and_the_lineage()
+    {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: answering(401),
+        }])
+        .await;
+        let store = store_with_bundle_until(1_000_000 + 86_400_000);
+        let generation = commit_next_credential(&store);
+        assert_eq!(
+            generation, 2,
+            "the token the poll acquires is the second credential"
+        );
+        let service = service_for(&up, store, &now);
+        let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
+        assert_eq!(
+            issue,
+            Some(PollIssue::Unauthorized(Refused {
+                incarnation: 1,
+                lifecycle_generation: 1,
+                credential_generation: 2,
+            })),
+            "the 401 names the credential it refused under the lineage the fetch started on"
+        );
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("usage request rejected with status 401"),
+            "the snapshot keeps the text every refused status writes"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_usage_403_a_500_and_a_transport_failure_answer_a_passing_fault_with_their_status_and_text(
+    ) {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: answering(403),
+        }])
+        .await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let fault = |status: u16| {
+            Some(PollIssue::Fault(PollFault {
+                endpoint: "usage",
+                status: Some(status),
+                transport: false,
+                text: format!("usage request rejected with status {status}"),
+            }))
+        };
+        assert_eq!(service.poll_reporting("a").await.unwrap().1, fault(403));
+        up.set_rule_after(0, "/api/oauth/usage", answering(500));
+        assert_eq!(service.poll_reporting("a").await.unwrap().1, fault(500));
+        up.set_rule_after(0, "/api/oauth/usage", Respond::CloseAfterRequest);
+        let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
+        let Some(PollIssue::Fault(fault)) = issue else {
+            panic!("a transport failure is a passing fault: {issue:?}");
+        };
+        assert_eq!(
+            (fault.endpoint, fault.status, fault.transport),
+            ("usage", None, true)
+        );
+        assert!(fault.text.starts_with("transport: "), "{}", fault.text);
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some(fault.text.as_str()),
+            "the fault's text is the snapshot's"
+        );
+        assert_eq!(usage_requests(&up), 3, "no fault holds the account back");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_caller_joined_to_another_callers_fetch_reads_its_snapshot_and_no_issue() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Gated(Box::new(answering(500))),
+        }])
+        .await;
+        let service = Arc::new(service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            &now,
+        ));
+        let starting = {
+            let service = service.clone();
+            tokio::spawn(async move { service.poll_reporting("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (usage_requests(&up) == 1).then_some(())
+        })
+        .await;
+        let mut joined = std::pin::pin!(service.poll_reporting("a"));
+        assert!(
+            futures::poll!(joined.as_mut()).is_pending(),
+            "the second caller joins the fetch still out"
+        );
+        up.release();
+        let (joined_snapshot, joined_issue) = joined.await.unwrap();
+        let (started_snapshot, started_issue) = starting.await.unwrap().unwrap();
+        assert!(
+            matches!(started_issue, Some(PollIssue::Fault(_))),
+            "the caller that started the fetch reads its fault: {started_issue:?}"
+        );
+        assert_eq!(joined_issue, None, "one fetch reports once");
+        assert_eq!(joined_snapshot.error, started_snapshot.error);
+        assert_eq!(usage_requests(&up), 1);
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_usage_429_answers_no_issue_and_keeps_the_ladder() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![rate_limited_bare()]).await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let (snapshot, issue) = service.poll_reporting("a").await.unwrap();
+        assert_eq!(issue, None, "a 429 is the ladder's, never a fault");
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("usage request rate-limited")
+        );
+        let status = service.poll_status("a").unwrap();
+        assert_eq!(
+            (
+                status.last_outcome,
+                status.rate_limited_in_a_row,
+                status.next_attempt_at
+            ),
+            (PollOutcome::RateLimited, 1, Some(1_000_000 + 120_000)),
+            "the ladder's first step"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_profile_500_and_a_profile_transport_failure_answer_the_fault_with_the_refreshs_text()
+    {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/profile".into(),
+            respond: answering(500),
+        }])
+        .await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+        let refused = service.profile("a").await.unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "profile request rejected with status 500"
+        );
+        let UsageError::Fault(fault) = refused else {
+            panic!("a profile 500 is a passing fault: {refused:?}");
+        };
+        assert_eq!(
+            fault,
+            PollFault {
+                endpoint: "profile",
+                status: Some(500),
+                transport: false,
+                text: "profile request rejected with status 500".into(),
+            }
+        );
+        up.set_rule_after(0, "/api/oauth/profile", Respond::CloseAfterRequest);
+        let lost = service.profile("a").await.unwrap_err();
+        let text = lost.to_string();
+        assert!(text.starts_with("transport: "), "{text}");
+        let UsageError::Fault(fault) = lost else {
+            panic!("a profile transport failure is a passing fault: {lost:?}");
+        };
+        assert_eq!(
+            (fault.endpoint, fault.status, fault.transport, fault.text),
+            ("profile", None, true, text)
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_re_pair_mark_of_a_replaced_credential_lands_nothing_and_the_current_one_lands_auth_failed(
+    ) {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![]).await;
+        let store = store_with_bundle_until(1_000_000 + 86_400_000);
+        let current = commit_next_credential(&store);
+        let service = service_for(&up, store.clone(), &now);
+        let fence = |credential_generation: u64| Refused {
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation,
+        };
+        assert_eq!(
+            service.mark_auth_failed("a", fence(current - 1)),
+            None,
+            "a 401 on the credential the re-pair replaced lands nothing"
+        );
+        let row = store.account("a").unwrap().unwrap();
+        assert_eq!(row.state, AccountState::Ready);
+        let mark = service
+            .mark_auth_failed("a", fence(current))
+            .expect("a 401 on the current credential lands the mark");
+        assert_eq!(
+            (mark.state, mark.cause, mark.credential_generation),
+            (
+                AccountState::ReauthRequired,
+                StateCause::AuthFailed,
+                current
+            )
+        );
+        let row = store.account("a").unwrap().unwrap();
+        assert_eq!(
+            (row.state, row.state_cause),
+            (AccountState::ReauthRequired, StateCause::AuthFailed)
+        );
+        up.shutdown().await;
     }
 }

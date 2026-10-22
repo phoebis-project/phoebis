@@ -1133,7 +1133,14 @@ async fn a_profile_refresh_whose_refresh_lands_a_reauth_mark_reports_it_to_routi
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     due_for_refresh(&h.store, "a");
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(&h.store, h.usage.as_ref().unwrap(), &h.router, &row).await;
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
     assert_eq!(
         h.store.account("a").unwrap().unwrap().state,
         AccountState::ReauthRequired,
@@ -1177,7 +1184,14 @@ async fn a_profile_refresh_whose_seat_tier_alone_moves_the_class_reloads_the_rou
         "a plan seat before the refresh"
     );
     let row = h.store.account("a").unwrap().unwrap();
-    QuotaPoll::refresh_profile(&h.store, h.usage.as_ref().unwrap(), &h.router, &row).await;
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
     assert!(
         h.store.subscription_term("a").unwrap().unwrap().usage_based,
         "the stored document classes the seat"
@@ -1637,6 +1651,216 @@ async fn a_run_after_an_invalidated_one_writes_its_own_start_and_end() {
         rows[2].3["duration_ms"].as_i64(),
         Some(rows[2].2 - rows[1].2),
         "the end measures the second run"
+    );
+    up.shutdown().await;
+}
+
+/// An answer of `status` with an empty object for its body.
+fn answering(status: u16) -> Respond {
+    Respond::Json {
+        status,
+        headers: vec![],
+        body: b"{}".to_vec(),
+    }
+}
+
+/// The rows of `kind` the ledger holds, in order: the account, when, and the detail.
+async fn rows_of(h: &Harness, kind: &str) -> Vec<(Option<String>, i64, serde_json::Value)> {
+    h.db.events(0, i64::MAX, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == kind)
+        .map(|e| {
+            let detail = serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+            (e.account_id, e.at, detail)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_usage_401_lands_reauth_required_under_auth_failed_and_the_poll_stops_asking_the_account()
+{
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", answering(401));
+    let h = harness_with_poll(
+        &up,
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(usage_asked(&up, A), 1, "the first slot meets the 401");
+    let row = h.store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.state_cause),
+        (AccountState::ReauthRequired, StateCause::AuthFailed),
+        "the usage endpoint refused the credential"
+    );
+    resumed(routing_reads_reauth_required(&h, "a")).await;
+    let moved = resumed(wait_for_async(Duration::from_secs(5), || async {
+        rows_of(&h, "account_state_changed").await.pop()
+    }))
+    .await;
+    assert_eq!(
+        (
+            moved.0.as_deref(),
+            moved.2["from"].as_str(),
+            moved.2["to"].as_str(),
+            moved.2["cause"].as_str()
+        ),
+        (
+            Some("a"),
+            Some("ready"),
+            Some("reauth_required"),
+            Some("auth_failed")
+        )
+    );
+
+    let sibling = usage_asked(&up, OAUTH_C);
+    step_to(&h, &up, &paused, secs(302 + 3 * 300)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        1,
+        "the marked account is out of the schedule"
+    );
+    assert!(
+        usage_asked(&up, OAUTH_C) >= sibling + 3,
+        "its sibling keeps the interval"
+    );
+    assert!(
+        resumed(rows_of(&h, "poll_failed")).await.is_empty(),
+        "the re-pair writes no passing fault"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_403_writes_poll_failed_naming_the_usage_endpoint_and_keeps_the_schedule() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", answering(403));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let (lines, _sink) = capture_tracing();
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(usage_asked(&up, A), 2, "a fault holds no slot back");
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().state,
+        AccountState::Ready
+    );
+    let rows = resumed(wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows_of(&h, "poll_failed").await;
+        (rows.len() == 2).then_some(rows)
+    }))
+    .await;
+    for (account, _, detail) in &rows {
+        assert_eq!(account.as_deref(), Some("a"));
+        assert_eq!(
+            detail,
+            &serde_json::json!({
+                "endpoint": "usage",
+                "status": 403,
+                "error": "usage request rejected with status 403",
+                "transport": false,
+            }),
+            "one row per poll that faulted"
+        );
+    }
+    let warnings = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("endpoint failed") && l.contains("account=a") && l.contains("403"))
+        .count();
+    assert_eq!(warnings, 2, "one warning per poll that faulted");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_profile_500_writes_poll_failed_naming_the_profile_endpoint_and_logs_one_warning() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", answering(500));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let (lines, _sink) = capture_tracing();
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows_of(&h, "poll_failed").await;
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|(account, _, detail)| (account.as_deref(), detail.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            Some("a"),
+            serde_json::json!({
+                "endpoint": "profile",
+                "status": 500,
+                "error": "profile request rejected with status 500",
+                "transport": false,
+            })
+        )]
+    );
+    let warnings = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("endpoint failed") && l.contains("account=a"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].contains("profile") && warnings[0].contains("500"),
+        "the line names the endpoint and the status: {}",
+        warnings[0]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_usage_transport_failure_writes_poll_failed_with_transport_set_and_no_status() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", Respond::CloseAfterRequest);
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    let answer =
+        QuotaPoll::poll_account(h.usage.as_ref().unwrap(), &h.ledger, Some(&h.router), &row)
+            .await
+            .unwrap();
+    let text = answer.error.expect("the poll read nothing");
+    assert!(text.starts_with("transport: "), "{text}");
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows_of(&h, "poll_failed").await;
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter()
+            .map(|(account, _, detail)| (account.as_deref(), detail.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            Some("a"),
+            serde_json::json!({
+                "endpoint": "usage",
+                "status": null,
+                "error": text,
+                "transport": true,
+            })
+        )],
+        "the snapshot's text, no status, and the transport flag"
     );
     up.shutdown().await;
 }

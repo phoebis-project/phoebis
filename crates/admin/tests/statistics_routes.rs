@@ -4867,6 +4867,57 @@ async fn the_routing_log_filters_on_the_stream_interrupted_kind() {
 }
 
 #[tokio::test]
+async fn the_routing_log_filters_on_the_poll_failed_kind() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    parts.ledger.record(phoebis_ledger::poll_failed(
+        "direct",
+        now - 2_000,
+        &phoebis_oauth::PollFault {
+            endpoint: "usage",
+            status: Some(403),
+            transport: false,
+            text: "usage request rejected with status 403".into(),
+        },
+    ));
+    parts
+        .ledger
+        .record(routing_event(now - 1_000, "cooldown_set"));
+    let route = |kinds: &str| {
+        format!(
+            "/admin/routing-log?from={}&to={}&kinds={kinds}",
+            now - 10_000,
+            now - 1
+        )
+    };
+    let first = get(&parts.app, &route("poll_failed"), Some(&cookie)).await;
+    let status = first.status();
+    assert_eq!(status, 200, "{}", json(first).await);
+    // Both rows landed before the filtered read, so the cooldown's absence is the filter's.
+    wait_json(
+        &parts.app,
+        &route("cooldown_set,poll_failed"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let page = json(get(&parts.app, &route("poll_failed"), Some(&cookie)).await).await;
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row["type"].as_str(), row["kind"].as_str()))
+            .collect::<Vec<_>>(),
+        [(Some("event"), Some("poll_failed"))],
+        "the fault's row alone, the cooldown left out"
+    );
+    assert_eq!(
+        (&rows[0]["detail"]["endpoint"], &rows[0]["detail"]["status"]),
+        (&serde_json::json!("usage"), &serde_json::json!(403))
+    );
+}
+
+#[tokio::test]
 async fn an_empty_kinds_reads_as_every_kind() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

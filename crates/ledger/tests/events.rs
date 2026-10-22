@@ -1835,7 +1835,7 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
 fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically() {
     use phoebis_ledger::EVENT_KINDS;
     use phoebis_routing::{CacheMapEntry, CreditsState, PinKeyFacts, ShedRoundFacts, WindowSource};
-    const KINDS: [&str; 34] = [
+    const KINDS: [&str; 35] = [
         "account_state_changed",
         "budget_period_ended",
         "budget_reached",
@@ -1855,6 +1855,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         "pin_released",
         "poll_backoff_ended",
         "poll_backoff_started",
+        "poll_failed",
         "refresh_failed",
         "refresh_succeeded",
         "refresh_uncertain",

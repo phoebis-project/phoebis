@@ -14945,12 +14945,12 @@ export const FIXTURES: Record<string, Fixture> = {
     }
   },
   "routing_log": {
-    "route": "GET /admin/routing-log?from=2026-10-11T11:16:40Z&to=2026-10-11T12:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,mark_cleared,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,reservation_expired,router_started,shedding_round,slow_down_ended,slow_down_started,stream_interrupted,warm_prefix_expired,wind_down_started,window_cleared,window_reset,window_spent&limit=200",
+    "route": "GET /admin/routing-log?from=2026-10-11T11:16:40Z&to=2026-10-11T12:17:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,mark_cleared,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,poll_failed,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,reservation_expired,router_started,shedding_round,slow_down_ended,slow_down_started,stream_interrupted,warm_prefix_expired,wind_down_started,window_cleared,window_reset,window_spent&limit=200",
     "body": {
       "rows": [
         {
           "type": "event",
-          "id": 47,
+          "id": 48,
           "at": 1791721060000,
           "kind": "router_started",
           "account_id": null,
@@ -16225,7 +16225,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 46,
+          "id": 47,
           "at": 1791718420000,
           "kind": "registry_changed",
           "account_id": null,
@@ -16249,7 +16249,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 45,
+          "id": 46,
           "at": 1791718360000,
           "kind": "refresh_uncertain",
           "account_id": "business",
@@ -16267,7 +16267,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 44,
+          "id": 45,
           "at": 1791718300000,
           "kind": "refresh_failed",
           "account_id": "business",
@@ -16285,7 +16285,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 43,
+          "id": 44,
           "at": 1791718240000,
           "kind": "refresh_succeeded",
           "account_id": "business",
@@ -16304,7 +16304,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 42,
+          "id": 43,
           "at": 1791718180000,
           "kind": "account_state_changed",
           "account_id": "business",
@@ -16324,7 +16324,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 41,
+          "id": 42,
           "at": 1791718120000,
           "kind": "ledger_gap",
           "account_id": null,
@@ -16363,7 +16363,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 40,
+          "id": 41,
           "at": 1791718060000,
           "kind": "budget_period_ended",
           "account_id": "business",
@@ -16382,7 +16382,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 39,
+          "id": 40,
           "at": 1791718000000,
           "kind": "budget_reached",
           "account_id": "business",
@@ -16403,7 +16403,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 38,
+          "id": 39,
           "at": 1791717940000,
           "kind": "catalog_changed",
           "account_id": "business",
@@ -16507,6 +16507,26 @@ export const FIXTURES: Record<string, Fixture> = {
             "reset_at": 1791717700000,
             "next_reset": 1792322500000,
             "observed": "sample"
+          }
+        },
+        {
+          "type": "event",
+          "id": 38,
+          "at": 1791717640000,
+          "kind": "poll_failed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "endpoint": "usage",
+            "status": 503,
+            "error": "usage request rejected with status 503",
+            "transport": false
           }
         },
         {

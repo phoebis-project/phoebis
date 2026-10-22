@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_oauth::{BackoffEdge, UsageError, UsageService, UsageSnapshot};
+use phoebis_oauth::{
+    BackoffEdge, LandedMark, PollFault, PollIssue, UsageError, UsageService, UsageSnapshot,
+};
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
     credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, FIVE_HOUR,
@@ -18,7 +20,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::assemble::Record;
-use crate::events::poll_backoff;
+use crate::events::{poll_backoff, poll_failed};
 use crate::record::{ExtraUsageSampleRecord, QuotaSampleRecord};
 use crate::rollup::bucket_of;
 use crate::task::Ledger;
@@ -201,11 +203,15 @@ pub fn lead_over_pace(
     utilization - elapsed_share_at(window, reset_at, end, at)
 }
 
-/// Whether the poll asks about this account: every OAuth account that holds a credential, paused or not,
-/// because a paused account's quota is still the operator's to watch.
+/// Whether the poll asks about this account: every OAuth account that holds a credential the upstream has not
+/// refused, paused or not, because a paused account's quota is still the operator's to watch. A refused credential
+/// is asked again only after a re-pair.
 pub fn polled(kind: AccountKind, state: AccountState) -> bool {
     kind == AccountKind::Oauth
-        && !matches!(state, AccountState::Disconnected | AccountState::Unpaired)
+        && !matches!(
+            state,
+            AccountState::Disconnected | AccountState::Unpaired | AccountState::ReauthRequired
+        )
 }
 
 /// What the startup step found before the bound: `reported` accounts reached the router with a sample,
@@ -401,7 +407,7 @@ impl QuotaPoll {
                     let handle = attempts.spawn(async move {
                         let _ = Self::poll_account(&usage, &ledger, Some(&router), &account).await;
                         if profile_due {
-                            Self::refresh_profile(&store, &usage, &router, &account).await;
+                            Self::refresh_profile(&store, &usage, &ledger, &router, &account).await;
                         }
                         Completion {
                             held: usage.held_for(&account.id),
@@ -455,14 +461,24 @@ impl QuotaPoll {
     /// whose `error` is set (the account held, or the read failed) was recorded nowhere, and the service's own
     /// error is a read that never completed. The scheduler calls it with the router and keeps nothing of the
     /// answer, and the startup step counts a clean snapshot as reported. A reauth mark the read's acquisition landed
-    /// reaches the router as `Report::AccountState` when `router` is given. The profile is `refresh_profile`'s.
+    /// reaches the router as `Report::AccountState` when `router` is given, as does the mark a usage 401 lands under
+    /// `auth_failed`, and any other failed answer or transport failure of the read writes a `poll_failed` row. The
+    /// profile is `refresh_profile`'s.
     pub async fn poll_account(
         usage: &UsageService,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
         account: &AccountRow,
     ) -> Result<UsageSnapshot, UsageError> {
-        let answer = usage.poll(&account.id).await;
+        let answer = match usage.poll_reporting(&account.id).await {
+            Ok((snapshot, issue)) => {
+                if let Some(issue) = issue {
+                    Self::report_issue(usage, ledger, router, account, &snapshot, issue).await;
+                }
+                Ok(snapshot)
+            }
+            Err(error) => Err(error),
+        };
         if let Some(router) = router {
             Self::report_landed_mark(usage, router, &account.id).await;
         }
@@ -513,13 +529,15 @@ impl QuotaPoll {
         }
     }
 
-    /// The profile row's refresh. A failure is logged, and a reauth mark its acquisition landed reaches the router as
-    /// `poll_account` reports one. A stored tier or class the profile changes asks the router to reload, since the
+    /// The profile row's refresh. A failure is logged, a failed answer or a transport failure writing a `poll_failed`
+    /// row beside its warning, and a reauth mark its acquisition landed reaches the router as `poll_account` reports
+    /// one. A stored tier or class the profile changes asks the router to reload, since the
     /// snapshot's tier prices the router's own use of the account's windows and the class places the account among the
     /// paid sources.
     pub async fn refresh_profile(
         store: &Store,
         usage: &UsageService,
+        ledger: &Ledger,
         router: &RouterHandle,
         account: &AccountRow,
     ) {
@@ -548,10 +566,71 @@ impl QuotaPoll {
                     }
                 }
             }
+            Err(UsageError::Fault(fault)) => Self::record_fault(usage, ledger, &account.id, &fault),
             Err(error) => {
                 tracing::debug!(account = %account.id, %error, "the quota poll got no profile")
             }
         }
+    }
+
+    /// What a usage fetch this poll started found beyond its snapshot: a 401 sends the account to the re-pair, and a
+    /// passing fault is recorded. The snapshot's own text and the schedule stay as the fetch left them.
+    async fn report_issue(
+        usage: &UsageService,
+        ledger: &Ledger,
+        router: Option<&RouterHandle>,
+        account: &AccountRow,
+        snapshot: &UsageSnapshot,
+        issue: PollIssue,
+    ) {
+        match issue {
+            PollIssue::Fault(fault) => Self::record_fault(usage, ledger, &account.id, &fault),
+            PollIssue::Unauthorized(refused) => {
+                let Some(mark) = usage.mark_auth_failed(&account.id, refused) else {
+                    return;
+                };
+                if let Some(router) = router {
+                    Self::report_refused_credential(router, mark, snapshot.error.clone()).await;
+                }
+            }
+        }
+    }
+
+    /// One warning line and one `poll_failed` row for a poll that faulted, as often as polls fault: the rows are the
+    /// record of each, and the ladder alone spaces the polls.
+    fn record_fault(usage: &UsageService, ledger: &Ledger, account_id: &str, fault: &PollFault) {
+        let status = fault
+            .status
+            .map_or_else(|| "transport".to_string(), |status| status.to_string());
+        tracing::warn!(
+            account = %account_id,
+            status = %status,
+            error = %fault.text,
+            "a poll of the {} endpoint failed",
+            fault.endpoint
+        );
+        ledger.record(poll_failed(account_id, usage.now(), fault));
+    }
+
+    /// Reports the mark a usage 401 landed as `report_landed_mark` reports a refresh's, with the snapshot's text,
+    /// which names the endpoint and its status, as the detail.
+    async fn report_refused_credential(
+        router: &RouterHandle,
+        mark: LandedMark,
+        detail: Option<String>,
+    ) {
+        router
+            .report(Report::AccountState {
+                account_id: mark.account_id,
+                state: mark.state,
+                incarnation: mark.incarnation,
+                lifecycle_generation: mark.lifecycle_generation,
+                credential_generation: mark.credential_generation,
+                cause: mark.cause,
+                detail,
+                dispatched_ordinal: None,
+            })
+            .await;
     }
 
     /// Reports the reauth mark the service's last acquisition for the account landed, as the relay reports its own:
@@ -606,7 +685,7 @@ impl QuotaPoll {
                 let answer =
                     Self::poll_account(&usage, &task_ledger, Some(&router), &account).await;
                 let _ = tx.send(matches!(answer, Ok(ref s) if s.error.is_none()));
-                Self::refresh_profile(&store, &usage, &router, &account).await;
+                Self::refresh_profile(&store, &usage, &task_ledger, &router, &account).await;
             });
             ledger.track(handle);
         }

@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_oauth::{BackoffEdge, Clock};
+use phoebis_oauth::{BackoffEdge, Clock, PollFault};
 use phoebis_relay::CatalogChange;
 use phoebis_routing::{CreditsState, RouterEvent, RouterHandle};
 use phoebis_store::{AccountState, ResolvedAttempt, StateCause, Store};
@@ -519,6 +519,25 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
         kind: kind.into(),
         account_id: Some(account_id.clone()),
         detail: Some(detail.to_string()),
+        ..Default::default()
+    })
+}
+
+/// `poll_failed` on the polled account, detail {endpoint, status, error, transport}.
+pub fn poll_failed(account_id: &str, at: i64, fault: &PollFault) -> Record {
+    Record::Event(EventRecord {
+        at,
+        kind: "poll_failed".into(),
+        account_id: Some(account_id.to_string()),
+        detail: Some(
+            json!({
+                "endpoint": fault.endpoint,
+                "status": fault.status,
+                "error": fault.text,
+                "transport": fault.transport,
+            })
+            .to_string(),
+        ),
         ..Default::default()
     })
 }

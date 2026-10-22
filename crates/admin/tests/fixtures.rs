@@ -2676,6 +2676,16 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             resumed_at: at(8),
         },
     ));
+    parts.ledger.record(phoebis_ledger::poll_failed(
+        "business",
+        at(4),
+        &phoebis_oauth::PollFault {
+            endpoint: "usage",
+            status: Some(503),
+            transport: false,
+            text: "usage request rejected with status 503".into(),
+        },
+    ));
     parts.ledger.record(phoebis_ledger::catalog_changed(
         &phoebis_relay::CatalogChange {
             account_id: "business".into(),

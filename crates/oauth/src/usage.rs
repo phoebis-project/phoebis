@@ -32,9 +32,12 @@ pub const BACKOFF_CAP_MS: i64 = 15 * 60 * 1_000;
 /// is per account and per minute, so a one-minute retry met the same answer.
 const BACKOFF_LADDER_MS: [i64; 3] = [120_000, 240_000, 480_000];
 
-/// The endpoint names a 429's warning and the held answer carry.
+/// The endpoint names a 429's warning, the held answer and a passing fault carry.
 const PROFILE_ENDPOINT: &str = "profile";
 const USAGE_ENDPOINT: &str = "usage";
+
+/// The snapshot's error text for a usage 401, worded as every other status the endpoint refuses with.
+const USAGE_UNAUTHORIZED: &str = "usage request rejected with status 401";
 
 /// Top-level keys the 2.1.270 binary and the Management Center source use for the Fable weekly window,
 /// read only when `limits[]` is absent from the response.
@@ -164,6 +167,39 @@ pub struct UsageSnapshot {
 pub enum UsageError {
     #[error("{0}")]
     Unavailable(String),
+    /// The profile endpoint's passing fault, displayed as the text the refresh logs.
+    #[error("{}", .0.text)]
+    Fault(PollFault),
+}
+
+/// A passing fault of the usage or the profile endpoint: any status but 200 and 429 (the usage endpoint's 401
+/// apart), or a transport failure.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PollFault {
+    /// `usage` or `profile`.
+    pub endpoint: &'static str,
+    /// The status the endpoint answered, `None` on a transport failure.
+    pub status: Option<u16>,
+    pub transport: bool,
+    /// The error text the snapshot records for a usage fault, and the profile refresh's for a profile one.
+    pub text: String,
+}
+
+/// The credential a usage 401 refused, the fence the re-pair mark's conditional write compares: the account's lineage
+/// at the fetch's start and the acquired token's generation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Refused {
+    pub incarnation: u64,
+    pub lifecycle_generation: u64,
+    pub credential_generation: u64,
+}
+
+/// What a poll's fetch found beyond its snapshot, handed to the caller that started the fetch alone, so one fetch
+/// reports once however many callers joined it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PollIssue {
+    Fault(PollFault),
+    Unauthorized(Refused),
 }
 
 /// Reads every top-level object with a `utilization` member as a window, keeping its key. `extra_usage`
@@ -315,6 +351,19 @@ enum FetchFailure {
         received_at: i64,
         retry_after: Option<i64>,
     },
+    Fault(PollFault),
+    /// The usage endpoint's 401. `fetch` fills the fence's credential generation and `fetch_and_cache` its lineage.
+    Unauthorized(Refused),
+}
+
+impl FetchFailure {
+    /// Completes a 401's fence with what the caller holds and leaves every other failure as it is.
+    fn fenced(mut self, fill: impl FnOnce(&mut Refused)) -> FetchFailure {
+        if let FetchFailure::Unauthorized(refused) = &mut self {
+            fill(refused);
+        }
+        self
+    }
 }
 
 /// Whose reading a fetch or a cache entry is. A deleted id created again draws a new incarnation but starts
@@ -425,6 +474,30 @@ fn utc(at_ms: i64) -> String {
         .unwrap_or_else(|_| at_ms.to_string())
 }
 
+/// A transport failure of either endpoint, under the text the snapshot and the profile refresh record for one.
+fn transport_fault(endpoint: &'static str, error: &str) -> PollFault {
+    PollFault {
+        endpoint,
+        status: None,
+        transport: true,
+        text: format!("transport: {error}"),
+    }
+}
+
+/// A usage status other than 200 and 429: the 401 that sends the account to the re-pair, its fence for `fetch` and
+/// `fetch_and_cache` to fill, and every other status a passing fault.
+fn usage_refusal(status: u16) -> FetchFailure {
+    if status == 401 {
+        return FetchFailure::Unauthorized(Refused::default());
+    }
+    FetchFailure::Fault(PollFault {
+        endpoint: USAGE_ENDPOINT,
+        status: Some(status),
+        transport: false,
+        text: format!("usage request rejected with status {status}"),
+    })
+}
+
 /// The ladder's wait for the `in_a_row`-th 429 in a row, counted from 1.
 fn ladder_step(in_a_row: u32) -> i64 {
     (in_a_row as usize)
@@ -434,7 +507,7 @@ fn ladder_step(in_a_row: u32) -> i64 {
         .unwrap_or(BACKOFF_CAP_MS)
 }
 
-type FetchOutcome = Result<UsageSnapshot, String>;
+type FetchOutcome = Result<(UsageSnapshot, Option<PollIssue>), String>;
 type SharedFetch = Shared<BoxFuture<'static, FetchOutcome>>;
 
 struct Inner {
@@ -501,11 +574,32 @@ impl UsageService {
     /// a held-down refresh button cannot turn into a stream of requests against an endpoint that rate-limits per
     /// account. A held account answers its last snapshot with the error set.
     pub async fn poll(&self, account_id: &str) -> Result<UsageSnapshot, UsageError> {
+        self.poll_reporting(account_id)
+            .await
+            .map(|(snapshot, _)| snapshot)
+    }
+
+    /// `poll` with the typed issue of the fetch this call started: `None` on a clean read, a held answer and a caller
+    /// joined to another's fetch.
+    pub async fn poll_reporting(
+        &self,
+        account_id: &str,
+    ) -> Result<(UsageSnapshot, Option<PollIssue>), UsageError> {
         let now = (self.inner.clock)();
         if let Some(held) = self.inner.held(account_id, now) {
-            return Ok(held);
+            return Ok((held, None));
         }
         self.join_or_start(account_id).await
+    }
+
+    /// The re-pair mark for a usage 401 under `StateCause::AuthFailed`, through the manager's conditional write.
+    pub fn mark_auth_failed(&self, account_id: &str, refused: Refused) -> Option<LandedMark> {
+        self.inner.manager.mark_auth_failed(account_id, refused)
+    }
+
+    /// The service's clock, which stamps its attempts, for a caller that records what an attempt found.
+    pub fn now(&self) -> i64 {
+        (self.inner.clock)()
     }
 
     /// How much longer the account waits out its backoff at the service's clock; `None` when it may be asked now.
@@ -569,12 +663,17 @@ impl UsageService {
             .remove(account_id);
     }
 
-    async fn join_or_start(&self, account_id: &str) -> Result<UsageSnapshot, UsageError> {
+    async fn join_or_start(
+        &self,
+        account_id: &str,
+    ) -> Result<(UsageSnapshot, Option<PollIssue>), UsageError> {
+        let mut started = false;
         let shared = {
             let mut inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
             match inflight.get(account_id) {
                 Some(existing) => existing.clone(),
                 None => {
+                    started = true;
                     let inner = self.inner.clone();
                     let id = account_id.to_string();
                     // Spawned so a caller that goes away mid-fetch does not stop the fetch other callers are
@@ -600,7 +699,10 @@ impl UsageService {
                 }
             }
         };
-        shared.await.map_err(UsageError::Unavailable)
+        shared
+            .await
+            .map(|(snapshot, issue)| (snapshot, issue.filter(|_| started)))
+            .map_err(UsageError::Unavailable)
     }
 
     /// The profile document, fetched now: the usage cache's `not_before` gates it and a 429 here counts against
@@ -644,8 +746,9 @@ impl UsageService {
         let host = ControlKind::Profile.host(self.inner.profile);
         let sent = self.inner.control.send(req, &host, FETCH_TIMEOUT).await;
         drop(permit);
-        let (head, body) =
-            sent.map_err(|error| UsageError::Unavailable(format!("transport: {error}")))?;
+        let (head, body) = sent.map_err(|error| {
+            UsageError::Fault(transport_fault(PROFILE_ENDPOINT, &error.to_string()))
+        })?;
         if head.status == 429 {
             // The hold runs from the answer's arrival, as a usage 429's does; `now` predates the credential and
             // permit waits.
@@ -661,10 +764,12 @@ impl UsageService {
             ));
         }
         if head.status != 200 {
-            return Err(UsageError::Unavailable(format!(
-                "profile request rejected with status {}",
-                head.status
-            )));
+            return Err(UsageError::Fault(PollFault {
+                endpoint: PROFILE_ENDPOINT,
+                status: Some(head.status),
+                transport: false,
+                text: format!("profile request rejected with status {}", head.status),
+            }));
         }
         parse_profile(&body).map_err(|error| UsageError::Unavailable(format!("parse: {error}")))
     }
@@ -707,10 +812,17 @@ impl Inner {
     async fn fetch_and_cache(&self, account_id: &str) -> FetchOutcome {
         let now = (self.clock)();
         if let Some(held) = self.held(account_id, now) {
-            return Ok(held);
+            return Ok((held, None));
         }
         let started = self.identity(account_id);
         let (read_at, result) = self.fetch(account_id).await;
+        let result = result.map_err(|failure| {
+            failure.fenced(|refused| {
+                let lineage = started.unwrap_or_default();
+                refused.incarnation = lineage.incarnation;
+                refused.lifecycle_generation = lineage.lifecycle_generation;
+            })
+        });
         let ended = self.identity(account_id);
         self.commit(account_id, read_at, started != ended, ended, result)
     }
@@ -735,9 +847,12 @@ impl Inner {
             .await
             .expect("usage semaphore is never closed");
         let sent_at = (self.clock)();
+        let result = self.request_usage(token.secret.expose(), permit).await;
         (
             sent_at,
-            self.request_usage(token.secret.expose(), permit).await,
+            result.map_err(|failure| {
+                failure.fenced(|refused| refused.credential_generation = token.generation)
+            }),
         )
     }
 
@@ -750,8 +865,9 @@ impl Inner {
         let host = ControlKind::Usage.host(self.profile);
         let sent = self.control.send(req, &host, FETCH_TIMEOUT).await;
         drop(permit);
-        let (head, body) =
-            sent.map_err(|error| FetchFailure::Message(format!("transport: {error}")))?;
+        let (head, body) = sent.map_err(|error| {
+            FetchFailure::Fault(transport_fault(USAGE_ENDPOINT, &error.to_string()))
+        })?;
         if head.status == 429 {
             let received_at = (self.clock)();
             return Err(FetchFailure::RateLimited {
@@ -760,10 +876,7 @@ impl Inner {
             });
         }
         if head.status != 200 {
-            return Err(FetchFailure::Message(format!(
-                "usage request rejected with status {}",
-                head.status
-            )));
+            return Err(usage_refusal(head.status));
         }
         let (windows, fable_window, extra_usage, spend, raw_keys) =
             parse_usage(&body).map_err(|error| FetchFailure::Message(format!("parse: {error}")))?;
@@ -830,7 +943,8 @@ impl Inner {
                 Some(entry) => Ok(entry.snapshot.clone()),
                 None => Err("account identity changed while fetching usage".to_string()),
             };
-            return (outcome, None);
+            // What the fetch found is about the holder it started under, which no longer stands.
+            return (outcome.map(|snapshot| (snapshot, None)), None);
         }
         // A hold armed while this fetch was out belongs to the account rather than to the snapshot it is
         // stored beside, so replacing the entry never shortens it.
@@ -875,7 +989,7 @@ impl Inner {
                         rate_limited_in_a_row: 0,
                     },
                 );
-                (Ok(snapshot), edge)
+                (Ok((snapshot, None)), edge)
             }
             Err(failure) => {
                 let previous = cache.get(account_id);
@@ -890,14 +1004,23 @@ impl Inner {
                     })
                     .unwrap_or((None, None, 0, ended.unwrap_or_default()));
                 let previous = previous.map(|entry| entry.snapshot.clone());
-                let (message, rate_limited) = match failure {
-                    FetchFailure::Message(message) => (message, None),
+                let (message, rate_limited, issue) = match failure {
+                    FetchFailure::Message(message) => (message, None, None),
                     FetchFailure::RateLimited {
                         received_at,
                         retry_after,
                     } => (
                         "usage request rate-limited".to_string(),
                         Some((received_at, retry_after)),
+                        None,
+                    ),
+                    FetchFailure::Fault(fault) => {
+                        (fault.text.clone(), None, Some(PollIssue::Fault(fault)))
+                    }
+                    FetchFailure::Unauthorized(refused) => (
+                        USAGE_UNAUTHORIZED.to_string(),
+                        None,
+                        Some(PollIssue::Unauthorized(refused)),
                     ),
                 };
                 let last_error = Some(message.clone());
@@ -933,7 +1056,7 @@ impl Inner {
                     entry.rate_limited(account_id, USAGE_ENDPOINT, received_at, retry_after)
                 });
                 cache.insert(account_id.to_string(), entry);
-                (Ok(snapshot), edge)
+                (Ok((snapshot, issue)), edge)
             }
         }
     }

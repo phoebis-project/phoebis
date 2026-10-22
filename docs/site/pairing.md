@@ -157,10 +157,13 @@ in transport, arms a backoff and tries again, and only a definitive failure, lis
 
 `reauth_required` follows one definitive failure, never a retry count. An API-key account is marked on a `401`, or a
 `403` whose error type is `authentication_error`, from the upstream. An OAuth account is marked when a refresh finds no
-refresh token in the stored bundle, when the token endpoint answers `401` or `400` with `invalid_grant`, when the
-refreshed token names an identity other than the account's, when a request replayed with a freshly refreshed token is
-refused again, or when a refresh was in flight as the process stopped, which the next start cannot settle and so
-quarantines.
+refresh token in the stored bundle, when the token endpoint answers `401` or `400` with `invalid_grant`, when the usage
+poll's read of the usage endpoint answers `401` on the account's current credential, when the refreshed token names an
+identity other than the account's, when a request replayed with a freshly refreshed token is refused again, or when a
+refresh was in flight as the process stopped, which the next start cannot settle and so quarantines. The usage poll
+stops reading a marked account until a pairing is confirmed on it. Any other failed answer of the usage or the profile
+endpoint, or a read that fails in transport, leaves the state as it is: the poll logs one warning and writes one
+`poll_failed` event per poll that failed, while a `429` backs the poll off.
 
 The Accounts view offers these actions, each through a control that [The console](console.md#accounts) describes, and
 each calls its own route:
