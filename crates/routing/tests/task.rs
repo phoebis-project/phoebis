@@ -11838,10 +11838,18 @@ async fn a_wall_read_by_a_head_that_names_no_reset_is_stored_under_the_stored_re
     handle.samples().await.unwrap();
     now.store(2_000, Ordering::SeqCst);
     handle.report(head_reading(2_000, 1.0, None, "r-1")).await;
-    assert!(matches!(
-        next_window_edge(&mut events).await,
-        RouterEvent::WindowSpent { at: 2_000, .. }
-    ));
+    match next_window_edge(&mut events).await {
+        RouterEvent::WindowSpent {
+            at,
+            reset: announced,
+            ..
+        } => assert_eq!(
+            (at, announced),
+            (2_000, Some(reset)),
+            "the wall is announced under the stored reset"
+        ),
+        other => panic!("the head at the wall reads spent, not {other:?}"),
+    }
     let spent = predicted_reading(&handle, FIVE_HOUR).await;
     assert_eq!(
         (spent.utilization, spent.reset),

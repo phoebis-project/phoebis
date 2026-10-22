@@ -9577,6 +9577,81 @@ fn a_loaded_pin_whose_last_refresh_is_its_creation_is_flagged_and_reads_warm_by_
     );
 }
 
+/// Both pins placed an hour before `T` and used a second before it: `flagged` last refreshed at its placement, so a
+/// load flags it, and `clear` a second after it.
+fn a_flagged_and_a_clear_pin(flagged_burn: f64, clear_burn: f64) -> (PinRow, PinRow) {
+    let flagged = PinRow {
+        last_refresh_at: T - HOUR,
+        ..burning("flagged", "a", flagged_burn, true, T)
+    };
+    let clear = PinRow {
+        last_refresh_at: T - HOUR + 1_000,
+        ..burning("clear", "a", clear_burn, true, T)
+    };
+    assert!(
+        warm(&flagged, true, T) && !warm(&flagged, false, T) && !warm(&clear, false, T),
+        "the flag alone decides the flagged pin's warmth, and the clear pin reads cold by its last refresh"
+    );
+    (flagged, clear)
+}
+
+#[test]
+fn a_fresh_sessions_prior_counts_a_flagged_pin_warm_by_its_last_use_and_leaves_out_a_clear_one() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let (flagged, clear) = a_flagged_and_a_clear_pin(10_000.0, 30_000.0);
+    let mut st = loaded(vec![flagged.clone(), clear.clone()]);
+    assert!(st.auxiliary_only(&flagged.key()) && !st.auxiliary_only(&clear.key()));
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T));
+    let fresh = SelectRequest {
+        body_tokens: 1_000,
+        ..request(&s, Some("s9"), "claude-sonnet-5", true, &[], T)
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &fresh, &mut rng()).0),
+        ("a".into(), None)
+    );
+    let booked = st.reservation("r-1").expect("the placement books");
+    assert!(
+        close(
+            booked.burn.get(FIVE_HOUR).copied().unwrap_or(0.0),
+            10_000.0 / 10_000_000.0
+        ),
+        "the flagged pin's burn alone is the prior, the clear pin cold: {booked:?}"
+    );
+}
+
+#[test]
+fn the_shed_round_reads_a_flagged_pin_warm_by_its_last_use_and_a_clear_one_cold() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    let (flagged, clear) = a_flagged_and_a_clear_pin(4.0, 3.0);
+    let mut st = rounding(vec![
+        flagged.clone(),
+        clear.clone(),
+        burning("current", "a", 1.0, true, T),
+    ]);
+    assert!(st.auxiliary_only(&flagged.key()) && !st.auxiliary_only(&clear.key()));
+    over_a_fitting_b(&mut st, T - 500);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &main_turn(&s, "current", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    let cold = |session: &str| {
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == session)
+            .map(|p| p.cold)
+    };
+    assert_eq!(
+        (cold("flagged"), cold("clear")),
+        (Some(false), Some(true)),
+        "the round reads the flagged pin by its last use and the clear one by its last refresh: {round:?}"
+    );
+}
+
 #[test]
 fn a_request_that_continues_nothing_on_another_lane_leaves_the_sessions_pin_untouched() {
     let s = snapshot(Pool {
@@ -12895,15 +12970,6 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
         burning("warm-2", "a", 2.0, true, T),
         burning("warm-1", "a", 1.0, true, T),
     ]);
-    // Sonnet's measured-scale share per token: one table's rate scales every pin of the account alike, so the
-    // order and the share of the sum read as the token counts would.
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-sonnet-5", Some(0.0454e-6))]),
-            ..RegimeRates::unit()
-        },
-        ..BurnRates::default()
-    });
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     assert_eq!(
@@ -12956,14 +13022,8 @@ fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_rounds_burn_sum() {
         burning("warm-4", "a", 4.0, true, T),
         burning("warm-1", "a", 1.0, true, T),
     ]);
-    // The guess model's input rate is unknown, so its two pins burn nine tokens a second that price to nothing.
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
-            ..RegimeRates::unit()
-        },
-        ..BurnRates::default()
-    });
+    // The round's pricer prices the guess model at nothing, so the nine tokens a second each guess pin burns weigh no
+    // share.
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
@@ -13360,13 +13420,6 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
             ..burning("fast-2", "a", 2.0, false, T)
         },
     ]);
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
-            ..RegimeRates::unit()
-        },
-        ..BurnRates::default()
-    });
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "cold-5", T), &mut rng());
@@ -13544,13 +13597,6 @@ fn warm_sessions_never_marks_no_warm_pin_when_an_unpriced_cold_pin_leaves_the_co
         burning("warm-4", "a", 4.0, true, T),
         burning("warm-1", "a", 1.0, true, T),
     ]);
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
-            ..RegimeRates::unit()
-        },
-        ..BurnRates::default()
-    });
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     assert_eq!(
@@ -19978,27 +20024,6 @@ fn two_pins_of_equal_burn_project_half_the_share_for_the_pin_under_the_test_regi
 fn the_order_ranks_a_pin_by_the_rate_of_its_own_regime() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
     let mut st = a_desk_pin_and_a_base_pin();
-    let half = Rates {
-        input: Some(0.5),
-        cache_read: Some(0.5),
-        write_5m: Some(0.5),
-        write_1h: Some(0.5),
-        output: Some(0.5),
-    };
-    st.set_rates(BurnRates {
-        five_hour: RegimeRates {
-            base: RateTable::unit(),
-            regimes: HashMap::from([(
-                "desk".to_string(),
-                RateTable {
-                    fallback: half,
-                    ..RateTable::unit()
-                },
-            )]),
-            entrypoints: HashMap::from([("desk".to_string(), "desk".to_string())]),
-        },
-        ..BurnRates::default()
-    });
     past_the_wait(&mut st, &s, "p", "a", T);
     let desk_turn = SelectRequest {
         entrypoint: Some("desk".into()),

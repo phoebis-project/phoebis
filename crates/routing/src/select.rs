@@ -4674,7 +4674,20 @@ fn shed_round(
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
     let in_pool = in_pool(snapshot, pool);
     let average_ms = burn_average_ms(pool);
-    let (mut pins, _) = state.burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms);
+    // A window-share round orders by the walk's own figure, which `share_of` fills below, so it lists its pins
+    // unpriced.
+    let mut pins: Vec<(PinRow, Option<f64>)> = match unit {
+        BurnUnit::WindowShare => state
+            .pins_on(account_id, &in_pool)
+            .into_iter()
+            .map(|p| (p.clone(), None))
+            .collect(),
+        BurnUnit::Usd => {
+            state
+                .burn_of(account_id, &in_pool, unit, state.rates(), now, average_ms)
+                .0
+        }
+    };
     let is_current = |p: &PinRow| p.key() == current.key();
     let is_cold = |p: &PinRow| {
         if is_current(p) {
