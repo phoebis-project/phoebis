@@ -5,7 +5,7 @@
 
 use std::path::Path;
 #[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -37,6 +37,8 @@ pub struct LedgerDb {
     writes: Writes,
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_read: AtomicBool,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    page_reads: AtomicUsize,
 }
 
 /// One `parked_records` row as the start reads it: the row's id and the serialized `ParkedRecord`.
@@ -108,6 +110,8 @@ impl LedgerDb {
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_read: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            page_reads: AtomicUsize::new(0),
         })
     }
 
@@ -121,6 +125,8 @@ impl LedgerDb {
             writes: Writes::default(),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_read: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            page_reads: AtomicUsize::new(0),
         })
     }
 
@@ -182,6 +188,8 @@ impl LedgerDb {
         self: &Arc<Self>,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,
     ) -> Result<T, LedgerError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.page_reads.fetch_add(1, Ordering::SeqCst);
         let db = Arc::clone(self);
         tokio::task::spawn_blocking(move || db.read_blocking(f))
             .await
@@ -255,6 +263,14 @@ impl LedgerDb {
     #[doc(hidden)]
     pub fn debug_fail_next_read(&self) {
         self.fail_next_read.store(true, Ordering::SeqCst);
+    }
+
+    /// The `read` calls this handle has run since it opened. A paged walk such as the guardrail dry run's takes one
+    /// per page, so a test pins the page size the walk reads by the count across it.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_page_reads(&self) -> usize {
+        self.page_reads.load(Ordering::SeqCst)
     }
 
     /// Caps the writer connection's file at the pages it holds once a vacuum has left none free, so the next insert

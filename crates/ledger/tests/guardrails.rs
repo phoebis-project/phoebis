@@ -596,6 +596,36 @@ fn the_sample_page_walks_the_newest_captured_rows_of_a_pool_or_a_key_and_skips_p
     );
 }
 
+/// The cursor names the page's last row by its instant and its id, so a row that shares the instant and sorts below
+/// the id opens the next page and one older than the instant follows it.
+#[test]
+fn two_rows_at_one_instant_are_walked_in_id_order_across_a_page_boundary() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 1_000 * HOUR_MS;
+    for row in [
+        sampled("a", now, "k1", true, "inference"),
+        sampled("t1", now - 1_000, "k1", true, "inference"),
+        sampled("t2", now - 1_000, "k2", true, "inference"),
+        sampled("z", now - 2_000, "k1", true, "inference"),
+    ] {
+        db.insert_request(&row, &[], None).unwrap();
+    }
+    let pool = SampleSubject::Pool("main");
+    let since = now - 72 * HOUR_MS;
+    let (first, next) = sample_ids(&db, pool, since, None, 2);
+    let cursor = format!("{}:t2", now - 1_000);
+    assert_eq!(
+        (first, next.as_deref()),
+        (vec!["a".into(), "t2".into()], Some(cursor.as_str())),
+        "the higher id first at the shared instant"
+    );
+    assert_eq!(
+        sample_ids(&db, pool, since, next.as_deref(), 2),
+        (vec!["t1".into(), "z".into()], None),
+        "the other row at that instant opens the next page"
+    );
+}
+
 /// The captured body comes back byte for byte, and a row whose body row has gone answers none, as does a row that
 /// never had one.
 #[test]

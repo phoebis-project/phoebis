@@ -221,6 +221,8 @@ mod tests {
         assert_eq!(refusal("a..b"), "path has an empty member at segment 2");
         assert_eq!(refusal(".a"), "path has an empty member at segment 1");
         assert_eq!(refusal("a."), "path has an empty member at segment 2");
+        assert_eq!(refusal("]a"), "path has an empty member at segment 1");
+        assert_eq!(refusal("a.]b"), "path has an empty member at segment 2");
         assert_eq!(refusal("a[x]"), "path has a malformed index at segment 2");
         assert_eq!(refusal("a[-0]"), "path has a malformed index at segment 2");
         assert_eq!(refusal("a[]"), "path has a malformed index at segment 2");

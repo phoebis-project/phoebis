@@ -5556,8 +5556,8 @@ fn the_bound_is_checked_inside_the_write_on_a_key_a_pool_and_a_pool_move() {
             .insert_guardrail(&guardrail(id, None), &[], &[], "test")
             .unwrap();
     }
-    // The sixty-fifth exists before either side names it, so each refusal below is the bound's and never a missing
-    // id's.
+    // The sixty-fifth exists before either side names it, so each update refusal below is the bound's and never a
+    // missing id's. Each insert refusal names a guardrail of its own, so a write past the bound shows in the readback.
     store
         .insert_guardrail(&guardrail("g65", None), &[], &[], "test")
         .unwrap();
@@ -5586,7 +5586,7 @@ fn the_bound_is_checked_inside_the_write_on_a_key_a_pool_and_a_pool_move() {
         .unwrap();
     let before = state(&store);
     assert!(matches!(
-        store.insert_guardrail(&guardrail("g65", None), &ids(&["empty"]), &[], "test"),
+        store.insert_guardrail(&guardrail("g66", None), &ids(&["empty"]), &[], "test"),
         Err(StoreError::PoolGuardrailBound(id)) if id == "empty"
     ));
     assert_eq!(state(&store), before);
@@ -5615,7 +5615,7 @@ fn the_bound_is_checked_inside_the_write_on_a_key_a_pool_and_a_pool_move() {
         .unwrap();
     let before = state(&store);
     assert!(matches!(
-        store.insert_guardrail(&guardrail("g65", None), &[], &ids(&["k1"]), "test"),
+        store.insert_guardrail(&guardrail("g66", None), &[], &ids(&["k1"]), "test"),
         Err(StoreError::KeyGuardrailBound(id)) if id == "k1"
     ));
     assert_eq!(state(&store), before);
@@ -5645,6 +5645,59 @@ fn the_bound_is_checked_inside_the_write_on_a_key_a_pool_and_a_pool_move() {
     ));
     assert_eq!(state(&store), before);
     assert_eq!(store.api_key("k2").unwrap().unwrap().pool_id, "other");
+}
+
+#[test]
+fn a_pool_side_write_that_takes_a_keys_own_list_past_the_bound_is_refused_for_the_key() {
+    let store = guarded_store();
+    let sixty_five: Vec<String> = (1..=65).map(|n| format!("g{n:02}")).collect();
+    for id in &sixty_five {
+        store
+            .insert_guardrail(&guardrail(id, None), &[], &[], "test")
+            .unwrap();
+    }
+    let k1 = store.api_key("k1").unwrap().unwrap();
+    store
+        .update_api_key_with_guardrails(&k1, k1.updated_at, Some(&sixty_five[..63]), "test")
+        .unwrap();
+    let state = |store: &Store| {
+        (
+            store.guardrail_attachments().unwrap(),
+            store.guardrails().unwrap(),
+        )
+    };
+    let before = state(&store);
+
+    let main = store.pool("main").unwrap().unwrap();
+    let refused = store
+        .update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&sixty_five[63..]),
+            "test",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&refused, StoreError::KeyGuardrailBound(id) if id == "k1"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "key k1 would hold more than 64 guardrails"
+    );
+    assert_eq!(state(&store), before, "the refused write left every list");
+
+    let main = store.pool("main").unwrap().unwrap();
+    store
+        .update_pool_with_members_and_guardrails(
+            &main,
+            main.updated_at,
+            None,
+            Some(&sixty_five[63..64]),
+            "test",
+        )
+        .expect("a pool list that brings the key's union to the bound is written");
 }
 
 #[test]
@@ -5775,15 +5828,15 @@ fn the_change_log_records_the_three_guardrail_kinds_and_the_guardrails_member_on
     assert_eq!(created["mode"], "observe");
     assert_eq!(created["pools"], serde_json::json!(["main"]));
     assert_eq!(created["keys"], serde_json::json!(["k1"]));
-    let updated = &changes[2].2;
-    assert_eq!(updated["name"], "renamed");
-    assert_eq!(updated["mode"], "enforce");
     assert_eq!(
-        updated["pools"],
-        serde_json::json!(["main", "other"]),
-        "the lists read as they stand after the write"
+        changes[2].2,
+        serde_json::json!({
+            "name": {"from": "g1", "to": "renamed"},
+            "mode": {"from": "observe", "to": "enforce"},
+            "pools": {"from": ["main"], "to": ["main", "other"]},
+        }),
+        "the update's pairs, its pools among them"
     );
-    assert_eq!(updated["keys"], serde_json::json!(["k1"]));
     assert_eq!(
         changes[3].2["guardrails"],
         serde_json::json!({ "from": ["g1"], "to": ["g2", "g1"] })
@@ -5801,6 +5854,91 @@ fn the_change_log_records_the_three_guardrail_kinds_and_the_guardrails_member_on
         "a key edit without a list adds no member"
     );
     assert_eq!(changes[7].2, serde_json::json!({}));
+}
+
+/// The diffs a guardrail's writes logged after `start`, oldest first.
+fn guardrail_diffs(store: &Store, start: u64) -> Vec<serde_json::Value> {
+    store
+        .registry_changes_after(start, 100)
+        .unwrap()
+        .into_iter()
+        .map(|change| serde_json::from_str(&change.diff_json).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_guardrail_create_logs_its_pools_and_keys_by_id_as_its_update_does() {
+    let store = guarded_store();
+    let start = store.newest_registry_change_id().unwrap().unwrap_or(0);
+    let g1 = store
+        .insert_guardrail(
+            &guardrail("g1", None),
+            &ids(&["other", "main"]),
+            &ids(&["k2", "k1"]),
+            "test",
+        )
+        .unwrap();
+    store
+        .update_guardrail(
+            &g1,
+            g1.updated_at,
+            Some(&ids(&["other", "main"])),
+            Some(&ids(&["k2", "k1"])),
+            "test",
+        )
+        .unwrap();
+    let diffs = guardrail_diffs(&store, start);
+    assert_eq!(diffs[0]["pools"], serde_json::json!(["main", "other"]));
+    assert_eq!(diffs[0]["keys"], serde_json::json!(["k1", "k2"]));
+    assert_eq!(
+        diffs[1],
+        serde_json::json!({}),
+        "the update reads the lists in the create's order, so the same lists written again change nothing"
+    );
+}
+
+#[test]
+fn a_guardrail_update_logs_each_changed_member_as_a_from_and_to_pair_and_nothing_for_the_rest() {
+    let store = guarded_store();
+    let g1 = store
+        .insert_guardrail(
+            &guardrail("g1", None),
+            &ids(&["main"]),
+            &ids(&["k1"]),
+            "test",
+        )
+        .unwrap();
+    let start = store.newest_registry_change_id().unwrap().unwrap_or(0);
+    let renamed = GuardrailRow {
+        name: "renamed".into(),
+        enabled: false,
+        ..g1.clone()
+    };
+    let at = store
+        .update_guardrail(
+            &renamed,
+            g1.updated_at,
+            Some(&ids(&["other", "main"])),
+            Some(&[]),
+            "test",
+        )
+        .unwrap();
+    store
+        .update_guardrail(&renamed, at, None, None, "test")
+        .unwrap();
+    assert_eq!(
+        guardrail_diffs(&store, start),
+        [
+            serde_json::json!({
+                "name": {"from": "g1", "to": "renamed"},
+                "enabled": {"from": true, "to": false},
+                "pools": {"from": ["main"], "to": ["main", "other"]},
+                "keys": {"from": ["k1"], "to": []},
+            }),
+            serde_json::json!({}),
+        ],
+        "a member the write left as it was, a list included, carries no pair"
+    );
 }
 
 #[test]

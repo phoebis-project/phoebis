@@ -1756,14 +1756,13 @@ impl Store {
         )?;
         set_guardrail_subjects_in(&tx, &row.id, "pool", pools, now)?;
         set_guardrail_subjects_in(&tx, &row.id, "key", keys, now)?;
-        record_change(
-            &tx,
-            now,
-            actor,
-            "guardrail_created",
-            &row.id,
-            &guardrail_diff(row, pools, keys),
-        )?;
+        // Read back rather than taken from the caller, so the lists sit in the order the update logs them.
+        let diff = guardrail_diff(
+            row,
+            &guardrail_subjects(&tx, &row.id, "pool")?,
+            &guardrail_subjects(&tx, &row.id, "key")?,
+        );
+        record_change(&tx, now, actor, "guardrail_created", &row.id, &diff)?;
         let written = tx.query_row(
             &format!("{GUARDRAIL_SELECT} WHERE id = ?1"),
             params![row.id],
@@ -1787,6 +1786,19 @@ impl Store {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         check_guardrail_side_bound(&tx, &row.id, pools, keys)?;
+        let before = tx
+            .query_row(
+                &format!("{GUARDRAIL_SELECT} WHERE id = ?1"),
+                params![row.id],
+                row_to_guardrail,
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::GuardrailNotFound(row.id.clone()))?;
+        let before = guardrail_fields(
+            &before,
+            &guardrail_subjects(&tx, &row.id, "pool")?,
+            &guardrail_subjects(&tx, &row.id, "key")?,
+        );
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE guardrails SET name = ?2, description = ?3, enabled = ?4, mode = ?5, action = ?6, conditions_json = ?7, preset_id = ?8, preset_version = ?9, updated_at = ?10 WHERE id = ?1 AND updated_at = ?11 AND incarnation = ?12",
@@ -1823,11 +1835,12 @@ impl Store {
         if let Some(keys) = keys {
             set_guardrail_subjects_in(&tx, &row.id, "key", keys, at)?;
         }
-        let diff = guardrail_diff(
+        let after = guardrail_fields(
             row,
             &guardrail_subjects(&tx, &row.id, "pool")?,
             &guardrail_subjects(&tx, &row.id, "key")?,
         );
+        let diff = serde_json::Value::Object(changed(&before, &after)).to_string();
         record_change(&tx, at, actor, "guardrail_updated", &row.id, &diff)?;
         tx.commit()?;
         Ok(at)
@@ -2445,6 +2458,10 @@ fn changed(
 }
 
 fn guardrail_diff(row: &GuardrailRow, pools: &[String], keys: &[String]) -> String {
+    guardrail_fields(row, pools, keys).to_string()
+}
+
+fn guardrail_fields(row: &GuardrailRow, pools: &[String], keys: &[String]) -> serde_json::Value {
     serde_json::json!({
         "name": row.name,
         "description": row.description,
@@ -2457,5 +2474,4 @@ fn guardrail_diff(row: &GuardrailRow, pools: &[String], keys: &[String]) -> Stri
         "pools": pools,
         "keys": keys,
     })
-    .to_string()
 }

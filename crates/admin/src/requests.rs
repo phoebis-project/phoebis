@@ -393,8 +393,8 @@ pub(crate) struct Event {
     ///   and `cause` as on a failed one.
     /// - `registry_changed`: an operator's edit to the registry, with its `kind`, `target` and `diff`: the row's
     ///   snapshot for a creation, the `{field: {from, to}}` pairs of the changed fields for an account, a key or a pool
-    ///   update, the guardrail's snapshot with its `pools` and `keys` lists for a guardrail update, `{}` for a deletion
-    ///   or a revocation, and the member list for `pool_members_set`. An account update's pairs carry
+    ///   update, the same pairs for a guardrail update with its `pools` and `keys` lists among the fields, `{}` for a
+    ///   deletion or a revocation, and the member list for `pool_members_set`. An account update's pairs carry
     ///   `"secret_replaced": true` beside them where the edit staged a secret, whose value the diff never holds, and
     ///   `key_rotated` carries the new secret's `prefix` and `previous_secret_until`, the instant the retired secret
     ///   stops being accepted.
