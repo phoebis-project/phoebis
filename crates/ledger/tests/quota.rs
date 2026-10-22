@@ -2191,7 +2191,8 @@ async fn a_backoff_run_open_when_the_plan_ended_closes_at_the_first_clean_poll_a
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let paused = start_polling(&h, &up).await;
 
-    // The first slot at 300 s opens the run, and the profile read that follows finds the plan ended.
+    // The first slot at 300 s opens the run, and the case sets the flag in place of a profile read that finds the plan
+    // ended.
     step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(usage_asked(&up, A), 1);
     assert!(h.store.set_plan_ended("a", NOW + 302_000).unwrap());
