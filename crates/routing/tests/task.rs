@@ -6049,6 +6049,47 @@ async fn two_pending_spend_heads_of_one_account_fold_to_the_newer() {
     assert_eq!(row.observed_at, 3_000);
 }
 
+#[tokio::test]
+async fn a_pending_reset_only_spend_head_keeps_an_older_pending_heads_share_at_the_cap() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .report(credits_at(true, None, Some(50.0), 1_000))
+        .await;
+    credits_row_reads(&store, 0.5).await;
+    let park = handle.park_loop().await;
+    handle.report(spend_head(1.0, 30 * HOUR, 2_000)).await;
+    handle
+        .report(Report::SpendHead {
+            account_id: "a".into(),
+            utilization: None,
+            reset: Some(30 * HOUR),
+            observed_at: 3_000,
+            incarnation: 1,
+        })
+        .await;
+    drop(park);
+    let row = credits_row_reads(&store, 1.0).await;
+    assert_eq!(
+        row.observed_at, 2_000,
+        "the head with a share lands beside the newer head that names the reset alone"
+    );
+    assert_eq!(
+        handle
+            .select(request(&handle, None, 1_000))
+            .await
+            .unwrap()
+            .result,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 30 * HOUR,
+            window: "spend".into()
+        }),
+        "the seat the upstream reported at its cap is held out until the reset"
+    );
+}
+
 /// 2026-10-10T00:00:00Z, 2026-10-15T00:00:00Z, 2026-11-01T00:00:00Z and 2026-12-01T00:00:00Z in epoch milliseconds.
 const OCT_10: i64 = 1_791_590_400_000;
 const OCT_15: i64 = 1_792_022_400_000;

@@ -615,7 +615,7 @@ pub enum Report {
         source_request_id: Option<String>,
     },
     /// A head on a usage-based account: the overage family read as the spend window's share and reset, no overage
-    /// evidence. Coalesced per account and holder as `Overage` is.
+    /// evidence. Coalesced per account, holder and the members the head names.
     SpendHead {
         account_id: String,
         /// `anthropic-ratelimit-unified-overage-utilization`, a fraction.
@@ -714,9 +714,13 @@ enum CoalesceKey {
         incarnation: u64,
         windows: Vec<String>,
     },
+    /// The members the head names, so a head that names the reset alone never replaces one that carries a share:
+    /// each header is its own reading, which the fold's own age tests order.
     SpendHead {
         account_id: String,
         incarnation: u64,
+        share: bool,
+        reset: bool,
     },
 }
 
@@ -787,11 +791,15 @@ impl Report {
             }),
             Report::SpendHead {
                 account_id,
+                utilization,
+                reset,
                 incarnation,
                 ..
             } => Some(CoalesceKey::SpendHead {
                 account_id: account_id.clone(),
                 incarnation: *incarnation,
+                share: utilization.is_some(),
+                reset: reset.is_some(),
             }),
             Report::Affinity(_)
             | Report::Cooldown { .. }
