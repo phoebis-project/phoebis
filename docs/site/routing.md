@@ -415,14 +415,14 @@ holds once an account has backed off for thirty minutes.
 poll or the router's own prediction took it there. A window read under its limit again in the same reset cycle emits
 `window_cleared`, after a reading at the limit and after a predicted spent edge alike, and the clear ends the
 `destination_spent` condition the spent event built ([Conditions and gauges](statistics.md#conditions-and-gauges)). The
-reset's passing emits `window_reset`, by the clock walk or by the first reading after it, and no clear. A head that
-reads a plan window at 0.98 or above while its stored reading stands at the wall in the same reset cycle is held at the
-wall: the reading keeps the wall's figure under the head's instant, so the head neither clears the window nor lets the
-next poll announce the wall again. Where neither the wall nor the head names a reset, the cycle runs the window's length
-and a minute from the wall's anchor: the instant the wall was announced, the reset's passing for a wall that went on
-past its reset, or the stored reading's instant where no announcement stands. A wall the router restored from the
-registry at a start keeps the anchor its stored reading gave it, so a head inside the margin after the restart neither
-moves the anchor nor holds the account past the window's length.
+reset's passing emits `window_reset`, by the clock walk or by the first reading after it, and no clear. A head or a poll
+that reads a plan window inside the margin, at 0.98 or above and under 1.0, while its stored reading stands at the wall
+in the same reset cycle is held at the wall: the reading keeps the wall's figure under its own instant, so it neither
+clears the window nor lets the next poll announce the wall again. Where neither the wall nor the reading names a reset,
+the cycle runs the window's length and a minute from the wall's anchor: the instant the wall was announced, the reset's
+passing for a wall that went on past its reset, or the stored reading's instant where no announcement stands. A wall the
+router restored from the registry at a start keeps the anchor its stored reading gave it, so a reading inside the margin
+after the restart neither moves the anchor nor holds the account past the window's length.
 
 **The projection** Every move and placement reads where each plan window of a subscription account is headed: its
 prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier,
