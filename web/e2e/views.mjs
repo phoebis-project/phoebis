@@ -972,20 +972,20 @@ function routingLogCells(kinds) {
 
 /**
  * The routing log's columns at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800: the chevron 24 px, Kind 166,
- * Session 70, By 152, Fact 189 and Link 64 at every width, Account 179 under 1420 px and 147 from it, Model 192 from
+ * Session 70, By 152, Fact 189 and Link 64 at every width, Account 178 under 1420 px and 146 from it, Model 192 from
  * 1420 px alone, and Time, the fill, the rest. On the three wide viewports the table is as wide as its card with
- * nothing to scroll sideways and Time takes the card less the other columns within 1 px: 146 px at 1280 and 1440, and
+ * nothing to scroll sideways and Time takes the card less the other columns within 1 px: 147 px at 1280 and 1440, and
  * at 1920 the room for each request id under the time, which no line there cuts. At 375 the table keeps its 990 px
- * minimum, Time 146 px, and scrolls inside its wrap, the document's width recorded. Each column from Time to Link holds
- * its longest cell (`routingLogCells`), so a column narrower than it fails, Account aside: it cuts a line past its
- * width by design, and it fails under the longest account id with its padding. A line cut on purpose (the request link
- * under the time, the agent line under the session, an Account line past the column) that does not end behind an
- * ellipsis fails. From 1420 px the model stands in its own column alone, so an Account cell that draws it beneath the
- * account fails, and under 1420 px a row with a model that does not draw it there fails. The bare log is read, then the
- * log under the 7-day range on the state changes, where the mock story dates its Time cells on the first page and a
- * Time cell that breaks over two lines fails. The mock pass fails a 7-day page with no dated cell, and the router's
- * seed, which draws no row older than a day, records that the read stands down. The bare log loads again at the pass's
- * viewport after.
+ * minimum, Time 147 px, and scrolls inside its wrap, the document's width recorded. Each column from Time to Link holds
+ * its longest cell (`routingLogCells`), with no slack, so a column narrower than it fails, Account aside: it cuts a
+ * line past its width by design, and it fails under the longest account id with its padding. A line cut on purpose (the
+ * request link under the time, the agent line under the session, an Account line past the column) that does not end
+ * behind an ellipsis fails. From 1420 px the model stands in its own column alone, so an Account cell that draws it
+ * beneath the account fails, and under 1420 px a row with a model that does not draw it there fails. The bare log is
+ * read, then the log under the 7-day range on the state changes, where the mock story dates its Time cells on the first
+ * page and a Time cell that breaks over two lines fails. The mock pass fails a 7-day page with no dated cell, and the
+ * router's seed, which draws no row older than a day, records that the read stands down. The bare log loads again at
+ * the pass's viewport after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -1001,10 +1001,10 @@ async function routingLogColumns(theme) {
       await settle();
       if (under !== '') await loadAtOrigin(path, '.routing-log__table');
       for (const { account, fact, height, model, width } of [
-        { account: 179, fact: 189, height: 800, model: null, width: 1280 },
-        { account: 147, fact: 189, height: 900, model: 192, width: 1440 },
-        { account: 147, fact: 189, height: 1080, model: 192, width: 1920 },
-        { account: 179, fact: 189, height: 800, model: null, width: 375 },
+        { account: 178, fact: 189, height: 800, model: null, width: 1280 },
+        { account: 146, fact: 189, height: 900, model: 192, width: 1440 },
+        { account: 146, fact: 189, height: 1080, model: 192, width: 1920 },
+        { account: 178, fact: 189, height: 800, model: null, width: 375 },
       ]) {
         const where = `${under}at ${width} by ${height}`;
         await page.setViewportSize({ height, width });
@@ -1043,7 +1043,8 @@ async function routingLogColumns(theme) {
         }
         if (width >= 1920) for (const [, need, column, text] of got.cut.filter(([name]) => name === 'time')) say(`${where} the request link "${text}" under the time takes ${need}px of the ${column}px column and is cut`);
         for (const [name, need, column, text] of got.longest) {
-          if (name !== 'account' && need !== null && need > column + 0.5) say(`${where} the ${named[name]} column is ${column}px, narrower than its longest cell "${text}" at ${need}px`);
+          // Strict: a line past its column by any fraction of a pixel wraps, the time at its last space.
+          if (name !== 'account' && need !== null && need > column) say(`${where} the ${named[name]} column is ${column}px, narrower than its longest cell "${text}" at ${need}px`);
         }
         if (got.floor !== null && got.account !== null && got.floor[0] > got.account + 0.5) say(`${where} the Account column is ${got.account}px, under the longest account id "${got.floor[1]}" at ${got.floor[0]}px`);
         for (const [name, need, column, text, ellipsis] of got.cut) {

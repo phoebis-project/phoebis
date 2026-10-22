@@ -2221,12 +2221,12 @@
    in the console's fonts over the mock story and the seeded router: Kind the label "account state changed" (165.6
    px), Session the eight characters of an id (69.4 px), By "reservation expired" (151.6 px), Fact "state funding
    required" (188.8 px), Link "Details" with the row's edge (63.1 px) and Model "claude-haiku-4-5-20251001" (191.3 px),
-   and Account 179 px under 1420 px and 147 px from it, above the longest account id's 67.8 px, cutting a longer line.
+   and Account 178 px under 1420 px and 146 px from it, above the longest account id's 67.8 px, cutting a longer line.
    Time, the row's identity, takes what the others leave, so a wide card gives its room to the request id under the
    time. The table's minimum width holds Time at the dated form under the 12-hour setting, the widest it draws ("May
-   28 09:12:05 AM", 146.3 px, its last 0.3 px in the cell's padding, which no clip cuts): with the chevron and Time at
-   146 px the columns take 990 px, the 1280 by 800 card, and with Model 1150 px, the 1440 by 900 card, and a narrower
-   card scrolls inside `.table-wrap`. */
+   28 09:12:05 AM", 146.3 px), whose text breaks at a space in a narrower cell: with the chevron and Time at 147 px the
+   columns take 990 px, the 1280 by 800 card, and with Model 1150 px, the 1440 by 900 card, and a narrower card
+   scrolls inside `.table-wrap`. */
 .routing-log__table {
   table-layout: fixed;
 }
@@ -2286,7 +2286,7 @@
 }
 
 .routing-log__account {
-  width: 179px;
+  width: 178px;
 }
 
 .routing-log__model {
@@ -2322,7 +2322,7 @@
   }
 
   .routing-log__table .routing-log__account {
-    width: 147px;
+    width: 146px;
   }
 
   /* On the table and both of its classes, so it outweighs `.table .sub` and `.routing-log__cut`, which draw it. */
