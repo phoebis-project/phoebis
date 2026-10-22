@@ -68,8 +68,8 @@ pub use sse::{SseEvent, SseParser};
 
 #[cfg(feature = "debug-hooks")]
 impl Relay {
-    /// How many decoders this relay built for the hold's and the bus copy's reads of a response, so a test can
-    /// tell how many times a committed stream was decoded.
+    /// How many decoders this relay built for the hold's reads of a response, so a test can tell that a held coded
+    /// stream is decoded once beside the forward.
     pub fn decoders_built(&self) -> u64 {
         self.decoders_built
             .load(std::sync::atomic::Ordering::Relaxed)

@@ -4685,24 +4685,17 @@ impl Relay {
             },
         };
         // The chunk is the decoded body the caller receives, since a consumer of a chunk was promised text.
-        let mut chunk_published = false;
-        let answer = match inspectable_copy(head, &raw, false).map(Bytes::from) {
-            None => None,
-            Some(text) => {
-                trace.publish_chunk(ResponseChunk {
-                    request_id: trace.request_id.clone(),
-                    attempt: outcome.attempt,
-                    index: 0,
-                    body: text.clone(),
-                    phase: None,
-                });
-                chunk_published = true;
-                // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read
-                // by the body task; the 200 arm guards a caller that would buffer one, whose usage still counts.
-                (head.status == 200)
-                    .then(|| answer_from_json(&text, &[], outcome.diagnostics_named))
-            }
-        };
+        trace.publish_chunk(ResponseChunk {
+            request_id: trace.request_id.clone(),
+            attempt: outcome.attempt,
+            index: 0,
+            body: payload.clone(),
+            phase: None,
+        });
+        // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read by the body
+        // task, and the 200 arm guards a caller that would buffer one, whose usage still counts.
+        let answer = (head.status == 200)
+            .then(|| answer_from_json(&payload, &[], outcome.diagnostics_named));
         let (usage, facts) = match answer {
             Some(answer) => (Some(answer.usage), answer.response),
             None => (None, ResponseFacts::default()),
@@ -4744,7 +4737,7 @@ impl Relay {
                 facts,
                 None,
                 Some(payload.len() as u64),
-                chunk_published.then_some(1),
+                Some(1),
                 None,
                 // An error document carries no message `id`.
                 None,

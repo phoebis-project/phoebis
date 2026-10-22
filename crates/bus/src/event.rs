@@ -531,9 +531,8 @@ impl Event {
 /// asserts the two agree, since the bus may not depend on the relay), the credentials, and the framing headers
 /// the relay regenerates for its own hop.
 ///
-/// `accept-encoding` is the one entry that is neither: the relay decodes a compressed upstream answer only for
-/// a caller that sent none, so a replayed one would hand compressed bytes to the probe's usage parser and pause
-/// every recipe it ran for.
+/// `accept-encoding` is the one entry that is neither: a probe asks for an identity answer so its usage parser reads
+/// the body without a decode, and the probe's bytes toward the upstream stay as the recorded fixtures pin them.
 pub const HEADER_DENYLIST: &[&str] = &[
     "accept-encoding",
     "authorization",

@@ -303,12 +303,12 @@ verdict. Past the commit, the router's own reading of a stream, the copy the led
 phases and usage from, holds at most 512 KiB of one event while that event is still arriving. An event that outgrows
 the bound before its end is skipped in that copy and the events after it are still read, while one that arrives whole
 in one decoded piece is parsed whatever its size. The relay logs one warning at the end of a stream that had an event
-skipped, and the client receives every byte as sent either way. A stream the upstream cuts, stalls or sends undecodable
-after the head, and one the account's cancel ends, for an account disconnected, unpaired, deleted or re-created under
-its id, logs one warning with the account, the request id, the upstream request id, the bytes the client received, the
-cut's code and the error's words, and lands in the ledger as a `stream_interrupted` event the request's drawer shows.
-Every cooldown deadline carries a second of margin, so a request sent at the reset is not refused by a clock a hair
-behind.
+skipped, and the client receives the whole stream either way, decoded where the upstream coded it. A stream the upstream
+cuts, stalls or sends undecodable after the head, and one the account's cancel ends, for an account disconnected,
+unpaired, deleted or re-created under its id, logs one warning with the account, the request id, the upstream request
+id, the bytes the client received, the cut's code and the error's words, and lands in the ledger as a
+`stream_interrupted` event the request's drawer shows. Every cooldown deadline carries a second of margin, so a request
+sent at the reset is not refused by a clock a hair behind.
 
 | Head | Verdict | What follows |
 | --- | --- | --- |
@@ -321,7 +321,7 @@ behind.
 | API-key `400` naming the credit balance | `FailOver` | Another account, this one marked `funding_required` |
 | `401`, or `403` `authentication_error` | `Refresh` for OAuth, `FailOver` for an API key | OAuth: the token is refreshed and the request tried again on the same account. API key: another account, this one marked `reauth_required` |
 | `403` `permission_error` | `FailOver` | Another account, the model cooled on this one for an hour, reason `permission` |
-| Anything else (a `2xx`, any other `4xx` or `5xx`) | `Commit` | The upstream's answer reaches the client as sent |
+| Anything else (a `2xx`, any other `4xx` or `5xx`) | `Commit` | The upstream's answer reaches the client, decoded where the upstream coded it |
 
 The cooldown tables, the windows and the reasons are on [Cooldowns and failover](routing.md#cooldowns-and-failover).
 The rate-limit families the router reads off a head are `anthropic-ratelimit-unified-*`, `anthropic-ratelimit-*` and

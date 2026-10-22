@@ -25,14 +25,13 @@ pub enum Commit {
     Timeout,
 }
 
-/// The decoded view of a stream whose raw bytes are forwarded untouched.
+/// The decoded view of a held stream.
 pub struct Inspect {
     pub decoder: Option<Box<dyn Decoder>>,
     pub parser: SseParser,
-    /// What the hold read, which the bus copy of a committed stream takes over with the decoder and the parser
-    /// rather than decoding and parsing the held bytes a second time; `None` once the copy stopped following the
-    /// stream (a piece that did not decode, a parser overflow) or its text outgrew what the bus copy would decode of
-    /// the held bytes in one piece.
+    /// What the hold read, which the committed stream's forward takes over with the parser and the text rather than
+    /// parsing the held bytes a second time. `None` once the copy stopped following the stream (a piece that did not
+    /// decode, a parser overflow) or its text outgrew what the forward decodes of the held bytes in one piece.
     pub read: Option<HeldRead>,
 }
 

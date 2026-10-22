@@ -48,7 +48,7 @@ pub const STREAM_UNDECODABLE: &str = "stream_undecodable";
 /// expand into hundreds of MiB in a single call without this, whatever the caller does with the result after.
 /// It is a budget against the 8 KiB reads the transport fills at a time, not against a whole body: at
 /// deflate's compression ceiling one wire chunk can still decode past it, and the body ends with an error there
-/// rather than a cut.
+/// rather than a silently shortened chunk.
 pub(crate) const STREAM_DECODED_CHUNK_MAX: usize = 1 << 20;
 
 /// Reports what a post-commit error event means for routing, through the body's `Waiting`, so a report the full

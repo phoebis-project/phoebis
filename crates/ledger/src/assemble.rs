@@ -1822,11 +1822,11 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_through_response_larger_on_the_wire_than_decoded_is_stored_complete() {
+    fn a_response_larger_on_the_wire_than_decoded_is_stored_complete() {
         let mut a = Assembler::new(clock_at(1_000));
         a.observe(observed_capturing("r1", Some("k"), 1));
         a.chunk(&chunk_bytes("r1", 0, b"0123456789"));
-        // One chunk published, one delivered; the caller took 40 compressed bytes for these 10.
+        // One chunk published and delivered, under a byte count four times its length.
         let records = a.observe(Event::RequestComplete(completion("r1", Some(1), Some(40))));
         let (request, bodies) = request_and_bodies(&records);
         assert!(!request.response_truncated);

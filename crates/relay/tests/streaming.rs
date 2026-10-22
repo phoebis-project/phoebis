@@ -1819,7 +1819,7 @@ fn corrupt_gzip(payload: &[u8]) -> Vec<u8> {
     body
 }
 
-/// The stream request from a caller that takes no content coding, so the relay decodes the answer for it.
+/// The stream request from a caller that takes no content coding.
 fn identity_request() -> Request<Body> {
     let mut request = common::stream_request(common::KEY);
     common::set_header(&mut request, "accept-encoding", "identity");
@@ -2178,7 +2178,7 @@ async fn a_gzip_stream_decoded_for_the_client_builds_the_holds_decoder_alone_and
 }
 
 #[tokio::test]
-async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
+async fn a_forwarded_coded_rejection_past_the_bound_reaches_the_client_decoded_prefix_and_rest() {
     // A non-portable request's 429 past the bound, decoded for the client as it is forwarded: no bus, no pin, no
     // hook and no conversation report read its body, so no copy of it is decoded beside the forward.
     let mut state: u32 = 0x9e37_79b9;
@@ -2224,6 +2224,8 @@ async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
         forwarded.as_ref() == rejection.as_bytes(),
         "the prefix, then the rest, both decoded"
     );
+    // The counter counts the hold's decoders, and no hold reads a rejection, so the forward's own decoder leaves it
+    // at zero.
     assert_eq!(h.relay.decoders_built() - before, 0);
     up.shutdown().await;
 }
