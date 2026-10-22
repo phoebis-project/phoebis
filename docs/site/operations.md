@@ -130,13 +130,13 @@ refused at start and by `check-config` with `the storage key does not match the 
 before the canary existed is proved against its sealed rows instead, the first 32 of each kind (credential bundles and
 API-key secrets), passing when any of them opens, and the next start seals its canary. `check-config` names such a
 registry with `registry at {path} has no key canary yet. A sealed row opens under the key, and the next start seals
-one`. The proof's scope, the first 32 credential bundles and the first 32 API-key secrets, leaves a dead end in two
-shapes: a registry without a canary whose readable credential or API-key rows all sit past the 32nd of their kind
-refuses the right key at the start, and so does one whose readable rows sit only among the keepalive recipe bodies,
-which the proof never reads, beside credential or API-key rows that do not open. `phoebis recover-key` scans every
-sealed row, so on a registry in either shape it seals the canary under the key that opens the rows and exits 0 with `the
-storage key opens {readable_rows} sealed {rows} and the registry has no canary, so a canary was sealed under it and
-nothing was discarded`, keeping every row, and the next start passes through the canary.
+one`. The proof's scope, the first 32 credential bundles and the first 32 API-key secrets, leaves two shapes of a
+registry without a canary refusing the right key at the start: one whose readable credential or API-key rows all sit
+past the 32nd of their kind, and one whose readable rows sit only among the keepalive recipe bodies, which the proof
+never reads, beside credential or API-key rows that do not open. `phoebis recover-key` is the way out of both: it scans
+every sealed row, so on a registry in either shape it seals the canary under the key that opens the rows and exits 0
+with `the storage key opens {readable_rows} sealed {rows} and the registry has no canary, so a canary was sealed under
+it and nothing was discarded`, keeping every row, and the next start passes through the canary.
 
 `init` refuses a key file that exists with `{path} already exists, and init never replaces a key, since every stored
 credential is sealed under it`, and refuses a data directory that already holds a registry, so a lost key is never

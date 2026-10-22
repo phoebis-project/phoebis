@@ -345,20 +345,20 @@ fn a_key_file_that_opens_the_rows_of_a_registry_without_a_canary_seals_one_witho
     );
     assert_no_key(&out, &[OLD_KEY]);
     assert_untouched(&registry(dir.path()), &old);
-    assert_eq!(
-        Store::open(&registry(dir.path()), &old)
-            .unwrap()
-            .accounts()
-            .unwrap(),
-        seeded,
-        "no account was marked"
+    let store = Store::open(&registry(dir.path()), &old).unwrap();
+    assert!(
+        store.credentials("claude-b").unwrap().is_some(),
+        "the second bundle is kept as well"
     );
+    assert_eq!(store.accounts().unwrap(), seeded, "no account was marked");
+    // Released before the second run, which takes the registry's lock.
+    drop(store);
     let out = recover_key(&config, &["--yes"], b"");
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
     assert_eq!(
         stdout_lines(&out),
         [MATCH_LINE],
-        "the canary the first run sealed opens under the key: {}",
+        "a key that opens the canary is nothing to recover: {}",
         printed(&out)
     );
 }
