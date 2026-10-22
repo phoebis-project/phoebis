@@ -1679,6 +1679,34 @@ async fn a_head_row_that_names_the_reset_alone_hides_no_earlier_share_from_the_s
 }
 
 #[tokio::test]
+async fn a_head_row_naming_the_reset_alone_keeps_the_share_of_a_head_at_the_cap_in_its_bucket() {
+    use common::{login, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    insert_oauth(&parts, "seat", true);
+    parts.router.reload().await.unwrap();
+    let reset = NOW + 3_600_000;
+    // The head at the cap and the reset-only head after it share one bucket, the poll an earlier one.
+    let bucket_start = phoebis_ledger::bucket_of(NOW - 60_000) * 1_000;
+    for row in [
+        polled_row("seat", NOW - 600_000, (300_000, 75_000), 0.25, None),
+        head_row("seat", bucket_start, None, 1.0, reset),
+        reset_only_head_row("seat", NOW - 60_000, reset),
+    ] {
+        parts.db.insert_samples(&[], Some(&row)).unwrap();
+    }
+    let account = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        (
+            &account["spend"]["utilization"],
+            &account["extra_usage"]["utilization"]
+        ),
+        (&serde_json::json!(1.0), &serde_json::json!(1.0)),
+        "the head's share at one stands under the reset-only head of its bucket: {account}"
+    );
+}
+
+#[tokio::test]
 async fn a_usage_based_accounts_spend_reads_the_estimate_where_the_router_answers_no_window() {
     use common::{login, month_end, NOW};
     let parts = common::admin_parts_full().await;

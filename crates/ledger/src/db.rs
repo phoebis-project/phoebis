@@ -510,16 +510,20 @@ pub(crate) fn insert_samples_in(
         )?;
     }
     if let Some(e) = extra {
-        // Keyed by the source too, so a head replaces the bucket's head row and the bucket's first poll keeps its row:
-        // neither hides the other.
-        let verb = if e.source == "head" {
-            "INSERT OR REPLACE"
+        // Keyed by the source too, so a head updates the bucket's head row and the bucket's first poll keeps its row:
+        // neither hides the other. A head that names the share or the reset alone keeps the other one the row holds,
+        // since each header is its own reading: the row carries the bucket's last share and last reset.
+        let (verb, conflict) = if e.source == "head" {
+            (
+                "INSERT",
+                " ON CONFLICT (account_id, bucket, source) DO UPDATE SET is_enabled = excluded.is_enabled, in_use = excluded.in_use, utilization = COALESCE(excluded.utilization, utilization), disabled_reason = excluded.disabled_reason, overage_reset = COALESCE(excluded.overage_reset, overage_reset)",
+            )
         } else {
-            "INSERT OR IGNORE"
+            ("INSERT OR IGNORE", "")
         };
         conn.execute(
             &format!(
-                "{verb} INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"
+                "{verb} INTO extra_usage_samples (account_id, bucket, is_enabled, in_use, monthly_limit, used_credits, utilization, currency, disabled_reason, overage_reset, source, spend_limit_minor, spend_used_minor, spend_percent, spend_currency, spend_exponent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16){conflict}"
             ),
             params![
                 e.account_id, e.bucket, e.is_enabled, e.in_use, e.monthly_limit, e.used_credits,

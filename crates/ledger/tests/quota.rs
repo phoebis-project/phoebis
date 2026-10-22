@@ -2060,3 +2060,33 @@ async fn the_share_read_answers_the_newest_row_that_carries_a_share_under_a_newe
         "the newest row that carries a share is the head before it, not the older poll"
     );
 }
+
+#[tokio::test]
+async fn a_head_naming_the_reset_alone_keeps_the_share_an_earlier_head_wrote_in_its_bucket() {
+    let now = NOW + 900_000;
+    let bucket = phoebis_ledger::bucket_of(NOW + 300_000);
+    let poll = extra_row(phoebis_ledger::bucket_of(NOW), "poll", 0.25);
+    let head = extra_row(bucket, "head", 1.0);
+    let later_reset = head.overage_reset.map(|reset| reset + 3_600_000);
+    let reset_only = phoebis_ledger::ExtraUsageSampleRecord {
+        utilization: None,
+        overage_reset: later_reset,
+        ..extra_row(bucket, "head", 0.0)
+    };
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    for row in [&poll, &head, &reset_only] {
+        db.insert_samples(&[], Some(row)).unwrap();
+    }
+    let share = db
+        .read_blocking(move |c| phoebis_ledger::latest_extra_usage_share(c, now))
+        .unwrap();
+    assert_eq!(
+        share,
+        [phoebis_ledger::ExtraUsageSampleRecord {
+            utilization: Some(1.0),
+            overage_reset: later_reset,
+            ..head
+        }],
+        "the bucket's head row keeps its last share under its last reset"
+    );
+}
