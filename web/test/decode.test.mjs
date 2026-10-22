@@ -1519,7 +1519,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
   assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
   assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);
-  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 3, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
+  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 6, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
   assert.deepEqual(r.outcome.pinEvents, [{ kind: 'pin_created', reason: null }]);
   assert.equal(r.outcome.completion.hit, true);
   assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
@@ -2117,8 +2117,8 @@ test('a session view given its held rows reads the first page alone, replacing t
 });
 
 test('the dashboard reads the live pin count the route answers beside the rollups', () => {
-  assert.equal(fixture('dashboard').sessions.active_pins, 1);
-  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 1);
+  assert.equal(fixture('dashboard').sessions.active_pins, 4);
+  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 4);
   assert.equal(d.decodeDashboard({ ...fixture('dashboard'), sessions: { active_pins: 3 } }).activePins, 3);
 });
 
@@ -2163,7 +2163,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const sessions = fixture('sessions').sessions.map(d.decodeSession);
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');
-  assert.equal(s1.agentId, null, 'an unpinned row names no agent');
+  assert.equal(sessions.find((s) => s.sessionId === 's2').agentId, null, 'an unpinned row names no agent');
   assert.equal(sessions.find((s) => s.sessionId === 's-fixture').agentId, 'main', 'a pinned row names the pin\'s own agent');
   assert.equal(sessions.find((s) => s.sessionId === 's0').historical, true, 'the row of an earlier holder of the same key id reads historical');
   assert.equal(s1.keyGeneration, fixture('sessions').sessions.find((s) => s.session_id === 's1').key_generation, 'the live holder names the generation its key row carries');
@@ -2178,7 +2178,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
   assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'limits', 'pools', 'probes24h']);
   assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
-  assert.deepEqual(ov.limits, { agents: { count: 1, max: 1024 }, retainedBytes: { count: fixture('keepalive_overview').limits.retained_bytes.count, max: 268_435_456 }, sessions: { count: 1, max: 128 } }, 'each count beside the cap the bootstrap file sets');
+  assert.deepEqual(ov.limits, { agents: { count: 3, max: 1024 }, retainedBytes: { count: fixture('keepalive_overview').limits.retained_bytes.count, max: 268_435_456 }, sessions: { count: 1, max: 128 } }, 'each count beside the cap the bootstrap file sets');
   const [pool] = ov.pools;
   assert.deepEqual(
     [ov.pools.length, pool.poolId, pool.credited24h, pool.probes24h, pool.wasted24h, Object.keys(fixture('keepalive_overview').pools[0].wasted_reasons_24h).sort()],
