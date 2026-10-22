@@ -406,14 +406,15 @@ const groupsField = async (page) => {
   return groupsBox()?.querySelector('textarea') ?? null;
 };
 /**
- * Turns a Sessions column on through the Columns control, then closes the control, whose open grid would otherwise
- * stand over every check after it. The grid is a popover a portal draws at the end of the body.
+ * Turns a Sessions or Requests column on through the Columns control, or off where `on` is false, then closes the
+ * control, whose open grid would otherwise stand over every check after it. The grid is a popover a portal draws at the
+ * end of the body.
  */
-async function showColumn(m, label) {
+async function showColumn(m, label, on = true) {
   columnsButton(m)?.click();
   await m.settle(100);
   const box = [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]');
-  if (box && !box.checked) box.click();
+  if (box && box.checked !== on) box.click();
   await m.settle(100);
   columnsButton(m)?.click();
   await m.settle(100);
@@ -9416,18 +9417,18 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
 {
   // The client cell holds two lines (the class over the agent type), so each of its spans carries its own text as its
   // title.
-  // The id span carries the row's whole id, which its Details link
-  // names.
+  // The id span prints the row's whole id, the column's room alone cutting
+  // it, and carries it on its title, as the row's Details link names it.
   const rows = [...m.container.querySelectorAll('.requests__table tbody tr')];
   const classes = rows.flatMap((tr) => [...tr.querySelectorAll('.requests__client-text')]);
   const agents = rows.flatMap((tr) => [...tr.querySelectorAll('.requests__client .sub')]);
   const offText = [...classes, ...agents].filter((s) => s.getAttribute('title') !== s.textContent).map((s) => `${JSON.stringify(s.textContent)} titled ${s.getAttribute('title') ?? 'nothing'}`);
   const ids = rows.map((tr) => ({
     id: tr.querySelector('.requests__links a[href^="/requests/"]')?.getAttribute('href')?.slice('/requests/'.length).split('?')[0] ?? null,
-    shown: tr.querySelector('td .sub.mono')?.textContent?.replace(/…$/, '') ?? '',
+    shown: tr.querySelector('td .sub.mono')?.textContent ?? '',
     title: tr.querySelector('td .sub.mono')?.getAttribute('title') ?? null,
   }));
-  const offId = ids.filter((r) => r.id === null || r.title !== r.id || !r.id.startsWith(r.shown)).map((r) => `${r.id} shown as ${r.shown}, titled ${r.title}`);
+  const offId = ids.filter((r) => r.id === null || r.title !== r.id || r.shown !== r.id).map((r) => `${r.id} shown as ${r.shown}, titled ${r.title}`);
   results.push({
     name: '/requests every client and agent type span carries its own text as its title, and the id span the whole id',
     ok: rows.length > 0 && classes.length > 0 && agents.length > 0 && offText.length === 0 && offId.length === 0,
@@ -9435,9 +9436,9 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   });
 }
 {
-  // Pool, Kind and Transport start hidden, since the drawer names all three, and the control still offers every column.
+  // Kind, Pool and Transport start hidden, since the drawer names all three, and the control still offers every column.
   const ALL = ['Time', 'Key', 'Pool', 'Account', 'Model', 'Client', 'Kind', 'Transport', 'Status', 'Attempts', 'TTFB', 'Tokens', 'Cost'];
-  const HIDDEN = ['Pool', 'Kind', 'Transport'];
+  const HIDDEN = ['Kind', 'Pool', 'Transport'];
   const colsButton = () => columnsButton(m);
   const heads = () => [...m.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
   const offered = () => [...(columnsGrid()?.querySelectorAll('label') ?? [])].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
@@ -9472,8 +9473,8 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   // With Kind on as well, every one of the thirteen columns is drawn, so the hidden ones carry their class too.
   await turn('Kind');
   // A turn that finds no label does nothing, so the head is counted before the classes are read.
-  results.push({ name: '/requests with Pool, Transport and Kind on the head draws fourteen cells, the three among them', ok: heads().length === 14 && ['Kind', 'Pool', 'Transport'].every((h) => heads().includes(h)), missing: heads() });
-  columnsMarked('/requests every one of the thirteen columns is fit or fill, with Client the fill', m.container.querySelector('.requests__table'), ['Client']);
+  results.push({ name: '/requests with Kind, Pool and Transport on the head draws fourteen cells, the three among them', ok: heads().length === 14 && ['Kind', 'Pool', 'Transport'].every((h) => heads().includes(h)), missing: heads() });
+  columnsMarked('/requests every one of the thirteen columns is fit or fill, with Time the fill', m.container.querySelector('.requests__table'), ['Time']);
   await turn('Kind');
   await turn('Pool');
   await turn('Transport');
@@ -9481,14 +9482,14 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   // here and the browser pass reads the width.
   const noFill = () => m.container.querySelector('.requests__table')?.classList.contains('table--no-fill') ?? null;
   const fillReads = [noFill()];
-  await turn('Client');
+  await turn('Time');
   fillReads.push(noFill());
-  await turn('Client');
+  await turn('Time');
   fillReads.push(noFill());
   results.push({
     name: '/requests the table takes its content width when no visible column is a fill',
     ok: JSON.stringify(fillReads) === JSON.stringify([false, true, false]),
-    missing: [`no-fill with Client, none, Client again: ${JSON.stringify(fillReads)}`],
+    missing: [`no-fill with Time, without it, with it again: ${JSON.stringify(fillReads)}`],
   });
   colsButton()?.click();
   await m.settle(100);
@@ -9640,7 +9641,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     const fast = [...(answer?.querySelectorAll('.chip') ?? [])].find((chip) => chip.textContent?.trim() === 'fast');
     // The row's own attempts say whether one was made, so a drawer that drew no Answer row for one fails.
     const rowId = tr.querySelector('td .sub.mono')?.textContent ?? '';
-    const attempted = requests.some((r) => r.attempts.length > 0 && `${r.id.slice(0, 12)}…` === rowId);
+    const attempted = requests.some((r) => r.attempts.length > 0 && r.id === rowId);
     servedAs.push(fast ? (fast.getAttribute('title') === "The answer's speed" ? 'fast' : `fast titled ${fast.getAttribute('title')}`) : !attempted && asked.startsWith('fast,') ? 'fast' : (answer?.textContent ?? `no Answer row, asked ${asked}`));
   }
   const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
@@ -10125,11 +10126,11 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
 {
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
   results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
-  // A row is paired with its fixture row by the id prefix the time cell shows, so the count is judged against the
+  // A row is paired with its fixture row by the id the time cell's line prints, so the count is judged against the
   // attempts the row holds rather than against another cell.
   const rowOf = (tr) => {
-    const prefix = tr?.querySelector('td .sub.mono')?.textContent ?? '';
-    return requests.find((r) => `${r.id.slice(0, 12)}…` === prefix) ?? null;
+    const id = tr?.querySelector('td .sub.mono')?.textContent ?? '';
+    return requests.find((r) => r.id === id) ?? null;
   };
   const cells = [...m.container.querySelectorAll('tbody tr')].map((tr) => ({ cell: tr.querySelector('.requests__attempts'), count: tr.querySelector('.requests__attempts .trail-count')?.textContent?.trim() ?? null, row: rowOf(tr) }));
   const many = cells.filter((c) => (c.row?.attempts.length ?? 0) >= 2);
@@ -10277,11 +10278,17 @@ const closeWide = async (page) => {
   await page.settle(100);
 };
 await m.navigate(`/requests/${laptopRow.id}`);
-results.push({
-  name: "/requests the drawer's compact set holds no fill, so the table takes its content width beside the drawer",
-  ok: m.container.querySelector('.requests__table')?.classList.contains('table--no-fill') === true,
-  missing: [m.container.querySelector('.requests__table')?.className ?? 'no table'],
-});
+{
+  // The compact set keeps Time, its fill, so the table spans the list's narrowed card beside the drawer. jsdom lays
+  // nothing out, so the classes are read here and the browser pass reads the width.
+  const table = m.container.querySelector('.requests__table');
+  const fills = columnClasses(table).fills;
+  results.push({
+    name: "/requests the drawer's compact set keeps Time as its fill, so the table takes the card's width beside the drawer",
+    ok: table !== null && !table.classList.contains('table--no-fill') && JSON.stringify(fills) === JSON.stringify(['Time']),
+    missing: [table?.className ?? 'no table', JSON.stringify(fills)],
+  });
+}
 {
   // The titles are read as titles, since the Outcome row and the bodies' Request block would carry two of the words.
   // The drawer draws no body text, so the bodies' needles are read from what Copy all hands over.

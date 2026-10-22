@@ -952,6 +952,7 @@ function routingLogCells(kinds) {
     account: width('account'),
     client: wrap.clientWidth,
     cut,
+    document: { inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
     fact: width('fact'),
     floor,
     longest,
@@ -962,26 +963,32 @@ function routingLogCells(kinds) {
     rows: rows.length,
     scroll: wrap.scrollWidth,
     table: round(table.getBoundingClientRect().width),
+    widths: Object.fromEntries(['chevron', 'time', 'kind', 'session', 'account', 'model', 'by', 'fact', 'link'].map((name) => [name, width(name)])),
   };
 }
 
 /**
- * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 189 px at both, Account 179 then 147, Model only
- * at 1440 at 192, and the table as wide as its card with nothing to scroll sideways. Each column from Time to Link
- * holds its longest cell (`routingLogCells`), so a column narrower than it fails, Account aside: it is the fill, and
- * it fails under the longest account id with its padding. A line cut on purpose (the request link under the time, the
- * agent line under the session, an Account line past the column) that does not end behind an ellipsis fails. At 1440
- * the model stands in its own column alone, so an Account cell that draws it beneath the account fails, and at 1280 a
- * row with a model that does not draw it there fails. The bare log is read, then the log under the 7-day range on the
- * state changes, where the mock story dates its Time cells on the first page and a Time cell that breaks over two lines
- * fails. The mock pass fails a 7-day page with no dated cell, and the router's seed, which draws no row older than a
- * day, records that the read stands down. The bare log loads again at the pass's viewport after.
+ * The routing log's columns at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800: the chevron 24 px, Kind 166,
+ * Session 70, By 152, Fact 189 and Link 64 at every width, Account 179 under 1420 px and 147 from it, Model 192 from
+ * 1420 px alone, and Time, the fill, the rest. On the three wide viewports the table is as wide as its card with
+ * nothing to scroll sideways and Time takes the card less the other columns within 1 px: 146 px at 1280 and 1440, and
+ * at 1920 the room for each request id under the time, which no line there cuts. At 375 the table keeps its 990 px
+ * minimum, Time 146 px, and scrolls inside its wrap, the document's width recorded. Each column from Time to Link holds
+ * its longest cell (`routingLogCells`), so a column narrower than it fails, Account aside: it cuts a line past its
+ * width by design, and it fails under the longest account id with its padding. A line cut on purpose (the request link
+ * under the time, the agent line under the session, an Account line past the column) that does not end behind an
+ * ellipsis fails. From 1420 px the model stands in its own column alone, so an Account cell that draws it beneath the
+ * account fails, and under 1420 px a row with a model that does not draw it there fails. The bare log is read, then the
+ * log under the 7-day range on the state changes, where the mock story dates its Time cells on the first page and a
+ * Time cell that breaks over two lines fails. The mock pass fails a 7-day page with no dated cell, and the router's
+ * seed, which draws no row older than a day, records that the read stands down. The bare log loads again at the pass's
+ * viewport after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
   const kinds = await kindLabels();
   if (kinds.length === 0) say('the Kinds list offers no kind label to measure');
-  const named = { account: 'Account', by: 'By', fact: 'Fact', kind: 'Kind', link: 'Link', model: 'Model', session: 'Session', time: 'Time' };
+  const named = { account: 'Account', by: 'By', chevron: 'chevron', fact: 'Fact', kind: 'Kind', link: 'Link', model: 'Model', session: 'Session', time: 'Time' };
   try {
     for (const [path, under] of [
       ['/routing-log', ''],
@@ -993,6 +1000,8 @@ async function routingLogColumns(theme) {
       for (const { account, fact, height, model, width } of [
         { account: 179, fact: 189, height: 800, model: null, width: 1280 },
         { account: 147, fact: 189, height: 900, model: 192, width: 1440 },
+        { account: 147, fact: 189, height: 1080, model: 192, width: 1920 },
+        { account: 179, fact: 189, height: 800, model: null, width: 375 },
       ]) {
         const where = `${under}at ${width} by ${height}`;
         await page.setViewportSize({ height, width });
@@ -1016,8 +1025,20 @@ async function routingLogColumns(theme) {
         if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
         if (got.model !== null && got.modelUnder > 0) say(`${where} the Model column draws, and ${got.modelUnder} Account cells draw the model beneath the account as well`);
         if (got.model === null && got.modelUnder !== got.models) say(`${where} the Model column is hidden, and ${got.models - got.modelUnder} of the ${got.models} rows with a model draw it beneath no account`);
-        if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
-        if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+        for (const [name, want] of Object.entries({ by: 152, chevron: 24, kind: 166, link: 64, session: 70 })) {
+          if (got.widths[name] !== want) say(`${where} the ${named[name]} column is ${got.widths[name] === null ? 'hidden' : `${got.widths[name]}px`}, not ${want}px`);
+        }
+        const others = Object.entries(got.widths).reduce((n, [name, w]) => (name === 'time' ? n : n + (w ?? 0)), 0);
+        if (got.widths.time === null) say(`${where} the table draws no Time column`);
+        if (width < 900) {
+          if (Math.abs(got.table - 990) > 0.5) say(`${where} the table is ${got.table}px, not its 990 px minimum`);
+          if (got.scroll <= got.client) say(`${where} the table takes ${got.table}px of its ${got.client}px wrap without scrolling inside it`);
+        } else {
+          if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
+          if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+          if (got.widths.time !== null && Math.abs(got.widths.time - (got.client - others)) > 1) say(`${where} the Time column is ${got.widths.time}px against the ${Math.round((got.client - others) * 10) / 10}px the card leaves past the other columns`);
+        }
+        if (width >= 1920) for (const [, need, column, text] of got.cut.filter(([name]) => name === 'time')) say(`${where} the request link "${text}" under the time takes ${need}px of the ${column}px column and is cut`);
         for (const [name, need, column, text] of got.longest) {
           if (name !== 'account' && need !== null && need > column + 0.5) say(`${where} the ${named[name]} column is ${column}px, narrower than its longest cell "${text}" at ${need}px`);
         }
@@ -4648,8 +4669,10 @@ function timeFit(cells) {
 
 /**
  * The request table's room, as the fit measures read it: how much the table needs of its wrap, its narrowest layout,
- * the columns' widths, the Client text's cut, the TTFB cells' lines, the held markers' lines, the Cost cells that read
- * a share or a 20x equivalent, and the Time cells' fit.
+ * the columns' widths and the fill heads, the Client texts cut, the TTFB cells' lines, the held markers' lines, the
+ * Cost cells that read a share or a 20x equivalent, the Time column (its width against the wrap less the other columns,
+ * and its cells' floor against the widest dated time the clock setting draws), each row's id line, the wrap's and the
+ * document's scroll, and the Time cells' fit.
  */
 async function readRequestsTable() {
   const read = await page.evaluate(() => {
@@ -4660,26 +4683,62 @@ async function readRequestsTable() {
     table.style.width = 'min-content';
     const least = Math.ceil(table.getBoundingClientRect().width);
     table.style.width = '';
-    const columns = [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]);
+    const hundredths = (n) => Math.round(n * 100) / 100;
+    const ths = [...table.querySelectorAll('thead th')];
+    const columns = ths.map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]);
     const classes = [...table.querySelectorAll('tbody .requests__client-text')];
-    const cut = classes.filter((c) => c.scrollWidth > c.clientWidth);
-    // The fills' floor: a cut Client text holds at least sixteen characters of its own font,
-    // one character read off a `ch` probe appended to its cell and removed. The widths come off the rects, since
-    // `clientWidth` rounds to a pixel and sixteen characters seldom land on one, with half a pixel for the layout's
-    // own rounding.
-    const chOf = (cell) => {
-      const probe = document.createElement('span');
-      probe.style.cssText = 'display:inline-block;width:1ch';
-      cell.appendChild(probe);
-      const ch = probe.getBoundingClientRect().width;
-      probe.remove();
-      return ch;
-    };
-    const short = classes
-      .filter((s) => s.scrollWidth > s.clientWidth)
-      .map((s) => ({ least: 16 * chOf(s.closest('td')), text: s.textContent ?? '', width: s.getBoundingClientRect().width }))
-      .filter((s) => s.width + 0.5 < s.least)
-      .map((s) => `"${s.text}" holds ${Math.round(s.width * 100) / 100}px, under sixteen characters of its font (${Math.round(s.least * 100) / 100}px)`);
+    const cutOf = (list) => list.filter((s) => s.scrollWidth > s.clientWidth).map((s) => s.textContent ?? '');
+    // A placeholder row is one cell across the table, so only the rows shaped like the head carry a Time cell.
+    const timeAt = ths.findIndex((th) => th.textContent?.trim() === 'Time');
+    const timeCells = timeAt < 0 ? [] : [...table.querySelectorAll('tbody tr')].filter((tr) => tr.children.length === ths.length).map((tr) => tr.children[timeAt]);
+    const first = timeCells[0] ?? null;
+    // The widest time the clock setting draws is the dated form, probed for every month in the first cell's font,
+    // since under its tabular figures the month's name is the one part whose width varies.
+    const hourCycle = localStorage.getItem('phoebis.timeFormat') === '12h' ? 'h12' : 'h23';
+    let widest = null;
+    if (first) {
+      const style = getComputedStyle(first);
+      const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      for (let month = 0; month < 12; month += 1) {
+        const at = new Date(2026, month, 28, 21, 12, 5);
+        const text = `${at.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${at.toLocaleTimeString('en-US', { hour: '2-digit', hourCycle, minute: '2-digit', second: '2-digit' })}`;
+        const probe = document.createElement('span');
+        probe.style.cssText = 'position:absolute;left:0;top:0;width:max-content;white-space:nowrap;visibility:hidden';
+        probe.textContent = text;
+        first.appendChild(probe);
+        const need = probe.getBoundingClientRect().width + padding;
+        probe.remove();
+        if (widest === null || need > widest.need) widest = { need: hundredths(need), text };
+      }
+    }
+    const timeColumn =
+      timeAt < 0
+        ? null
+        : {
+            floor: first === null ? null : parseFloat(getComputedStyle(first).minWidth) || 0,
+            rest: hundredths(wrap.clientWidth - ths.reduce((n, th, i) => (i === timeAt ? n : n + th.getBoundingClientRect().width), 0)),
+            widest,
+            width: hundredths(ths[timeAt].getBoundingClientRect().width),
+          };
+    // Each row's id line: the text it prints against the whole id on its title, the characters its room holds (the id
+    // is monospace, so one character is read off the line's first eight) and whether it ends behind an ellipsis, which
+    // takes the room of one character.
+    const ids = timeCells
+      .map((td) => td.querySelector('.sub.mono'))
+      .filter(Boolean)
+      .map((line) => {
+        const text = line.firstChild?.nodeType === Node.TEXT_NODE ? line.firstChild : null;
+        const count = text === null ? 0 : Math.min(8, text.data.length);
+        const range = document.createRange();
+        if (text !== null) {
+          range.setStart(text, 0);
+          range.setEnd(text, count);
+        }
+        const perChar = count > 0 ? range.getBoundingClientRect().width / count : 0;
+        const cut = line.scrollWidth > line.clientWidth;
+        const length = line.textContent?.length ?? 0;
+        return { cut, length, shown: perChar === 0 ? 0 : cut ? Math.floor(line.clientWidth / perChar) - 1 : length, text: line.textContent ?? '', title: line.getAttribute('title') };
+      });
     const lines = (el) => {
       const range = document.createRange();
       range.selectNodeContents(el);
@@ -4694,50 +4753,77 @@ async function readRequestsTable() {
     // under the share position, a 20x equivalent under native, the default.
     const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (20x )?(5h|7d|Fable week)/.test(td.textContent ?? '')).length;
     return {
-      classes: { cut: cut.length, ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length, untitled: cut.filter((c) => c.closest('td')?.getAttribute('title') !== c.textContent).map((c) => c.textContent) },
+      classes: { cut: cutOf(classes), ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length },
       client: wrap.clientWidth,
       columns,
+      document: { inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
       drawer: document.querySelector('.drawer') !== null,
-      floor: { cut: classes.filter((s) => s.scrollWidth > s.clientWidth).length, short },
+      fills: ths.filter((th) => th.classList.contains('col-fill')).map((th) => th.textContent?.trim() ?? ''),
       held,
+      ids,
       least,
       rows: table.querySelectorAll('tbody tr').length,
       scroll: table.scrollWidth,
       shares,
+      timeColumn,
       ttfb: { cells: ttfb.length, split: ttfb.filter((td) => lines(td) > 1).map((td) => td.textContent?.trim() ?? '') },
+      twelve: table.classList.contains('requests__table--12h'),
+      wrapScroll: wrap.scrollWidth,
     };
   });
   return read && { ...read, time: timeFit(await page.evaluate(timeCellsOf, '.requests__table')) };
 }
 
+/** The id lines of a request table read for a measurements line: how many, how many print the whole id, and the cut. */
+const idLines = (read) => ({ cut: read.ids.filter((i) => i.cut).length, fewest: read.ids.length === 0 ? null : Math.min(...read.ids.map((i) => i.shown)), lines: read.ids.length, whole: read.ids.filter((i) => i.text === i.title).length });
+
 /**
- * The request list's default columns against its card with the drawer closed at the pass's 1280 by 800: the table's
- * need, its narrowest layout and the columns' widths are recorded, the Client text gives up its room behind an
- * ellipsis with the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room.
- * The router pass's seed fits the card, so there the fit is asserted. The mock story's rows carry values wider than
- * the 990 px card (its default set runs past 990 px there with the fills at their floors), so in the mock pass the
- * width is recorded and the table scrolls inside its wrap. In both passes each cut Client text
- * holds at least sixteen characters of its font, the fills' floor. A held row's marker reads its wait as waited
- * on one line. The share measure below reads the same width with the Cost column's widest text. Under a `range` the
- * page was loaded on, the Time cells' fit is held as well: the mock's story and the router's seed both lie within the
- * day before the pass's clock, so the range is read with the page's clock moved past a day on (`datedRead`), where
- * every row prints its date, and a read with no dated cell fails, as does a cell whose date and time break over two
- * lines, run past its content box or stand taller than the row's other cells.
+ * The column rule on a request table's read: Time is the one fill, its cells' floor holds the widest dated time the
+ * clock setting draws with the cell's padding, so no Time cell breaks over two lines or runs past its cell, and every
+ * id line prints the whole id, cut by the room alone, with at least twelve of its characters in view (the whole id
+ * where it is shorter). The other columns are as wide as their content, so no Client text is cut. Where the table fits
+ * its wrap, Time takes the wrap less the other columns within 1 px, and the document is never wider than the window: a
+ * set wider than the card scrolls inside `.table-wrap`.
+ */
+function timeFill(read, say) {
+  if (JSON.stringify(read.fills) !== JSON.stringify(['Time'])) say(`the fill columns read ${JSON.stringify(read.fills)}, not ["Time"]`);
+  const time = read.timeColumn;
+  if (time === null) say('no Time column to measure');
+  else {
+    if (time.widest !== null && (time.floor ?? 0) + 0.5 < time.widest.need) say(`the Time cells' floor is ${time.floor}px, under the widest time "${time.widest.text}" with its padding at ${time.widest.need}px`);
+    if (read.scroll <= read.client && Math.abs(time.width - time.rest) > 1) say(`the Time column is ${time.width}px against the ${time.rest}px the wrap leaves past the other columns`);
+  }
+  for (const id of read.ids.filter((i) => i.text !== i.title)) say(`the id line prints "${id.text}", not the whole id "${id.title}"`);
+  for (const id of read.ids.filter((i) => i.shown < Math.min(12, i.length))) say(`the id line of "${id.title}" holds ${id.shown} characters, fewer than twelve`);
+  for (const text of read.time.split) say(`the Time cell "${text}" breaks over two lines`);
+  for (const text of read.time.past) say(`the Time cell "${text}" runs past its cell`);
+  for (const text of read.classes.cut) say(`the Client text "${text}" is cut`);
+  if (read.document.scroll > read.document.inner) say(`the document needs ${read.document.scroll}px of the ${read.document.inner}px window, so the page scrolls sideways`);
+}
+
+/**
+ * The request list's default columns against its card with the drawer closed at the pass's 1280 by 800, in both passes:
+ * the table needs no more than its wrap's width, with the Cost column whole, and holds the column rule (`timeFill`).
+ * The table's need, its narrowest layout and the columns' widths are recorded. The Client text's box keeps its
+ * ellipsis, and a TTFB figure never parts from its unit. A held row's marker reads its wait as waited on one line. The
+ * share measure below reads the same draw with the Cost column's widest text. Under a `range` the page was loaded on,
+ * the dated form is held as well: the mock's story and the router's seed both lie within the day before the pass's
+ * clock, so the range is read with the page's clock moved past a day on (`datedRead`), where every row prints its date,
+ * and a read with no dated cell fails, as does a cell that stands taller than the row's other cells.
  */
 async function requestsTableFits(theme, range = null) {
   const read = await readRequestsTable();
   const under = range === null ? '' : ` under ${range}`;
-  measurements.push(`${theme} /requests table${under} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, floor ${JSON.stringify(read.floor)}, TTFB ${JSON.stringify(read.ttfb)}, Time ${JSON.stringify(read.time)}`}`);
+  measurements.push(`${theme} /requests table${under} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, fills ${JSON.stringify(read.fills)}, Time column ${JSON.stringify(read.timeColumn)}, ids ${JSON.stringify(idLines(read))}, client text ${JSON.stringify(read.classes)}, TTFB ${JSON.stringify(read.ttfb)}, Time ${JSON.stringify(read.time)}`}`);
   if (read === null) {
     failures.push(`${theme} /requests${under}: no request table to measure`);
     return;
   }
   const say = (what) => failures.push(`${theme} /requests${under}: ${what}`);
   if (read.drawer) say('the drawer is open, so the default set is not measured alone');
-  if (!mock && read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+  if (read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+  timeFill(read, say);
   if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) say(`the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
-  for (const text of read.classes.untitled) say(`the cut Client text "${text}" does not carry its whole class on the cell's title`);
-  for (const text of read.floor.short) say(`the cut text ${text}`);
   if (read.rows > 0 && read.ttfb.cells === 0) say('no TTFB cell to measure');
   for (const text of read.ttfb.split) say(`the TTFB cell "${text}" draws its figure and its unit on two lines`);
   measurements.push(`${theme} /requests${under} held markers ${JSON.stringify(read.held)}`);
@@ -4745,9 +4831,73 @@ async function requestsTableFits(theme, range = null) {
   if (range === null) return;
   if (read.rows > 0 && read.time.cells === 0) say('no Time cell to measure');
   if (read.time.dated.length === 0) say('no Time cell prints its date, so the dated form is not measured');
-  for (const text of read.time.split) say(`the Time cell "${text}" breaks over two lines`);
-  for (const text of read.time.past) say(`the Time cell "${text}" runs past its cell`);
   for (const text of read.time.taller) say(`the Time cell "${text}" stands taller than its row's other cells`);
+}
+
+/**
+ * The default set under the 12-hour setting, read on the 7-day range a day and an hour on (`datedRead`), where every
+ * Time cell prints its date: the table carries its 12-hour class and holds the column rule (`timeFill`), its Time
+ * cells' floor taking the widest dated time of that setting with the cell's padding, so no time cuts. Whether the set
+ * runs past the card at 1280 by 800, scrolling inside its wrap, is recorded. The setting leaves after, and the view
+ * loop loads the bare list again.
+ */
+async function requestsTableTwelveHour(theme) {
+  const say = (what) => failures.push(`${theme} /requests under the 12-hour setting: ${what}`);
+  try {
+    await page.evaluate((key) => localStorage.setItem(key, '12h'), TIME_FORMAT_KEY);
+    await loadAtOrigin('/requests?range=7d', '.requests__table');
+    await datedRead();
+    const read = await readRequestsTable();
+    measurements.push(`${theme} /requests table under the 12-hour setting under 7d ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), the wrap ${read.wrapScroll}px, ${read.twelve ? 'the 12-hour class' : 'no 12-hour class'}, columns ${JSON.stringify(read.columns)}, Time column ${JSON.stringify(read.timeColumn)}, ids ${JSON.stringify(idLines(read))}, Time ${JSON.stringify(read.time)}`}`);
+    if (read === null) {
+      say('no request table to measure');
+      return;
+    }
+    if (!read.twelve) say('the table does not carry requests__table--12h');
+    if (read.time.dated.length === 0) say('no Time cell prints its date, so the dated form is not measured');
+    timeFill(read, say);
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), TIME_FORMAT_KEY);
+  }
+}
+
+/**
+ * The request list's default columns at 1440 by 900 and at 375 by 800, under the column rule (`timeFill`). At 1440 the
+ * table fits its card with Time taking the wrap less the other columns, and in the mock pass every id reads whole, the
+ * story's sixteen characters within the room Time takes there. At 375 the set is wider than the phone's card: the
+ * table lays out at its narrowest with Time at its floor within 1 px and scrolls inside its wrap, the document as wide
+ * as the window. The viewport returns to the pass's 1280 by 800 after.
+ */
+async function requestsTableSizes(theme) {
+  try {
+    for (const { height, width } of [
+      { height: 900, width: 1440 },
+      { height: 800, width: 375 },
+    ]) {
+      const where = `at ${width} by ${height}`;
+      const say = (what) => failures.push(`${theme} /requests ${where}: ${what}`);
+      await page.setViewportSize({ height, width });
+      await settle();
+      const read = await readRequestsTable();
+      measurements.push(`${theme} /requests table ${where} ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px, the wrap ${read.wrapScroll}px, the document ${JSON.stringify(read.document)}, columns ${JSON.stringify(read.columns)}, Time column ${JSON.stringify(read.timeColumn)}, ids ${JSON.stringify(idLines(read))}, Time ${JSON.stringify(read.time)}`}`);
+      if (read === null) {
+        say('no request table to measure');
+        continue;
+      }
+      timeFill(read, say);
+      if (width > 900) {
+        if (read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+        if (mock) for (const id of read.ids.filter((i) => i.cut)) say(`the id "${id.title}" is cut, though the story's ids fit the room`);
+        continue;
+      }
+      if (read.wrapScroll <= read.client) say(`the table takes ${read.scroll}px of its ${read.client}px wrap without scrolling inside it`);
+      if (Math.abs(read.scroll - read.least) > 1) say(`the table is ${read.scroll}px against its narrowest layout's ${read.least}px`);
+      if (read.timeColumn !== null && Math.abs(read.timeColumn.width - (read.timeColumn.floor ?? 0)) > 1) say(`the Time column is ${read.timeColumn.width}px, not at its ${read.timeColumn.floor}px floor`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+  }
 }
 
 /**
@@ -4755,9 +4905,8 @@ async function requestsTableFits(theme, range = null) {
  * native, the default, a request's "1.47% 20x 5h" main line over "0.244% 20x 7d"). The mock pass's alone: the router
  * pass seeds one API key account, whose rows read dollars. The story's plan-funded rows carry 20x equivalents, so the
  * count of cells whose main line or `.sub` reads one is asserted above zero: a page with no such cell would measure
- * the table without the widest text. The need, the wrap's width and the Cost column's width are recorded: the story's
- * values run wider than the 990 px card with the fills at their floors, so the table scrolls inside its wrap there and
- * the width is a record, as in `requestsTableFits`, under the `range` the page was loaded on as well.
+ * the table without the widest text. The need, the wrap's width and the Cost column's width are recorded beside the
+ * fit `requestsTableFits` asserts on the same draw, under the `range` the page was loaded on as well.
  */
 async function requestsTableFitsWithShares(theme, range = null) {
   const read = await readRequestsTable();
@@ -4773,11 +4922,10 @@ async function requestsTableFitsWithShares(theme, range = null) {
 }
 
 /**
- * The request table's text at 1920 by 1080, the mock pass's alone: with the fill column given the free width, no
- * Client text or agent type is cut, read off each span's own overflow (each keeps its own
- * ellipsis, so a cut behind the cell's clip still reads on the span), and the table fits its wrap. The time cell is
- * not read: its id shows twelve characters at every width, whole on its own title. The viewport then returns to the
- * pass's 1280 by 800.
+ * The request table's text at 1920 by 1080 with the default columns, the mock pass's alone: every column but Time is
+ * as wide as its content, so no Client text or agent type is cut, read off each span's own overflow (each keeps its
+ * own ellipsis, so a cut behind the cell's clip still reads on the span), Time takes the rest with every id line
+ * printing the whole id uncut, and the table fits its wrap. The viewport then returns to the pass's 1280 by 800.
  */
 async function requestsTableWide(theme) {
   const say = (what) => failures.push(`${theme} /requests at 1920 by 1080: ${what}`);
@@ -4791,9 +4939,11 @@ async function requestsTableWide(theme) {
     const cut = (list) => list.filter((s) => s.scrollWidth > s.clientWidth).map((s) => s.textContent ?? '');
     const agent = spans('.requests__client .sub');
     const client = spans('.requests__client-text');
+    const ids = spans('td .sub.mono');
     return {
       client: wrap.clientWidth,
       cut: { agent: cut(agent), client: cut(client) },
+      ids: { lines: ids.length, short: ids.filter((s) => s.scrollWidth > s.clientWidth || s.textContent !== s.getAttribute('title')).map((s) => s.getAttribute('title') ?? '') },
       scroll: table.scrollWidth,
       spans: { agent: agent.length, client: client.length },
     };
@@ -4804,6 +4954,8 @@ async function requestsTableWide(theme) {
     if (read.spans.client === 0) say('no Client text to measure');
     for (const text of read.cut.client) say(`the Client text "${text}" is cut`);
     for (const text of read.cut.agent) say(`the agent type "${text}" is cut`);
+    if (read.ids.lines === 0) say('no id line to measure');
+    for (const id of read.ids.short) say(`the id "${id}" is not drawn whole`);
     if (read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
   }
   await page.setViewportSize({ height: 800, width: 1280 });
@@ -4811,12 +4963,12 @@ async function requestsTableWide(theme) {
 }
 
 /**
- * The request table with Client hidden through the Columns control, so no drawn column fills: the
- * table carries `table--no-fill` and takes its content width up to its wrap's, read at the pass's 1280 by 800 and at
- * 1920 by 1080, where the content leaves the card's rest empty. The viewport and the column return afterwards.
+ * The request table with Time, its fill, hidden through the Columns control, so no drawn column fills: the table
+ * carries `table--no-fill` and takes its content width up to its wrap's, read at the pass's 1280 by 800 and at 1920
+ * by 1080, where the content leaves the card's rest empty. The viewport and the column return afterwards.
  */
 async function requestsTableNoFill(theme) {
-  const say = (what) => failures.push(`${theme} /requests without its fills: ${what}`);
+  const say = (what) => failures.push(`${theme} /requests without its fill: ${what}`);
   const button = page.locator('.filter-bar button[aria-label="Columns"]');
   const turn = async (labels) => {
     await button.click();
@@ -4828,7 +4980,7 @@ async function requestsTableNoFill(theme) {
     await button.click();
     await settle();
   };
-  await turn(['Client']);
+  await turn(['Time']);
   const measure = () =>
     page.evaluate(() => {
       const table = document.querySelector('.requests__table');
@@ -4847,9 +4999,9 @@ async function requestsTableNoFill(theme) {
   const wide = await measure();
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
-  await turn(['Client']);
+  await turn(['Time']);
   await atRest();
-  measurements.push(`${theme} /requests without Client at 1280 by 800 ${JSON.stringify(narrow)}, at 1920 by 1080 ${JSON.stringify(wide)}`);
+  measurements.push(`${theme} /requests without Time at 1280 by 800 ${JSON.stringify(narrow)}, at 1920 by 1080 ${JSON.stringify(wide)}`);
   for (const [at, read] of [
     ['1280 by 800', narrow],
     ['1920 by 1080', wide],
@@ -4858,7 +5010,7 @@ async function requestsTableNoFill(theme) {
       say(`no request table to measure at ${at}`);
       continue;
     }
-    if (read.heads.includes('Client')) say(`the Columns control left a fill drawn at ${at}: ${JSON.stringify(read.heads)}`);
+    if (read.heads.includes('Time')) say(`the Columns control left the fill drawn at ${at}: ${JSON.stringify(read.heads)}`);
     if (!read.noFill) say(`the table does not carry table--no-fill at ${at}`);
     if (Math.abs(read.width - Math.min(read.content, read.client)) > 1) say(`the table is ${read.width}px wide against its content's ${read.content}px in a ${read.client}px wrap at ${at}`);
   }
@@ -5971,17 +6123,19 @@ async function fastLane(theme, path) {
 /**
  * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
  * its head 106 px at both (the id, the time and the "Widen to" line, which breaks once beside the head's actions at
- * either width), the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
- * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
- * type and height, and the request class badge its box. The Estimated cost row of a request a subscription window
- * paid draws its share chips in the same type, each on one line inside the cell, with the muted equivalent on one
- * line after them (a request billed in dollars draws no chip there, which is recorded). The mock pass reads them again
- * on the story's plan-funded Fable answer, whose three chips read a 5-hour, a 7-day and a 7-day Fable share in that
- * order. The Phases legend lists the seven phases, and the token bar draws a segment wherever the Usage table holds
- * tokens (a request that ended with no answer holds none and draws none). A request that ended with no answer draws no
- * chip, so then the chips are read on the newest request that answered 200. The router's seeded answers name no stop
- * reason, speed or region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot
- * stays the list alone.
+ * either width), the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll sideways at
+ * both, Time its one fill and the table as wide as its card with no `table--no-fill`, and in the mock pass every id
+ * line whole. At 375 by 800 the drawer stacks under the list and the compact set, wider than the phone's card, scrolls
+ * inside it. Every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's type and
+ * height, and the request class badge its box. The Estimated cost row of a request a subscription window paid draws its
+ * share chips in the same type, each on one line inside the cell, with the muted equivalent on one line after them (a
+ * request billed in dollars draws no chip there, which is recorded). The mock pass reads them again on the story's
+ * plan-funded Fable answer, whose three chips read a 5-hour, a 7-day and a 7-day Fable share in that order. The Phases
+ * legend lists the seven phases, and the token bar draws a segment wherever the Usage table holds tokens (a request
+ * that ended with no answer holds none and draws none). A request that ended with no answer draws no chip, so then the
+ * chips are read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or
+ * region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list
+ * alone.
  */
 async function requestDrawerCompact(theme) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
@@ -6066,13 +6220,26 @@ async function requestDrawerCompact(theme) {
                 chips: [...costCell.querySelectorAll('.chip')].map((c) => ({ box: box(c), edges: edges(c), lines: lines(c), text: c.textContent })),
                 equivalent: equivalent === null ? null : { edges: edges(equivalent), lines: lines(equivalent), text: equivalent.textContent },
               },
+        document: { inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
         drawer: Math.round(document.querySelector('.drawer')?.getBoundingClientRect().width ?? 0),
         head: head ? Math.round(head.getBoundingClientRect().height) : null,
         heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
         phases: document.querySelectorAll('.drawer .waterfall__legend li').length,
         reference: status ? box(status) : null,
         segments: document.querySelectorAll('.drawer .token-bar__seg').length,
-        table: wrap && table ? { client: wrap.clientWidth, scroll: table.scrollWidth } : null,
+        // The compact set's rule: Time its one fill, the table as wide as its card, and each id line whole and uncut.
+        table:
+          wrap && table
+            ? {
+                client: wrap.clientWidth,
+                fills: [...table.querySelectorAll('thead th.col-fill')].map((th) => th.textContent?.trim() ?? ''),
+                ids: [...table.querySelectorAll('tbody td .sub.mono')].filter((s) => s.scrollWidth > s.clientWidth || s.textContent !== s.getAttribute('title')).map((s) => s.getAttribute('title') ?? ''),
+                noFill: table.classList.contains('table--no-fill'),
+                scroll: table.scrollWidth,
+                width: Math.round(table.getBoundingClientRect().width * 100) / 100,
+                wrap: wrap.scrollWidth,
+              }
+            : null,
         // The Usage table's six token rows summed, the figure a zero segment count is judged against.
         tokens: [...document.querySelectorAll('.drawer .usage-table tr')]
           .filter((tr) => ['Input (uncached)', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain'].includes(tr.children[0]?.textContent?.trim() ?? ''))
@@ -6093,7 +6260,13 @@ async function requestDrawerCompact(theme) {
     if (got.head !== 106) say(`${where}: the head is ${got.head}px tall, not 106px`);
     if (JSON.stringify(got.heads) !== JSON.stringify(['Time', 'Model', 'Status', 'Attempts', ''])) say(`${where}: the table draws the columns ${JSON.stringify(got.heads)}`);
     if (got.table === null) say(`${where} has no table to measure`);
-    else if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
+    else {
+      if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
+      if (got.table.noFill) say(`${where}: the compact table carries table--no-fill`);
+      if (JSON.stringify(got.table.fills) !== JSON.stringify(['Time'])) say(`${where}: the compact table's fill columns read ${JSON.stringify(got.table.fills)}, not ["Time"]`);
+      if (Math.abs(got.table.width - got.table.client) > 1) say(`${where}: the compact table is ${got.table.width}px wide in its ${got.table.client}px card`);
+      if (mock) for (const id of got.table.ids) say(`${where}: the id "${id}" is not drawn whole`);
+    }
     if (got.reference === null) say(`${where} has no status badge to measure against`);
     if (got.badge !== null && got.badge.box !== got.badge.reference) say(`${where}: the "${got.badge.text}" class badge measures ${got.badge.box} against the status badge's ${got.badge.reference}`);
     counted(where, got);
@@ -6101,6 +6274,15 @@ async function requestDrawerCompact(theme) {
     for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
     costRow(where, got);
   }
+  // Under 1100 px the drawer stacks under the list, so the compact set takes the phone's whole card and scrolls inside
+  // it where it is wider.
+  await page.setViewportSize({ height: 800, width: 375 });
+  await settle();
+  const phone = await read();
+  measurements.push(`${theme} /requests the open drawer under the list at 375 by 800 ${JSON.stringify({ document: phone.document, heads: phone.heads, table: phone.table })}`);
+  if (JSON.stringify(phone.heads) !== JSON.stringify(['Time', 'Model', 'Status', 'Attempts', ''])) say(`the open drawer at 375 by 800: the table draws the columns ${JSON.stringify(phone.heads)}`);
+  if (phone.table === null) say('the open drawer at 375 by 800 has no table to measure');
+  else if (phone.table.scroll <= phone.table.client || phone.table.wrap <= phone.table.client) say(`the open drawer at 375 by 800: the compact table takes ${phone.table.scroll}px of its ${phone.table.client}px card without scrolling inside it`);
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
   // The story's plan-funded Fable answer prices all three windows, so its cost row draws the three-chip layout, in
@@ -6772,7 +6954,8 @@ async function openDecision(row) {
 /**
  * The site's Routing log shot shows a decision card open, so the first decision row (in the mock's story the renewal
  * at its newest instant) opens before the shot. A second click shuts a row, so `decisionCard` measures this card after
- * the shot rather than opening it again.
+ * the shot rather than opening it again. The open row's panel spans the table in one cell, which leaves the columns as
+ * the bare log draws them: Time, the fill, takes the card less the other drawn columns within 1 px.
  */
 async function firstDecisionOpen(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -6784,6 +6967,19 @@ async function firstDecisionOpen(theme) {
   if (!(await openDecision(first))) say('the first decision row opened to no card');
   await atRest();
   await settle();
+  const read = await page.evaluate(() => {
+    const table = document.querySelector('.routing-log__table');
+    const wrap = table?.closest('.table-wrap');
+    // The log's own head alone: the open card nests tables of its own.
+    const heads = [...(table?.querySelectorAll(':scope > thead > tr > th') ?? [])];
+    const time = heads.find((th) => th.classList.contains('routing-log__time')) ?? null;
+    if (!table || !wrap || !time) return null;
+    const others = heads.filter((th) => th !== time && getComputedStyle(th).display !== 'none').reduce((n, th) => n + th.getBoundingClientRect().width, 0);
+    return { client: wrap.clientWidth, rest: Math.round((wrap.clientWidth - others) * 10) / 10, time: Math.round(time.getBoundingClientRect().width * 10) / 10 };
+  });
+  measurements.push(`${theme} /routing-log Time with the first decision open ${JSON.stringify(read)}`);
+  if (read === null) say('no table with a Time column to measure with the first decision open');
+  else if (Math.abs(read.time - read.rest) > 1) say(`with the first decision open the Time column is ${read.time}px against the ${read.rest}px the card leaves past the other columns`);
 }
 
 /**
@@ -8691,35 +8887,42 @@ async function burnShot(theme) {
 }
 
 /**
- * The Sessions table's default columns, the Context column among them, fit its card at the pass's 1280 by 800: the
- * table needs no more than its wrap's width, so nothing scrolls sideways and the companion and the cache warming state
- * stay in view. A slowed session's speed chip stands on the account's line inside its Account cell, which the mock pass
- * requires on studio's sessions.
+ * The Sessions table's default columns, the Context column among them, fit its card at the pass's 1280 by 800 and at
+ * 1440 by 900: the table needs no more than its wrap's width, so nothing scrolls sideways and the companion and the
+ * cache warming state stay in view. A slowed session's speed chip stands on the account's line inside its Account cell,
+ * which the mock pass requires on studio's sessions, read at 1280. At 375 by 800 the set is wider than the phone's
+ * card: it scrolls inside its wrap with Session, the fill, at its floor within 1 px, and the document stays as wide as
+ * the window. The viewport returns to the pass's 1280 by 800 after.
  */
 async function sessionsTableFits(theme) {
-  const read = await page.evaluate(() => {
-    const table = document.querySelector('.sessions-table');
-    const wrap = table?.closest('.table-wrap');
-    if (!table || !wrap) return null;
-    // The table stretches to its wrap whenever it fits, so its narrowest layout is what tells the room it has left.
-    table.style.width = 'min-content';
-    const least = Math.ceil(table.getBoundingClientRect().width);
-    table.style.width = '';
-    return {
-      client: wrap.clientWidth,
-      columns: [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]),
-      least,
-      rows: table.querySelectorAll('tbody tr.srow').length,
-      scroll: table.scrollWidth,
-      speed: [...table.querySelectorAll('.srow__account .speed-chip .badge')].map((chip) => {
-        const cell = chip.closest('td').getBoundingClientRect();
-        const box = chip.getBoundingClientRect();
-        const name = chip.closest('.srow__account').querySelector('a')?.getBoundingClientRect() ?? null;
-        return { inside: box.left >= cell.left - 0.5 && box.right <= cell.right + 0.5, line: name !== null && box.top <= name.bottom && box.bottom >= name.top, text: chip.textContent?.trim() ?? '' };
-      }),
-      wrapScroll: wrap.scrollWidth,
-    };
-  });
+  const measure = () =>
+    page.evaluate(() => {
+      const table = document.querySelector('.sessions-table');
+      const wrap = table?.closest('.table-wrap');
+      if (!table || !wrap) return null;
+      // The table stretches to its wrap whenever it fits, so its narrowest layout is what tells the room it has left.
+      table.style.width = 'min-content';
+      const least = Math.ceil(table.getBoundingClientRect().width);
+      table.style.width = '';
+      const session = [...table.querySelectorAll('thead th')].find((th) => th.textContent?.trim() === 'Session') ?? null;
+      return {
+        client: wrap.clientWidth,
+        columns: [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]),
+        document: { inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
+        least,
+        rows: table.querySelectorAll('tbody tr.srow').length,
+        scroll: table.scrollWidth,
+        session: session === null ? null : { floor: parseFloat(getComputedStyle(session).minWidth) || 0, width: Math.round(session.getBoundingClientRect().width * 100) / 100 },
+        speed: [...table.querySelectorAll('.srow__account .speed-chip .badge')].map((chip) => {
+          const cell = chip.closest('td').getBoundingClientRect();
+          const box = chip.getBoundingClientRect();
+          const name = chip.closest('.srow__account').querySelector('a')?.getBoundingClientRect() ?? null;
+          return { inside: box.left >= cell.left - 0.5 && box.right <= cell.right + 0.5, line: name !== null && box.top <= name.bottom && box.bottom >= name.top, text: chip.textContent?.trim() ?? '' };
+        }),
+        wrapScroll: wrap.scrollWidth,
+      };
+    });
+  const read = await measure();
   measurements.push(`${theme} /sessions table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, speed chips ${JSON.stringify(read.speed)}`}`);
   if (read === null) failures.push(`${theme} /sessions: no session table to measure`);
   else {
@@ -8727,6 +8930,34 @@ async function sessionsTableFits(theme) {
     if (read.scroll > read.client || read.wrapScroll > read.client) failures.push(`${theme} /sessions: the default columns need ${Math.max(read.scroll, read.wrapScroll)}px of the wrap's ${read.client}px, so the table scrolls sideways`);
     if (mock && read.speed.length === 0) failures.push(`${theme} /sessions: the story slows studio's sessions, yet no Account cell draws a speed chip`);
     for (const chip of read.speed.filter((c) => !c.inside || !c.line)) failures.push(`${theme} /sessions: the speed chip ${JSON.stringify(chip.text)} stands ${chip.inside ? "off the account name's line" : 'past its Account cell'}`);
+  }
+  try {
+    for (const { height, width } of [
+      { height: 900, width: 1440 },
+      { height: 800, width: 375 },
+    ]) {
+      const where = `at ${width} by ${height}`;
+      const say = (what) => failures.push(`${theme} /sessions ${where}: ${what}`);
+      await page.setViewportSize({ height, width });
+      await settle();
+      const got = await measure();
+      measurements.push(`${theme} /sessions table ${where} ${got === null ? 'not drawn' : `${got.scroll} of ${got.client}px, at least ${got.least}px, the wrap ${got.wrapScroll}px, the document ${JSON.stringify(got.document)}, Session ${JSON.stringify(got.session)}, columns ${JSON.stringify(got.columns)}`}`);
+      if (got === null) {
+        say('no session table to measure');
+        continue;
+      }
+      if (got.session === null) say('the table draws no Session column');
+      if (got.document.scroll > got.document.inner) say(`the document needs ${got.document.scroll}px of the ${got.document.inner}px window, so the page scrolls sideways`);
+      if (width > 900) {
+        if (got.scroll > got.client || got.wrapScroll > got.client) say(`the default columns need ${Math.max(got.scroll, got.wrapScroll)}px of the wrap's ${got.client}px, so the table scrolls sideways`);
+        continue;
+      }
+      if (got.wrapScroll <= got.client) say(`the table takes ${got.scroll}px of its ${got.client}px wrap without scrolling inside it`);
+      if (got.session !== null && Math.abs(got.session.width - got.session.floor) > 1) say(`the Session column is ${got.session.width}px, not at its ${got.session.floor}px floor`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
   }
 }
 
@@ -8746,8 +8977,8 @@ async function sessionsTableFits(theme) {
  * widest single item, which is the need its width is held to, and the stacked read is no failure. Two or more fill
  * columns are equal within 1 px, and the table does not overflow its wrap: its `.table-wrap` ancestor where one
  * exists, else its parent element, unless `overflowRecorded` holds, when a table wider than its wrap is recorded
- * rather than failed (the request table and the Dashboard's recent requests in the mock pass, whose story's values run
- * past their cards at 1280 by 800).
+ * rather than failed (the Dashboard's recent requests in the mock pass, whose story's values run past its card at 1280
+ * by 800).
  * `fixed` counts the leading columns that keep a width of their own (the Sessions
  * gutter's 30 px) and carry neither class. In the mock pass a table that read no rows fails, since a table whose every
  * row spans its cells would otherwise pass on its header alone. The measurement records every column's class, width
@@ -9053,11 +9284,10 @@ async function sessionForkMark(theme) {
 
 /**
  * Every fork link on Sessions lies inside its cell's content box with its words whole and takes a pointer at its
- * center, with the default columns.
- * The badge sits under the id and wraps its words when the column is narrower than they
- * are, so its height is free and its width is what the measurement records beside its cell's. The story forks three
- * sessions beside their bases, one of them without a pin, so the mock pass requires three links. The router pass
- * measures the links its seed draws and records their count.
+ * center, with the default columns. The badge sits under the id and wraps its words when the column is narrower than
+ * they are, so its height is free and its width is what the measurement records beside its cell's. The story forks
+ * three sessions beside their bases, one of them without a pin, so the mock pass requires three links. The router
+ * pass measures the links its seed draws and records their count.
  */
 async function sessionForkBadges(theme) {
   const say = (what) => failures.push(`${theme} /sessions fork badges: ${what}`);
@@ -9386,10 +9616,12 @@ try {
         await datedRead();
         await requestsTableFits(theme, '7d');
         if (mock) await requestsTableFitsWithShares(theme, '7d');
+        await requestsTableTwelveHour(theme);
         await loadAtOrigin('/requests', '.requests__table');
+        await requestsTableSizes(theme);
         // The Status, Attempts and links cells drop their second item under the first, and the links column's header
-        // is empty. In the mock pass the story's values run past the card, so the table's width is a record there.
-        await tableColumns(theme, 'requests', '.requests__table', ['Client'], 0, { overflowRecorded: mock, wrapping: ['Status', 'Attempts', ''] });
+        // is empty.
+        await tableColumns(theme, 'requests', '.requests__table', ['Time'], 0, { wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
         await pagerControls(theme, view.path);
       }

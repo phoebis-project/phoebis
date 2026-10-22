@@ -36,12 +36,12 @@ import { StatusBadge } from './DashboardPage';
 
 // `fill` marks the columns the table draws `col-fill`, so the table takes its content width when none of them shows.
 const COLUMNS = [
-  { id: 'time', label: 'Time' },
+  { fill: true, id: 'time', label: 'Time' },
   { id: 'key', label: 'Key' },
   { id: 'pool', label: 'Pool' },
   { id: 'account', label: 'Account' },
   { id: 'model', label: 'Model' },
-  { fill: true, id: 'client', label: 'Client' },
+  { id: 'client', label: 'Client' },
   { id: 'kind', label: 'Kind' },
   { id: 'transport', label: 'Transport' },
   { id: 'status', label: 'Status' },
@@ -253,7 +253,7 @@ export function RequestsPage() {
   const catalog = useAsync(() => api.listCatalog(), []);
   // The revisions the drawer's cost row names. The cells read no cost model, since the route prices every figure.
   const settings = useAsync(() => api.getSettings(), []);
-  const { unit } = useAppSettings();
+  const { timeFormat, unit } = useAppSettings();
 
   const { address, filters: read, replace } = useQueryFilters(REQUESTS_CODEC);
   const filters = useMemo<Filters>(() => ({ ...read, outcomes: outcomesOf(read.outcomes), rows: Number(read.rows), statuses: read.statuses.filter((code) => /^\d+$/.test(code)) }), [read]);
@@ -378,15 +378,15 @@ export function RequestsPage() {
 
         <Card padded={false} className="card--table">
           <div className="table-wrap">
-            <table className={`table table--hover requests__table${fills ? '' : ' table--no-fill'}`}>
+            <table className={`table table--hover requests__table${timeFormat === '12h' ? ' requests__table--12h' : ''}${fills ? '' : ' table--no-fill'}`}>
               <thead>
                 <tr>
-                  {shown.has('time') && <th className="col-fit">Time</th>}
+                  {shown.has('time') && <th className="col-fill">Time</th>}
                   {shown.has('key') && <th className="col-fit">Key</th>}
                   {shown.has('pool') && <th className="col-fit">Pool</th>}
                   {shown.has('account') && <th className="col-fit">Account</th>}
                   {shown.has('model') && <th className="col-fit">Model</th>}
-                  {shown.has('client') && <th className="col-fill">Client</th>}
+                  {shown.has('client') && <th className="col-fit">Client</th>}
                   {shown.has('kind') && <th className="col-fit">Kind</th>}
                   {shown.has('transport') && <th className="col-fit">Transport</th>}
                   {shown.has('status') && <th className="col-fit">Status</th>}
@@ -421,9 +421,9 @@ export function RequestsPage() {
                         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                       >
                         {shown.has('time') && (
-                          <td className="num col-fit" title={fmtAbsolute(r.at)}>
+                          <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
                             {fmtDatedTime(r.at, now)}
-                            <span className="sub mono" title={r.id}>{shortId(r.id, 12)}</span>
+                            <span className="sub mono" title={r.id}>{r.id}</span>
                           </td>
                         )}
                         {shown.has('key') && <td className="mono col-fit">{r.keyId ?? '-'}</td>}
@@ -435,7 +435,7 @@ export function RequestsPage() {
                           </td>
                         )}
                         {shown.has('client') && (
-                          <td className="mono requests__client col-fill" title={r.client ?? undefined}>
+                          <td className="mono requests__client col-fit" title={r.client ?? undefined}>
                             {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text" title={r.client}>{r.client}</span>}
                             {r.agentType && (
                               <span className="sub" title={r.agentType}>

@@ -1984,7 +1984,8 @@
   grid-template-columns: minmax(0, 1fr) 440px;
 }
 
-/* The compact set needs 568 px beside the drawer, which a 440 px drawer does not leave at 1280 by 800. */
+/* Under 1360 px the drawer narrows to 400 px, so the list beside it keeps 572 px at 1280 by 800: the compact set's
+   floor of 436 px and the rest for the request ids under the Time column. */
 @media (max-width: 1359px) {
   .requests.has-drawer {
     grid-template-columns: minmax(0, 1fr) 400px;
@@ -2110,8 +2111,8 @@
   align-items: center;
 }
 
-/* The cells sit 8 px apart, so the fit columns leave the Client fill, which floors at sixteen characters, as much of the
-   card as they can. Where the values run past the card the table scrolls inside its wrap. */
+/* The cells sit 8 px apart, so the fit columns leave Time, the one fill, as much of the card as they can. Where the
+   values run past the card the table scrolls inside its wrap. */
 .requests__table th,
 .requests__table td {
   padding-left: 4px;
@@ -2128,14 +2129,14 @@
   padding-right: 12px;
 }
 
-/* A figure and its unit read as one value, so the room comes from the fills' cut rather than from a split. */
+/* A figure and its unit read as one value, so the room comes from the request id's cut rather than from a split. */
 .requests__table td.num {
   white-space: nowrap;
 }
 
-/* The client cell holds two lines (the class over the agent type), so the cut sits on each text's own box rather than
-   on the cell: bounded by the cell's room, a box ends in an ellipsis past it
-   and reads whole on its title. */
+/* The client cell holds two lines (the class over the agent type), each text on a box of its own bounded by the cell,
+   with an ellipsis past it and the whole value on its title. The column is a fit one, as wide as its widest value, so
+   the bound keeps every value whole. */
 .requests__client-text {
   display: inline-block;
   max-width: 100%;
@@ -2149,14 +2150,18 @@
   white-space: nowrap;
 }
 
-/* The fit columns leave the fill little in a 990 px card, so its cell keeps a floor of sixteen characters of
-   its text and grows past it where the room is. The floor bounds the border box, so it carries the cell's 8 px of
-   padding (4 px each side) on top of the sixteen characters.
-   The floor sits on the cell, which the column's width is read off: a floor on the
-   text's box alone widens nothing (the cell's zero max-width clamps the column) and clips the text behind the cell
-   without its ellipsis. A table wider than its card scrolls inside `.table-wrap`. */
-.requests__table td.requests__client {
-  min-width: calc(16ch + 8px);
+/* Time is the fill, the row's identity: it takes the free width, and the request id under the time ends in an ellipsis
+   where the room runs out, whole on its title. The floor sits on the cell, which the column's width is read off: a
+   floor on the text's box alone widens nothing (the cell's zero max-width clamps the column) and clips the text behind
+   the cell without its ellipsis. It holds the widest time the clock setting draws with the cell's 16 px of padding
+   (12 px at the row's edge, 4 px inside), the dated "May 28 21:12:05" (126.1 px) and under the 12-hour setting "May 28
+   09:12:05 PM" (149.3 px), so a time never cuts, and a set wider than the card scrolls inside `.table-wrap`. */
+.requests__table td.requests__time {
+  min-width: 127px;
+}
+
+.requests__table--12h td.requests__time {
+  min-width: 150px;
 }
 
 /* A sub that wrapped would set the height of its whole row, and a log a third taller costs more
@@ -2211,15 +2216,16 @@
   font-size: 11.5px;
 }
 
-/* The routing log. The columns are fixed, so a long value is cut behind an ellipsis rather than widening the table: the
-   chevron and the seven columns fill the 990 px card at 1280 by 800 and the eight the 1150 px card at 1440 by 900.
-   Each column is as wide as its longest cell with the cell's padding, measured in the console's fonts over the mock
-   story and the seeded router at both viewports: Time the dated form under the 12-hour setting, the widest it draws
-   ("May 28 09:12:05 PM", 145.3 px), Kind the label "account state changed" (165.6 px), Session the eight characters
-   of an id (69.4 px), By "reservation expired" (151.6 px), Fact "state funding required" (188.8 px), Link "Details"
-   with the row's edge (63.1 px) and Model "claude-haiku-4-5-20251001" (191.3 px). With the chevron they take 811 px
-   of the 990 px card and, Model with them, 1003 px of the 1150 px card, so Account takes the 179 px and the 147 px
-   left, above the longest account id's 67.8 px, and cuts a longer line. */
+/* The routing log. The columns are fixed, so a long value is cut behind an ellipsis rather than widening the table and
+   a reload never moves a column. Each column but Time is as wide as its longest cell with the cell's padding, measured
+   in the console's fonts over the mock story and the seeded router: Kind the label "account state changed" (165.6
+   px), Session the eight characters of an id (69.4 px), By "reservation expired" (151.6 px), Fact "state funding
+   required" (188.8 px), Link "Details" with the row's edge (63.1 px) and Model "claude-haiku-4-5-20251001" (191.3 px),
+   and Account 179 px under 1420 px and 147 px from it, above the longest account id's 67.8 px, cutting a longer line.
+   Time, the row's identity, takes what the others leave, so a wide card gives its room to the request id under the
+   time. The table's minimum width holds Time at the dated form under the 12-hour setting, the widest it draws ("May
+   28 09:12:05 PM", 145.3 px): with the chevron and Time at 146 px the columns take 990 px, the 1280 by 800 card, and
+   with Model 1150 px, the 1440 by 900 card, and a narrower card scrolls inside `.table-wrap`. */
 .routing-log__table {
   table-layout: fixed;
 }
@@ -2240,7 +2246,7 @@
   padding-right: 12px;
 }
 
-/* The chevron is its own 24 px column beside the Time column's 146 px (`.routing-log__time`), 170 px together. */
+/* The chevron is its own 24 px column, counted in the table's minimum width. */
 .routing-log__table .routing-log__chevron {
   width: 24px;
   padding-right: 0;
@@ -2263,8 +2269,11 @@
   }
 }
 
+/* Time asks for the whole table, so the fixed layout gives it what the other columns leave. A column with no width
+   would share that rest with the column an open row's full-width cell adds while Model is hidden, its span counting
+   the hidden column. */
 .routing-log__time {
-  width: 146px;
+  width: 100%;
 }
 
 .routing-log__kind {
@@ -2297,12 +2306,20 @@
 
 /* Model leaves first under 1420 px, its value moving beneath the account, and Account takes the width it gave up. */
 @media (max-width: 1419.98px) {
+  .routing-log__table {
+    min-width: 990px;
+  }
+
   .routing-log__table .routing-log__model {
     display: none;
   }
 }
 
 @media (min-width: 1420px) {
+  .routing-log__table {
+    min-width: 1150px;
+  }
+
   .routing-log__table .routing-log__account {
     width: 147px;
   }
@@ -3412,6 +3429,12 @@
     grid-template-columns: 1fr;
   }
 
+  /* The list above the stacked drawer keeps the column's width rather than its table's, so a compact set wider than a
+     phone's card scrolls inside its wrap instead of widening the page. */
+  .requests.has-drawer > .stack {
+    min-width: 0;
+  }
+
   .accounts__list,
   .drawer {
     position: static;
@@ -3724,10 +3747,9 @@
 }
 
 /* The cells take 5 px each side, one step wider than 4. Each pixel of padding widens the fit columns by 17 px and the
-   Session column's floor by 2, so in the 990 px card at 1280 px the mock story's default columns leave Session about
-   40 px of drawn room above its floor at 4 px and about 21 px at 5, and at 6 px under 2 px with the Session cell down
-   to nine characters of its id. The row's first and last cells keep the card's 12 px edge, and an expanded row's
-   detail cell keeps its own inset. */
+   Session column's floor by 2, so in the 990 px card at 1280 px the default columns leave Session 112 px at 5 px,
+   fourteen characters of its id, and each pixel more takes two or three of them. The row's first and last cells keep
+   the card's 12 px edge, and an expanded row's detail cell keeps its own inset. */
 .sessions-table th,
 .sessions-table td {
   padding-left: 5px;
@@ -3739,9 +3761,9 @@
   padding-left: 12px;
 }
 
-/* The two fill columns share what the fit columns leave, but never shrink under the fork badge's widest word with the
-   badge's padding (63.8 px) and the cell's (10 px), so a column set wider than the card scrolls inside its wrap rather
-   than cutting that word. The default set leaves Session, its one fill, 95 px at 1280 px. */
+/* Session, the one fill, takes what the fit columns leave, but never shrinks under the fork badge's widest word with
+   the badge's padding (63.8 px) and the cell's (10 px), so a column set wider than the card scrolls inside its wrap
+   rather than cutting that word. The default set leaves it 112 px at 1280 px. */
 .sessions-table th.col-fill,
 .sessions-table td.col-fill {
   min-width: 74px;
