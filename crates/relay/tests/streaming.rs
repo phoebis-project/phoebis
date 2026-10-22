@@ -1911,6 +1911,33 @@ async fn an_answer_in_a_coding_the_relay_cannot_read_answers_502_upstream_undeco
 }
 
 #[tokio::test]
+async fn an_answer_whose_codings_sit_in_two_fields_answers_502_upstream_undecodable_and_files_stream_undecodable(
+) {
+    // Two fields read as the list `gzip, gzip`, which the relay refuses as it refuses that list in one field.
+    let (status, code, message, complete) = one_refusal(
+        Respond::Json {
+            status: 200,
+            headers: vec![
+                ("Content-Encoding".into(), "gzip".into()),
+                ("Content-Encoding".into(), "gzip".into()),
+            ],
+            body: gzip(&gzip(COMPRESSIBLE)),
+        },
+        common::stream_request(common::KEY),
+    )
+    .await;
+    assert_eq!(
+        (status, code.as_deref(), message.as_deref()),
+        (502, Some("upstream_undecodable"), Some(UNDECODABLE)),
+        "the body is the relay's own error document, with no byte of the upstream's"
+    );
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_undecodable"))
+    );
+}
+
+#[tokio::test]
 async fn a_rejection_whose_gzip_body_does_not_inflate_answers_502_upstream_undecodable_and_files_stream_undecodable(
 ) {
     // The 400 is drained whole and forwarded, so the relay decodes it for this caller before a byte goes out.

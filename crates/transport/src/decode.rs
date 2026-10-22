@@ -15,11 +15,19 @@ pub enum Encoding {
 }
 
 /// An unrecognized `Content-Encoding` is rejected rather than treated as `Identity`: passing the still-compressed
-/// bytes through as plain text would corrupt the relayed response instead of failing loudly.
+/// bytes through as plain text would corrupt the relayed response instead of failing loudly. Several
+/// `Content-Encoding` fields read as one list (RFC 9110 sections 5.3 and 8.4), refused as a list in one field is.
 pub fn encoding(head: &ResponseHead) -> Result<Encoding, TransportError> {
-    let Some(raw) = head.get("content-encoding") else {
+    let fields: Vec<&str> = head
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    if fields.is_empty() {
         return Ok(Encoding::Identity);
-    };
+    }
+    let raw = fields.join(", ");
     match raw.trim().to_ascii_lowercase().as_str() {
         "identity" => Ok(Encoding::Identity),
         "gzip" => Ok(Encoding::Gzip),
@@ -305,6 +313,17 @@ mod tests {
     fn unknown_token_is_rejected() {
         assert!(matches!(
             encoding(&head(vec![("Content-Encoding", "gzip, br")])),
+            Err(TransportError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn two_content_encoding_fields_read_as_one_list_and_are_rejected() {
+        assert!(matches!(
+            encoding(&head(vec![
+                ("Content-Encoding", "gzip"),
+                ("Content-Encoding", "gzip")
+            ])),
             Err(TransportError::Decode(_))
         ));
     }
