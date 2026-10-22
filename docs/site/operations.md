@@ -299,11 +299,11 @@ Fable week when the account has one, then the nearest reset as `resets {HH:MM}` 
 {reason}`, with the scope ahead of the reason (`fast`, `fast_credits`, `model:{canonical}`) when the cooldown holds less
 than the whole account. A member in the `disconnected` or `reauth_required` state prints `-` under both windows, since
 the router answers it none. A usage-based seat prints its spend window in place of the windows, after its eligibility
-and outside the other members' columns: `spend {NN}%`, the spend and its cap in whole major units (`$1025 of $2500`,
-the spend alone without a cap, `-` without amounts, a currency other than dollars by its code), then `resets {HH:MM}`
-for a head's reset, `resets {MM-DD} est` for the estimate on the first of the next month in UTC, or a cooldown as
-above. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts
-no pool holds, with their state, and is left out when there are none.
+and outside the other members' columns: `spend {NN}%`, the spend and its cap in whole major units (`$1025 of $2500`, the
+spend alone without a cap, `-` without amounts, a currency other than USD by its code), then `resets {HH:MM}` for a
+head's reset, `resets {MM-DD} est` for the estimate on the first of the next month in UTC, or a cooldown as above. The
+block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts no pool holds, with their state,
+and is left out when there are none.
 
 The pins block is the sessions route's answer, one line per session that holds a pin: the route groups pins by key
 generation and session and prefers the main agent's pin, so a session whose subagent is pinned to another account shows

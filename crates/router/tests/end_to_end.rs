@@ -84,7 +84,7 @@ async fn logged_in(client: &reqwest::Client, session_url: &str) {
 /// kernel's ephemeral range (`net.ipv4.ip_local_port_range`, 32768 upward on Linux).
 const PORT_SPAN: u16 = 200;
 
-/// Where the kernel's own ephemeral range starts (`net.ipv4.ip_local_port_range`, 32768 upward on Linux); the
+/// Where the kernel's own ephemeral range starts (`net.ipv4.ip_local_port_range`, 32768 upward on Linux). The
 /// allocator's whole span must stay below it.
 const EPHEMERAL_FLOOR: u16 = 32_768;
 
@@ -102,7 +102,7 @@ fn port_base() -> u16 {
 
 /// A port no other test in this binary is handed, from a 200-port slice below the range the kernel picks
 /// ephemeral ports from, so a concurrent test's outbound connection cannot take it between here and the bind
-/// that uses it. Probed once so a port another process holds is skipped; a slice with no free port panics.
+/// that uses it. Probed once so a port another process holds is skipped, and a slice with no free port panics.
 /// Rests on one precondition, asserted below: the cursor advances fewer than `PORT_SPAN` times in one
 /// process, one advance per draw and one per port a fake upstream holds.
 ///
@@ -114,7 +114,7 @@ fn free_port() -> u16 {
     static NEXT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
     let base = port_base();
     // Every pass through the loop takes the next offset, so a probe that finds a port another process holds
-    // burns one rather than retrying it; the probe's socket is dropped at once. One full pass with no free
+    // burns one rather than retrying it, and the probe's socket is dropped at once. One full pass with no free
     // port is a host with 200 listeners in this slice, reported by name rather than looped on.
     for _ in 0..PORT_SPAN {
         // The raw counter rather than the ports handed out, because a slice another process is filling burns
@@ -122,7 +122,7 @@ fn free_port() -> u16 {
         let raw = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         assert!(
             raw < PORT_SPAN,
-            "end_to_end.rs advanced its port cursor past {PORT_SPAN} in one process; a test is drawing ports it never binds, another process's listeners are filling the slice, or the slice must grow"
+            "end_to_end.rs advanced its port cursor past {PORT_SPAN} in one process. A test is drawing ports it never binds, another process's listeners are filling the slice, or the slice must grow"
         );
         let port = base + raw;
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {

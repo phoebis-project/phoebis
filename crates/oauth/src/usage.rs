@@ -168,9 +168,11 @@ pub enum UsageError {
 
 /// Reads every top-level object with a `utilization` member as a window, keeping its key. `extra_usage`
 /// carries a `utilization` of its own but describes purchased credit rather than a quota window, so it is
-/// parsed separately. The Fable weekly window comes from `limits[]` when present; a top-level key is read
+/// parsed separately. The Fable weekly window comes from `limits[]` when present. A top-level key is read
 /// only as a fallback for the wire shapes captured before that field existed. The spend reading comes from
-/// the body's `spend` object where present, else it is built from the extra-usage amounts.
+/// the body's `spend` object where it carries the spent amount with its currency and exponent, else from the
+/// extra-usage amounts where they carry the used credits, a currency and `decimal_places`, and is none
+/// otherwise.
 #[allow(clippy::type_complexity)]
 pub fn parse_usage(
     body: &[u8],

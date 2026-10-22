@@ -1152,8 +1152,8 @@ async fn the_account_view_reads_the_extra_usage_flag_from_the_organization_alone
     use common::{get, json, login};
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
-    // An older client document carried the flag under `account`, and the client reads the organization's, so the
-    // view ignores the account's copy.
+    // A document can carry the flag under `account` as well, and the client reads the organization's, so the view
+    // ignores the account's copy.
     store
         .set_profile(
             "business",

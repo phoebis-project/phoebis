@@ -120,8 +120,8 @@ pub fn refold_refusals(
     if mark.is_some() {
         return Ok(0);
     }
-    // Each purge's own arithmetic, a zero keeping its rows for good. The configuration holds a nonzero rollup
-    // retention at least as long as the request one, so a nonzero request retention is the tighter bound.
+    // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
+    // since the configuration holds a nonzero rollup retention at least as long as the request one.
     let from = match (retention_days, rollup_retention_days) {
         (0, 0) => i64::MIN,
         (0, days) => {

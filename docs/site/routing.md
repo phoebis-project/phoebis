@@ -414,8 +414,8 @@ holds once an account has backed off for thirty minutes.
 **Spent and cleared** A plan window read at 1.0 or above emits `window_spent` once per reset cycle, whether a head, a
 poll or the router's own prediction took it there. A window read under its limit again in the same reset cycle emits
 `window_cleared`, after a reading at the limit and after a predicted spent edge alike, and the clear ends the
-`destination_spent` condition the spent event built ([Conditions and gauges](statistics.md#conditions-and-gauges)). A
-reading under the limit after the reset passed emits `window_reset` and no clear.
+`destination_spent` condition the spent event built ([Conditions and gauges](statistics.md#conditions-and-gauges)). The
+reset's passing emits `window_reset`, by the clock walk or by the first reading after it, and no clear.
 
 **The projection** Every move and placement reads where each plan window of a subscription account is headed: its
 prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier,
@@ -557,7 +557,7 @@ next request, which renews the pin in place. The destination gate, the reservati
 and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
 
 The round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
-pin's last prompt size in tokens, or for a pin a classifier call renewed last or no call has renewed with usage yet the
+pin's last prompt size in tokens, or for a pin a classifier call renewed last or no call has renewed with usage yet, the
 prompt its move would rewrite: the body of the request the round runs on for that request's own pin and nothing for any
 other pin or a classifier request), a pin whose burn the cost model cannot price after every priced pin of its group,
 each burn read from the pin's average decayed with `burn_average_seconds`, and as its demand under a round the stretch

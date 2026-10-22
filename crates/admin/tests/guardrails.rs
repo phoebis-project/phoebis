@@ -2017,12 +2017,17 @@ async fn the_dry_run_reads_full_pages_until_the_last_whatever_room_the_sample_ha
     // The counter counts every `read` on the handle, and the one this harness runs beside a dry run is the ledger
     // writer's start read, since no member carries a budget for its spend refresh to read. The writer answers a
     // replay only once its loop runs, after that start read, so the start read and the replay's own count read both
-    // land before `before`. The harness parks nothing, so the replay lands no row.
-    parts
-        .ledger
-        .replay_parked(common::NOW, Duration::from_secs(1))
-        .await
-        .unwrap();
+    // land before `before`. The harness parks nothing, so the replay lands no row. The replay's own bound runs on the
+    // harness's frozen clock and never expires, so a wall-clock bound turns a writer stuck on a batch into a failure.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        parts
+            .ledger
+            .replay_parked(common::NOW, Duration::from_secs(1)),
+    )
+    .await
+    .expect("the ledger writer answered no replay within five seconds")
+    .unwrap();
     let before = parts.db.debug_page_reads();
     let (status, answer) = dry_run(
         app,

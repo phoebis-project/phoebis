@@ -2349,7 +2349,8 @@ impl RoutingState {
         self.in_flight = in_flight;
     }
 
-    /// The tables the shedding round prices each pin's burn through.
+    /// The tables a usd shedding round prices each pin's burn through. A window-share round orders its pins by its
+    /// own walk's figure.
     pub fn rates(&self) -> &BurnRates {
         &self.rates
     }

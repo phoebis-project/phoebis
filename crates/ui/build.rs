@@ -25,7 +25,7 @@ const COMMIT_STAMP: &str = "phoebis-bundle-commit";
 fn newest(path: &Path) -> Option<SystemTime> {
     let meta = std::fs::metadata(path).ok()?;
     // A directory's own mtime moves when an entry is created, deleted, or renamed, which no surviving file's
-    // mtime records; without it a deleted source leaves the bundle looking fresh.
+    // mtime records. Without it a deleted source leaves the bundle looking fresh.
     let mut newest = meta.modified().ok();
     if meta.is_file() {
         return newest;
@@ -76,7 +76,7 @@ fn main() {
     let built = newest(&dist.join("index.html"));
     let sources = inputs.iter().filter_map(|i| newest(&web.join(i))).max();
     // A placeholder is newer than every source the moment it is copied, so freshness alone would keep it for
-    // ever; the marker makes it stale on every run that may build.
+    // ever. The marker makes it stale on every run that may build.
     let placeholder = std::fs::read_to_string(dist.join("index.html"))
         .is_ok_and(|page| page.contains(PLACEHOLDER_MARKER));
     let stale = bundle_stale(placeholder, built, sources, stamped.as_deref(), &commit);

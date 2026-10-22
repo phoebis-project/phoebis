@@ -1256,8 +1256,8 @@ async fn the_message_id_hook_reads_the_saved_record_back_before_it_writes() {
         "/v1/messages",
         Respond::SseGated {
             status: 200,
-            // No `request-id`: `record_request_id` is skipped, so the hook's write is the one write the session's
-            // entry meets after the eviction below.
+            // No `request-id`: the second answer records no request id, so the session's record keeps the first
+            // answer's `req_up_0000` for the last assertion.
             headers: vec![],
             events: vec![
                 // Past the hold's 64 KiB bound, so the answer commits on the overflow before the gate, and

@@ -934,7 +934,7 @@ async fn a_probe_sent_while_a_request_is_open_outlives_that_request_failing_past
             .map(|row| row.client.as_str())
             .collect::<Vec<_>>(),
         [UNATTRIBUTED],
-        "the settlement files under the reserved client, since no request names one"
+        "a probe's settlement answers no request, so it files under the reserved client"
     );
 }
 

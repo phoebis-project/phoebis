@@ -597,7 +597,8 @@ pub(crate) struct BreakdownRow {
     pub key: String,
     /// Under `group_by=key` an earlier holder's rows read `<id> (deleted)` whatever the generation, the creation
     /// instant being `key_created_at`'s to format. Under `group_by=model` the empty key, the requests the router
-    /// rejected before routing, reads `no model`. Under `group_by=client` the `-` row reads `unattributed`.
+    /// rejected before routing, reads `no model`. Under `group_by=client` the `-` row reads `unattributed`. Under
+    /// `group_by=classifier` the `-` row reads `none`.
     pub label: String,
     /// The key's id under `group_by=key`. Absent for another dimension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1137,7 +1138,7 @@ mod tests {
         assert_eq!(
             members(&source),
             2,
-            "the two members of Override, each set here, are the two OverrideView declares"
+            "the two members of Override, each set here"
         );
         round_trips_source::<_, OverrideView>(source);
     }
@@ -1147,7 +1148,7 @@ mod tests {
         assert_eq!(
             members(&every_cell()),
             5,
-            "the five cells of TypeOverride, each set here, are the five TypeOverrideView declares"
+            "the five cells of TypeOverride, each set here"
         );
         round_trips_source::<_, TypeOverrideView>(every_cell());
     }

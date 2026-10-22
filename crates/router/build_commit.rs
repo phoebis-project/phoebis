@@ -10,9 +10,9 @@ use std::process::Command;
 /// current branch's ref (its loose file, or its directory where the ref is packed) and `packed-refs`, each resolved
 /// through `git rev-parse --git-path`, so a linked worktree names its own `HEAD` and the common directory's refs.
 pub fn build_commit(dir: &Path, forced: Option<&str>) -> (String, Vec<PathBuf>) {
-    // The console's bundle build trims and lowercases the variable the same way, so the header, the `build` members
-    // and the bundle agree on a value set by hand. A blank value reads as unset, so a workflow that exports it empty
-    // still falls to git.
+    // The ui crate's build script calls this helper and hands the bundle build the value it answers, so the header,
+    // the `build` members and the bundle's commit read one value. A blank value reads as unset, so a workflow that
+    // exports it empty still falls to git.
     let forced = forced
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
