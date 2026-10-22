@@ -278,6 +278,64 @@ async fn a_usage_based_seats_selection_and_its_outcome_carry_the_class() {
     up.shutdown().await;
 }
 
+/// A reload that classes the plan seat usage-based while the upstream holds the leg's head leaves the leg on the
+/// class it was dispatched under, so its settlement and its request row file one funding word.
+#[tokio::test]
+async fn a_class_change_while_the_head_is_held_leaves_the_outcome_on_the_selections_class() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Gated(Box::new(json_200())),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let app = h.app.clone();
+    let request = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(5), || {
+        (up.requests().len() == 1).then_some(())
+    })
+    .await;
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    assert!(
+        h.router.snapshot().usage_based("a"),
+        "the reload classes the seat while its head is held"
+    );
+    up.release();
+    let resp = request.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let served = outcome(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let selected = events
+        .iter()
+        .find_map(|e| match e {
+            Event::AccountSelected(selected) => Some(selected),
+            _ => None,
+        })
+        .expect("the leg published its selection");
+    assert_eq!(
+        (selected.usage_based, served.usage_based),
+        (false, false),
+        "the selection and the outcome read the one class the leg was dispatched under"
+    );
+    up.shutdown().await;
+}
+
 /// An operator can lower the global cap below a window a key or pool already holds. The stored value is not
 /// rewritten, so what a request is allowed to keep is decided where the request is published.
 #[tokio::test]

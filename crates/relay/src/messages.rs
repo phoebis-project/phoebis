@@ -2329,6 +2329,7 @@ impl Relay {
                 }
             };
             attempted.push(selection.account.id.clone());
+            let usage_based = self.router.snapshot().usage_based(&selection.account.id);
             dialed = true;
             match self
                 .dispatch_to(
@@ -2338,6 +2339,7 @@ impl Relay {
                     &answer.cancel,
                     answer.ticket,
                     answer.funding_ordinal,
+                    usage_based,
                     &mut attempt,
                     &mut key_permit,
                     &mut end_guard,
@@ -2374,8 +2376,7 @@ impl Relay {
                     // ledger files the attempt's funding from.
                     if let Some(outcome) = response.extensions_mut().get_mut::<RelayOutcome>() {
                         outcome.account_kind = Some(selection.account.kind);
-                        outcome.usage_based =
-                            self.router.snapshot().usage_based(&selection.account.id);
+                        outcome.usage_based = usage_based;
                     }
                     return response;
                 }
@@ -2474,7 +2475,8 @@ impl Relay {
     /// carries. `seq` is the selecting decision's, which every pass of the leg reports its cache map under.
     /// `key_permit` is the request's own, which a committed stream takes into its body, and so is `end_guard`, the
     /// request's end report, which every pass of the leg re-arms with its attempt. `selected` is the ticket the
-    /// selection charged for the leg's first pass.
+    /// selection charged for the leg's first pass. `usage_based` is the account's class, read once by the selection
+    /// loop, so a reload during the leg never files its selection and its outcome under two classes.
     ///
     /// An OAuth 401 runs the refresh ladder on this account: a refresh, and after one that failed without a
     /// conclusive answer a second once the account's backoff clears, the key's permit and the ticket held through
@@ -2490,6 +2492,7 @@ impl Relay {
         cancel: &CancellationToken,
         mut selected: Option<AccountTicket>,
         funding_ordinal: Option<u64>,
+        usage_based: bool,
         attempt: &mut u8,
         key_permit: &mut Option<KeyPermit>,
         end_guard: &mut Option<EndGuard>,
@@ -2582,7 +2585,6 @@ impl Relay {
         if let Some(key) = memory_key {
             self.memory.restore(key, (self.clock)()).await;
         }
-        let usage_based = self.router.snapshot().usage_based(&account.id);
         // The body for this leg and what the editor added to it; the head is built per pass and reports its own.
         let build = |skip: &BTreeSet<Injected>| -> Built {
             let mut edited = admitted.raw.to_vec();
