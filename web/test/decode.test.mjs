@@ -43,7 +43,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(d.decodeAccount({ ...body, pool: undefined }).pool, null, 'a row without the member reads as in no pool');
   assert.equal(a.extraUsage.monthlyLimitCredits, 5000);
   assert.equal(a.requests.lifetime, fixture('account').requests.lifetime, 'the lifetime count reads as the route answers it');
-  // The fixture seeds one live model-scoped cooldown so the key-models and models-state fixtures have a row.
+  // The fixture seeds one live model-scoped cooldown so the key-models fixture has a row.
   assert.equal(a.status, 'cooldown');
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
