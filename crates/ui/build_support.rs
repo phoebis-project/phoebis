@@ -1,5 +1,25 @@
-//! The Node check the build script runs before npm, apart from `build.rs` so the crate's unit tests reach it:
-//! a build script is not a test target.
+//! The Node check the build script runs before npm and its judgement of the bundle, apart from `build.rs` so the
+//! crate's unit tests reach them: a build script is not a test target.
+
+use std::time::SystemTime;
+
+/// Whether the bundle needs a build: a placeholder, no bundle, a source newer than it, or a commit stamp (the file
+/// the script writes in `OUT_DIR` after a build) absent or naming another commit than this build's.
+pub(crate) fn bundle_stale(
+    placeholder: bool,
+    built: Option<SystemTime>,
+    sources: Option<SystemTime>,
+    stamped: Option<&str>,
+    commit: &str,
+) -> bool {
+    placeholder
+        || stamped != Some(commit)
+        || match (built, sources) {
+            (None, _) => true,
+            (Some(b), Some(s)) => s > b,
+            (Some(_), None) => false,
+        }
+}
 
 /// The floor the console's `engines` field declares.
 pub(crate) const NODE_RANGES: &str = ">=26.0.0";
@@ -70,6 +90,40 @@ mod tests {
     fn the_ranges_match_the_web_packages_engines_field() {
         let field = format!(r#""node": "{NODE_RANGES}""#);
         assert!(web_file("package.json").contains(&field), "{field}");
+    }
+
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    /// Sources a minute older than the bundle, so the time test alone reads the bundle fresh.
+    fn newer_bundle() -> (Option<SystemTime>, Option<SystemTime>) {
+        let sources = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        (
+            Some(sources + std::time::Duration::from_secs(60)),
+            Some(sources),
+        )
+    }
+
+    #[test]
+    fn a_bundle_newer_than_its_sources_is_stale_where_its_stamp_names_another_commit_or_none() {
+        let (built, sources) = newer_bundle();
+        let other = "fedcba9876543210fedcba9876543210fedcba98";
+        assert!(bundle_stale(false, built, sources, Some(other), COMMIT));
+        assert!(bundle_stale(false, built, sources, None, COMMIT));
+    }
+
+    #[test]
+    fn a_bundle_newer_than_its_sources_and_stamped_with_the_commit_at_hand_is_fresh() {
+        let (built, sources) = newer_bundle();
+        assert!(!bundle_stale(false, built, sources, Some(COMMIT), COMMIT));
+        assert!(!bundle_stale(false, built, None, Some(COMMIT), COMMIT));
+    }
+
+    #[test]
+    fn a_placeholder_a_missing_bundle_or_a_newer_source_is_stale_whatever_the_stamp() {
+        let (built, sources) = newer_bundle();
+        assert!(bundle_stale(true, built, sources, Some(COMMIT), COMMIT));
+        assert!(bundle_stale(false, None, sources, Some(COMMIT), COMMIT));
+        assert!(bundle_stale(false, sources, built, Some(COMMIT), COMMIT));
     }
 
     #[test]

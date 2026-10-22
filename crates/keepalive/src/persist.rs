@@ -1169,7 +1169,13 @@ impl Inner {
             let expires = agent.expires;
             agent.current = Some(observation);
             if let Some(expires) = expires.filter(|expires| *expires <= now) {
-                tracing::info!(key = %key.0, session = %key.1, agent = %agent_id, expires, "a keepalive recipe's entry lapsed while the router was down");
+                tracing::info!(
+                    key = %key.0,
+                    session = %key.1,
+                    agent = %agent_id,
+                    expires = %crate::engine::utc_stamp(expires),
+                    "a keepalive recipe's entry lapsed while the router was down"
+                );
                 self.discard_at_load(
                     &key,
                     &agent_id,

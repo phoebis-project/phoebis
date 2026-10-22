@@ -44,8 +44,8 @@ pub struct PinRow {
     /// `None` for a pin never renewed with usage.
     pub burn: PinBurn,
     pub burn_at: Option<i64>,
-    /// The same tokens weighed by the peak band at each renewal: what the 5-hour meter charged, which the
-    /// shedding order and a subscription account's figure read; the dollar figure reads `burn`.
+    /// The same tokens weighed by the peak band at each renewal: what the 5-hour meter charged, which a
+    /// subscription account's figure reads. The dollar figure reads `burn`.
     pub burn_banded: PinBurn,
     /// The pin's fast usage as typed tokens per second over the same window, decayed from `burn_at` as `burn` is,
     /// and zero for a pin never renewed fast.

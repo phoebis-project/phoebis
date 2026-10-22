@@ -1,7 +1,7 @@
 //! The three ceilings a retained recipe is probed under: the idle window of the main conversation in every state,
 //! a park on a background command or a subagent, and a park on a scheduled wakeup, active while any of them says
-//! probe. Every figure is the exact millisecond the break-even gives at the production timing, and a recipe ends at
-//! the first tick at or after it.
+//! probe. Every break-even figure is the exact millisecond the break-even gives at the production timing, and a recipe
+//! ends at the first tick at or after its ceiling.
 mod common;
 
 use std::collections::BTreeMap;
@@ -329,7 +329,8 @@ async fn main_idle_is_probed_until_the_window_ends_with_idle_limit() {
 }
 
 #[tokio::test]
-async fn the_idle_window_never_runs_past_the_break_even() {
+async fn an_idle_window_above_the_break_even_runs_to_its_set_limit() {
+    // The hour sits 14 minutes past the dollar row's break-even of 2,760,000 ms on a five-minute entry.
     let mut r = rig(dollars(policy(|p| p.max_idle_seconds = 3_600))).await;
     r.observe("main").await;
     let start = r.now();
@@ -337,7 +338,7 @@ async fn the_idle_window_never_runs_past_the_break_even() {
     ends_at(
         &mut r,
         "main",
-        start + 2_760_000,
+        start + 3_600_000,
         Reason::IdleLimit,
         "idle_limit",
     )
@@ -973,7 +974,8 @@ async fn a_busy_main_past_the_window_ends_with_idle_limit() {
 }
 
 /// A price file that prices no row leaves no break-even of its own: the ceilings read the shipped table's tightest
-/// row, whose excess of 11.5 over the read gives 2,760,000 ms on a five-minute entry, rather than running unbounded.
+/// row, whose excess of 11.5 over the read gives 2,760,000 ms on a five-minute entry, the end a zero idle window
+/// resolves to.
 #[tokio::test]
 async fn a_price_file_with_no_usable_row_falls_back_to_the_shipped_tightest_row() {
     let mut r = rig(RigSpec {
@@ -982,7 +984,7 @@ async fn a_price_file_with_no_usable_row_falls_back_to_the_shipped_tightest_row(
             "test",
         )
         .unwrap(),
-        ..dollars(policy(|_| {}))
+        ..dollars(policy(|p| p.max_idle_seconds = 0))
     })
     .await;
     r.observe("main").await;
@@ -994,7 +996,7 @@ async fn a_price_file_with_no_usable_row_falls_back_to_the_shipped_tightest_row(
     assert_eq!(
         (r.status("main").reason, retained(&r, "main")),
         (Reason::IdleLimit, false),
-        "the default window of 3,600 s capped at the shipped tightest row's break-even"
+        "a zero idle window resolves to the shipped tightest row's break-even"
     );
 }
 

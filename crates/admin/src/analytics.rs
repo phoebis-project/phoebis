@@ -70,6 +70,13 @@ fn flag(q: &HashMap<String, String>, name: &str) -> bool {
     q.get(name).is_some_and(|v| v == "true" || v == "1")
 }
 
+/// The end of the hour that starts at `hour`, where a read up to the current hour ends rather than at
+/// `hour_ceil(now)`, which is `now` itself on the hour's first millisecond and would leave out the hour a request just
+/// landed in.
+pub(crate) fn hour_end(hour: i64) -> i64 {
+    hour + 3_600
+}
+
 fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
     RollupFilter {
         keys: list(q, "keys"),
@@ -86,15 +93,9 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
     }
 }
 
-/// The range in Unix milliseconds, the group-by, the filter, the live keys' generations the key dimension is read
-/// against, and the registry's account kinds.
-type Selection = (
-    (i64, i64),
-    String,
-    RollupFilter,
-    LiveKeys,
-    HashMap<String, AccountKind>,
-);
+/// The range in Unix milliseconds, the group-by, the filter, and the live keys' generations the key dimension is read
+/// against.
+type Selection = ((i64, i64), String, RollupFilter, LiveKeys);
 
 /// The registry's account kinds by id, which name a burn group's unit.
 #[allow(clippy::result_large_err)]
@@ -138,9 +139,8 @@ async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Se
             ))
         }
     };
-    let kinds = kinds(state)?;
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
-    Ok(((from, to), group_by, filter, live, kinds))
+    Ok(((from, to), group_by, filter, live))
 }
 
 /// The query of `GET /admin/analytics/accounts`, `GET /admin/analytics/guardrails` and `GET /admin/analytics/rewrites`.
@@ -278,14 +278,14 @@ pub(crate) struct Series {
     responses(
         (status = 200, description = "The points over the range.", body = Series),
         (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `pricing table: the range needs {count} points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
-        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+        (status = 500, response = LedgerFailure),
     ),
 )]
 pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live, _) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -347,14 +347,14 @@ pub(crate) struct Breakdown {
     responses(
         (status = 200, description = "The rows over the range.", body = Breakdown),
         (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
-        (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
+        (status = 500, response = LedgerFailure),
     ),
 )]
 pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, filter, live, _) = match selection(&state, &q).await {
+    let ((from, to), group_by, filter, live) = match selection(&state, &q).await {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -1009,12 +1009,16 @@ pub(crate) struct Reconciliation {
     pub window_end: i64,
     pub first_reading_at: i64,
     pub last_reading_at: i64,
-    /// The last reading's utilization less the first's, as a fraction of the window.
+    /// The rise between each contributing part's two ends, readings of one source, each part's rise floored at zero,
+    /// summed over the parts a fall split the window into, as a fraction of the window. A part contributes where it
+    /// holds a priced attempt, and `first_reading_at` and `last_reading_at` are the first and last ends of the parts
+    /// that contributed.
     pub observed_rise: f64,
     /// The share of the window the router priced its attempts at.
     pub predicted_share: f64,
-    /// `observed_rise` over `predicted_share`. A ratio under 0.8 or over 1.25 holds `meter_drift` while the row is its
-    /// window's newest among those with a rise of at least 0.05, so a newer row with a smaller rise leaves it standing.
+    /// `observed_rise` over `predicted_share`. A ratio under 0.8 or over 1.25 holds `meter_drift` where
+    /// `predicted_share` reaches 0.05 too, while the row is its window's newest among those that ended in the last
+    /// eight days with a rise of at least 0.05, so a newer row with a smaller rise leaves it standing.
     pub ratio: f64,
     /// The attempts priced.
     pub requests: u32,

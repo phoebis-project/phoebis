@@ -17,9 +17,9 @@ import { guardrailRefusals, presetBadges, verdictWords } from '@/lib/guardrails'
 import { useAsync } from '@/lib/hooks';
 import { effectiveCaptureHours } from '@/pages/KeysPage';
 
-const LEAD = 'A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 400.';
+const LEAD = 'A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 403.';
 const NAME_HINT = "The guardrail's id is made from this name when the guardrail is created.";
-const MODE_HINT = 'Observe records each match on the request. Enforce refuses a matching request with a 400 before any account is selected.';
+const MODE_HINT = 'Observe records each match on the request. Enforce refuses a matching request with a 403 before any account is selected.';
 const CONDITIONS_HINT = 'Every condition must hold. The router checks the cheap conditions first, whatever their order here, and the message text last.';
 const APPLIES_HINT = "A pool's guardrails cover every key of the pool. A guardrail attached here joins the end of each pool's and key's order, which their own dialogs arrange.";
 const DELETE_BODY = 'Removes the guardrail from every pool and key it is attached to. Requests it matched keep its id in the log.';

@@ -21,7 +21,7 @@ proxy:
   # body_read_seconds: 60
   # key_body_reads: 128
   # max_request_bytes: 33554432
-  # Signs a restored cch=00000 with this build's formula, off until a server rejects the placeholder.
+  # Signs a restored cch=00000 with this build's formula. Leave it off until a server rejects the placeholder.
   # sign_cch_placeholder: false
   # How the edited body leaves: auto mirrors the client, on always gzip, off always identity.
   # upstream_gzip: auto

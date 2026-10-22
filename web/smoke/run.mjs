@@ -950,7 +950,18 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
 }
 
 let m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', 'Refused, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
+{
+  const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
+  const read = (t) => [t?.querySelector('.stat__label')?.textContent ?? null, t?.querySelector('.stat__value')?.textContent ?? null, t?.querySelector('.stat__note')?.textContent ?? null];
+  const requestsHint = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
+  const rateHint = 'Errors among the requests the router asked an account for, the refused requests left out';
+  results.push({
+    name: "/ the Refused tile reads the story's six refusals with guardrail_blocked the most common and the two tiles carry their hints",
+    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '6', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint,
+    missing: [JSON.stringify(read(tiles[4])), `first tile ${tiles[0]?.getAttribute('title') ?? 'no title'}`, `fourth tile ${tiles[3]?.getAttribute('title') ?? 'no title'}`],
+  });
+}
 columnsMarked('/ the recent requests table marks Key as its fill column', m.container.querySelector('.dash__recent'), ['Key']);
 fillTitles('/ every Key cell of the recent requests table carries its own text as its title', m.container.querySelector('.dash__recent'));
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
@@ -2195,7 +2206,7 @@ await readsAgain('/', 'getOverview', 30_000);
   const failed = line()?.textContent ?? '';
   results.push({
     name: '/ the as-of line moves after a refresh and names a failed one',
-    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh of the 24-hour figures failed: ledger locked. Showing data as of ') && drawn.length === 4 && JSON.stringify(tiles()) === JSON.stringify(drawn),
+    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh of the 24-hour figures failed: ledger locked. Showing data as of ') && drawn.length === 5 && JSON.stringify(tiles()) === JSON.stringify(drawn),
     missing: [`title ${before} then ${after}`, failed || 'no line', JSON.stringify(drawn), JSON.stringify(tiles())],
   });
   page.unmount();
@@ -8962,7 +8973,7 @@ const editGuardrail = async (page, name) => {
     name: '/guardrails lists the two guardrails with their mode, state, attachments, 24-hour matches and preset',
     ok:
       page.container.querySelector('.filter-bar__count')?.textContent === '2 guardrails' &&
-      page.text().includes('A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 400.') &&
+      page.text().includes('A guardrail checks each request against its conditions before any account is selected. Observe records the matches, enforce refuses them with a 403.') &&
       JSON.stringify(large.slice(0, 6)) === JSON.stringify(['Large auxiliary requests', 'enforce', 'on', '0 pools, 1 key', figures('large-auxiliary'), '-']) &&
       JSON.stringify(summary.slice(0, 6)) === JSON.stringify(['Subagent status summary', 'observe', 'on', '1 pool, 0 keys', figures('subagent-status-summary'), 'Subagent status summary v1']) &&
       countOf('large-auxiliary').blocked === 3 &&
@@ -9022,6 +9033,12 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
       JSON.stringify(pickers) === JSON.stringify(['1 pool', 'No keys']) &&
       (dlg?.textContent ?? '').includes('Every group saves together.'),
     missing: [dlg?.querySelector('.dialog__title')?.textContent ?? 'no dialog', JSON.stringify(labels), JSON.stringify(subjects), line?.textContent ?? 'no preset line', JSON.stringify(pickers)],
+  });
+  const modeHint = [...(identity?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Mode')?.querySelector(':scope > .field__hint')?.textContent ?? null;
+  results.push({
+    name: '/guardrails the Mode hint of the dialog says the block answers a 403',
+    ok: modeHint === 'Observe records each match on the request. Enforce refuses a matching request with a 403 before any account is selected.',
+    missing: [modeHint ?? 'no Mode hint'],
   });
   buttonIn(dlg, 'Cancel')?.click();
   await page.settle(200);
@@ -9148,6 +9165,11 @@ const guardrailRefRows = (refs, inherited) =>
     .sort((a, b) => a.position - b.position)
     .map((r) => ({ badge: r.mode, name: r.name, off: !r.enabled, source: inherited ? 'inherited' : null, tone: `badge badge--${r.mode === 'enforce' ? 'warning' : 'neutral'}` }));
 const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+/** An Attach box's option by its guardrail's name, read past the Select all row. */
+const optionNamed = (box, name) => [...(box?.querySelectorAll(CHOICE) ?? [])].find((o) => o.textContent?.trim() === name);
+/** The names an Attach box shows checked, in its order: the row selected and its check drawn. */
+const checkedNames = (box) =>
+  [...(box?.querySelectorAll(CHOICE) ?? [])].filter((o) => o.getAttribute('aria-selected') === 'true' && o.querySelector('.mselect__check svg') !== null).map((o) => o.textContent?.trim());
 {
   const pool = (await api.listPools()).find((p) => p.id === 'all');
   const registry = await api.listGuardrails();
@@ -9169,11 +9191,15 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
   await page.settle(150);
   const box = [...document.querySelectorAll('.popover')].pop();
   const offered = [...(box?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const checked = checkedNames(box);
   const unattached = registry.filter((g) => !(pool?.guardrails ?? []).some((r) => r.id === g.id));
-  box?.querySelector(CHOICE)?.click();
+  const added = unattached[0];
+  optionNamed(box, added?.name)?.click();
   await page.settle(150);
   const attached = guardrailListRows(section).map((r) => r.name);
-  const added = unattached[0];
+  const picked = { checked: checkedNames(box).includes(added?.name), open: box?.isConnected === true };
+  // An operator's click on a row control closes the box first, which jsdom's click does not.
+  await closeBoxes(page);
   section?.querySelector(`button[aria-label="Move ${added?.name} up"]`)?.click();
   await page.settle(150);
   const moved = guardrailListRows(section).map((r) => r.name);
@@ -9196,10 +9222,16 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
       (hint?.textContent ?? '').startsWith("Top to bottom. A pool's guardrails run before a key's own. Manage guardrails") &&
       link?.getAttribute('href') === '/guardrails' &&
       unattached.length > 0 &&
-      JSON.stringify(offered) === JSON.stringify(unattached.map((g) => g.name)) &&
+      JSON.stringify(offered) === JSON.stringify(registry.map((g) => g.name)) &&
+      JSON.stringify(checked) === JSON.stringify(registry.filter((g) => ids.includes(g.id)).map((g) => g.name)) &&
       JSON.stringify(attached) === JSON.stringify([...(pool?.guardrails ?? []).map((r) => r.name), added?.name]) &&
       JSON.stringify(moved) === JSON.stringify([...(pool?.guardrails ?? []).slice(0, -1).map((r) => r.name), added?.name, (pool?.guardrails ?? []).at(-1)?.name]),
-    missing: [JSON.stringify(opened), hint?.textContent ?? 'no hint', link?.getAttribute('href') ?? 'no link', JSON.stringify(offered), JSON.stringify(attached), JSON.stringify(moved)],
+    missing: [JSON.stringify(opened), hint?.textContent ?? 'no hint', link?.getAttribute('href') ?? 'no link', JSON.stringify(offered), JSON.stringify(checked), JSON.stringify(attached), JSON.stringify(moved)],
+  });
+  results.push({
+    name: '/pools the Attach box of the pool dialog keeps the box open on a pick',
+    ok: added !== undefined && JSON.stringify(attached) === JSON.stringify([...(pool?.guardrails ?? []).map((r) => r.name), added.name]) && picked.open && picked.checked,
+    missing: [JSON.stringify(attached), JSON.stringify(picked)],
   });
   results.push({
     name: '/pools the pool dialog sends its guardrails as the whole list when it changed and leaves them out when it did not',
@@ -9233,12 +9265,17 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
 }
 {
   const desktop = (await api.listKeys()).find((k) => k.id === 'desktop');
-  // A third guardrail in the registry the dialog reads, so the list it offers shows what it leaves out: the key's own
-  // and its pool's.
+  // Two guardrails no list holds join the registry the dialog reads, so the box has two to pick in turn and shows what
+  // it leaves out: the pool's.
   const { listGuardrails } = api;
-  const [first] = await listGuardrails.call(api);
+  const unstubbed = await listGuardrails.call(api);
+  const [first] = unstubbed;
   const extra = { ...first, id: 'smoke-extra', keys: [], name: 'Smoke extra', pools: [] };
-  api.listGuardrails = async () => [...(await listGuardrails.call(api)), extra];
+  const spare = { ...first, id: 'smoke-spare', keys: [], name: 'Smoke spare', pools: [] };
+  api.listGuardrails = async () => [...(await listGuardrails.call(api)), extra, spare];
+  // The box lists in the registry's order and the own rows run in the key's position order, so each is built apart.
+  const boxOrder = [...unstubbed.filter((g) => !(desktop?.poolGuardrails ?? []).some((r) => r.id === g.id)).map((g) => g.name), extra.name, spare.name];
+  const inBox = (names) => boxOrder.filter((n) => names.includes(n));
   const page = await mount('/keys?edit=desktop&group=guardrails');
   await page.settle(300);
   const dlg = openDialogs(page).pop() ?? null;
@@ -9250,12 +9287,14 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
   const upHeld = section?.querySelector(`button[aria-label="Move ${ownFirst?.name} up"]`)?.disabled;
   buttonIn(section, 'Attach guardrail')?.click();
   await page.settle(150);
-  const offered = [...([...document.querySelectorAll('.popover')].pop()?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const box = [...document.querySelectorAll('.popover')].pop();
+  const offered = [...(box?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const checked = checkedNames(box);
   await closeBoxes(page);
   buttonIn(dlg, 'Cancel')?.click();
   await page.settle(200);
   page.unmount();
-  api.listGuardrails = listGuardrails;
+  const own = guardrailRefRows(desktop?.guardrails ?? [], false).map((r) => r.name);
   results.push({
     name: "/keys the key dialog's Guardrails group draws the pool's rows inherited and the key's own after them",
     ok:
@@ -9265,8 +9304,59 @@ const shownGroupOf = (dlg) => [...(dlg?.querySelectorAll('section.dialog-group:n
       JSON.stringify(rows) === JSON.stringify([...guardrailRefRows(desktop?.poolGuardrails ?? [], true), ...guardrailRefRows(desktop?.guardrails ?? [], false)]) &&
       hint.startsWith("The pool's guardrails run first and cannot be dropped here. This key's own run after them. Manage guardrails") &&
       upHeld === true &&
-      JSON.stringify(offered) === JSON.stringify(['Smoke extra']),
-    missing: [shown, JSON.stringify(rows), hint, `first own row's Move up disabled ${upHeld}`, JSON.stringify(offered)],
+      JSON.stringify(offered) === JSON.stringify(boxOrder) &&
+      JSON.stringify(checked) === JSON.stringify(inBox(own)),
+    missing: [shown, JSON.stringify(rows), hint, `first own row's Move up disabled ${upHeld}`, JSON.stringify(offered), JSON.stringify(checked)],
+  });
+  // The same key's box again, picked through: each pick attaches at once with the box open and its check drawn, an
+  // uncheck detaches, Select all attaches every offered guardrail and its uncheck none, and Escape closes the box.
+  const picking = await mount('/keys?edit=desktop&group=guardrails');
+  await picking.settle(300);
+  const pickSection = group(openDialogs(picking).pop() ?? null, 'Guardrails');
+  const ownNow = () => guardrailListRows(pickSection).filter((r) => r.source === null).map((r) => r.name);
+  buttonIn(pickSection, 'Attach guardrail')?.click();
+  await picking.settle(150);
+  const pickBox = [...document.querySelectorAll('.popover')].pop();
+  const all = [...(pickBox?.querySelectorAll(CHOICE) ?? [])].map((o) => o.textContent?.trim());
+  const steps = [];
+  const step = async (label, click) => {
+    click?.click();
+    await picking.settle(150);
+    steps.push({ checked: checkedNames(pickBox), label, open: pickBox?.isConnected === true, own: ownNow() });
+  };
+  await step('first pick', optionNamed(pickBox, extra.name));
+  await step('second pick', optionNamed(pickBox, spare.name));
+  await step('uncheck', optionNamed(pickBox, spare.name));
+  await step('Select all', pickBox?.querySelector('.mselect__option--all'));
+  await step('Select all unchecked', pickBox?.querySelector('.mselect__option--all'));
+  const focusInBox = pickBox?.contains(document.activeElement) === true;
+  pressKey('Escape', pickBox);
+  await picking.settle(150);
+  const closed = { focusInBox, focused: document.activeElement !== null && document.activeElement === buttonIn(pickSection, 'Attach guardrail'), open: pickBox?.isConnected === true };
+  picking.unmount();
+  api.listGuardrails = listGuardrails;
+  const openWith = (label, checkedList, ownList) => ({ checked: checkedList, label, open: true, own: ownList });
+  const picked = [...own, extra.name];
+  const both = [...picked, spare.name];
+  // Select all appends the unattached ones in the box's order after the list as it stood.
+  const selected = [...picked, ...boxOrder.filter((n) => !picked.includes(n))];
+  results.push({
+    name: '/keys the Attach box stays open while the operator picks, each pick attaching at once, and Select all attaches every offered guardrail',
+    ok:
+      own.length > 0 &&
+      JSON.stringify(all) === JSON.stringify(boxOrder) &&
+      JSON.stringify(steps) ===
+        JSON.stringify([
+          openWith('first pick', inBox(picked), picked),
+          openWith('second pick', inBox(both), both),
+          openWith('uncheck', inBox(picked), picked),
+          openWith('Select all', boxOrder, selected),
+          openWith('Select all unchecked', [], []),
+        ]) &&
+      closed.focusInBox &&
+      closed.open === false &&
+      closed.focused,
+    missing: [JSON.stringify(all), ...steps.map((s) => JSON.stringify(s)), JSON.stringify(closed)],
   });
   // A new key takes no attachment, so its group reads its pool's rows and says when its own can be attached.
   const pool = (await api.listPools())[0];
@@ -15566,30 +15656,61 @@ m.unmount();
 }
 
 {
-  // The route's answer with three requests a guardrail blocked in its first group: the Traffic line counts them, and
-  // its rate and the Errors by code card leave them out, so the rate reads as it did without them.
-  const blocksCheck = '/analytics the Traffic line counts the requests a guardrail blocked, and its rate and the Errors by code card leave them out';
+  // The route's answer with three refusals in its first group's map and its counts as they were: the Traffic line
+  // reads as it did, the Refused column and the Refusals by code card read the three, and Errors by code holds none.
+  const refusedCheck = '/analytics the Refused column, the Refusals by code card and the Traffic line read a refused group apart from the counts';
   const lineOf = (page) => /([\d,]+) requests, ([\d.]+)% errors/.exec(page.text());
   const plain = await mount('/analytics');
   const before = lineOf(plain);
   plain.unmount();
   const breakdownOf = api.getAnalyticsBreakdown;
-  api.getAnalyticsBreakdown = async (...args) => (await breakdownOf.apply(api, args)).map((g, i) => (i === 0 ? { ...g, errors: { ...g.errors, guardrail_blocked: 3 }, rejected: g.rejected + 3, requests: g.requests + 3 } : g));
-  const blocked = await mount('/analytics');
-  const after = lineOf(blocked);
-  const text = blocked.text();
+  api.getAnalyticsBreakdown = async (...args) => (await breakdownOf.apply(api, args)).map((g, i) => (i === 0 ? { ...g, refused: 3, refusals: { ...g.refusals, guardrail_blocked: 3 } } : g));
+  const refused = await mount('/analytics');
+  const after = lineOf(refused);
+  const cardOf = (title) => [...refused.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  const codesOf = (title) => [...(cardOf(title)?.querySelectorAll('.hbars li > .mono') ?? [])].map((s) => s.textContent?.trim());
+  const table = cardOf('Traffic by key')?.querySelector('table');
+  const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+  const first = [...(table?.querySelector('tbody tr')?.children ?? [])].map((td) => td.textContent?.trim());
+  const column = heads.indexOf('Rejected') + 1;
   results.push({
-    name: blocksCheck,
-    ok: before !== null && after !== null && Number(after[1].replace(/,/g, '')) === Number(before[1].replace(/,/g, '')) + 3 && after[2] === before[2] && !text.includes('guardrail_blocked') && text.includes('api_error'),
-    missing: [`before ${before?.[0] ?? 'no line'}`, `after ${after?.[0] ?? 'no line'}`, text.includes('guardrail_blocked') ? 'guardrail_blocked listed' : 'guardrail_blocked absent', text.includes('api_error') ? 'api_error listed' : 'api_error absent'],
+    name: refusedCheck,
+    ok: before !== null && after !== null && after[0] === before[0] && column > 0 && heads[column] === 'Refused' && first[column] === '3' && codesOf('Refusals by code').includes('guardrail_blocked') && cardOf('Errors by code') !== undefined && !codesOf('Errors by code').includes('guardrail_blocked'),
+    missing: [`before ${before?.[0] ?? 'no line'}`, `after ${after?.[0] ?? 'no line'}`, `${heads[column] ?? 'no column'} after Rejected reads ${first[column] ?? 'no cell'}`, `Refusals by code ${JSON.stringify(codesOf('Refusals by code'))}`, `Errors by code ${JSON.stringify(codesOf('Errors by code'))}`],
   });
   delete api.getAnalyticsBreakdown;
-  blocked.unmount();
+  refused.unmount();
 }
 
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'the guardrail blocks left out', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'desktop', 'laptop', 'in range']);
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Non-200 responses in range, the refused requests left out', 'Refusals by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
+{
+  const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
+  const hinted = [...(table?.querySelectorAll('thead th') ?? [])].filter((th) => th.querySelector('[title]') !== null).map((th) => [th.textContent?.trim(), th.querySelector('[title]').getAttribute('title')]);
+  const hint = 'The refused requests are left out, see the Refused column';
+  results.push({ name: '/analytics the Requests and Error rate headers of the Traffic table say the refused requests are left out', ok: JSON.stringify(hinted) === JSON.stringify([['Requests', hint], ['Error rate', hint]]), missing: hinted.length ? hinted.map((h) => h.join(': ')) : ['no header carries a hint'] });
+}
+{
+  // The story's refusals by key: the runner's send after its key's revocation on ci, the three guardrail blocks
+  // on desktop, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the
+  // Traffic line does.
+  const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
+  const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
+  const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
+  const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+  const cellsOf = (key) => [...([...(table?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === key)?.children ?? [])].map((td) => td.textContent?.trim());
+  const keys = ['desktop', 'ci', 'laptop'].map((key) => [key, cellsOf(key)[heads.indexOf('Failed')], cellsOf(key)[heads.indexOf('Refused')]]);
+  const line = /[\d,]+ requests, [\d.]+% errors/.exec(m.text())?.[0] ?? null;
+  results.push({
+    name: "/analytics the Refused and Failed cells by key, the Refusals by code card and the Traffic line read the story's refusals apart from the counts",
+    ok:
+      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '4', '2']]) &&
+      JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
+      line === '209 requests, 16.3% errors',
+    missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
+  });
+}
 await tab(m, 'Latency');
 expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
 await tab(m, 'Cache');
@@ -18162,22 +18283,24 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Model');
     {
-      // The story's revoked key sends one request the router rejects before routing, so it carries no model. Its row
-      // counts the request as an error, with no answer.
+      // The story's revoked key sends one request the router refuses before routing, so it carries no model. Its row
+      // counts the request under Refused alone, as no request and no error.
       const row = trafficRows('model').find((cells) => cells[0] === 'no model') ?? [];
       const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
       results.push({
-        name: '/analytics grouped by model the Traffic table names the requests the router rejected before routing "no model", with their figures',
-        ok: row.length === 12 && figure(1) > 0 && figure(2) === 0 && row[8] === '100.0%',
+        name: '/analytics grouped by model the Traffic table names the request the router refused before routing "no model", under Refused alone',
+        ok: row.length === 13 && figure(1) === 0 && figure(2) === 0 && row[8] === '1' && row[9] === '0.0%',
         missing: row.length ? row : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
       });
     }
     const heads = [...(traffic('model')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({ name: '/analytics the traffic table ends with the server-tool calls', ok: JSON.stringify(heads.slice(-3)) === JSON.stringify(['Failovers', 'Search', 'Fetch']), missing: heads });
     const fable = trafficRows('model').find((row) => row[0] === 'claude-fable-5-1') ?? [];
+    // The cells sit under their headers' indexes, the group column leading both rows.
+    const calls = (head) => Number((fable[heads.indexOf(head)] ?? '').replace(/,/g, ''));
     results.push({
       name: '/analytics a model whose answers reach server tools counts both calls',
-      ok: fable.length > 11 && Number(fable[10].replace(/,/g, '')) > 0 && Number(fable[11].replace(/,/g, '')) > 0,
+      ok: heads.indexOf('Search') > 0 && heads.indexOf('Fetch') > 0 && calls('Search') > 0 && calls('Fetch') > 0,
       missing: fable,
     });
 
@@ -18820,11 +18943,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const sums = want.get(r.canonicalModel) ?? [0, 0];
       want.set(r.canonicalModel, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
     }
-    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[10]) !== sums[0] || num(row[11]) !== sums[1]; });
+    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[11]) !== sums[0] || num(row[12]) !== sums[1]; });
     results.push({
       name: '/analytics a session sums the server-tool calls per model the way the routes sum them',
       ok: perModel.length > 0 && wrong.length === 0,
-      missing: wrong.map((row) => `${row[0]} ${row[10]}/${row[11]} against ${(want.get(row[0]) ?? []).join('/')}`),
+      missing: wrong.map((row) => `${row[0]} ${row[11]}/${row[12]} against ${(want.get(row[0]) ?? []).join('/')}`),
     });
 
     const agentFold = '/analytics a user agent pattern nothing matches empties the session fold';
@@ -19552,9 +19675,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   const first = rowsOf(page)[0];
   const labels = (await toggleMenu(page, first)).map((b) => b.textContent?.trim() ?? '');
   await toggleMenu(page, first);
-  // The default set leaves the request count to the Columns control.
-  await showColumn(page, 'Requests');
-  const quiet = rowsOf(page).find((tr) => Number(sessionCell(page, tr, 'Requests')?.textContent) === 0);
+  // A count of 0 also reads on a session whose every request was refused, whose rows the log lists.
+  const quiet = rowsOf(page).find((tr) => sessionOf(page, tr)?.lastRequestAt === null);
   const off = await entryOf(page, quiet);
   await toggleMenu(page, quiet);
   // A row inside the hour, one past it inside six hours and one past six hours inside a day, where the story has them.
@@ -20768,7 +20890,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
     // A slowed session's speed chip is the cell's other badge, read by the check after this one.
     const badges = [...m.container.querySelectorAll('.srow__account .badge')].filter((b) => !b.closest('.speed-chip')).map((b) => b.textContent?.trim() ?? '');
-    // The 25 rows under no age limit less the registration-only row, which names no account.
+    // The 26 rows under no age limit less the registration-only row and the refusal-only row, which name no account.
     const pinnedTo = 24;
     results.push({
       name: '/sessions account cells carry the account kind on their title and description rather than a badge',
@@ -20852,12 +20974,12 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
-  // Of the 25 rows under no age limit, the registration-only row and the laptop row the ledger never saw carry no last
+  // Of the 26 rows under no age limit, the registration-only row and the laptop row the ledger never saw carry no last
   // use and no request, so they have no expiry to count down.
   results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 25 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 23, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
-  // 21 of the 25 rows under no age limit hold ledgered requests, and the two rows with no last use, the row idle for
-  // two hours and nightly's notebook row hold none.
+  // 21 of the 26 rows under no age limit hold ledgered requests, and the two rows with no last use, the row idle for
+  // two hours, nightly's notebook row and the refusal-only row hold none.
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length === 21 && counts.includes(0), missing: counts.map(String) });
 
   // Per-agent pins: a "+N" badge wherever an agent runs another model or sits on another account.
@@ -21093,9 +21215,12 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     }
   }
 
-  // A session with no ledgered requests cannot open the analytics view.
+  // A session with no ledgered row cannot open the analytics view. A count of 0 also reads on a session whose every
+  // request was refused, so the row is found by its last request instead.
+  const ledgerSessions = await api.listSessions();
+  const rowOfSession = (s) => (s === undefined ? undefined : rows().find((r) => r.id === `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`));
   const busyRow = () => rows().find((r) => Number(cell(r, 'Requests')?.textContent?.trim()) > 0);
-  const barren = rows().find((r) => Number(cell(r, 'Requests')?.textContent?.trim()) === 0);
+  const barren = rowOfSession(ledgerSessions.find((s) => !s.historical && s.lastRequestAt === null));
   const openMenu = async (row) => {
     row?.querySelector('.menu__trigger')?.click();
     await m.settle(120);
@@ -21143,6 +21268,36 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const jumps = (await openMenu(busyRow())).filter((b) => b.textContent?.trim() === 'View in analytics');
     results.push({ name: '/sessions enables the jump with ledgered requests', ok: jumps.length === 1 && jumps.every((b) => !b.disabled), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
     await openMenu(busyRow());
+  }
+  {
+    // The count leaves a refused request out, while the log lists it and the session's analytics fold holds it, so a
+    // session whose every request was refused opens both views. One with no ledgered row has nothing to open.
+    const ledgerJumps = (items) => items.filter((b) => ['View in analytics', 'View in requests'].includes(b.textContent?.trim() ?? ''));
+    const read = async (row) => {
+      const count = cell(row, 'Requests');
+      const jumps = ledgerJumps(await openMenu(row));
+      await openMenu(row);
+      return { count: count?.textContent?.trim() ?? null, hover: count?.getAttribute('title') ?? null, jumps: jumps.map((b) => ({ disabled: b.disabled, title: b.getAttribute('title') })), muted: count?.querySelector('.muted') != null };
+    };
+    const refusedOnly = ledgerSessions.find((s) => !s.historical && s.requests === 0 && s.lastRequestAt !== null);
+    const refused = await read(rowOfSession(refusedOnly));
+    // Found again, since the navigation above drew the table anew.
+    const unledgered = await read(rowOfSession(ledgerSessions.find((s) => !s.historical && s.lastRequestAt === null)));
+    results.push({
+      name: '/sessions a session whose every request was refused opens both ledger views under a muted 0 with no hover, and one with no ledgered row keeps the hint',
+      ok:
+        refusedOnly !== undefined &&
+        refused.count === '0' &&
+        refused.muted &&
+        refused.hover === null &&
+        refused.jumps.length === 2 &&
+        refused.jumps.every((j) => !j.disabled && j.title === null) &&
+        unledgered.count === '0' &&
+        (unledgered.hover ?? '').includes('no ledgered requests') &&
+        unledgered.jumps.length === 2 &&
+        unledgered.jumps.every((j) => j.disabled && (j.title ?? '').includes('no ledgered requests')),
+      missing: [refusedOnly === undefined ? 'no refusal-only session' : `${refusedOnly.keyId} ${refusedOnly.sessionId}`, JSON.stringify(refused), JSON.stringify(unledgered)],
+    });
   }
   {
     const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
@@ -21513,7 +21668,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     }));
     const count = cell(row, 'Agents')?.textContent?.trim();
     const tile = [...m.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value')?.textContent?.trim();
-    // The 25 rows under no age limit hold 36 records, two of them the written session's released subagents.
+    // The 26 rows under no age limit hold 36 records, two of them the written session's released subagents.
     const want = '34 of 1,024';
     results.push({
       name: '/sessions a line the mod released is not listed, one the session\'s end released is, and the Agents column and tile leave the hidden ones out of their counts',
@@ -21544,7 +21699,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 25, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 26, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
@@ -23819,7 +23974,7 @@ m.unmount();
     return button !== undefined && button !== null;
   };
   const counts = (outage) => Object.fromEntries(Object.entries(outage.calls).map(([name, calls]) => [name, calls.length]));
-  const tilesDrawn = (page) => page.container.querySelectorAll('.stat-grid > .stat').length === 4 && tilesFailure(page) === null;
+  const tilesDrawn = (page) => page.container.querySelectorAll('.stat-grid > .stat').length === 5 && tilesFailure(page) === null;
 
   let outage = failCalls(READS, 'ledger locked');
   let page = await mount('/', { now: CLOCK_ORIGIN });

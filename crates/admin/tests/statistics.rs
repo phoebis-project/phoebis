@@ -1219,6 +1219,7 @@ async fn a_contract_refusal_lists_its_item() {
         ttfc_ms: None,
         error_code: Some("client_contract".into()),
         client_contract: Some("class_header".into()),
+        refused: true,
         ..request(
             "r-refused",
             now - HOUR,
@@ -1342,6 +1343,8 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
         diagnostics: None,
         message_id: None,
         skipped_events: 0,
+        interruption: None,
+        passthrough: None,
         finished_at: now + 1_300,
     }));
     let all = wait_json(&parts.app, "/admin/requests?limit=500", &cookie, |v| {
@@ -1947,6 +1950,61 @@ async fn a_bodies_route_answers_the_bytes_each_side_stored_and_saw() {
     );
 }
 
+/// The route reads a capture at the admin state's clock, so a body whose expiry has passed answers 404 while its row
+/// waits for the purge's next pass.
+#[tokio::test]
+async fn the_bodies_route_serves_a_capture_before_its_expiry_by_the_clock_and_answers_404_past_it()
+{
+    let parts = common::admin_parts_full().await;
+    let now = common::NOW;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (id, expires_at) in [("r-expired", now - HOUR), ("r-kept", now + HOUR)] {
+        let mut row = request(
+            id,
+            now - 2 * HOUR,
+            Some("desktop"),
+            "claude-sonnet-5",
+            "succeeded",
+            200,
+            "inference",
+        );
+        row.bodies_captured = true;
+        parts
+            .db
+            .insert_request(
+                &row,
+                &[attempt(id, "business", 200)],
+                Some(&BodyRecord {
+                    request_id: id.into(),
+                    request_body: b"{}".to_vec(),
+                    response_body: None,
+                    request_len_seen: 2,
+                    response_len_seen: 0,
+                    expires_at,
+                }),
+            )
+            .unwrap();
+    }
+    let expired = get(
+        &parts.app,
+        "/admin/requests/r-expired/bodies",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(expired.status(), 404, "the expiry lies before the clock");
+    assert_eq!(
+        json(expired).await["error"],
+        "no captured bodies for this request"
+    );
+    assert_eq!(
+        get(&parts.app, "/admin/requests/r-kept/bodies", Some(&cookie))
+            .await
+            .status(),
+        200,
+        "the expiry lies after the clock"
+    );
+}
+
 /// A capturing request straight onto the bus: `delivered` of its response chunks reach the ledger while its
 /// completion says `published` went out, so the rest were dropped at the bus.
 /// The observation of an inference request under `desktop`, for a test that drives the writer through the bus.
@@ -2016,6 +2074,8 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
         diagnostics: None,
         message_id: None,
         skipped_events: 0,
+        interruption: None,
+        passthrough: None,
         finished_at: common::NOW + 900,
     }));
 }
@@ -2223,8 +2283,10 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
     assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 24.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
     assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 24);
-    assert_eq!(dashboard["recent"].as_array().unwrap().len(), 20);
-    assert_eq!(dashboard["recent"][0]["id"], "d0");
+    assert!(
+        dashboard.get("recent").is_none(),
+        "the dashboard answers no list of requests, which the console reads from the requests route"
+    );
     let business = dashboard["accounts"]
         .as_array()
         .unwrap()
@@ -2243,6 +2305,113 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
         "the newest sample per window"
     );
     assert_eq!(dashboard["sessions"]["active_pins"].as_u64(), Some(0));
+}
+
+/// Two served requests and two guardrail blocks of the key `desktop` an hour before `now`, each block flagged with no
+/// attempt as the landing flags a refusal.
+fn plant_refusals_beside_served(parts: &common::Full) {
+    let now = common::NOW;
+    for id in ["r-served-1", "r-served-2"] {
+        parts
+            .db
+            .insert_request(
+                &request(
+                    id,
+                    now - HOUR,
+                    Some("desktop"),
+                    "claude-sonnet-5",
+                    "succeeded",
+                    200,
+                    "inference",
+                ),
+                &[attempt(id, "business", 200)],
+                None,
+            )
+            .unwrap();
+    }
+    for id in ["r-refused-1", "r-refused-2"] {
+        let refused = RequestRecord {
+            attempts: 0,
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: Some("guardrail_blocked".into()),
+            refused: true,
+            ..request(
+                id,
+                now - HOUR,
+                Some("desktop"),
+                "claude-sonnet-5",
+                "rejected",
+                403,
+                "inference",
+            )
+        };
+        parts.db.insert_request(&refused, &[], None).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn the_breakdown_route_carries_refused_and_refusals_per_row() {
+    let parts = common::admin_parts_full().await;
+    plant_refusals_beside_served(&parts);
+    let cookie = login(&parts.app, "admin-secret").await;
+    let breakdown = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=key",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let row = breakdown["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key_id"] == "desktop")
+        .unwrap_or_else(|| panic!("no desktop row: {breakdown}"));
+    assert_eq!(
+        (
+            row["requests"].as_u64(),
+            row["refused"].as_u64(),
+            &row["refusals"]
+        ),
+        (
+            Some(2),
+            Some(2),
+            &serde_json::json!({ "guardrail_blocked": 2 })
+        ),
+        "the two blocks beside the two served requests: {row}"
+    );
+}
+
+#[tokio::test]
+async fn the_dashboard_route_carries_the_refused_count_and_the_top_refusal_code() {
+    let parts = common::admin_parts_full().await;
+    plant_refusals_beside_served(&parts);
+    let cookie = login(&parts.app, "admin-secret").await;
+    let dashboard = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            dashboard["requests_24h"].as_u64(),
+            dashboard["refused_24h"].as_u64(),
+            dashboard["top_refusal_code"].as_str()
+        ),
+        (Some(2), Some(2), Some("guardrail_blocked")),
+        "the two served requests, the two blocks apart"
+    );
+    let at = (common::NOW - HOUR).div_euclid(HOUR) * HOUR;
+    let hour = dashboard["hourly"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["at"] == at)
+        .unwrap_or_else(|| panic!("no hour at {at}: {}", dashboard["hourly"]));
+    assert_eq!(
+        (hour["requests"].as_u64(), hour["refused"].as_u64()),
+        (Some(2), Some(2)),
+        "the hour's refused beside its requests: {hour}"
+    );
 }
 
 fn guardrail_match(id: &str, position: u32, blocked: bool) -> phoebis_ledger::GuardrailMatchRecord {
@@ -2293,7 +2462,7 @@ fn listed_ids(page: &serde_json::Value) -> Vec<&str> {
 }
 
 /// `guardrails` keeps the requests a listed guardrail matched and `-` the ones none matched, and both the list's row
-/// and the show route carry the blocking guardrail and every match in evaluation order.
+/// and the show route carry the blocking guardrail, every match in evaluation order and the row's refused flag.
 #[tokio::test]
 async fn the_request_log_filters_by_guardrail_and_by_none_and_the_summary_carries_the_matches() {
     let parts = common::admin_parts_full().await;
@@ -2315,6 +2484,15 @@ async fn the_request_log_filters_by_guardrail_and_by_none_and_the_summary_carrie
             vec![guardrail_match("g1", 0, false)],
         ),
         guarded("r-none", now - 3 * HOUR, 1_000, Vec::new()),
+        RequestRecord {
+            refused: true,
+            ..guarded(
+                "r-refused",
+                now - 4 * HOUR,
+                1_000,
+                vec![guardrail_match("g3", 0, true)],
+            )
+        },
     ] {
         parts.db.insert_request(&row, &[], None).unwrap();
     }
@@ -2357,6 +2535,27 @@ async fn the_request_log_filters_by_guardrail_and_by_none_and_the_summary_carrie
     let shown = json(get(&parts.app, "/admin/requests/r-blocked", Some(&cookie)).await).await;
     assert_eq!(shown["request"]["guardrail_id"], "g2");
     assert_eq!(shown["request"]["guardrails"], expected);
+    let listed = page("limit=500").await;
+    let refused_of = |id: &str| {
+        listed["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .map(|r| r["refused"].clone())
+    };
+    assert_eq!(
+        ["r-refused", "r-blocked", "r-watched", "r-none"].map(refused_of),
+        [
+            Some(serde_json::json!(true)),
+            Some(serde_json::json!(false)),
+            Some(serde_json::json!(false)),
+            Some(serde_json::json!(false))
+        ],
+        "the flagged refusal alone reads refused, the unflagged block and the served rows do not"
+    );
+    let shown = json(get(&parts.app, "/admin/requests/r-refused", Some(&cookie)).await).await;
+    assert_eq!(shown["request"]["refused"], true);
 }
 
 /// The counts route answers each guardrail matched in the range with the registry's current name, null for an id the

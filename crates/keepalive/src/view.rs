@@ -66,9 +66,9 @@ pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
         | RequestRejected
         | UnexpectedOutput
         | UnsupportedProbe => RecipeState::Paused,
-        AgentReleased | AgentUnknown | BusGap | Evicted | Expired | ExpiredAtRestart
-        | IdleLimit | InstanceReplaced | KeyOptedOut | OptedOut | ParkedLimit | Released
-        | Reset | SessionEnded | SessionExpired => RecipeState::Ended,
+        AgentReleased | AgentUnknown | BusGap | Compacted | Evicted | Expired
+        | ExpiredAtRestart | IdleLimit | InstanceReplaced | KeyOptedOut | OptedOut
+        | ParkedLimit | Released | Reset | SessionEnded | SessionExpired => RecipeState::Ended,
     };
     match state {
         RecipeState::Held | RecipeState::Retained if paused => RecipeState::Paused,
@@ -95,8 +95,9 @@ pub struct RecipeView {
     pub credited_today: u64,
     pub deadline: Option<i64>,
     pub key_id: String,
-    /// The guard's verdict on the last request the agent observed, `null` before the first one. Never a hold:
-    /// `auxiliary` and `foreign` both leave the recipe scheduled exactly as `state` and `cause` already say.
+    /// The guard's verdict on the last request the agent observed, `null` before the first one. `auxiliary` and
+    /// `foreign` both leave the recipe scheduled exactly as `state` and `cause` already say, `compaction` leaves it as
+    /// it stood while the compaction is open, and a completed one stops it under `compacted`.
     pub last_guard: Option<Guard>,
     pub last_probe_at: Option<i64>,
     pub last_request_at: Option<i64>,
@@ -331,7 +332,7 @@ mod tests {
         assert_eq!(
             counts.into_iter().collect::<Vec<_>>(),
             [
-                ("ended", 15),
+                ("ended", 16),
                 ("held", 14),
                 ("not_retained", 14),
                 ("paused", 14),

@@ -1136,6 +1136,19 @@ textarea.input {
   font-size: 12px;
 }
 
+/* One width for the trailing slot of both kinds of guardrail row, the three sm ghost buttons' with their two gaps,
+   so the mode badge ends at the same x in every row. */
+.guardrail-list {
+  --guardrail-trailing: 106px;
+}
+
+.guardrail-row__trailing {
+  flex: none;
+  display: inline-flex;
+  justify-content: flex-end;
+  width: var(--guardrail-trailing);
+}
+
 /* Dialog */
 .dialog {
   padding: 0;

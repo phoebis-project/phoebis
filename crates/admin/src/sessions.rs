@@ -7,7 +7,9 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use phoebis_routing::listing::{LONG_CONTEXT_ABOVE, LONG_CONTEXT_SUFFIX};
 use phoebis_routing::{entrypoint_of, BurnRates, BurnUnit, FIVE_HOUR};
+use phoebis_store::PinRow;
 use serde_json::{json, Value};
 use utoipa::ToSchema;
 
@@ -73,7 +75,20 @@ pub(crate) struct Session {
     pub cycle_ms: Option<f64>,
     /// The cache TTL in force at the pin's last refresh.
     pub cache_ttl_ms: Option<i64>,
+    /// The context of the row's pin, the main agent's where it holds one: its last turn's prompt in tokens, cache
+    /// reads and writes included, 0 before its first turn.
     pub last_input_tokens: Option<u64>,
+    /// The pin's context window in tokens as the client sizes it: 1,000,000 where the newest request of the pin's agent
+    /// named a `[1m]` twin (the session's newest where that agent sent none), else 200,000. Null on a row with no pin,
+    /// on a historical row and where `last_input_tokens` is 0.
+    pub context_window_tokens: Option<u64>,
+    /// `last_input_tokens` over `context_window_tokens`, rounded to three decimals, null where the window is.
+    pub context_share: Option<f64>,
+    /// The greatest prefix in tokens among the live cache-map entries on the pin's account and incarnation whose root
+    /// is the session and whose model is the pin's: a message entry's count covers the static blocks before it, and a
+    /// conversation whose only live entries are static reads the relay's estimate. Null where the window is and where
+    /// no live entry stands.
+    pub cached_prefix_tokens: Option<u64>,
     /// The pin's last main, subagent or compaction turn, or a keepalive probe's renewal.
     pub last_refresh_at: Option<i64>,
     /// The account a shed round marked the pin's session to leave.
@@ -89,6 +104,10 @@ pub(crate) struct Session {
     pub companion: String,
     pub companion_since: Option<i64>,
     pub agents: u64,
+    /// One line per pin of another agent of the session that the companion carries a recipe for and has not
+    /// released, ordered by agent id then model, each with its own pin's figures. Null on a row whose `companion` is
+    /// `none`, empty where every other agent is released.
+    pub agent_contexts: Option<Vec<AgentContext>>,
     /// Main's recipe.
     pub keepalive: SessionKeepalive,
     /// The seconds since main's last presence report, null before the first one.
@@ -100,6 +119,22 @@ pub(crate) struct Session {
     pub forked_from: Option<String>,
     /// The matched depth.
     pub fork_depth: Option<u32>,
+}
+
+/// One agent's pin on a companion session's row, with the figures the row answers for its own pin, read from this pin
+/// and its model.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentContext {
+    pub agent_id: String,
+    pub model: String,
+    /// The pin's last turn's prompt in tokens, cache reads and writes included, 0 before its first turn.
+    pub last_input_tokens: u64,
+    /// Null, as `context_share` and `cached_prefix_tokens` are, where `last_input_tokens` is 0.
+    pub context_window_tokens: Option<u64>,
+    pub context_share: Option<f64>,
+    /// Null as well where no live entry stands.
+    pub cached_prefix_tokens: Option<u64>,
 }
 
 /// The recipe as the session row reads it, every member null while main holds none.
@@ -206,6 +241,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         (String, i64, String),
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
+    // The pin each row shows and every other agent's pins, which the context pass reads after the historical one.
+    let mut row_pin: std::collections::BTreeMap<(String, i64, String), PinRow> =
+        std::collections::BTreeMap::new();
+    let mut agent_pins: std::collections::BTreeMap<(String, i64, String), Vec<PinRow>> =
+        std::collections::BTreeMap::new();
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
     // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it and its
     // unmetered usage at that same set, or the share of the account's own 5-hour window through the model's anchor
@@ -235,6 +275,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             .or_default()
             .insert(p.agent_id.clone());
         let is_main = p.agent_id == "main";
+        if !is_main {
+            agent_pins.entry(key.clone()).or_default().push(p.clone());
+        }
         // A session holds a pin per agent and the row shows one of them: the main agent's pin once one exists
         // (replaced only by a newer pin of its own), else whichever the caller used last.
         let keep = match (held_is_main.get(&key).copied(), rows.get(&key)) {
@@ -296,6 +339,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 .and_then(|factor| equivalent.map(|b| b / factor))
             }
         };
+        row_pin.insert(key.clone(), p.clone());
         rows.insert(
             key,
             json!({
@@ -373,6 +417,89 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["presence_age_seconds"] = json!(null);
         }
     }
+    // The context figures, after the historical pass has settled `companion`: the row's own pin, and on a companion
+    // row one line per pin of every other agent the companion carries a recipe for and has not released. The window
+    // reads each agent's newest spelling of its model, since the pin's model has the long-context suffix folded out.
+    let spellings = match state
+        .ledger
+        .db()
+        .read(move |c| phoebis_ledger::agent_models(c, cutoff))
+        .await
+    {
+        Ok(spellings) => spellings,
+        Err(e) => return Err(crate::analytics::ledger_failure(e)),
+    };
+    let mut models: std::collections::BTreeMap<
+        (String, i64, String),
+        Vec<phoebis_ledger::AgentModel>,
+    > = std::collections::BTreeMap::new();
+    for spelling in spellings {
+        models
+            .entry((
+                spelling.key_id.clone(),
+                spelling.key_generation,
+                spelling.session_id.clone(),
+            ))
+            .or_default()
+            .push(spelling);
+    }
+    let recipes = state.keepalive.recipes();
+    let mut unreleased: std::collections::BTreeSet<(String, i64, String, String)> =
+        std::collections::BTreeSet::new();
+    for recipe in &recipes {
+        let Some(&generation) = live.get(&recipe.key_id) else {
+            continue;
+        };
+        if recipe.agent_state != phoebis_keepalive::AgentState::Released {
+            unreleased.insert((
+                recipe.key_id.clone(),
+                generation,
+                recipe.session_id.clone(),
+                recipe.agent_id.clone(),
+            ));
+        }
+    }
+    for (key, entry) in rows.iter_mut() {
+        let models = models.get(key).map(Vec::as_slice);
+        let figures = |pin: &PinRow| context_figures(state, pin, newest_model(models, pin), now);
+        let [window, share, prefix] = match row_pin.get(key) {
+            Some(pin) if entry["historical"] != true => figures(pin),
+            _ => [Value::Null, Value::Null, Value::Null],
+        };
+        entry["context_window_tokens"] = window;
+        entry["context_share"] = share;
+        entry["cached_prefix_tokens"] = prefix;
+        entry["agent_contexts"] = if entry["companion"] == "none" {
+            Value::Null
+        } else {
+            let mut lines: Vec<&PinRow> = agent_pins
+                .get(key)
+                .into_iter()
+                .flatten()
+                .filter(|pin| {
+                    unreleased.contains(&(
+                        key.0.clone(),
+                        key.1,
+                        key.2.clone(),
+                        pin.agent_id.clone(),
+                    ))
+                })
+                .collect();
+            lines.sort_by(|a, b| (&a.agent_id, &a.model).cmp(&(&b.agent_id, &b.model)));
+            Value::Array(
+                lines
+                    .into_iter()
+                    .map(|pin| {
+                        let [window, share, prefix] = figures(pin);
+                        json!({
+                            "agent_id": pin.agent_id, "model": pin.model, "last_input_tokens": pin.last_input_tokens,
+                            "context_window_tokens": window, "context_share": share, "cached_prefix_tokens": prefix,
+                        })
+                    })
+                    .collect(),
+            )
+        };
+    }
     // A session the engine knows only from a registration carries no pin and no ledger row, so its model and
     // serving account come from its main agent's recipe instead, the first the session's agents sort to. A
     // recipe belongs to the live key alone, so it joins under that generation and never reaches a historical row.
@@ -380,7 +507,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         (String, i64, String),
         phoebis_keepalive::RecipeView,
     > = std::collections::BTreeMap::new();
-    for recipe in state.keepalive.recipes() {
+    for recipe in recipes {
         let Some(&generation) = live.get(&recipe.key_id) else {
             continue;
         };
@@ -437,6 +564,48 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     };
     out.sort_by_key(|v| std::cmp::Reverse(latest(v)));
     Ok(out)
+}
+
+/// The client's own rule for a model's context window, as the routing crate states it: a million tokens where the
+/// newest request's spelling, `newest_model`, named the `[1m]` twin, else two hundred thousand.
+fn context_window_tokens(newest_model: &str) -> u64 {
+    // Case-blind, as the relay folds the suffix out of the spelling.
+    if newest_model
+        .to_ascii_lowercase()
+        .ends_with(LONG_CONTEXT_SUFFIX)
+    {
+        1_000_000
+    } else {
+        LONG_CONTEXT_ABOVE
+    }
+}
+
+/// The spelling the pin's agent named on its newest request of the window, else the session's newest request's. A
+/// pin's own model has the suffix folded out, so a session with no request in the window reads the plain window.
+fn newest_model<'a>(models: Option<&'a [phoebis_ledger::AgentModel]>, pin: &'a PinRow) -> &'a str {
+    let models = models.unwrap_or_default();
+    models
+        .iter()
+        .find(|m| m.agent_id.as_deref() == Some(pin.agent_id.as_str()))
+        .or_else(|| models.first())
+        .map_or(pin.model.as_str(), |m| m.model.as_str())
+}
+
+/// A pin's context window, its last prompt's share of it and its cached prefix, each null before the pin's first turn.
+fn context_figures(state: &AdminState, pin: &PinRow, newest_model: &str, now: i64) -> [Value; 3] {
+    if pin.last_input_tokens == 0 {
+        return [Value::Null, Value::Null, Value::Null];
+    }
+    let window = context_window_tokens(newest_model);
+    let share = (pin.last_input_tokens as f64 / window as f64 * 1_000.0).round() / 1_000.0;
+    let prefix = state.router.cached_prefix(
+        &pin.account_id,
+        pin.incarnation,
+        &pin.session_id,
+        &pin.model,
+        now,
+    );
+    [json!(window), json!(share), json!(prefix)]
 }
 
 /// Read the per-model cost card.

@@ -23,8 +23,6 @@ const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
 const ACCT_SECRET: &str = "sk-ant-api03-ACCT0001";
 const RESET: i64 = 4_600; // one hour past NOW (1_000 s), in Unix seconds
-/// The session id the first-party fixture's head carries.
-const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
 
 const REFUSED_BETA: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `cache-diagnosis-2026-04-07` for the `anthropic-beta` header."}}"#;
 const REFUSED_REQUEST_ID: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unrecognized request header `x-client-request-id`."}}"#;
@@ -36,20 +34,6 @@ fn json_400(message: &str) -> Respond {
         status: 400,
         headers: vec![],
         body: message.as_bytes().to_vec(),
-    }
-}
-
-/// A non-streaming commit, so the message id lands in memory synchronously within the request the fixture's
-/// own `stream: true` would otherwise defer to a background drain of the response body; the streamed path is
-/// covered on its own in `restoration.rs`.
-fn ok_with_id(id: &str) -> Respond {
-    Respond::Json {
-        status: 200,
-        headers: vec![],
-        body: format!(
-            r#"{{"id":"{id}","type":"message","content":[],"usage":{{"input_tokens":1,"output_tokens":1}}}}"#
-        )
-        .into_bytes(),
     }
 }
 
@@ -2218,4 +2202,164 @@ async fn a_client_member_is_detached_when_a_cooldown_releases_the_pin_onto_a_sib
     );
     assert_eq!(named(&up), Some(Some("msg_b01".into())));
     up.shutdown().await;
+}
+
+/// What the client writes as the whole first user message of a resumed conversation whose opening tool results it
+/// dropped. It writes it after it stamped the request, over a message that then held those results alone.
+const RESUME_PLACEHOLDER: &str = "[Orphaned tool result removed due to conversation resume]";
+
+/// The drift warning's own words, which pick its line out of the capture.
+const DRIFT_WARNING: &str = "a caller stamped a billing line this build cannot reproduce";
+
+/// The first-party fixture stamped `cc_version=2.1.269.{suffix}`, its one user message replaced by the resume
+/// placeholder where `resumed`, and re-signed so the hash check passes and the suffix check decides. The fixture's
+/// own `517` is the empty prompt's suffix under 2.1.269.
+fn stamped(suffix: &str, resumed: bool) -> Vec<u8> {
+    let mut text = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen(
+            "cc_version=2.1.269.517",
+            &format!("cc_version=2.1.269.{suffix}"),
+            1,
+        );
+    if resumed {
+        let open = r#""messages":["#;
+        let start = text.find(open).expect("the fixture carries messages") + open.len();
+        let end = text
+            .find(r#"],"system":"#)
+            .expect("the system blocks follow the messages");
+        text.replace_range(
+            start..end,
+            &format!(
+                r#"{{"role":"user","content":[{{"type":"text","text":"{RESUME_PLACEHOLDER}"}}]}}"#
+            ),
+        );
+    }
+    phoebis_cch::sign(text.as_bytes()).expect("the fixture signs")
+}
+
+/// Sends `native`, asserts its `400` `client_drift` refusal of `kind` before any account is tried, with the
+/// decision's reason and nothing dialled, and answers the client's message with the drift warning's line.
+async fn drift_refusal(native: &[u8], kind: &str) -> (String, String) {
+    let captured = Captured::default();
+    let _log = captured.install();
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(first_party_request(native, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            resp.status(),
+            resp.headers()
+                .get("x-phoebis-error-code")
+                .and_then(|v| v.to_str().ok())
+        ),
+        (StatusCode::BAD_REQUEST, Some("client_drift"))
+    );
+    let o = outcome(&resp);
+    assert_eq!(
+        (o.account_id.as_str(), o.attempt, o.client_drift.as_deref()),
+        ("", 0, Some(kind))
+    );
+    let refusal: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let record = decision_of(&mut events, &o.request_id).await;
+    assert_eq!(
+        record
+            .outcome
+            .refusal
+            .as_ref()
+            .map(|r| (r.kind, r.code, r.reason.as_str())),
+        Some(("client", "drift", kind))
+    );
+    assert!(
+        up.requests().is_empty(),
+        "a drifted body is not sent upstream in any form"
+    );
+    up.shutdown().await;
+    let log = captured.text();
+    let warnings: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains(DRIFT_WARNING))
+        .collect();
+    assert_eq!(warnings.len(), 1, "one drift warning: {log}");
+    (
+        refusal["error"]["message"].as_str().unwrap().to_string(),
+        warnings[0].to_string(),
+    )
+}
+
+/// The client hashed the empty prompt for a resumed request, since the message it stamped held tool results
+/// alone, so the router reproduces the stamp and the request relays.
+#[tokio::test]
+async fn a_resumed_conversation_stamped_over_the_empty_prompt_relays() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(first_party_request(&stamped("517", true), "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(outcome(&resp).client_drift, None);
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(up.requests().len(), 1, "the body reached the upstream");
+    up.shutdown().await;
+}
+
+/// The router reproduces a resumed stamp over the empty prompt, so a resumed suffix it cannot reproduce is a real
+/// non-reproduction: refused, with words and a warning that name the resume beside the re-pin.
+#[tokio::test]
+async fn a_resumed_conversations_suffix_that_reproduces_from_no_candidate_is_refused_naming_the_resume(
+) {
+    let (message, warning) = drift_refusal(&stamped("abc", true), "version_suffix").await;
+    assert_eq!(
+        message,
+        "the conversation was resumed, and the client's version suffix does not reproduce from the resume \
+         placeholder, the empty prompt or the user agent. Re-pin the router to this client version"
+    );
+    assert!(warning.contains(" resume=true"), "{warning}");
+}
+
+/// A conversation that was not resumed keeps the words of a version change, and its warning says so.
+#[tokio::test]
+async fn a_fresh_conversations_suffix_that_does_not_reproduce_keeps_the_version_change_words() {
+    let (message, warning) = drift_refusal(&stamped("abc", false), "version_suffix").await;
+    assert_eq!(
+        message,
+        "the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to \
+         this client version"
+    );
+    assert!(warning.contains(" resume=false"), "{warning}");
+}
+
+/// The hash check reads no prompt, so its words stay a version change's, and its warning still marks the resume
+/// for the operator reading the journal.
+#[tokio::test]
+async fn a_resumed_conversations_drifted_hash_keeps_the_hash_words_and_warns_the_resume() {
+    let mut native = stamped("517", true);
+    let at = phoebis_cch::find_cch(&native)
+        .expect("the line carries a hash")
+        .digits_start;
+    native[at] = if native[at] == b'0' { b'1' } else { b'0' };
+    let (message, warning) = drift_refusal(&native, "hash").await;
+    assert_eq!(
+        message,
+        "the client's billing hash does not match the pinned profile. Re-pin the router to this client version"
+    );
+    assert!(warning.contains(" resume=true"), "{warning}");
 }

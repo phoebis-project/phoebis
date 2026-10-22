@@ -9,9 +9,9 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, AutoMode, Classifier, Event as BusEvent, Kind, Origin,
-    Outcome as BusOutcome, Phase, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
-    ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
+    AccountSelected, AttemptOutcome, AutoMode, Classifier, Event as BusEvent, Interruption, Kind,
+    Origin, Outcome as BusOutcome, Phase, RequestComplete, RequestObserved, RequestShape,
+    ResponseChunk, ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
@@ -1134,6 +1134,8 @@ fn complete_event(id: &str) -> BusEvent {
         diagnostics: None,
         message_id: None,
         skipped_events: 0,
+        interruption: None,
+        passthrough: None,
         finished_at: 1,
     })
 }
@@ -1314,6 +1316,72 @@ fn a_requests_slow_down_waits_count_into_its_hourly_row() {
     );
 }
 
+/// A request refused after it waited through a slow-down hold (its key revoked during the hold) counts under the
+/// refusals map alone, so the hour's held count and held time are the served request's.
+#[test]
+fn a_refusal_after_a_slow_down_hold_counts_under_no_held_figure() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let slowed = |held_ms: u64| {
+        format!(
+            r#"{{"waited_on":["a"],"cohort":null,"held_ms":{held_ms},"waits":[{{"reason":"slow_down","held_ms":{held_ms}}}]}}"#
+        )
+    };
+    let request = |id: &str, key_id: &str, held_ms: u64| RequestRecord {
+        id: id.into(),
+        received_at: 3_600_000,
+        key_id: Some(key_id.into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        held: Some(slowed(held_ms)),
+        ..Default::default()
+    };
+    let served = RequestRecord {
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..request("served", "desktop", 2_000)
+    };
+    let attempt = AttemptRecord {
+        request_id: "served".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        outcome: "succeeded".into(),
+        output_tokens: Some(5),
+        ..Default::default()
+    };
+    let refused = RequestRecord {
+        status: Some(401),
+        outcome: "rejected".into(),
+        error_code: Some("auth_unknown".into()),
+        refused: true,
+        ..request("refused", "laptop", 3_000)
+    };
+    db.insert_request(&served, &[attempt], None).unwrap();
+    db.insert_request(&refused, &[], None).unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    assert_eq!(
+        (
+            rows.iter().map(|r| r.slow_down_held).sum::<u64>(),
+            rows.iter().map(|r| r.slow_down_held_ms).sum::<u64>(),
+        ),
+        (1, 2_000),
+        "the served request's hold alone: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .flat_map(|r| r.refusals.clone())
+            .collect::<Vec<_>>(),
+        [("auth_unknown".to_string(), 1)],
+        "the refusal sits in the map"
+    );
+}
+
 /// The row `list_requests` hands back, the same query `/admin/requests` runs.
 async fn listed(h: &Harness, id: &str) -> RequestRecord {
     wait_for_async(Duration::from_secs(5), || async {
@@ -1321,6 +1389,24 @@ async fn listed(h: &Harness, id: &str) -> RequestRecord {
         h.db.read(move |c| {
             let (rows, _) =
                 list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 50)?;
+            Ok(rows.into_iter().find(|(r, _)| r.id == id).map(|(r, _)| r))
+        })
+        .await
+        .unwrap()
+    })
+    .await
+}
+
+/// The same row under a filter that keeps the probe rows the default listing hides.
+async fn listed_with_probes(h: &Harness, id: &str) -> RequestRecord {
+    wait_for_async(Duration::from_secs(5), || async {
+        let id = id.to_string();
+        h.db.read(move |c| {
+            let filter = RequestFilter {
+                include_probes: true,
+                ..Default::default()
+            };
+            let (rows, _) = list_requests(c, &filter, &LiveKeys::default(), None, 50)?;
             Ok(rows.into_iter().find(|(r, _)| r.id == id).map(|(r, _)| r))
         })
         .await
@@ -1512,6 +1598,125 @@ async fn a_client_gone_completion_lands_the_attempts_it_reached_and_no_gap() {
         gaps,
         ["silent"],
         "the sweep aged the silent request out and found nothing of the two that completed"
+    );
+    up.shutdown().await;
+}
+
+/// A completion whose body ended short after the head writes one `stream_interrupted` row at its finish: the serving
+/// attempt's account and upstream request id, the request's key, session and resolved model, and the cut's code,
+/// words, bytes and attempt. A clean completion writes none, and a request with no session finds its own row among
+/// the events its detail reads.
+#[tokio::test]
+async fn a_completion_cut_after_its_head_writes_one_stream_interrupted_row_its_request_reads() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let cut = |code: &str, text: &str| Interruption {
+        code: code.into(),
+        text: text.into(),
+        bytes_relayed: 42,
+    };
+    let requests = [
+        (
+            "cut-in-session",
+            Some("s1"),
+            Some(cut("stream_stalled", "no chunk for 20 s")),
+        ),
+        (
+            "cut-alone",
+            None,
+            Some(cut(
+                "stream_cut",
+                "malformed response: connection closed inside chunked body",
+            )),
+        ),
+        ("clean", Some("s1"), None),
+    ];
+    for (id, session, interruption) in requests.clone() {
+        let BusEvent::RequestObserved(mut observed) = observed_event(id) else {
+            unreachable!()
+        };
+        observed.key_id = Some("k1".into());
+        observed.session_id = session.map(str::to_string);
+        h.bus.publish(BusEvent::RequestObserved(observed));
+        h.bus.publish(selected_event(id, 1, "a", 10));
+        let BusEvent::ResponseHead(mut head) = head_event(id, 200, 20) else {
+            unreachable!()
+        };
+        head.headers = vec![("request-id".into(), format!("req_{id}"))];
+        h.bus.publish(BusEvent::ResponseHead(head));
+        let BusEvent::RequestComplete(mut complete) =
+            answered_event(id, 200, ResponseFacts::default())
+        else {
+            unreachable!()
+        };
+        if let Some(interruption) = &interruption {
+            complete.outcome = BusOutcome::Incomplete;
+            complete.error_code = Some(interruption.code.clone());
+            complete.response_bytes = Some(interruption.bytes_relayed);
+        }
+        complete.interruption = interruption;
+        complete.finished_at = 30;
+        h.bus.publish(BusEvent::RequestComplete(complete));
+    }
+    for (id, _, _) in requests {
+        ledgered(&h, id).await;
+    }
+    // The event goes to the writer ahead of its request row, so a landed request has its row written.
+    let mut rows =
+        h.db.read(|c| phoebis_ledger::recent_events_of_kind(c, "stream_interrupted", 5))
+            .await
+            .unwrap();
+    rows.sort_by(|a, b| a.request_id.cmp(&b.request_id));
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.request_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("cut-alone"), Some("cut-in-session")],
+        "one row per cut completion and none for the clean one"
+    );
+    let row = &rows[1];
+    assert_eq!(
+        (
+            row.at,
+            row.account_id.as_deref(),
+            row.key_id.as_deref(),
+            row.session_id.as_deref(),
+            row.model.as_deref(),
+        ),
+        (
+            30,
+            Some("a"),
+            Some("k1"),
+            Some("s1"),
+            Some("claude-sonnet-5")
+        )
+    );
+    let detail: serde_json::Value = serde_json::from_str(row.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        detail,
+        serde_json::json!({
+            "code": "stream_stalled",
+            "text": "no chunk for 20 s",
+            "bytes_relayed": 42,
+            "upstream_request_id": "req_cut-in-session",
+            "attempt": 1,
+        })
+    );
+    let own =
+        h.db.read(|c| {
+            let (request, _) =
+                phoebis_ledger::request_by_id(c, "cut-alone")?.expect("the request landed");
+            phoebis_ledger::request_events(c, &request)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        own.iter()
+            .filter(|e| e.kind == "stream_interrupted")
+            .map(|e| e.request_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("cut-alone")],
+        "a request with no session reads its own row by its id"
     );
     up.shutdown().await;
 }
@@ -2837,6 +3042,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         // keeps the shape the class dimension joins, since a primary-key column cannot be dropped in place and the
         // rebuild names its own columns regardless of what the source table still carries.
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -2891,7 +3097,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2977,6 +3183,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3010,7 +3217,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -3076,6 +3283,12 @@ const VERSION_38_REQUESTS: &str =
 const VERSION_39_REQUESTS: &str =
     "ALTER TABLE requests DROP COLUMN classifier; ALTER TABLE requests DROP COLUMN client_contract;";
 
+/// The two columns migration 42 adds, the request's `refused` and the rollup's `refusals_json`, dropped over a file
+/// the current schema built so a replay from an earlier version adds them again. Both sit outside every key and
+/// index, so each drops in place.
+const VERSION_41_REQUESTS: &str =
+    "ALTER TABLE requests DROP COLUMN refused; ALTER TABLE rollups_hourly DROP COLUMN refusals_json;";
+
 /// The table migration 23 drops, recreated so a forward replay from version 20 or 21 can drop it again.
 const RECREATE_DROPPED_TABLE: &str = "CREATE TABLE window_reconciliations (account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL, computed_at INTEGER NOT NULL, PRIMARY KEY (account_id, window, window_end)); -- rollback";
 
@@ -3086,6 +3299,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3113,7 +3327,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -3176,6 +3390,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         // SQLite cannot drop a primary-key column, so the version-21 table is rebuilt from the live one with
         // the speed left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3209,7 +3424,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -3263,6 +3478,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         // SQLite cannot drop a primary-key column, so the version-23 table is rebuilt from the live one with
         // the funding left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3296,7 +3512,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3351,6 +3567,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3378,7 +3595,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -3420,6 +3637,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3446,7 +3664,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3486,6 +3704,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         // and a poll of one bucket could each hold a row for one window; the top-level `seven_day_overage_included`
         // and `seven_day_fable` rows stand for a poll key the captured bodies never carried.
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3519,7 +3738,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let rows: Vec<(i64, String, Option<f64>, String)> = db
         .quota_samples("a", 0, i64::MAX)
         .await
@@ -3581,6 +3800,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3600,7 +3820,7 @@ async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3665,6 +3885,7 @@ async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -3681,7 +3902,7 @@ async fn a_ledger_below_the_slow_down_columns_migrates_and_a_fresh_file_carries_
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -3755,9 +3976,72 @@ fn ledger_left_at_39(path: &std::path::Path) {
     )
     .unwrap();
     db.write(|c| {
+        c.execute_batch(VERSION_41_REQUESTS)?;
         c.execute_batch(VERSION_40_COLUMNS)?;
         c.execute_batch(VERSION_39_REQUESTS)?;
         c.execute_batch("UPDATE meta SET value = '39' WHERE key = 'schema_version';")?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// A ledger file at version 41 holding five rejected requests, each landed unflagged as a row from before the column:
+/// `r-blocked` (a guardrail block with no attempt), `r-reselect` (a refusal at the reselect after an attempt),
+/// `r-lost` (the same refusal with its stored count and no attempt row, as `finish` stores one whose selection the bus
+/// lost), `r-unavailable` (the router's own standing) and `r-probe` (a probe whose key the registry refused).
+fn ledger_left_at_41(path: &std::path::Path) {
+    let db = phoebis_ledger::LedgerDb::open(path).unwrap();
+    let rejected = |id: &str, kind: &str, code: &str, attempts: u32| RequestRecord {
+        id: id.into(),
+        received_at: 3_600_000,
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: kind.into(),
+        origin: if kind == "probe" {
+            "keepalive"
+        } else {
+            "client"
+        }
+        .into(),
+        outcome: "rejected".into(),
+        attempts,
+        error_code: Some(code.into()),
+        ..Default::default()
+    };
+    let reselect_attempt = AttemptRecord {
+        request_id: "r-reselect".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        outcome: "rate_limited".into(),
+        ..Default::default()
+    };
+    for (request, attempts) in [
+        (
+            rejected("r-blocked", "inference", "guardrail_blocked", 0),
+            Vec::new(),
+        ),
+        (
+            rejected("r-reselect", "inference", "client_not_allowed", 1),
+            vec![reselect_attempt],
+        ),
+        (
+            rejected("r-lost", "inference", "client_not_allowed", 1),
+            Vec::new(),
+        ),
+        (
+            rejected("r-unavailable", "inference", "accounts_unavailable", 0),
+            Vec::new(),
+        ),
+        (rejected("r-probe", "probe", "auth_unknown", 0), Vec::new()),
+    ] {
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+    db.write(|c| {
+        c.execute_batch(VERSION_41_REQUESTS)?;
+        c.execute_batch("UPDATE meta SET value = '41' WHERE key = 'schema_version';")?;
         Ok(())
     })
     .unwrap();
@@ -3782,7 +4066,7 @@ async fn the_ledger_step_adds_the_classifier_and_the_contract_item_and_a_ledger_
     let path = dir.path().join("ledger.sqlite");
     ledger_left_at_39(&path);
     let db = Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let fresh = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
     for (ledger, which) in [(&*db, "the carried file"), (&fresh, "a fresh file")] {
         let requests = names_of(ledger, "SELECT name FROM pragma_table_info('requests')");
@@ -3814,6 +4098,151 @@ async fn the_ledger_step_adds_the_classifier_and_the_contract_item_and_a_ledger_
         rows.iter().map(|r| r.requests).collect::<Vec<_>>(),
         [1],
         "the rebuild carries the row over"
+    );
+}
+
+/// The backfill reads a stored row's own facts as the landing does: a refusal at the reselect, a refusal whose
+/// stored count outlived its lost selection, the router's own standing and a refused probe all stay unflagged.
+#[tokio::test]
+async fn the_ledger_step_flags_the_stored_refusals_and_a_ledger_left_at_41_is_carried_to_42() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    ledger_left_at_41(&path);
+    let db = Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 42);
+    let fresh = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    for (ledger, which) in [(&*db, "the carried file"), (&fresh, "a fresh file")] {
+        let requests = names_of(ledger, "SELECT name FROM pragma_table_info('requests')");
+        assert!(
+            requests.iter().any(|c| c == "refused"),
+            "{which} carries the request's flag: {requests:?}"
+        );
+        let rollups = names_of(
+            ledger,
+            "SELECT name FROM pragma_table_info('rollups_hourly')",
+        );
+        assert!(
+            rollups.iter().any(|c| c == "refusals_json"),
+            "{which} carries the rollup's refusals map: {rollups:?}"
+        );
+    }
+    let mut flags = db
+        .read_blocking(|c| {
+            let filter = RequestFilter {
+                include_probes: true,
+                ..Default::default()
+            };
+            let (rows, _) = list_requests(c, &filter, &LiveKeys::default(), None, 50)?;
+            Ok(rows
+                .into_iter()
+                .map(|(r, _)| (r.id, r.refused))
+                .collect::<Vec<_>>())
+        })
+        .unwrap();
+    flags.sort();
+    assert_eq!(
+        flags,
+        [
+            ("r-blocked".to_string(), true),
+            ("r-lost".to_string(), false),
+            ("r-probe".to_string(), false),
+            ("r-reselect".to_string(), false),
+            ("r-unavailable".to_string(), false),
+        ],
+        "the block before any attempt is the one stored refusal"
+    );
+}
+
+/// The flag is the ledger's reading at landing: a refusal before any attempt reads refused, a refusal at the reselect
+/// after an attempt stays a rejected request, and a probe the registry refused stays on its probe row.
+#[tokio::test]
+async fn a_request_landed_with_a_refusal_code_and_no_attempt_reads_refused_and_one_after_an_attempt_does_not(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let rejection = |id: &str, attempt: u8, code: &str| {
+        let BusEvent::RequestComplete(complete) = complete_event(id) else {
+            unreachable!()
+        };
+        BusEvent::RequestComplete(RequestComplete {
+            attempt,
+            outcome: BusOutcome::Rejected,
+            status: 403,
+            error_code: Some(code.into()),
+            ..complete
+        })
+    };
+    h.bus.publish(observed_event("blocked"));
+    h.bus.publish(rejection("blocked", 0, "guardrail_blocked"));
+    h.bus.publish(observed_event("reselected"));
+    h.bus.publish(selected_event("reselected", 1, "a", 10));
+    h.bus.publish(head_event("reselected", 429, 20));
+    h.bus
+        .publish(rejection("reselected", 1, "client_not_allowed"));
+    for event in refused_probe_events("refused", "auth_unknown") {
+        h.bus.publish(event);
+    }
+    let blocked = listed_with_probes(&h, "blocked").await;
+    assert_eq!(
+        (blocked.attempts, blocked.refused),
+        (0, true),
+        "a block before any attempt is a refusal"
+    );
+    let reselected = listed_with_probes(&h, "reselected").await;
+    assert_eq!(
+        (reselected.attempts, reselected.refused),
+        (1, false),
+        "a refusal at the reselect after an attempt is a rejected request"
+    );
+    let probe = listed_with_probes(&h, "refused").await;
+    assert_eq!(
+        (probe.kind.as_str(), probe.refused),
+        ("probe", false),
+        "a probe is the router's own request and never a refusal"
+    );
+    up.shutdown().await;
+}
+
+/// The flag lands on its column and reads back, and a parked record serialized before the member reads it unset.
+#[test]
+fn the_record_round_trips_refused_and_a_parked_record_from_before_reads_false() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r-refused".into(),
+            received_at: 3_600_000,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "rejected".into(),
+            error_code: Some("guardrail_blocked".into()),
+            refused: true,
+            ..Default::default()
+        },
+        &[],
+        None,
+    )
+    .unwrap();
+    let refused = db
+        .read_blocking(|c| {
+            let (rows, _) =
+                list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 50)?;
+            Ok(rows
+                .into_iter()
+                .find(|(r, _)| r.id == "r-refused")
+                .map(|(r, _)| r.refused))
+        })
+        .unwrap();
+    assert_eq!(refused, Some(true), "the flag reads back from its column");
+    let parked: phoebis_ledger::ParkedRecord =
+        serde_json::from_str(r#"{"request":{"id":"r1","received_at":5},"attempts":[]}"#)
+            .expect("a record from before the member still reads");
+    assert!(
+        !parked.request.refused,
+        "a parked record from before the member reads unflagged"
     );
 }
 
@@ -3943,6 +4372,7 @@ async fn a_ledger_below_the_walls_time_column_gains_it_at_zero_on_every_account_
         })
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch("UPDATE meta SET value = '40' WHERE key = 'schema_version';")?;
             Ok(())
@@ -3950,7 +4380,7 @@ async fn a_ledger_below_the_walls_time_column_gains_it_at_zero_on_every_account_
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let rollups = db
         .read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -3981,6 +4411,7 @@ async fn a_ledger_below_the_landing_stamp_gains_it_with_nulls_no_filter_answers(
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch("UPDATE meta SET value = '40' WHERE key = 'schema_version';")?;
             Ok(())
@@ -3988,7 +4419,7 @@ async fn a_ledger_below_the_landing_stamp_gains_it_with_nulls_no_filter_answers(
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let since = |landed_after: Option<i64>| {
         db.read_blocking(|c| {
             phoebis_ledger::list_request_page(
@@ -4094,6 +4525,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         )
         .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -4112,7 +4544,7 @@ async fn a_ledger_below_the_phase_columns_migrates_and_a_fresh_file_carries_them
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let (row, attempts) = db
         .read_blocking(|c| phoebis_ledger::request_by_id(c, "r0"))
         .unwrap()
@@ -4183,6 +4615,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         db.insert_request(&request("r0", Some("client")), &[], None)
             .unwrap();
         db.write(|c| {
+            c.execute_batch(VERSION_41_REQUESTS)?;
             c.execute_batch(VERSION_40_COLUMNS)?;
             c.execute_batch(VERSION_39_REQUESTS)?;
             c.execute_batch(VERSION_38_REQUESTS)?;
@@ -4199,7 +4632,7 @@ async fn a_requests_diagnostics_source_round_trips_and_a_ledger_at_version_31_re
         .unwrap();
     }
     let db = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 41);
+    assert_eq!(db.schema_version().await.unwrap(), 42);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.diagnostics_source, None,
@@ -4230,7 +4663,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
     let event_indexes = "SELECT name FROM pragma_index_list('events') ORDER BY name";
     {
         let fresh = Arc::new(LedgerDb::open(&path).unwrap());
-        assert_eq!(fresh.schema_version().await.unwrap(), 41);
+        assert_eq!(fresh.schema_version().await.unwrap(), 42);
         assert_eq!(
             names(
                 &fresh,
@@ -4268,6 +4701,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         // The indexes leave first, since SQLite refuses to drop an indexed column.
         fresh
             .write(|c| {
+                c.execute_batch(VERSION_41_REQUESTS)?;
                 c.execute_batch(VERSION_40_COLUMNS)?;
                 c.execute_batch(VERSION_39_REQUESTS)?;
                 c.execute_batch(VERSION_38_REQUESTS)?;
@@ -4296,7 +4730,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         );
     }
     let existing = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(existing.schema_version().await.unwrap(), 41);
+    assert_eq!(existing.schema_version().await.unwrap(), 42);
     assert_eq!(
         names(&existing, event_columns),
         [
@@ -4764,6 +5198,49 @@ fn an_attempt_keeps_its_selection_trace_with_the_cache_read_folded_in() {
         serde_json::from_str(attempts[0].selection.as_deref().unwrap()).unwrap();
     assert_eq!(selection["strategy"], "pace");
     assert_eq!(selection["cache_read"], 42);
+}
+
+/// The trace `r1`'s first attempt stores once its completion lands with `usage`, naming `coding` as passed through.
+fn stored_trace_of_a_pass_through(usage: Option<Usage>, coding: &str) -> serde_json::Value {
+    let trace = r#"{"strategy":"pace","tier":[0,1,0],"renewed":false,"moved":null,"skipped":[]}"#;
+    let mut assembler = Assembler::new(Arc::new(|| NOW));
+    assembler.observe(observed_event("r1"));
+    assembler.observe(selected_event_with_trace("r1", 1, "a", minutes(1), trace));
+    let BusEvent::RequestComplete(mut complete) = complete_event("r1") else {
+        unreachable!()
+    };
+    complete.attempt = 1;
+    complete.account_id = Some("a".into());
+    complete.usage = usage;
+    complete.passthrough = Some(coding.into());
+    let records = assembler.observe(BusEvent::RequestComplete(complete));
+    let [Record::Request { attempts, .. }] = records.as_slice() else {
+        panic!("{} records at completion", records.len());
+    };
+    serde_json::from_str(attempts[0].selection.as_deref().unwrap()).unwrap()
+}
+
+#[test]
+fn a_passed_through_answer_without_usage_stores_its_coding_in_the_attempts_trace() {
+    let selection = stored_trace_of_a_pass_through(None, "gzip");
+    assert_eq!(selection["strategy"], "pace");
+    assert_eq!(
+        selection["passthrough"], "gzip",
+        "a copy that did not decode read no usage, and the fact still lands"
+    );
+}
+
+#[test]
+fn a_passed_through_answer_with_usage_stores_its_coding_beside_the_cache_read() {
+    let selection = stored_trace_of_a_pass_through(
+        Some(Usage {
+            cache_read_tokens: Some(42),
+            ..Usage::default()
+        }),
+        "gzip",
+    );
+    assert_eq!(selection["cache_read"], 42);
+    assert_eq!(selection["passthrough"], "gzip");
 }
 
 /// An assembler on a clock the test steps, with `r1` observed and its first attempt selected at `NOW + 10`.
@@ -6609,7 +7086,10 @@ async fn a_parked_record_keeps_its_money_and_not_its_capture() {
         "its money is kept"
     );
     assert!(
-        h.db.bodies("poison").await.unwrap().is_none(),
+        h.db.bodies("poison", h.clock.load(Ordering::SeqCst))
+            .await
+            .unwrap()
+            .is_none(),
         "its capture is gone"
     );
     assert!(

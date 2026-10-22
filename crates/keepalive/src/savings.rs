@@ -99,10 +99,11 @@ pub(crate) fn settlement_unit(
     }
 }
 
-/// One delta of a recipe's key. An account the recipe never reached takes the ledger's reserved id, which is
-/// what every reader groups an unattributed row under; an empty string would read as an account of its own. A
-/// `fast` delta files under speed `fast`: a credit, a skip or a migration mark at its recipe's speed, beside the fast
-/// requests the recipe keeps warm, and a settlement at its probe's answer's, beside the probe's own request row.
+/// One delta of a recipe's key. An account the recipe never reached takes the ledger's reserved id, the one every
+/// reader groups an unattributed row under, since an empty string would read as an account of its own. The client
+/// takes the reserved id too, which a credit replaces with its request's. A `fast` delta files under speed `fast`: a
+/// credit, a skip or a migration mark at its recipe's speed, beside the fast requests the recipe keeps warm, and a
+/// settlement at its probe's answer's, beside the probe's own request row.
 #[allow(clippy::too_many_arguments)]
 fn delta(
     at: i64,
@@ -125,6 +126,7 @@ fn delta(
             .to_string(),
         canonical_model: canonical_model.to_string(),
         kind: kind.to_string(),
+        client: UNATTRIBUTED.to_string(),
         speed: fast.then_some(Speed::Fast),
         ..Default::default()
     }
@@ -134,6 +136,8 @@ impl Engine {
     /// Every probe the upstream served lands here, landed on its recipe or not: the probe is the pool's whatever
     /// happened to the recipe while it was in flight. A probe that migrated its session counts on its key. The delta
     /// carries no dollar and no token, since the probe's own request row carries its counts, which a reader prices.
+    /// The mark files at `now`, the probe's completion, while that request row files at the probe's receipt, so a probe
+    /// answered past an hour's end leaves the two in different hours.
     pub(crate) fn record_probe(&self, record: &ProbeRecord, _applied: Applied, now: i64) {
         // The migration is all the delta carries, so any other probe's would fold a row of zeros under the credit key,
         // which reads as an empty group of its own.
@@ -162,7 +166,8 @@ impl Engine {
     /// `band` its request row's, so the credit prices at the cells and the windows that row does. `at` is the request's
     /// receipt, the instant its row files under, so the credit sits in that row's hour and revision whenever the
     /// answer completes. `ttl_ms` is the TTL the request's observation settled on, the TTL its own write would have
-    /// taken.
+    /// taken. `client` is the request's client label as the relay observed it, so the credit prices under that
+    /// client's regime as its request row does.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_kept_warm(
         &self,
@@ -180,6 +185,7 @@ impl Engine {
         fast: bool,
         kind: Option<AccountKind>,
         in_overage: bool,
+        client: Option<&str>,
     ) {
         let mut d = delta(
             at,
@@ -191,6 +197,9 @@ impl Engine {
             "inference",
             fast,
         );
+        if let Some(client) = client {
+            d.client = client.to_string();
+        }
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
         if ttl_ms == crate::config::ONE_HOUR_MS {

@@ -1,26 +1,18 @@
-//! The processed rule list a key is judged by, with the live cooldowns each entry covers, and the cooldown
-//! state grouped by model with the ledger's last rejections and permits.
+//! The processed rule list a key is judged by, with the live cooldowns each entry covers.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_ledger::{recent_events_of_kind, EventRecord};
 use phoebis_routing::{pattern, rules};
 use phoebis_store::CooldownRow;
-use serde_json::{json, Value};
 use utoipa::ToSchema;
 
-use crate::analytics::ledger_failure;
-use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable, StorageFailure};
+use crate::openapi::{ErrorBody, RouterUnavailable, StorageFailure};
 use crate::routes::{failure, store_failure};
 use crate::AdminState;
-
-/// The newest rejections and permits a state read answers, each event kind on its own.
-const RECENT_EVENTS: usize = 50;
 
 const ROUTER_UNAVAILABLE: &str = "the router is not available";
 
@@ -60,74 +52,6 @@ pub(crate) struct ModelCooldown {
     pub until: i64,
     pub window: String,
     pub set_at: i64,
-}
-
-/// The cooldown state grouped by model with the ledger's last rejections and permits.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ModelsState {
-    /// One group per canonical model with a live model-scoped cooldown on any account. Account-wide cooldowns are
-    /// on the account rows instead.
-    pub cooldowns: Vec<ModelCooldowns>,
-    /// The newest 50 `model_rejected` events, newest first.
-    pub rejections: Vec<Rejection>,
-    /// The newest 50 `model_permitted` events, newest first.
-    pub permits: Vec<Permit>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ModelCooldowns {
-    pub model: String,
-    pub rows: Vec<ModelCooldown>,
-}
-
-/// A `model_rejected` event.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Rejection {
-    pub at: i64,
-    #[schema(required = true)]
-    pub account_id: Option<String>,
-    #[schema(required = true)]
-    pub key_id: Option<String>,
-    #[schema(required = true)]
-    pub session_id: Option<String>,
-    #[schema(required = true)]
-    pub model: Option<String>,
-    #[schema(value_type = Option<String>, required = true)]
-    pub wire_model: Value,
-    /// The router's own id for the request.
-    #[schema(value_type = Option<String>, required = true)]
-    pub request_id: Value,
-    /// The upstream's own id for the rejected attempt.
-    #[schema(value_type = Option<String>, required = true)]
-    pub upstream_request_id: Value,
-}
-
-/// A `model_permitted` event.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Permit {
-    pub at: i64,
-    #[schema(required = true)]
-    pub account_id: Option<String>,
-    #[schema(required = true)]
-    pub key_id: Option<String>,
-    #[schema(required = true)]
-    pub session_id: Option<String>,
-    #[schema(required = true)]
-    pub model: Option<String>,
-    #[schema(value_type = Option<String>, required = true)]
-    pub wire_model: Value,
-    /// The router's own id for the request.
-    #[schema(value_type = Option<String>, required = true)]
-    pub request_id: Value,
-    /// The upstream's own id for the permitted attempt.
-    #[schema(value_type = Option<String>, required = true)]
-    pub upstream_request_id: Value,
-    #[schema(value_type = Vec<String>)]
-    pub rejected_by: Value,
 }
 
 fn cooldown_json(row: &CooldownRow) -> ModelCooldown {
@@ -222,111 +146,6 @@ pub(crate) async fn key_models(
     .into_response()
 }
 
-/// Read the model cooldowns and the last rejections and permits.
-#[utoipa::path(
-    get,
-    path = "/admin/models/state",
-    operation_id = "models_state",
-    tag = "Models",
-    responses(
-        (status = 200, description = "The model state.", body = ModelsState),
-        (status = 500, response = LedgerFailure),
-        (status = 503, response = RouterUnavailable),
-    ),
-)]
-pub(crate) async fn state(State(state): State<Arc<AdminState>>) -> Response {
-    let cooldowns = match state.router.cooldowns().await {
-        Ok(rows) => rows,
-        Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, ROUTER_UNAVAILABLE),
-    };
-    let now = (state.clock)();
-    let mut grouped: BTreeMap<&str, Vec<&CooldownRow>> = BTreeMap::new();
-    for row in &cooldowns {
-        if row.until <= now {
-            continue;
-        }
-        if let Some(model) = model_of(&row.scope) {
-            grouped.entry(model).or_default().push(row);
-        }
-    }
-    let cooldown_groups: Vec<ModelCooldowns> = grouped
-        .into_iter()
-        .map(|(model, mut rows)| {
-            rows.sort_by(|a, b| a.account_id.cmp(&b.account_id));
-            ModelCooldowns {
-                model: model.to_string(),
-                rows: rows.into_iter().map(cooldown_json).collect(),
-            }
-        })
-        .collect();
-    let events = state
-        .ledger
-        .db()
-        .read(move |c| {
-            Ok((
-                recent_events_of_kind(c, "model_rejected", RECENT_EVENTS)?,
-                recent_events_of_kind(c, "model_permitted", RECENT_EVENTS)?,
-            ))
-        })
-        .await;
-    let (rejections, permits) = match events {
-        Ok(pair) => pair,
-        Err(e) => return ledger_failure(e),
-    };
-    Json(ModelsState {
-        cooldowns: cooldown_groups,
-        rejections: rejections.iter().map(rejection_json).collect(),
-        permits: permits.iter().map(permit_json).collect(),
-    })
-    .into_response()
-}
-
-fn detail_of(event: &EventRecord) -> Value {
-    event
-        .detail
-        .as_deref()
-        .and_then(|d| serde_json::from_str(d).ok())
-        .unwrap_or_else(|| json!({}))
-}
-
-fn rejection_json(event: &EventRecord) -> Rejection {
-    let detail = detail_of(event);
-    Rejection {
-        at: event.at,
-        account_id: event.account_id.clone(),
-        key_id: event.key_id.clone(),
-        session_id: event.session_id.clone(),
-        model: event.model.clone(),
-        wire_model: detail.get("wire_model").cloned().unwrap_or(Value::Null),
-        request_id: detail
-            .get("source_request_id")
-            .cloned()
-            .unwrap_or(Value::Null),
-        upstream_request_id: detail.get("request_id").cloned().unwrap_or(Value::Null),
-    }
-}
-
-fn permit_json(event: &EventRecord) -> Permit {
-    let detail = detail_of(event);
-    Permit {
-        at: event.at,
-        account_id: event.account_id.clone(),
-        key_id: event.key_id.clone(),
-        session_id: event.session_id.clone(),
-        model: event.model.clone(),
-        wire_model: detail.get("wire_model").cloned().unwrap_or(Value::Null),
-        request_id: detail
-            .get("source_request_id")
-            .cloned()
-            .unwrap_or(Value::Null),
-        upstream_request_id: detail.get("request_id").cloned().unwrap_or(Value::Null),
-        rejected_by: detail
-            .get("rejected_by")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::openapi::round_trip::round_trips;
@@ -334,10 +153,5 @@ mod tests {
     #[test]
     fn the_key_models_answer_round_trips_through_its_declared_type() {
         round_trips::<super::KeyModels>("key_models");
-    }
-
-    #[test]
-    fn the_models_state_answer_round_trips_through_its_declared_type() {
-        round_trips::<super::ModelsState>("models_state");
     }
 }

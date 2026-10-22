@@ -2,19 +2,19 @@
 
 What the router changes on the wire between Claude Code and Anthropic, what it sends on its own, its contract with the
 keepalive mod and how long it waits on an upstream. The client's environment block, the refusal table and the models
-listing are on [The client](client.md), the cooldown tables on
-[Pools, keys and routing](routing.md#cooldowns-and-failover), and the mod's install and settings on
-[The keepalive mod](keepalive-mod.md).
+listing are on [The client](client.md), the cooldown tables on [Pools, keys and
+routing](routing.md#cooldowns-and-failover), and the mod's install and settings on [The keepalive
+mod](keepalive-mod.md).
 
 ## The frame
 
-The request the upstream receives is the one Claude Code sent, header order and spelling included
-([Headers and transport](#headers-and-transport)). The router edits the body and the head where the account requires it
-(the credential, the account's identity, the OAuth claim), where the operator switched an edit on (a pool field or a
+The request the upstream receives is the one Claude Code sent, header order and spelling included ([Headers and
+transport](#headers-and-transport)). The router edits the body and the head where the account requires it (the
+credential, the account's identity, the OAuth claim), where the operator switched an edit on (a pool field or a
 bootstrap key), and where it owns the value (the framing headers, the folded model, the restored billing fields). Three
-request kinds pass the same handler: an inference request
-(`POST /v1/messages`), a token count (a path ending in `/count_tokens`) and a probe, the keepalive engine's replay of a
-kept request ([How a probe works](keepalive.md#how-a-probe-works)).
+request kinds pass the same handler: an inference request (`POST /v1/messages`), a token count (a path ending in
+`/count_tokens`) and a probe, the keepalive engine's replay of a kept request ([How a probe
+works](keepalive.md#how-a-probe-works)).
 
 A request body arrives as `gzip` or identity, and the router inflates a gzip body before any read or edit, so every
 check and every edit sees the plain bytes. A token count gets the `safeguards` cut, the model fold, the credential, the
@@ -79,7 +79,7 @@ find or walk is refused rather than sent on under the account's credential ([ref
 | Replace `model` with the folded spelling: the `[1m]` suffix removed, ASCII lowercased | The long-context marker is a client-side routing hint | All three | Both | None |
 | Restore the absent fields of the billing line at `system[0].text`: `cch=00000` on every line, `cc_prev_req={id}` on a conversation class and on a conversation-shaped fork, and `cc_prompt_id={id}` from the client's `x-claude-code-prompt-id` header, each at its place in the client's own field order | Give a reduced-shape request the first-party fields, never rewriting a present one | Inference from a `claude-cli/` agent whose version the client itself would spell, when the line is there and `system` is an array | Both | None, but a field an account refused once is latched off for that account |
 | Insert the top-level `diagnostics` member before `stream` (else last), naming the previous message id on this account or `null` | Ask the upstream for cache diagnostics, naming `null` on the first request after a move and on a probe | Inference and probe, where the client sent cache markers and at least one tool and no `diagnostics` of its own | Both | The pool's `cache_diagnostics` |
-| Set a present `diagnostics.previous_message_id` to `null` | Name no message the account cannot find | The first request a session sends to an account other than the one its previous request landed on (a move, a failover's leg or its landing, a pin released or passed over) and every probe | Both | None |
+| Set a present `diagnostics.previous_message_id` to `null` | Name no message the account cannot find | The first request a session sends to an account other than the one its previous request landed on, whatever model the two requests named (a move, a failover's leg or its landing, a pin released or passed over, a session that switched model between its turns), an auxiliary request reading its own model's landing alone and a pin only auxiliary requests have used counting as no other model's landing, and every probe | Both | None |
 | Rewrite every ephemeral `cache_control` marker to the policy's TTL (`1h` writes `"ttl":"1h"` after `"type":"ephemeral"`, `5m` removes `ttl`), and under `inject_when_absent` add a top-level marker to a body with none, never on an auxiliary request | Apply the pool's cache TTL policy | Inference and probe | Both: the `metered` rules for an API-key account or an account in overage, else the `plan` rules, per model and per main or subagent branch | The pool's cache TTL policy ([Cache TTL](routing.md#cache-ttl)), off by default |
 | Re-sign the `cch=` hash over the edited bytes | Keep a client's own hash valid after the edits moved the bytes it covered | All three, where the client stamped a real hash, and a restored placeholder only under the switch | Both | `proxy.sign_cch_placeholder` in the bootstrap file, default `false`, for the restored placeholder alone |
 | Gzip the edited body, or send it as identity | The outbound coding | All three | Both | `proxy.upstream_gzip` in the bootstrap file: `auto` mirrors the client, `on` always gzip, `off` never |
@@ -175,12 +175,14 @@ fields), which the router never writes and whose turn origin it records when the
 Two checks guard the restoration against a client build the router was not pinned to. The hash check refuses a stamped
 `cch=` hash this build's formula does not reproduce over the body, and the suffix check refuses, on a Claude Code
 inference request, a `cc_version` suffix that does not reproduce from the first user message and the version the user
-agent names. The hash goes first. A body carrying only the placeholder `cch=00000` passes, and a line with no
-`cc_version`, a bare version with no suffix, or a version other than the agent's is not the suffix drift: the first two
-carry nothing to check, and the third is the hash check's to judge. Both run once per request, after the key's client
-and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift. The
-contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request that
-fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
+agent names. On a resumed conversation, whose first user message is the client's resume placeholder, the suffix also
+reproduces from the empty prompt, since the client stamps the request over a message of tool results alone and writes
+the placeholder afterwards. The hash goes first. A body carrying only the placeholder `cch=00000` passes, and a line
+with no `cc_version`, a bare version with no suffix, or a version other than the agent's is not the suffix drift: the
+first two carry nothing to check, and the third is the hash check's to judge. Both run once per request, after the key's
+client and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift.
+The contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request
+that fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
 
 Either refuses the request as `400` `invalid_request_error` with the code `client_drift`, the header
 `x-phoebis-error-code: client_drift` and the message of its kind ([refusal codes](client.md#refusal-codes)):
@@ -189,10 +191,15 @@ Either refuses the request as `400` `invalid_request_error` with the code `clien
 | --- | --- |
 | `hash` | `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` |
 | `version_suffix` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version` |
+| `version_suffix`, resumed conversation | `the conversation was resumed, and the client's version suffix does not reproduce from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this client version` |
 
 The refusal logs `a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client` at
 warn level with the drift kind, the user agent and the profile name, and records itself as the request's one decision,
 of kind `client` with the code `drift` and the check as its reason, so the request log names which check refused.
+
+The warning also carries `resume`, `true` where the first user message is the client's resume placeholder, and the
+suffix check's refusal of such a body names the resume in its message while it stays a real non-reproduction, since the
+router reproduces a resumed conversation's stamp over the empty prompt.
 
 The router fails closed because a stamp it cannot verify never travels under an account's credential, edited or not: a
 wrong hash is indistinguishable from tampering, and the cost would fall on the account rather than on the request, which
@@ -296,8 +303,12 @@ verdict. Past the commit, the router's own reading of a stream, the copy the led
 phases and usage from, holds at most 512 KiB of one event while that event is still arriving. An event that outgrows
 the bound before its end is skipped in that copy and the events after it are still read, while one that arrives whole
 in one decoded piece is parsed whatever its size. The relay logs one warning at the end of a stream that had an event
-skipped, and the client receives every byte as sent either way. Every cooldown deadline carries a second of margin, so
-a request sent at the reset is not refused by a clock a hair behind.
+skipped, and the client receives every byte as sent either way. A stream the upstream cuts, stalls or sends undecodable
+after the head, and one the account's cancel ends, for an account disconnected, unpaired, deleted or re-created under
+its id, logs one warning with the account, the request id, the upstream request id, the bytes the client received, the
+cut's code and the error's words, and lands in the ledger as a `stream_interrupted` event the request's drawer shows.
+Every cooldown deadline carries a second of margin, so a request sent at the reset is not refused by a clock a hair
+behind.
 
 | Head | Verdict | What follows |
 | --- | --- | --- |
@@ -311,6 +322,10 @@ a request sent at the reset is not refused by a clock a hair behind.
 | `401`, or `403` `authentication_error` | `Refresh` for OAuth, `FailOver` for an API key | OAuth: the token is refreshed and the request tried again on the same account. API key: another account, this one marked `reauth_required` |
 | `403` `permission_error` | `FailOver` | Another account, the model cooled on this one for an hour, reason `permission` |
 | Anything else (a `2xx`, any other `4xx` or `5xx`) | `Commit` | The upstream's answer reaches the client as sent |
+
+A coded `200` the client accepts passes through as sent and records as succeeded even where the router's own copy of the
+bytes does not decode, with no `stream_interrupted` event and the coding named among the attempt's stored facts as
+`passthrough`.
 
 The cooldown tables, the windows and the reasons are on [Cooldowns and failover](routing.md#cooldowns-and-failover).
 The rate-limit families the router reads off a head are `anthropic-ratelimit-unified-*`, `anthropic-ratelimit-*` and
@@ -350,7 +365,8 @@ exists to prevent, so the connection is refused instead.
 ## What the router sends on its own
 
 The polls, the fetches and the probes leave the router with no client behind them. A poll and a fetch have no switch,
-and neither has the credential refresh that a poll or a fetch draws ahead of the token's expiry. A probe has the pool's.
+and the credential refresh that a poll or a fetch draws ahead of the token's expiry has none either. A probe has the
+pool's.
 
 **The usage poll.** Every 300 seconds the router reads the usage endpoint of every OAuth account that holds a
 credential, a paused account included, because a paused account's quota is still the operator's to watch. The call
@@ -502,7 +518,8 @@ A connect or handshake that times out counts as unsent, so the request is writte
 retry in place sleeps the throttle's delay on the same account, with the same credential, before any byte of the
 answer's head reaches the client ([Retry in place](routing.md#retry-in-place)). The slow-down's hold sleeps to the pin's
 deadline, which a retry or a sibling request of the pin rejoins, before the request is selected again
-([Slow-down](routing.md#slow-down)).
+([Slow-down](routing.md#slow-down)). A reset wait and the slow-down and rewrite holds end inside the head guard whatever
+its length: at the request's deadline where the guard leaves one, else at the guard itself.
 
 Beneath these sit Claude Code's own waits. The client cuts a stream that has gone silent for 180 seconds with its
 watchdog on, and gives the first byte of an answer a window of at least 180 seconds ([The client](client.md)). The four

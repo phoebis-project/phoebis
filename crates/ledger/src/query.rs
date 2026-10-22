@@ -676,6 +676,17 @@ pub struct SampleRow {
     pub context_compacted: Option<String>,
 }
 
+/// The pool's sample page before its cursor clause and its order, walked on `requests_received`, kept as a constant
+/// so this module's plan tests pin each statement's plan.
+pub const GUARDRAIL_SAMPLE_POOL_SQL: &str = "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE r.pool_id = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2";
+/// The key's, seeking `requests_key`.
+pub const GUARDRAIL_SAMPLE_KEY_SQL: &str = "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE r.key_id = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2";
+/// The clause a page past the first appends, its two binds after the subject's and the window's.
+pub const GUARDRAIL_SAMPLE_CURSOR_SQL: &str =
+    " AND (r.received_at < ?3 OR (r.received_at = ?3 AND r.id < ?4))";
+/// The order and the limit every page appends last, the limit's bind index written by the caller.
+pub const GUARDRAIL_SAMPLE_ORDER_SQL: &str = " ORDER BY r.received_at DESC, r.id DESC LIMIT ?";
+
 /// The newest captured, non-probe rows of the subject since `since`, newest first, at most `limit`, with the next
 /// cursor in `list_requests`'s spelling where more exist. Walks `requests_received` for a pool and `requests_key`
 /// for a key.
@@ -686,16 +697,14 @@ pub fn guardrail_sample_page(
     cursor: Option<&str>,
     limit: usize,
 ) -> Result<(Vec<SampleRow>, Option<String>), LedgerError> {
-    let (column, id) = match subject {
-        SampleSubject::Key(id) => ("key_id", id),
-        SampleSubject::Pool(id) => ("pool_id", id),
-    };
-    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(id.to_string()), Box::new(since)];
     // The pool's walk takes `requests_received` and the key's `requests_key`, both bounded below by the capture
     // window, so a pool or a key whose capture is off scans no months of rows before it answers an empty page.
-    let mut clauses = format!(
-        "r.{column} = ?1 AND r.bodies_captured = 1 AND r.kind != 'probe' AND r.received_at >= ?2"
-    );
+    let (base, id) = match subject {
+        SampleSubject::Key(id) => (GUARDRAIL_SAMPLE_KEY_SQL, id),
+        SampleSubject::Pool(id) => (GUARDRAIL_SAMPLE_POOL_SQL, id),
+    };
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(id.to_string()), Box::new(since)];
+    let mut after = "";
     if let Some(cursor) = cursor {
         let (at, id) = cursor
             .split_once(':')
@@ -705,16 +714,11 @@ pub fn guardrail_sample_page(
             .map_err(|_| LedgerError::Yaml("cursor is <received_at>:<id>".into()))?;
         args.push(Box::new(at));
         args.push(Box::new(id.to_string()));
-        clauses.push_str(" AND (r.received_at < ?3 OR (r.received_at = ?3 AND r.id < ?4))");
+        after = GUARDRAIL_SAMPLE_CURSOR_SQL;
     }
     // One row past the page says whether a next page exists, as `list_requests` reads it.
     args.push(Box::new((limit + 1) as i64));
-    let sql = format!(
-        "SELECT r.id, r.received_at, r.kind, r.canonical_model, r.client, r.request_class, r.agent_type, \
-         r.user_agent, r.compaction, r.context_compacted FROM requests r WHERE {clauses} \
-         ORDER BY r.received_at DESC, r.id DESC LIMIT ?{}",
-        args.len()
-    );
+    let sql = format!("{base}{after}{GUARDRAIL_SAMPLE_ORDER_SQL}{}", args.len());
     let mut rows = conn
         .prepare(&sql)?
         .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
@@ -753,16 +757,22 @@ pub fn request_body(conn: &Connection, id: &str, now: i64) -> Result<Option<Vec<
 }
 
 /// The events of the request's window under its own session, and
-/// every event that names the request itself.
+/// every event that names the request itself, by its `request_id` column or the `source_request_id` of its detail.
 pub fn request_events(
     conn: &Connection,
     request: &RequestRecord,
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let to = request.finished_at.unwrap_or(i64::MAX);
     let marker = format!("%\"source_request_id\":\"{}\"%", request.id);
-    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND ((session_id IS NOT NULL AND session_id = ?3) OR detail LIKE ?4) ORDER BY at, rowid")?;
+    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND (session_id = ?3 OR detail LIKE ?4 OR request_id = ?5) ORDER BY at, rowid")?;
     let rows = stmt.query_map(
-        params![request.received_at, to, request.session_id, marker],
+        params![
+            request.received_at,
+            to,
+            request.session_id,
+            marker,
+            request.id
+        ],
         |r| {
             Ok(EventRecord {
                 at: r.get(0)?,
@@ -868,6 +878,7 @@ pub const EVENT_KINDS: &[&str] = &[
     "shedding_round",
     "slow_down_ended",
     "slow_down_started",
+    "stream_interrupted",
     "warm_prefix_expired",
     "wind_down_started",
     "window_cleared",
@@ -1742,6 +1753,10 @@ pub struct GroupRow {
     pub cost: CostSplitJson,
     pub cost_usd: f64,
     pub errors: BTreeMap<String, u64>,
+    /// The refused requests of the group, the sum of `refusals`, not in `requests`.
+    pub refused: u64,
+    /// The refused requests of the group by error code.
+    pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
     pub histograms: Histograms,
     pub percentiles: Percentiles,
@@ -1920,20 +1935,16 @@ impl LiveKeys {
         format!("{}@{}", row.key_id, row.key_generation)
     }
 
-    /// The label of a key group alone (every other dimension keeps its group key as its label): the id;
-    /// `<id> (deleted, created 2026-09-14 09:31 UTC)` for a generation no live key holds, the generation being that
-    /// key's `created_at` so two earlier holders read apart; `<id> (deleted)` for generation 0, the rows the
-    /// startup stamp left unstamped, which carry no creation time; `unattributed` for the reserved id.
+    /// The label of a key group: the id for the live generation, `<id> (deleted)` for every generation no live key
+    /// holds, generation 0 included, and `unattributed` for the reserved id. Two earlier holders of one id share the
+    /// label, and `holder_of` answers each one's creation instant for a reader to print in its own zone.
     pub fn label_of(&self, key: &str) -> String {
         if key == UNATTRIBUTED {
             return "unattributed".into();
         }
         // A key id never carries `@` (the admin's slug rule), so the split is unambiguous.
         match key.rsplit_once('@') {
-            Some((id, generation)) => match created_stamp(generation) {
-                Some(stamp) => format!("{id} (deleted, created {stamp})"),
-                None => format!("{id} (deleted)"),
-            },
+            Some((id, _)) => format!("{id} (deleted)"),
             None => key.into(),
         }
     }
@@ -2006,21 +2017,14 @@ pub fn group_of(
     }
 }
 
-/// Minute precision in UTC; the `<id>@<generation>` selector, never the label, tells two holders created in
-/// the same minute apart. `None` for generation 0, which is no creation time, and for a generation that is no
-/// millisecond instant, so the console and the ledger agree on every generation a key can carry.
-fn created_stamp(generation: &str) -> Option<String> {
-    generation
-        .parse::<i64>()
-        .ok()
-        .filter(|&ms| ms != 0)
-        .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok())
-        .map(|t| t.strftime("%Y-%m-%d %H:%M UTC").to_string())
-}
-
-fn label_of(key: &str) -> String {
+/// The label of a group under any dimension but the key: the group key itself, `unattributed` for the reserved id,
+/// and "no model" for the model grouping's empty key, the requests the router rejected before routing, whose key
+/// stays empty so a filter on it keeps working.
+fn label_of(key: &str, group_by: &str) -> String {
     if key == UNATTRIBUTED {
         "unattributed".into()
+    } else if key.is_empty() && group_by == "model" {
+        "no model".into()
     } else {
         key.into()
     }
@@ -2074,11 +2078,18 @@ fn row_key(row: &RollupRow) -> RowKey<'_> {
     }
 }
 
-/// One rollup row priced through `price_row` at its own key, a plain call that fills nothing in after it: a probe
-/// row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Every reader of the module
-/// prices a row through it.
+/// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it:
+/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Every rollup row reader
+/// of the module prices a row through it and reads its `usd`, `equivalent` and `estimated`, and none reads its
+/// `shares`, since the shares a route answers come from `ShareSums::add` under the caller's `pricing`. So the key
+/// carries no tier, as `price_group`'s does, `price_row` prices no share window, and `estimated` reads the
+/// equivalent's fallback alone.
 pub(crate) fn priced(row: &RollupRow, prices: &PriceRevisions, costs: &PlanTables) -> Priced {
-    price_row(prices, costs, &row_key(row), row.usage())
+    let key = RowKey {
+        tier: None,
+        ..row_key(row)
+    };
+    price_row(prices, costs, &key, row.usage())
 }
 
 fn cost_split_json(usd: &CostSplit) -> CostSplitJson {
@@ -2139,6 +2150,8 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         cost: cost_split_json(&dollars.usd),
         cost_usd: dollars.usd.total(),
         errors: sum.errors.clone(),
+        refused: sum.refusals.values().sum(),
+        refusals: sum.refusals.clone(),
         cache_miss_reasons: reasons,
         histograms: Histograms {
             duration_ms: sum.duration_hist.buckets(),
@@ -2787,7 +2800,7 @@ impl GroupSums {
                     row.key_created_at = key_created_at;
                     row
                 } else {
-                    let label = label_of(&k);
+                    let label = label_of(&k, group_by);
                     group_row(&k, group, label)
                 }
             })
@@ -3011,6 +3024,7 @@ pub struct HourPoint {
     pub at: i64,
     pub cost: f64,
     pub errors: u64,
+    pub refused: u64,
     pub requests: u64,
     pub tokens: u64,
     /// The billed rows' dollars of the hour, a part of `cost`.
@@ -3025,11 +3039,15 @@ pub struct Dashboard {
     pub tokens_24h: u64,
     pub tokens_cached_24h: u64,
     pub cost_24h: f64,
-    /// The requests that did not succeed over the requests, both without the requests a guardrail blocked: a
-    /// guardrail block is a refusal the operator asked for, so it is no error of the router's.
+    /// The requests that did not succeed over the requests. The refused requests are in neither, since the fold never
+    /// counted them.
     pub error_rate_24h: Option<f64>,
-    /// The most frequent error code but `guardrail_blocked`, for the same reason.
+    /// The most frequent error code of the window.
     pub top_error_code: Option<String>,
+    /// The requests the router refused before any account was asked over the window, not in `requests_24h`.
+    pub refused_24h: u64,
+    /// The most frequent code of the window's refusals, `None` with none.
+    pub top_refusal_code: Option<String>,
     pub hourly: Vec<HourPoint>,
     /// The billed rows' dollars of the day, a part of `cost_24h`.
     pub billed_24h: f64,
@@ -3037,12 +3055,10 @@ pub struct Dashboard {
     pub equivalent_24h: SharedEquivalent,
     /// True when any plan row of the day priced through the model tier's fallback weight.
     pub estimated_24h: bool,
-    #[serde(skip)]
-    pub recent: Vec<RequestWithAttempts>,
 }
 
 /// The last day's rollups folded hour by hour through `read_rollups_paged`, each row's dollars and 20x equivalent
-/// priced from its counts, and the newest requests.
+/// priced from its counts.
 pub async fn dashboard(
     db: &Arc<LedgerDb>,
     now: i64,
@@ -3052,12 +3068,14 @@ pub async fn dashboard(
     let to_hour = (now / 1_000).div_euclid(3_600) * 3_600 + 3_600;
     let from_hour = to_hour - 24 * 3_600;
     let mut errors: BTreeMap<String, u64> = BTreeMap::new();
+    let mut refusals: BTreeMap<String, u64> = BTreeMap::new();
     let mut hourly: Vec<HourPoint> = (from_hour..to_hour)
         .step_by(3_600)
         .map(|hour| HourPoint {
             at: hour * 1_000,
             cost: 0.0,
             errors: 0,
+            refused: 0,
             requests: 0,
             tokens: 0,
             billed: 0.0,
@@ -3066,20 +3084,15 @@ pub async fn dashboard(
         .collect();
     let mut tokens_cached = 0;
     let mut estimated = false;
-    let mut rated: u64 = 0;
     read_rollups_paged(db, &RollupSelect::default(), from_hour, to_hour, |r| {
         if r.kind == "probe" {
             return;
         }
         if let Some(point) = hourly.get_mut(((r.hour - from_hour) / 3_600) as usize) {
             let (usd, billed, equivalent, fallback) = shared_figures(r, prices, costs);
-            let blocked = r.errors.get("guardrail_blocked").copied().unwrap_or(0);
             point.requests += r.requests;
-            point.errors += r
-                .requests
-                .saturating_sub(r.succeeded)
-                .saturating_sub(blocked);
-            rated += r.requests.saturating_sub(blocked);
+            point.errors += r.requests.saturating_sub(r.succeeded);
+            point.refused += r.refusals.values().sum::<u64>();
             point.cost += usd;
             point.billed += billed;
             point.equivalent.add(&equivalent);
@@ -3090,28 +3103,29 @@ pub async fn dashboard(
                 + r.cache_write_1h_tokens
                 + r.output_tokens;
         }
-        for (code, n) in r
-            .errors
-            .iter()
-            .filter(|(code, _)| *code != "guardrail_blocked")
-        {
+        for (code, n) in &r.errors {
             *errors.entry(code.clone()).or_default() += n;
+        }
+        for (code, n) in &r.refusals {
+            *refusals.entry(code.clone()).or_default() += n;
         }
         tokens_cached += r.cache_read_tokens;
     })
     .await?;
     let requests: u64 = hourly.iter().map(|h| h.requests).sum();
     let failed: u64 = hourly.iter().map(|h| h.errors).sum();
-    let (recent, _) = db
-        .read(|c| list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 20))
-        .await?;
     Ok(Dashboard {
         requests_24h: requests,
         tokens_24h: hourly.iter().map(|h| h.tokens).sum(),
         tokens_cached_24h: tokens_cached,
         cost_24h: hourly.iter().map(|h| h.cost).sum(),
-        error_rate_24h: (rated > 0).then(|| failed as f64 / rated as f64),
+        error_rate_24h: (requests > 0).then(|| failed as f64 / requests as f64),
         top_error_code: errors
+            .iter()
+            .max_by_key(|(_, n)| **n)
+            .map(|(c, _)| c.clone()),
+        refused_24h: refusals.values().sum(),
+        top_refusal_code: refusals
             .iter()
             .max_by_key(|(_, n)| **n)
             .map(|(c, _)| c.clone()),
@@ -3124,7 +3138,6 @@ pub async fn dashboard(
             }),
         estimated_24h: estimated,
         hourly,
-        recent,
     })
 }
 
@@ -3450,7 +3463,8 @@ pub fn session_activity(
 
 /// One pass over the window's client requests, grouped by `group` (a column expression over `requests`): the
 /// newest request of a group is inside the window whenever any of its requests is, so the window alone answers
-/// both the counts and the newest request's facts.
+/// both the counts and the newest request's facts. The count leaves the refused requests out, while their rows
+/// stay in the partition, so a session whose every request was refused keeps its newest request and is listed.
 fn activity(
     conn: &Connection,
     since: i64,
@@ -3458,12 +3472,12 @@ fn activity(
 ) -> Result<Vec<SessionActivity>, LedgerError> {
     let mut stmt = conn.prepare(&format!(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id, {group} AS grp, received_at, canonical_model, \
-         presented_retired, rotation_at, identified_by, identity_root FROM requests \
+         presented_retired, rotation_at, identified_by, identity_root, refused FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
          ranked AS (SELECT recent.*, \
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
          MIN(received_at) OVER (PARTITION BY key_id, key_generation, grp) AS first_at, \
-         COUNT(*) OVER (PARTITION BY key_id, key_generation, grp) AS n \
+         SUM(CASE WHEN refused = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY key_id, key_generation, grp) AS n \
          FROM recent WHERE grp IS NOT NULL) \
          SELECT key_id, key_generation, grp, first_at, received_at, n, canonical_model, \
          (SELECT a.account_id FROM attempts a WHERE a.request_id = ranked.id ORDER BY a.attempt DESC LIMIT 1), \
@@ -3482,6 +3496,47 @@ fn activity(
             account_id: r.get(7)?,
             on_retired_secret: r.get(8)?,
             rotation_at: r.get(9)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The model one agent of a session named on its newest client request, as the client spelled it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentModel {
+    pub key_id: String,
+    pub key_generation: i64,
+    /// The client's own session, as `session_activity` keys it.
+    pub session_id: String,
+    /// `None` on a request that carried no agent.
+    pub agent_id: Option<String>,
+    pub received_at: i64,
+    /// The `model` column, which keeps the `[1m]` suffix of a long-context twin that `canonical_model` folds out.
+    pub model: String,
+}
+
+/// The newest client request's own model spelling per (key, key generation, session, agent) since `since`,
+/// over the window and the requests `session_activity` reads, newest first, so a session's first row is its newest
+/// request.
+pub fn agent_models(conn: &Connection, since: i64) -> Result<Vec<AgentModel>, LedgerError> {
+    let mut stmt = conn.prepare(&format!(
+        "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, agent_id, received_at, model \
+         FROM requests \
+         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
+         ranked AS (SELECT recent.*, \
+         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp, agent_id ORDER BY received_at DESC, id DESC) \
+         AS nth FROM recent WHERE grp IS NOT NULL) \
+         SELECT key_id, key_generation, grp, agent_id, received_at, model FROM ranked WHERE nth = 1 \
+         ORDER BY received_at DESC, id DESC"
+    ))?;
+    let rows = stmt.query_map(params![since], |r| {
+        Ok(AgentModel {
+            key_id: r.get(0)?,
+            key_generation: r.get(1)?,
+            session_id: r.get(2)?,
+            agent_id: r.get(3)?,
+            received_at: r.get(4)?,
+            model: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -4452,8 +4507,9 @@ pub fn moves_by_reason_and_fit(
 
 /// One routing condition the hourly fold wrote: the kind, its subject, the oldest qualifying event's time (for
 /// `slowed_long` the own start of the oldest span counted, for `meter_drift` the `window_end` of the oldest off
-/// window), the count and the kind's detail. `pool_id` is the pool the condition's events name, which an account's
-/// `slowed_long` carries as the pool of its newest span, and null for an account's condition whose events name none.
+/// window, at most the fold's instant), the count and the kind's detail. `pool_id` is the pool the condition's events
+/// name, which an account's `slowed_long` carries as the pool of its newest span, and null for an account's condition
+/// whose events name none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoutingCondition {
     pub kind: String,
@@ -4825,6 +4881,54 @@ mod tests {
         );
     }
 
+    /// The plans of a dry run's sample page for `subject`, on the first page and on a page past its cursor.
+    fn sample_page_plans(base: &str, subject: &str) -> [Vec<String>; 2] {
+        use rusqlite::types::Value;
+        let first = plan_of(
+            &format!("{base}{GUARDRAIL_SAMPLE_ORDER_SQL}3"),
+            vec![
+                Value::from(subject.to_string()),
+                Value::from(0_i64),
+                Value::from(50_i64),
+            ],
+        );
+        let later = plan_of(
+            &format!("{base}{GUARDRAIL_SAMPLE_CURSOR_SQL}{GUARDRAIL_SAMPLE_ORDER_SQL}5"),
+            vec![
+                Value::from(subject.to_string()),
+                Value::from(0_i64),
+                Value::from(3_600_000_i64),
+                Value::from("r1".to_string()),
+                Value::from(50_i64),
+            ],
+        );
+        [first, later]
+    }
+
+    /// Whether the plan's first seek goes through `index` and no step walks a whole table.
+    fn seeks_through(plan: &[String], index: &str) -> bool {
+        plan.iter()
+            .find(|step| step.starts_with("SEARCH"))
+            .is_some_and(|step| step.starts_with(&format!("SEARCH r USING INDEX {index} ")))
+            && !plan.iter().any(|step| step.starts_with("SCAN"))
+    }
+
+    /// No index leads with `pool_id`, so a pool's page ranges over the received times from the window's start and
+    /// checks the pool row by row, and a rewritten predicate that lost the range would walk every request.
+    #[test]
+    fn the_pool_sample_page_walks_requests_received() {
+        for plan in sample_page_plans(GUARDRAIL_SAMPLE_POOL_SQL, "main") {
+            assert!(seeks_through(&plan, "requests_received"), "{plan:?}");
+        }
+    }
+
+    #[test]
+    fn the_key_sample_page_seeks_requests_key() {
+        for plan in sample_page_plans(GUARDRAIL_SAMPLE_KEY_SQL, "k1") {
+            assert!(seeks_through(&plan, "requests_key"), "{plan:?}");
+        }
+    }
+
     /// 2026-01-15 00:00 UTC in seconds, inside the test cost model's effective range.
     const HOUR: i64 = 1_768_435_200;
     const TIER: &str = "default_claude_max_20x";
@@ -4923,6 +5027,121 @@ mod tests {
             .map(|(w, share)| (*w, share.unwrap()))
             .collect();
         assert_eq!(cost, want);
+    }
+
+    /// No reader of a priced row reads its shares, since the shares a route answers come from the share fold under
+    /// the caller's pricing, so `priced` prices no share window of a plan row whose account tier the cost model sizes,
+    /// while the same row at its own key prices them.
+    #[test]
+    fn priced_prices_no_share_window_of_a_plan_row_on_a_sized_tier() {
+        let prices = crate::test_tables::api_prices();
+        let costs = crate::test_tables::subscription_costs();
+        let mut row = RollupRow::key(
+            HOUR,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-opus-5-5",
+            "inference",
+            "-",
+            "-",
+            "-",
+            "-",
+            "standard",
+            "plan",
+            "standard",
+            TIER,
+            "-",
+        );
+        row.requests = 1;
+        row.input_tokens = 1_000;
+        row.output_tokens = 100;
+        let own_key = price_row(&prices, &costs, &row_key(&row), row.usage());
+        assert!(
+            own_key.shares.is_some(),
+            "the tier is sized, so the row's own key prices its windows: {own_key:?}"
+        );
+        let read = priced(&row, &prices, &costs);
+        assert_eq!(read.shares, None, "{read:?}");
+        assert_eq!(
+            (&read.usd, &read.equivalent),
+            (&own_key.usd, &own_key.equivalent),
+            "the dollars and the equivalent stand"
+        );
+    }
+
+    /// The plan sums fold the equivalent the row's priced figures carry, so a figure no pricing of the row's usage
+    /// answers reads back from the group's equivalent sums. A fold that priced the usage again would read the same
+    /// figures the priced row holds in production, which leaves only this sentinel to tell the two apart.
+    #[test]
+    fn the_plan_sums_fold_the_priced_rows_equivalent_and_never_price_its_usage_again() {
+        let costs = crate::test_tables::subscription_costs();
+        let model = "claude-sonnet-5-5";
+        let mut row = RollupRow::key(
+            HOUR,
+            "k",
+            0,
+            "p",
+            "a",
+            model,
+            "inference",
+            "-",
+            "-",
+            "-",
+            "-",
+            "standard",
+            "plan",
+            "standard",
+            "-",
+            "-",
+        );
+        row.requests = 1;
+        row.input_tokens = 1_000;
+        row.output_tokens = 100;
+        let sentinel: WindowShares =
+            IndexMap::from([(FIVE_HOUR, Some(0.375)), (SEVEN_DAY, Some(0.0625))]);
+        let at = HOUR * 1_000;
+        let repriced = price_equivalent(
+            &costs,
+            entrypoint_of_client(&row.client),
+            model,
+            row.usage(),
+            at,
+            at,
+        )
+        .shares;
+        for (window, share) in &sentinel {
+            assert_ne!(
+                repriced.get(window).copied().flatten(),
+                *share,
+                "the sentinel on {window} is a figure the pricer does not answer for this usage"
+            );
+        }
+        let mut plan = PlanSums::default();
+        plan.add(
+            &row,
+            Priced {
+                equivalent: Some(sentinel.clone()),
+                ..Priced::default()
+            },
+            &costs,
+            true,
+        );
+        let cost = &plan.equivalent.cost;
+        assert_eq!(
+            cost.keys().copied().collect::<Vec<_>>(),
+            [FIVE_HOUR, SEVEN_DAY],
+            "the sentinel's windows alone"
+        );
+        for (window, share) in &sentinel {
+            let sum = &cost[window];
+            assert_eq!(
+                (Some(sum.sum), sum.unpriced),
+                (*share, false),
+                "the equivalent sums on {window} read the priced row's figure"
+            );
+        }
     }
 
     /// The hour of a date's midnight, in seconds.

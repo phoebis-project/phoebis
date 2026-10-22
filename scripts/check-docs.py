@@ -307,6 +307,8 @@ def routes_in(source):
 
 def check_client(route_files, client_md):
     """The proxy listener's served (method, path) pairs against the client page's table."""
+    if missing([client_md]):
+        return 1
     served = set()
     findings = 0
     for path in route_files:
@@ -496,7 +498,8 @@ def check_check_config(main_rs, installation_md):
 # code, so a value opening with `&` is passed by. The lookahead spans the whitespace itself, since a `\s*` before
 # it would backtrack to zero width and test the space ahead of the `&`. `self.code` in `Failure::response` forwards
 # a `code:` field the check has read, so it is passed by too.
-CODE_FIELD = re.compile(r"\bcode:(?!\s*&)\s*")
+# A `pub code:` is a member's declaration, never a value, so a `code:` after `pub` is passed by.
+CODE_FIELD = re.compile(r"(?<!pub )\bcode:(?!\s*&)\s*")
 ERROR_CALL = re.compile(r"(?<!fn )\banthropic_error\(")
 CODE_LITERAL = re.compile(r'^r?(#*)"([a-z_]+)"\1$')
 CODE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -564,6 +567,8 @@ def code_expressions(code, blanked):
 def check_codes(code_files, client_md):
     """Every code the `x-phoebis-error-code` header carries on the proxy listener against the client page's refusal
     table, both ways. A code expression the check cannot read is a finding, never a silent pass."""
+    if missing([client_md]):
+        return 1
     consts, answered, pending, findings = {}, set(), [], 0
     for path in code_files:
         if not path.is_file():

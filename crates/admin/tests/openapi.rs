@@ -22,8 +22,8 @@ const ROUTES_RS: &str = include_str!("../src/routes.rs");
 /// The two catch-alls, the paths a plain `.route(` registers, which the introduction describes.
 const PLAIN_ROUTES: &[&str] = &["/admin", "/admin/{*rest}"];
 
-/// The eighteen tags in the order the document declares them, the API page's area order.
-const TAGS: [&str; 18] = [
+/// The seventeen tags in the order the document declares them, the API page's area order.
+const TAGS: [&str; 17] = [
     "Accounts",
     "Analytics",
     "Attention",
@@ -32,7 +32,6 @@ const TAGS: [&str; 18] = [
     "Keepalive",
     "Keys",
     "Ledger",
-    "Models",
     "Pairing",
     "Pools",
     "Pricing",
@@ -50,7 +49,7 @@ const TAGS: [&str; 18] = [
 const REFUSALS: &[(&str, &[u16])] = &[
     ("session_show", &[]),
     ("session_login", &[400, 401, 429]),
-    ("session_logout", &[]),
+    ("session_logout", &[500]),
     ("accounts_list", &[500]),
     ("accounts_create", &[400, 404, 409, 500, 502, 503]),
     ("account_show", &[404, 500]),
@@ -94,7 +93,6 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("key_revoke", &[404, 500, 503]),
     ("key_rotate", &[404, 409, 500, 503]),
     ("ledger_replay_parked", &[500, 503]),
-    ("models_state", &[500, 503]),
     ("pairing_start", &[400, 404, 409, 500]),
     ("pairing_show", &[404]),
     ("pairing_cancel", &[404, 409]),
@@ -154,8 +152,8 @@ const EXAMPLE_FILES: &[&str] = &[
     "key_models",
     "replay",
     "replay_held",
-    "models_state",
     "pairing_started",
+    "oauth_session",
     "pools",
     "pool_traffic",
     "pricing",
@@ -213,7 +211,7 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
     ("key_created", Some(("keys_create", 201))),
     ("key_models", Some(("key_models", 200))),
     ("keys", Some(("keys_list", 200))),
-    ("models_state", Some(("models_state", 200))),
+    ("oauth_session", Some(("pairing_show", 200))),
     ("pairing_started", Some(("pairing_start", 201))),
     ("pool_traffic", Some(("pool_traffic", 200))),
     ("pools", Some(("pools_list", 200))),
@@ -451,6 +449,10 @@ async fn the_document_is_served_without_the_gate_as_no_store_json() {
     assert_eq!(response.headers()["content-type"], "application/json");
     assert_eq!(response.headers()["cache-control"], "no-store");
     assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(
+        response.headers()["x-phoebis-build"],
+        common::FIXTURE_BUILD_COMMIT
+    );
     assert!(response
         .headers()
         .get("access-control-allow-origin")
@@ -578,13 +580,18 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        57,
-        "the admin listener's 57 paths"
+        56,
+        "the admin listener's 56 paths"
+    );
+    assert_eq!(
+        phoebis_admin::path_count(),
+        document["paths"].as_object().unwrap().len(),
+        "the exported count is the document's"
     );
     assert_eq!(
         operations(&document).len(),
-        70,
-        "the admin listener's 70 operations"
+        69,
+        "the admin listener's 69 operations"
     );
 }
 
@@ -675,18 +682,35 @@ async fn every_operation_declares_one_success_and_the_refusals_of_its_row_as_err
                 == "#/components/schemas/ErrorBody";
             assert!(shared || inline, "{id} {status}: the body is an ErrorBody");
             if status == "409" {
-                let stale_edit = [
+                let coded = [
                     "account_patch",
                     "guardrail_patch",
                     "key_patch",
+                    "pairing_confirm",
                     "pool_patch",
                 ]
                 .contains(&id);
                 assert_eq!(
                     response["headers"]["x-phoebis-error-code"].is_object(),
-                    stale_edit,
-                    "{id} 409: the code header on the four stale_edit sites alone"
+                    coded,
+                    "{id} 409: the code header on the four stale_edit sites and the pairing confirm alone"
                 );
+                if id == "pairing_confirm" {
+                    let code = response["headers"]["x-phoebis-error-code"]["description"]
+                        .as_str()
+                        .unwrap();
+                    assert!(
+                        code.starts_with("`sealed_under_another_key`"),
+                        "{id} 409: the header names the code: {code}"
+                    );
+                    let bullets = response["description"].as_str().unwrap();
+                    assert!(
+                        bullets.contains(
+                            "- `{label} holds a credential sealed under another storage key, so disconnect it before pairing again`, which carries the `sealed_under_another_key` code"
+                        ),
+                        "{id} 409: the sealed slot's refusal among the bullets: {bullets}"
+                    );
+                }
             }
         }
     }
@@ -969,27 +993,177 @@ async fn every_examples_key_order_is_its_schemas_property_order() {
 }
 
 #[tokio::test]
-async fn a_model_rejection_and_a_model_permit_require_every_key_they_carry() {
+async fn the_document_answers_a_keys_models_and_no_cooldowns_grouped_by_model() {
     let (_app, _up, document) = document().await;
-    for name in ["Permit", "Rejection"] {
-        let schema = &document["components"]["schemas"][name];
-        let properties: BTreeSet<&str> = schema["properties"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let required: BTreeSet<&str> = schema["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| r.as_str().unwrap())
-            .collect();
-        assert_eq!(
-            required, properties,
-            "{name}: the route writes every key on every row, null or not"
+    assert!(
+        document["paths"].get("/admin/models/state").is_none(),
+        "no operation answers the cooldowns grouped by model"
+    );
+    let schemas = document["components"]["schemas"].as_object().unwrap();
+    for name in ["KeyModels", "ModelCooldown", "RuleEntry"] {
+        assert!(
+            schemas.contains_key(name),
+            "{name}: the key's processed rules carry it"
         );
     }
+    for name in ["ModelCooldowns", "ModelsState", "Permit", "Rejection"] {
+        assert!(
+            !schemas.contains_key(name),
+            "{name}: no answer of the document carries it"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_request_detail_answers_stream_cut_as_null_or_the_cuts_six_members() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    assert!(
+        admits_null(&schemas["RequestDetail"]["properties"]["stream_cut"]),
+        "a request without a cut answers null: {}",
+        schemas["RequestDetail"]
+    );
+    let properties: BTreeSet<&str> = schemas["StreamCut"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        properties,
+        BTreeSet::from([
+            "at",
+            "attempt",
+            "bytes_relayed",
+            "code",
+            "text",
+            "upstream_request_id"
+        ])
+    );
+}
+
+#[tokio::test]
+async fn a_session_row_answers_its_context_figures_and_agent_lines_as_null_or_their_values() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    for member in [
+        "agent_contexts",
+        "cached_prefix_tokens",
+        "context_share",
+        "context_window_tokens",
+    ] {
+        assert!(
+            admits_null(&schemas["Session"]["properties"][member]),
+            "Session.{member}: a row with no figure answers null: {}",
+            schemas["Session"]
+        );
+    }
+    let properties: BTreeSet<&str> = schemas["AgentContext"]["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        properties,
+        BTreeSet::from([
+            "agent_id",
+            "cached_prefix_tokens",
+            "context_share",
+            "context_window_tokens",
+            "last_input_tokens",
+            "model"
+        ])
+    );
+    for member in [
+        "cached_prefix_tokens",
+        "context_share",
+        "context_window_tokens",
+    ] {
+        assert!(
+            admits_null(&schemas["AgentContext"]["properties"][member]),
+            "AgentContext.{member}: a line with no turn answers null"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_login_takes_stay_logged_in_false_by_default_and_the_session_answers_persistent() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    let input = &schemas["LoginInput"];
+    assert_eq!(
+        input["properties"]["stay_logged_in"]["type"], "boolean",
+        "{input}"
+    );
+    assert_eq!(input["properties"]["stay_logged_in"]["default"], false);
+    assert!(
+        !input["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "stay_logged_in")),
+        "a login may leave the flag out: {input}"
+    );
+    let view = &schemas["SessionView"];
+    assert_eq!(
+        view["properties"]["persistent"]["type"], "boolean",
+        "{view}"
+    );
+    assert!(
+        view["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|m| m == "persistent")),
+        "every session answer carries the member: {view}"
+    );
+}
+
+#[tokio::test]
+async fn the_system_and_about_answers_declare_the_build_beside_the_version() {
+    let (_app, _up, document) = document().await;
+    let schemas = &document["components"]["schemas"];
+    for name in ["About", "System"] {
+        let schema = &schemas[name];
+        assert_eq!(
+            schema["properties"]["build"]["type"], "string",
+            "{name}: {schema}"
+        );
+        assert!(
+            schema["properties"]["build"]["description"]
+                .as_str()
+                .is_some_and(|text| text.contains("x-phoebis-build")),
+            "{name}.build names the header it repeats: {schema}"
+        );
+        assert!(
+            schema["required"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|m| m == "build")),
+            "every {name} answer carries the member: {schema}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_account_answers_none()
+{
+    let (_app, _up, document) = document().await;
+    let windows = &document["components"]["schemas"]["Account"]["properties"]["windows"];
+    // utoipa joins the doc comment's lines with line breaks, which the reference renders as spaces.
+    let description = windows["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert_eq!(
+        description.as_deref(),
+        Some(
+            "The account's quota windows: the router's reported sample first and the ledger's samples of the last day \
+             for the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and \
+             for an `oauth` account in the `disconnected` or `reauth_required` state, whose last reading the view no \
+             longer answers."
+        ),
+        "{windows}"
+    );
+    assert_eq!(
+        windows["type"], "array",
+        "the member stays an array, empty for the two states: {windows}"
+    );
 }
 
 #[tokio::test]

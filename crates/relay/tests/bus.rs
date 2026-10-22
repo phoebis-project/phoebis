@@ -18,8 +18,6 @@ use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
-/// The session id the first-party fixture's head carries.
-const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
 const REFUSED_DIAGNOSTICS: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"unknown field diagnostics."}}"#;
 
 /// The events of one request in publish order, with the chunks pulled out beside them.
@@ -601,15 +599,6 @@ fn json_answer(status: u16, body: &str) -> Respond {
         headers: vec![],
         body: body.as_bytes().to_vec(),
     }
-}
-
-fn ok_with_id(id: &str) -> Respond {
-    json_answer(
-        200,
-        &format!(
-            r#"{{"id":"{id}","type":"message","content":[],"usage":{{"input_tokens":1,"output_tokens":1}}}}"#
-        ),
-    )
 }
 
 /// Sends `request`, reads its answer to the end and returns the completion the relay published for it.

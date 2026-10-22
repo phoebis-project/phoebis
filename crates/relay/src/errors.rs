@@ -314,8 +314,26 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         },
         // Fail closed: a hash or a version suffix the pinned rules cannot reproduce means the client moved past
         // the profile. A stamp the router cannot verify never travels under an account's credential, so the
-        // operator re-pins rather than the relay guessing what the upstream now expects.
-        RelayError::ClientDrift { kind: "version_suffix" } => Failure {
+        // operator re-pins rather than the relay guessing what the upstream now expects. A resumed conversation's
+        // suffix already reproduces over the empty prompt the client stamps, so its refusal is a moved client too,
+        // and the words name the resume apart so the client and the operator see which conversation it was.
+        RelayError::ClientDrift {
+            kind: "version_suffix",
+            resumed: true,
+        } => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "client_drift",
+            message: Cow::Borrowed("the conversation was resumed, and the client's version suffix does not reproduce \
+                      from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this \
+                      client version"),
+            retry_after: None,
+            no_retry: false,
+        },
+        RelayError::ClientDrift {
+            kind: "version_suffix",
+            resumed: false,
+        } => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
             code: "client_drift",
@@ -333,9 +351,11 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             retry_after: None,
             no_retry: false,
         },
+        // The client's query loop treats a 403 as final and heals none. The name rule refuses the two phrases the
+        // client reads in a 403, `model:` and `OAuth token has been revoked`, since the message carries the name.
         RelayError::GuardrailBlocked { .. } => Failure {
-            status: StatusCode::BAD_REQUEST,
-            error_type: "invalid_request_error",
+            status: StatusCode::FORBIDDEN,
+            error_type: "permission_error",
             code: "guardrail_blocked",
             message: error.to_string().into(),
             retry_after: None,
@@ -500,11 +520,15 @@ mod tests {
     /// failed, so an operator reads the right one off the response without a log line.
     #[test]
     fn a_client_drift_message_names_the_kind_that_failed() {
-        let hash = relay_failure(&RelayError::ClientDrift { kind: "hash" });
+        let hash = relay_failure(&RelayError::ClientDrift {
+            kind: "hash",
+            resumed: false,
+        });
         assert_eq!(hash.code, "client_drift");
         assert!(hash.message.contains("billing hash"), "{}", hash.message);
         let suffix = relay_failure(&RelayError::ClientDrift {
             kind: "version_suffix",
+            resumed: false,
         });
         assert_eq!(suffix.code, "client_drift");
         assert!(
@@ -595,7 +619,8 @@ mod tests {
     }
 
     /// The name is the one part of the answer the operator wrote, so the arm formats it into the message and the
-    /// answer says nothing else about the guardrail.
+    /// answer says nothing else about the guardrail. The client treats a 403 as final and heals no 403 by resending
+    /// the request, so a block costs one request per tick.
     #[test]
     fn the_guardrail_arm_formats_the_name() {
         let failure = relay_failure(&RelayError::GuardrailBlocked {
@@ -610,8 +635,8 @@ mod tests {
                 failure.no_retry
             ),
             (
-                StatusCode::BAD_REQUEST,
-                "invalid_request_error",
+                StatusCode::FORBIDDEN,
+                "permission_error",
                 "guardrail_blocked",
                 None,
                 true
@@ -620,8 +645,45 @@ mod tests {
         assert_eq!(failure.message, r#"blocked by guardrail "Large auxiliary""#);
         assert!(
             !failure.message.contains("prompt is too long"),
-            "the client reads that phrase in a 400 as its compaction trigger"
+            "the client reads that phrase in a 400 as its compaction trigger, and a name is the one part of the \
+             message the operator writes"
         );
+        assert!(
+            !failure.message.contains("model:"),
+            "the client reads that phrase in a 403 permission_error as its model-access switch"
+        );
+        assert!(
+            !failure.message.contains("OAuth token has been revoked"),
+            "the client reads that phrase in a 403 as its token refresh"
+        );
+    }
+
+    /// The arms that refuse by policy answer the 403 `permission_error` the client reads as final, each under its
+    /// own code, and among them only the block asks the client not to resend the request.
+    #[test]
+    fn each_403_arm_answers_permission_error_under_its_own_code_and_the_block_alone_asks_for_no_retry(
+    ) {
+        for (error, code, no_retry) in [
+            (
+                RelayError::GuardrailBlocked {
+                    name: "Large auxiliary".into(),
+                },
+                "guardrail_blocked",
+                true,
+            ),
+        ] {
+            let failure = relay_failure(&error);
+            assert_eq!(
+                (
+                    failure.status,
+                    failure.error_type,
+                    failure.code,
+                    failure.no_retry
+                ),
+                (StatusCode::FORBIDDEN, "permission_error", code, no_retry),
+                "{error:?}"
+            );
+        }
     }
 
     /// A client that retries its 4xx answers would send a blocked request or one the contract refused again
@@ -637,9 +699,17 @@ mod tests {
             RelayError::BodyTooDeep,
             RelayError::BodyTooLarge,
             RelayError::Cch(phoebis_cch::CchError::Json(0)),
-            RelayError::ClientDrift { kind: "hash" },
+            RelayError::ClientDrift {
+                kind: "hash",
+                resumed: false,
+            },
             RelayError::ClientDrift {
                 kind: "version_suffix",
+                resumed: false,
+            },
+            RelayError::ClientDrift {
+                kind: "version_suffix",
+                resumed: true,
             },
             RelayError::InvalidModel,
             RelayError::LedgerBehind,

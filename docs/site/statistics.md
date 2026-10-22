@@ -92,6 +92,24 @@ the percentile, and the value carries the error of the bucket it falls in.
 Every ledger read the admin routes, the usage page, and the metrics listener make runs on a blocking worker off
 the request runtime, so a slow analytics query never delays proxy traffic.
 
+## Refused requests
+
+The ledger flags a request the router refused before any account was asked, for the client's or a policy's cause: a
+missing, malformed or doubled key header, a refused key, a client outside Claude Code, a client drift or a missing
+header the contract requires, a guardrail block, a malformed, incomplete, late or oversized body, an unsupported
+encoding, an unknown route or method, and a model the key does not allow, one the body lacks or one that is not a usable
+model name, never a keepalive probe. The router's own refusals stay in the figures, `account_cancelled`,
+`accounts_unavailable`, `body_budget_exhausted`, `key_body_reads`, `ledger_behind` and `router_unavailable`, and so does
+every outcome after an account was asked. The hourly row counts a flagged request in a map by error code and in no
+request, outcome, cache, latency or error figure, nor in the slow-down's held count or held time, so every reader of the
+rollups, the Dashboard, the Analytics views, the pool cards and the key usage, leaves them out without a rule of its
+own, and the scrape's request counter skips a flagged request by a rule of its own. The refused requests show on the
+Dashboard's Refused tile, the Analytics view's Refused column and "Refusals by code" card, the Guardrails card for a
+block, the Requests view and a session's request list, and in `phoebis_refusals_total` ([Metrics](#metrics)). The first
+start after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the
+map, in pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old
+counts.
+
 ## Quota samples
 
 Quota samples arrive from two sources. Every response head from an OAuth account carries the unified rate-limit
@@ -130,8 +148,8 @@ reads it: an estimate rather than a bill, since tier and batch modifiers are not
 the rate-limit windows, never this number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the
 binary. `stats.api_prices_path` replaces its whole list with a file of the operator's own, Settings names each table's
 path and date on its About card, and the cost reference dialog the Sessions view opens draws the table ([The cost
-reference](console.md#the-cost-reference)). An attempt on a model the entry in force does not price reads no cost
-estimate and is counted in `phoebis_pricing_unknown_model_total`.
+reference](console.md#the-cost-reference)). A request with usage on a model the entry in force does not price reads no
+cost estimate and is counted in `phoebis_pricing_unknown_model_total`.
 
 The file is a list of revisions under its one key, `revisions`: each entry carries an `effective` date in `YYYY-MM-DD`
 form and the whole table of that date, `models`. An entry is in force from 00:00 UTC of its date to the next entry's,
@@ -280,18 +298,19 @@ window's factor is 1, so the week has no band. The interactive regime holds its 
 interactive request's 5-hour share does not move with it. The edges are steps, and Saturday and Sunday are outside the
 band. The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by the band in
 force at its completion, and a session's burn, an average whose time constant is the pool's `burn_average_seconds`,
-keeps a copy weighed by the band at each renewal, which the shedding round prices on the anchor tier's 5-hour rates of
-the pin's regime on plan quota so its order reads what the meter charged. The projection reads the plain copy at the
-band in force when it reads, on every window the session's model draws, and carries it forward weighing the band's hours
-inside the horizon as the band weighs them. A projection, a runway and a stretch across a band edge weigh the in-band
-part of the horizon at one over the band factor and the rest at the plain rate. The analytics routes read the hourly
-rollups instead, which fold a request under the hour it arrived in, so their shares and 20x equivalents weigh it by that
-hour's band rather than by the band at its completion. The burn route groups by the analytics' ten dimensions, read from
-the rollups the same way, and by session, which reads the attempts, each weighed by the band at its completion. The
-shares answer under the account grouping, or under every grouping when the filter names exactly one account, since
-shares of different accounts' windows do not add, and the 20x equivalents answer under every grouping. The Tiers and
-peak band tab of the cost reference names this week's hours in your zone ([The cost
-reference](console.md#the-cost-reference)).
+keeps a copy weighed by the band at each renewal, which the sessions route's burn reads while the account runs on its
+plan, as the share the meter charged. The shedding round orders its pins by the plain copy: while the account runs on
+its plan by its average share of the window that fired over the span the round covers, on the account's tier, and in
+overage by its dollars. The projection reads the plain copy at the band in force when it reads, on every window the
+session's model draws, and carries it forward weighing the band's hours inside the horizon as the band weighs them. A
+projection, a runway and a stretch across a band edge weigh the in-band part of the horizon at one over the band factor
+and the rest at the plain rate. The analytics routes read the hourly rollups instead, which fold a request under the
+hour it arrived in, so their shares and 20x equivalents weigh it by that hour's band rather than by the band at its
+completion. The burn route groups by the analytics' ten dimensions, read from the rollups the same way, and by session,
+which reads the attempts, each weighed by the band at its completion. The shares answer under the account grouping, or
+under every grouping when the filter names exactly one account, since shares of different accounts' windows do not add,
+and the 20x equivalents answer under every grouping. The Tiers and peak band tab of the cost reference names this week's
+hours in your zone ([The cost reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window of the request's
 regime on every tier, so a Fable request's share of it is twice its 7-day share.
@@ -306,10 +325,10 @@ gauge, `GET /admin/attention` answers it, and the console lists it on the dashbo
 model tier with no weighed model, prices no share: the prediction adds no charge, the projection adds no burn, the
 shedding round ranks the pin after every priced one and never marks it, the analytics list the share under model
 unlisted and the cost reference shows a dash. An account tier without a capacity on a window prices no share there
-either, and the prediction adds no charge and the projection no burn on that window. The shedding round orders that
-tier's pins like any other, on the anchor tier's rates, and marks none of them for a round on that window, and in the
-analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier
-reads model unlisted. A dated model id reads the weight of its undated name.
+either, and the prediction adds no charge and the projection no burn on that window. While the account runs on its plan,
+a shedding round on that window reads that tier's pins as unpriced, after every priced pin, and marks none of them, and
+in the analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves `null` on a
+listed tier reads model unlisted. A dated model id reads the weight of its undated name.
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
@@ -367,14 +386,17 @@ refusal drops it.
 
 A routing decision leaves in the purge that takes its request. One whose request never landed leaves at the same age.
 
-The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction, so the
-writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute poll's
-reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per day. The same pass
-cuts the registry's history at the requests' cutoff, in slices of 1,000 rows: its resolved credential refresh attempts
-and its change log. It keeps what is read whatever its age: an attempt whose outcome is still uncertain, each account's
-newest two resolved attempts, which the attention line reads, and its newest attempt, which the account view reads, and
-each key id's newest create and delete, which tell a re-created key from its predecessor. A budgeted member's hourly
-rows stay from its period's start on, so a retention shorter than the period never reopens an exhausted member.
+The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction. A slice
+of captured bodies frees about 32 MiB beside the 1,000 rows, so the writer waits behind one slice at most and never
+behind a whole pass, and the day's cut costs the WAL one slice at a time. A body above 32 MiB goes alone in a slice of
+its own, since a slice always takes its first body, at most `proxy.max_request_bytes` plus the 8 MiB response cap. Every
+five-minute poll's reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per
+day. The same pass cuts the registry's history at the requests' cutoff, in slices of 1,000 rows: its resolved credential
+refresh attempts and its change log. It keeps what is read whatever its age: an attempt whose outcome is still
+uncertain, each account's newest two resolved attempts, which the attention line reads, and its newest attempt, which
+the account view reads, and each key id's newest create and delete, which tell a re-created key from its predecessor. A
+budgeted member's hourly rows stay from its period's start on, so a retention shorter than the period never reopens an
+exhausted member.
 
 The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
 its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
@@ -387,7 +409,7 @@ between the old and the new threshold inside the retained window stays priced at
 ## Metrics
 
 `stats.metrics_listen` (`127.0.0.1:9464` by default) serves `/metrics` in Prometheus text format and nothing else. It
-speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-three
+speaks plain HTTP and asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-four
 families are rendered, each with a `# TYPE` line and no `# HELP` line:
 
 | Metric | Type | Labels |
@@ -409,6 +431,7 @@ families are rendered, each with a `# TYPE` line and no `# HELP` line:
 | `phoebis_ledger_queued` | gauge | none |
 | `phoebis_pins_active` | gauge | `pool` |
 | `phoebis_pricing_unknown_model_total` | counter | none |
+| `phoebis_refusals_total` | counter | `code`, `key`, `kind` |
 | `phoebis_requests_total` | counter | `key`, `kind`, `outcome` |
 | `phoebis_router_dropped_reports_total` | counter | `kind` |
 | `phoebis_router_writer_degraded` | gauge | none |
@@ -421,6 +444,8 @@ own id or, for a dated id priced under its undated base, that base, and every ot
 downstream caller cannot grow the label set by naming models it likes. `phoebis_tokens_total` counts under five `kind`
 values, `cache_read`, `cache_write_1h`, `cache_write_5m`, `input` and `output`, and `phoebis_upstream_ttfb_seconds` uses
 the same 64 log-spaced buckets the rollups use, with an overflow bucket.
+`phoebis_refusals_total` counts the requests the router refused before any account was asked, under the refusal's code,
+the key and the kind, the requests `phoebis_requests_total` leaves out ([Refused requests](#refused-requests)).
 `phoebis_keepalive_probes_total` counts each probe under its pool and one of four outcomes: `landed` when it read the
 whole prefix back, or wrote it on the account a migration moved it to, `cold` when the upstream served it without that
 read, `failed` when the upstream did not serve it, and `held` when the router refused it with `503 ledger_behind` while
@@ -442,10 +467,46 @@ records or more, half its 4,096 ([Refusal codes](client.md#refusal-codes)).
 again, and `phoebis_ledger_parked_priced_total` counts the priced records parked since start
 ([the ledger writer](#the-ledger-writer)).
 
+Each family means what its entry below says, the text a `# HELP` line would hold:
+
+- `phoebis_account_cooldown_seconds` reads the seconds left on each cooldown an account is under, one series per scope.
+- `phoebis_account_overage_in_use` reads 1 for an account in overage, billing extra usage past its plan, and 0 for any
+  other account.
+- `phoebis_account_ratelimit_utilization` reads the latest utilization each quota window of an account reported, 1 at
+  the window's limit.
+- `phoebis_attempts_total` counts the attempts on the upstream, by account, model and the attempt's outcome.
+- `phoebis_attention` reads 1 while an attention condition holds on its subject and 0 once it clears
+  ([Conditions and gauges](#conditions-and-gauges)).
+- `phoebis_bus_dropped_total` counts the events the in-process event bus dropped for a subscriber whose queue was full.
+- `phoebis_bus_subscriber_panics_total` counts the panics that stopped a subscriber of the event bus.
+- `phoebis_keepalive_agents` reads the agents the keepalive engine retains, one series per state.
+- `phoebis_keepalive_probes_total` counts the keepalive engine's probes, by outcome and pool.
+- `phoebis_keepalive_skipped_total` counts the due probes the keepalive engine withheld, by pool and recipe state.
+- `phoebis_ledger_behind_refusals_total` counts the requests answered `ledger_behind` because the ledger's writer
+  channel held half its capacity or more.
+- `phoebis_ledger_degraded` reads 1 from a batch the ledger could not write until a batch lands and the spend is read
+  again, and 0 otherwise.
+- `phoebis_ledger_dropped_total` counts the records the ledger dropped unwritten, by the table each was bound for.
+- `phoebis_ledger_parked_priced_total` counts the priced records the ledger parked since the start.
+- `phoebis_ledger_queued` reads the records waiting in the ledger's writer channel.
+- `phoebis_pins_active` reads the live session pins of each pool.
+- `phoebis_pricing_unknown_model_total` counts the requests with token usage whose model the price entry in force does
+  not price.
+- `phoebis_refusals_total` counts the requests the router refused before any account was asked, by code, key and kind.
+- `phoebis_requests_total` counts the requests the ledger recorded, by key, kind and outcome, a request the router
+  refused before any account was asked left out.
+- `phoebis_router_dropped_reports_total` counts the reports the routing loop's closed queue refused at shutdown, by
+  report kind.
+- `phoebis_router_writer_degraded` reads 1 while writes past the routing state writer's bound wait in memory, and 0
+  otherwise.
+- `phoebis_router_writer_depth` reads the batches waiting in the routing state writer's channel.
+- `phoebis_tokens_total` counts the tokens the upstream reported, by account, kind and model.
+- `phoebis_upstream_ttfb_seconds` measures the seconds from an upstream attempt's start to its response head, by model.
+
 ## The console's views
 
 The views that show the figures above are described on [The console](console.md), each with its figures, filters and
-controls: the [Dashboard](console.md#dashboard) with its attention line, four 24-hour tiles and two capacity rings,
+controls: the [Dashboard](console.md#dashboard) with its attention line, five 24-hour tiles and two capacity rings,
 and [Settings](console.md#settings) with the About card that names each price table's path and date.
 
 ### Quota
@@ -467,7 +528,8 @@ The decisions and events of the log, the decision card and the query the view ke
 
 The Traffic, Burn, Latency, Cache, Cost, Cache warming and Accounts sections, their ranges and groupings, are on
 [Analytics](console.md#analytics), the held time per bucket under Traffic's moves chart among them, which reads the
-slow-down's two rollup counts above.
+slow-down's two rollup counts above. Under the model grouping the requests the router rejected before routing keep the
+empty key and read "no model".
 
 ## Conditions and gauges
 
@@ -500,7 +562,7 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `poll_backoff` | warning | the polled account | a poll answers clean |
 | `model_unweighted` | warning | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
-| `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind with a rise of at least 5% reads a ratio inside 0.8 to 1.25, or no window has such a rise |
+| `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind that ended in the last eight days with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no such window remains |
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
 | `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours |
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
@@ -577,27 +639,37 @@ detail names the model, its model tier, the model whose weight stands in and the
 
 **`meter_drift`** holds while, for any window kind, the account's newest completed window with a rise of at least 5%
 reads a ratio outside 0.8 to 1.25 between the rise the upstream's readings showed and the share the router priced for
-its own requests in it. The ledger reconciles each account's completed 5-hour, 7-day and Fable windows every hour,
-prices the plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the Meter
-reconciliation card of the [Analytics](console.md#analytics) view lists. The subject is the account, and the item dates
-from the oldest off window's end. The detail names the off windows with their ratios, the cost model's source and the
-revision in force, since the fix is the cost model file. The dashboard's line reads it under the label "Meter drift
-against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, and it opens the Analytics view on the
-account with the Burn section in view.
+its own requests in it, and only where the rise and the priced share both reach 5%, since one reading step over a
+smaller priced share reads far off. The ledger reconciles each account's completed 5-hour, 7-day and Fable windows every
+hour, prices the plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the
+Meter reconciliation card of the [Analytics](console.md#analytics) view lists. The condition reads only a window that
+ended inside the last eight days while the card keeps its rows for 30, so an account that serves nothing leaves the
+condition within eight days of its newest window's end. A window's rise is read between two readings of one source, the
+poll's where the window saw two or more polls and the head's otherwise, since the head truncates the percent the poll
+rounds, and the attempts priced are those completed between the two. A fall inside a window splits its run, except a
+head at most one percent under the poll before it, and the parts' rises and priced shares sum into the window's one row.
+A window whose reset slid, a later reading naming a later reset while its own still lay ahead, writes no row. The
+subject is the account, and the item dates from the oldest off window's end. The detail names the off windows with their
+ratios, the cost model's source and the revision in force, since the fix is the cost model file. The dashboard's line
+reads it under the label "Meter drift against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`,
+and it opens the Analytics view on the account with the Burn section in view.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is
 announced once per reset cycle, since a newer head of the same cycle within two points of 1.0 after it neither clears
 nor repeats it, and two points cover a head, which reads the share up to a point under the poll's whole percent, with
-one point of room. The ledger folds the four routing conditions from its events once an hour and at start into one
-table, which the gauge and `GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds
-none of its events. The subject is the account, and the item dates from the oldest wall of the day. The detail counts
-the walls, names their windows and the settings `shed_cap` and `window_ceiling`, and names one figure by the trigger of
-the newest shedding round on the wall's window within that window's length before the wall: after a projection round the
-projection error, one less the round's projection, after a slow-down round the time the wall arrived before the reset (0
-at or after it), and neither with no round. The ledger also keeps each account's longest early wall of the hour under a
-slow-down round, so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on
-the account's spent windows since the condition began.
+one point of room. A head that names no reset, taken before the announced reset, is of the announced cycle, so within
+the two points it neither clears nor repeats the wall, and the cycle that holds a head within the two points runs from
+the instant the wall was announced, or from the reset's passing for a wall that goes on past its reset. The ledger folds
+the four routing conditions from its events once an hour and at start into one table, which the gauge and
+`GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds none of its events. The
+subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls, names their
+windows and the settings `shed_cap` and `window_ceiling`, and names one figure by the trigger of the newest shedding
+round on the wall's window within that window's length before the wall: after a projection round the projection error,
+one less the round's projection, after a slow-down round the time the wall arrived before the reset (0 at or after it),
+and neither with no round. The ledger also keeps each account's longest early wall of the hour under a slow-down round,
+so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on the account's spent
+windows since the condition began.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour. It is folded as `wall_reached` is. The subject is the destination account, and

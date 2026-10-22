@@ -10,11 +10,14 @@ use crate::chains::Chains;
 #[derive(Debug, PartialEq)]
 pub struct BodyFacts {
     /// UTF-16 code units 4, 7, and 20 of each `text` block of the first `user` message, in the wire's order,
-    /// matching the client's own JavaScript string indexing; `b'0' as u16` where a text is shorter. The client
-    /// hashes the first text of its first non-meta user message for the version suffix, and the meta flag never
-    /// reaches the wire: the blocks it prepends (a system reminder, a slash command's caveat and output) and the
-    /// user's own words all land as text blocks of one message, so every block is a candidate.
+    /// matching the client's own JavaScript string indexing. A text too short for a position reads `b'0' as u16` there.
+    /// The client hashes the first text of its first non-meta user message for the version suffix, and the meta flag
+    /// never reaches the wire: the blocks it prepends (a system reminder, a slash command's caveat and output) and the
+    /// user's own words all land as text blocks of one message, so every block is a candidate. A resumed body adds the
+    /// padding of the empty prompt, since the client stamps the request before it writes the resume placeholder.
     pub prompt_units: Vec<[u16; 3]>,
+    /// The first user message is the client's resume placeholder, so its text is no anchor the stamp was computed over.
+    pub resumed: bool,
     /// The `cc_turn_origin` the line carries, in the client's own spelling (a token of lowercase ASCII letters
     /// and underscores, at most 32 bytes); absent from a reduced-shape request.
     pub turn_origin: Option<String>,
@@ -55,6 +58,9 @@ pub struct ClientHints {
     pub request_class: Option<String>,
 }
 
+/// The text the client writes in place of a tool result it dropped at a resume.
+pub const RESUME_PLACEHOLDER: &str = "[Orphaned tool result removed due to conversation resume]";
+
 impl BodyFacts {
     /// The facts and the parsed root they were read from, for a caller that reads the tree once more and drops it.
     pub fn read_with_tree(body: &[u8]) -> (BodyFacts, Option<Value>) {
@@ -65,6 +71,7 @@ impl BodyFacts {
         let Some(root) = phoebis_guardrails::parse_body(body) else {
             let facts = BodyFacts {
                 prompt_units: vec![[b'0' as u16; 3]],
+                resumed: false,
                 turn_origin: None,
                 entrypoint: None,
                 carries_line: false,
@@ -92,14 +99,21 @@ impl BodyFacts {
                 .find_map(|entry| entry.get("output_config")?.get("effort")?.as_str())
                 .map(str::to_string)
         });
-        let prompt_units = messages
-            .and_then(|m| {
-                m.iter()
-                    .find(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
-            })
+        let first_user = messages.and_then(|m| {
+            m.iter()
+                .find(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
+        });
+        let resumed =
+            first_user.is_some_and(|message| texts(message).next() == Some(RESUME_PLACEHOLDER));
+        let mut prompt_units = first_user
             .map(|message| texts(message).map(prompt_units_of).collect::<Vec<_>>())
             .filter(|candidates| !candidates.is_empty())
             .unwrap_or_else(|| vec![[b'0' as u16; 3]]);
+        // The client stamps a resumed request over a first user message that holds tool results alone and writes
+        // the placeholder afterwards, so the suffix it carries is the empty prompt's.
+        if resumed {
+            prompt_units.push([b'0' as u16; 3]);
+        }
         // Read once and shared by every field the line may carry, so a change to one field's spelling rule
         // never has to re-walk the body to find the text the others already have in hand.
         let first_system_text = root
@@ -149,6 +163,7 @@ impl BodyFacts {
         let markers_ttl_ms = markers_ttl_ms(&root);
         let facts = BodyFacts {
             prompt_units,
+            resumed,
             turn_origin,
             entrypoint,
             carries_line,

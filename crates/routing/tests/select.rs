@@ -9140,7 +9140,7 @@ fn without_the_class_a_continuation_refreshes_a_restart_is_cold_and_a_foreign_re
         (0, Some("x1")),
         "the same static prefix without the tail restarted the conversation, which is cold"
     );
-    assert!(!warm(&pin, T + 3_000));
+    assert!(!warm(&pin, false, T + 3_000));
     select(&mut st, &s, &at(T + 4_000, "other", &["y1"]), &mut rng());
     let foreign = pinned(&st, "s1");
     assert_eq!(
@@ -9155,7 +9155,7 @@ fn without_the_class_a_continuation_refreshes_a_restart_is_cold_and_a_foreign_re
     );
     select(&mut st, &s, &at(T + 5_000, "s0", &["x1", "x2"]), &mut rng());
     assert!(
-        warm(&pinned(&st, "s1"), T + 5_000),
+        warm(&pinned(&st, "s1"), false, T + 5_000),
         "the restarted conversation's continuation warms the pin again"
     );
 }
@@ -9186,7 +9186,7 @@ fn a_compacted_request_is_cold_and_the_next_continuation_re_warms_the_pin() {
         (0, Some("c1")),
         "the compacted flag is cold whatever the class says, and the pin keeps the compacted chain's tail"
     );
-    assert!(!warm(&pin, T + 2_000));
+    assert!(!warm(&pin, false, T + 2_000));
     select(
         &mut st,
         &s,
@@ -9196,7 +9196,7 @@ fn a_compacted_request_is_cold_and_the_next_continuation_re_warms_the_pin() {
     let pin = pinned(&st, "s1");
     assert_eq!(pin.last_refresh_at, T + 3_000);
     assert!(
-        warm(&pin, T + 3_000),
+        warm(&pin, false, T + 3_000),
         "the continuation of the compacted conversation re-warms the pin"
     );
 }
@@ -9276,7 +9276,7 @@ fn a_probe_never_colds_a_pin() {
         };
         let before = pinned(&st, "s1");
         assert!(
-            effective_warm(&before, &probe, &st.affinity().read().unwrap()),
+            effective_warm(&before, false, &probe, &st.affinity().read().unwrap()),
             "{shape}: the round's order reads the pin warm on the probe"
         );
         select(&mut st, &s, &probe, &mut rng());
@@ -9288,7 +9288,7 @@ fn a_probe_never_colds_a_pin() {
             before.last_refresh_at
         );
         assert!(
-            warm(&after, probe.now),
+            warm(&after, false, probe.now),
             "{shape}: still warm after the probe"
         );
     }
@@ -9385,6 +9385,185 @@ fn a_request_on_another_lane_is_cold_whatever_its_boundaries_and_its_continuatio
         ),
         (0, standard.as_str(), Some("m5")),
         "a main turn on another lane reads cold too"
+    );
+}
+
+/// A request of `class` on session `s1` of the one-member pool `s`, carrying no chain.
+fn classed(s: &RegistrySnapshot, class: &str, now: i64) -> SelectRequest {
+    with_facts(
+        request(s, Some("s1"), "claude-sonnet-5", true, &[], now),
+        Some(class),
+        false,
+        None,
+        &[],
+    )
+}
+
+#[test]
+fn a_pin_only_auxiliary_requests_use_reads_warm_by_its_last_use_and_cold_one_ttl_after_the_last() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(&mut st, &s, &classed(&s, "quota", T), &mut rng());
+    // Two thirds of the five-minute TTL apart, so from the second request on the placement is more than a TTL behind.
+    let mut now = T;
+    for class in ["quota", "title", "suggestion"] {
+        now += 200_000;
+        let d = decide(&mut st, &s, &classed(&s, class, now), &mut rng());
+        assert_eq!(
+            d.summary
+                .fact
+                .iter()
+                .map(|f| (f.key, f.value.clone()))
+                .collect::<Vec<_>>(),
+            vec![("idle", FactValue::Int(200_000))],
+            "a {class} request {} ms after the placement renews the pin warm, so the row names its idle age",
+            now - T
+        );
+        assert_eq!(
+            fact(line(&d.record, "move:drain"), "cold"),
+            &FactValue::Bool(false),
+            "the move rules read the pin warm on the {class} request"
+        );
+    }
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        pin.last_refresh_at, T,
+        "no auxiliary request refreshed the pin"
+    );
+    assert!(
+        st.pin_warm(&pin, now + 299_999),
+        "a millisecond short of one TTL after the last use, the pin is warm"
+    );
+    assert!(
+        !st.pin_warm(&pin, now + 300_000),
+        "one TTL after the last use, the pin is cold"
+    );
+}
+
+#[test]
+fn a_main_turn_on_a_pin_only_auxiliary_requests_used_clears_its_flag_and_it_reads_its_last_refresh_again(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(&mut st, &s, &classed(&s, "title", T), &mut rng());
+    select(&mut st, &s, &classed(&s, "quota", T + 200_000), &mut rng());
+    assert!(
+        st.auxiliary_only(&pin_key("s1")),
+        "only auxiliary requests used the pin so far"
+    );
+    select(&mut st, &s, &classed(&s, "main", T + 250_000), &mut rng());
+    assert!(
+        !st.auxiliary_only(&pin_key("s1")),
+        "the main turn refreshed the pin, which clears the flag"
+    );
+    select(&mut st, &s, &classed(&s, "quota", T + 500_000), &mut rng());
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.last_refresh_at, pin.last_used_at),
+        (T + 250_000, T + 500_000)
+    );
+    assert!(
+        st.pin_warm(&pin, T + 549_999),
+        "a millisecond short of one TTL after the main turn, the pin is warm"
+    );
+    assert!(
+        !st.pin_warm(&pin, T + 550_000),
+        "one TTL after the main turn the pin is cold, though an auxiliary request used it since"
+    );
+}
+
+#[test]
+fn a_fresh_placement_under_main_or_with_no_class_leaves_the_new_pins_flag_clear() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(&mut st, &s, &classed(&s, "main", T), &mut rng());
+    pinned(&st, "s1");
+    assert!(
+        !st.auxiliary_only(&pin_key("s1")),
+        "a main turn refreshes the pin it places"
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let classless = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    assert_eq!(classless.request_class, None);
+    select(&mut st, &s, &classless, &mut rng());
+    pinned(&st, "s1");
+    assert!(
+        !st.auxiliary_only(&pin_key("s1")),
+        "a request that names no class is no auxiliary one"
+    );
+}
+
+#[test]
+fn a_main_turn_on_another_lane_keeps_the_flag_of_a_pin_only_auxiliary_requests_used() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let fast = lane_key("claude-sonnet-5", "fast", "none", "-");
+    select(&mut st, &s, &classed(&s, "quota", T), &mut rng());
+    let switched = SelectRequest {
+        lane: fast.clone(),
+        ..classed(&s, "main", T + 100_000)
+    };
+    select(&mut st, &s, &switched, &mut rng());
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.last_refresh_at, pin.lane.as_str()),
+        (0, fast.as_str()),
+        "a main turn on another lane reads cold"
+    );
+    assert!(
+        st.auxiliary_only(&pin_key("s1")),
+        "a lane change keeps the flag"
+    );
+    assert!(
+        st.pin_warm(&pin, T + 399_999),
+        "a millisecond short of one TTL after the last use, the pin is warm"
+    );
+    assert!(
+        !st.pin_warm(&pin, T + 400_000),
+        "one TTL after the last use, the pin is cold"
+    );
+}
+
+#[test]
+fn a_loaded_pin_whose_last_refresh_is_its_creation_is_flagged_and_reads_warm_by_its_last_use() {
+    // Both created an hour before `T` and used a second before it.
+    let st = loaded(vec![
+        PinRow {
+            last_refresh_at: T - HOUR,
+            ..seeded_pin("s1", "a", T)
+        },
+        PinRow {
+            last_refresh_at: T - HOUR + 1_000,
+            ..seeded_pin("s2", "a", T)
+        },
+    ]);
+    assert!(
+        st.auxiliary_only(&pin_key("s1")),
+        "no refreshing turn moved the stamp since the placement"
+    );
+    assert!(
+        !st.auxiliary_only(&pin_key("s2")),
+        "a refreshing turn moved the stamp a second after the placement"
+    );
+    assert!(
+        st.pin_warm(&pinned(&st, "s1"), T),
+        "used a second ago, the flagged pin is warm"
+    );
+    assert!(
+        !st.pin_warm(&pinned(&st, "s2"), T),
+        "refreshed an hour ago, the other pin is cold"
     );
 }
 
@@ -10700,13 +10879,14 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
 }
 
 /// `seeded_pin` burning `burn` input tokens a second in both copies, warm or cold: the default tables price it
-/// at `burn`.
+/// at `burn`. A cold pin was last refreshed half an hour ago, after its placement, so a load leaves it unflagged and
+/// its use a second ago keeps it no warmer.
 fn burning(session: &str, account: &str, burn: f64, warm: bool, now: i64) -> PinRow {
     let rates = input_rate(burn);
     PinRow {
         burn: rates,
         burn_banded: rates,
-        last_refresh_at: if warm { now - 1_000 } else { now - HOUR },
+        last_refresh_at: if warm { now - 1_000 } else { now - HOUR / 2 },
         ..seeded_pin(session, account, now)
     }
 }
@@ -11301,6 +11481,31 @@ fn the_return_to_plan_line_names_its_mode_on_every_verdict_and_the_dwell_under_a
         &FactValue::List(vec!["b".into()])
     );
 
+    // b metered too: the cold pin's return holds under always, and no plan member takes it.
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        kinds: vec![("a", AccountKind::ApiKey), ("b", AccountKind::ApiKey)],
+        failover: Failover {
+            return_to_plan: ReturnToPlan::Always,
+            return_to_plan_dwell_seconds: 600,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = on_the_metered_member();
+    let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let stuck_line = line(&d.record, "move:return_to_plan");
+    assert_eq!(
+        (stuck_line.verdict, keys(stuck_line)),
+        (
+            "no",
+            vec!["mode", "cold", "dwell_age_ms", "dwell_ms", "no_destination"]
+        ),
+        "a return with no destination names the mode and the dwell beside the missing destination"
+    );
+    assert_eq!(fact(stuck_line, "no_destination"), &FactValue::Bool(true));
+
     let s = returning_pool(ReturnToPlan::WhenCold);
     let mut st = on_the_metered_member();
     let d = decide(&mut st, &s, &main_turn(&s, "warm", T), &mut rng());
@@ -11341,7 +11546,7 @@ fn a_restart_on_a_warm_pin_is_cold_for_the_return_rule_on_that_request() {
         ..burning("s1", "a", 0.0, true, T)
     };
     let mut st = loaded(vec![pin.clone()]);
-    assert!(warm(&pinned(&st, "s1"), T), "the stored pin is warm");
+    assert!(warm(&pinned(&st, "s1"), false, T), "the stored pin is warm");
     let restart = |s: &RegistrySnapshot| {
         with_facts(
             request(s, Some("s1"), "claude-sonnet-5", true, &[], T),
@@ -12050,25 +12255,27 @@ fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does
 #[test]
 fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leaving_overage_reads_the_window_share_back(
 ) {
+    // A cap of the whole sum makes the target the excess, which neither pin covers alone, so the walk marks the first
+    // pin of the order and keeps the other as the last.
     let s = tiered(Pool {
         policy: OveragePolicy::Allow,
-        ..shedding_pool(Shedding::default())
+        ..shedding_pool(Shedding {
+            shed_cap: 1.0,
+            ..Shedding::default()
+        })
     });
-    // Both pins burn the same tokens; the dollar table weighs Sonnet's nine times Opus's and the 5-hour share
-    // table the other way round, so the unit alone decides which pin is heavier.
+    // The Opus pin burns twice the Sonnet pin's tokens, so twice its share of the 5-hour window, while the dollar
+    // table weighs Sonnet's tokens nine times Opus's, so the Sonnet pin burns more dollars. The unit alone decides
+    // which pin is heavier.
     let opus = PinRow {
         model: "claude-opus-5".into(),
         ..burning("opus", "a", 10.0, false, T)
     };
-    let sonnet = burning("sonnet", "a", 10.0, false, T);
+    let sonnet = burning("sonnet", "a", 5.0, false, T);
     let mut st = rounding(vec![opus, sonnet]);
     st.set_rates(BurnRates {
         dollars: input_prices(&[("claude-opus-5", Some(1.0)), ("claude-sonnet-5", Some(9.0))]),
-        five_hour: RegimeRates {
-            base: input_prices(&[("claude-opus-5", Some(9.0)), ("claude-sonnet-5", Some(1.0))]),
-            ..RegimeRates::unit()
-        },
-        fast: RateTable::unit(),
+        ..BurnRates::default()
     });
     let opus_key = PinKey {
         model: "claude-opus-5".into(),
@@ -12112,12 +12319,12 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
     assert_eq!(
         landed(select(&mut st, &s, &opus_turn(later), &mut rng()).0),
         ("b".into(), Some(MigrateReason::Shed)),
-        "back on plan the round reads the 5-hour share and marks the Opus pin first"
+        "back on plan the round orders on the window share and marks the Opus pin first"
     );
     let untouched = pinned(&st, "sonnet");
     assert_eq!(
         (untouched.burn, untouched.burn_banded),
-        (input_rate(10.0), input_rate(10.0)),
+        (input_rate(5.0), input_rate(5.0)),
         "neither copy was reset by the switch"
     );
 }
@@ -12583,7 +12790,7 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
     );
 
     // An unpriced pin is never marked and still counts as one of the account's pins: last in the order, since the
-    // anchor table prices the guess model at nothing, it is the last unmarked one, so the priced pin before it can be
+    // round's pricer prices the guess model at nothing, it is the last unmarked one, so the priced pin before it can be
     // marked. A fast pin leaves the window-share round before the order, so the unpriced pin lists among the walked
     // pins ahead of it.
     let mut st = rounding(vec![
@@ -12925,7 +13132,7 @@ fn a_compacted_request_on_a_warm_pin_is_first_in_the_order_on_that_request() {
         ..main_turn(&s, "warm-9", T)
     };
     assert!(
-        warm(&pinned(&st, "warm-9"), T),
+        warm(&pinned(&st, "warm-9"), false, T),
         "the stored refresh reads warm"
     );
     assert_eq!(
@@ -13095,7 +13302,7 @@ fn a_lane_changed_pin_sorts_among_the_cold_ones_in_the_shed_round() {
         ..main_turn(&s, "warm-9", T)
     };
     assert!(
-        warm(&pinned(&st, "warm-9"), T),
+        warm(&pinned(&st, "warm-9"), false, T),
         "the stored refresh reads warm"
     );
     assert_eq!(
@@ -14048,6 +14255,90 @@ fn a_fable_week_round_over_one_fable_pin_and_opus_pins_reads_last_pin_and_never_
         model: "claude-fable-5".into(),
         ..pin_key("f1")
     }));
+}
+
+#[test]
+fn a_round_that_walks_no_pin_reads_off_window_where_a_pin_it_left_out_is_off_the_window_that_fired()
+{
+    let s = tiered(shedding_pool(Shedding::default()));
+    let model_pin = |session: &str, model: &str, speed: &str, burn: f64, warm: bool| PinRow {
+        model: model.into(),
+        lane: lane_key(model, speed, "none", "-"),
+        ..burning(session, "a", burn, warm, T)
+    };
+    // The account's one Fable pin runs on the fast lane: its burn takes the Fable week over the ceiling, and the
+    // window-share round leaves it out before the window's partition takes the two Opus pins, so no pin is walked.
+    let mut st = rounding(vec![
+        model_pin("f1", "claude-fable-5", "fast", 4.0, true),
+        model_pin("o1", "claude-opus-5", "standard", 2.0, false),
+        model_pin("o2", "claude-opus-5", "standard", 1.0, false),
+    ]);
+    st.record_sample(
+        "a",
+        with_fable(sample(0.1, 0.1, T - 500), 0.93, Some(T + 96 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.1, 0.1, T - 500), 0.1, Some(T + 96 * HOUR)),
+    );
+    let req = with_facts(
+        request(&s, Some("o1"), "claude-opus-5", true, &[], T),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    );
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (
+            round.window.as_str(),
+            round.unit,
+            round.outcome.as_str(),
+            round.reason
+        ),
+        (
+            "seven_day_fable",
+            "window_share",
+            "nothing_to_mark",
+            Some("off_window")
+        ),
+        "the round walked no pin and left the Opus pins out off the Fable week"
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("f1", Some("fast_lane")),
+            ("o1", Some("off_window")),
+            ("o2", Some("off_window"))
+        ]
+    );
+
+    // Every pin of this round is on the fast lane, so none it left out is off the window, and the round that found no
+    // priced burn to remove reads `unpriced`.
+    let mut st = rounding(vec![
+        model_pin("fast-4", "claude-sonnet-5", "fast", 4.0, false),
+        model_pin("fast-2", "claude-sonnet-5", "fast", 2.0, false),
+    ]);
+    over_a_fitting_b(&mut st, T - 500);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "fast-4", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.outcome.as_str(), round.reason),
+        ("five_hour", "nothing_to_mark", Some("unpriced"))
+    );
+    assert!(
+        round.pins.iter().all(|p| p.skip == Some("fast_lane")),
+        "{:?}",
+        round.pins
+    );
 }
 
 #[test]
@@ -20360,7 +20651,14 @@ fn time_of(value: &FactValue) -> i64 {
 
 #[test]
 fn the_stretch_is_the_time_the_unslowed_demand_passes_the_ceiling_before_the_reset() {
-    let s = slowed_pool();
+    // A 45-minute threshold, apart from the half hour the other slowing pools set, so the line reads the pool's own.
+    let mut pool = slowing(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        load_shedding: false,
+        ..Pool::default()
+    });
+    pool.slow_down.slow_down_stretch_seconds = 2_700;
+    let s = tiered(pool);
     // Two pins burn 0.10 and 0.05 of the 5-hour window an hour on a at 0.80 with its reset two hours out: the 0.15 of
     // room under the ceiling lasts an hour, so the sessions would pass it an hour before the reset.
     let mut st = rounding(vec![
@@ -20393,11 +20691,11 @@ fn the_stretch_is_the_time_the_unslowed_demand_passes_the_ceiling_before_the_res
     assert!((stretch_ms / 3_600_000.0 - 1.0).abs() < 1e-3);
     assert!((factor / 0.5 - 1.0).abs() < 1e-3);
     assert!(close(number(fact(shed, "speed")), 1.0));
-    assert_eq!(fact(shed, "threshold_ms"), &FactValue::Int(1_800_000));
+    assert_eq!(fact(shed, "threshold_ms"), &FactValue::Int(2_700_000));
     assert_eq!(
         time_of(fact(shed, "over_since")),
         T,
-        "an hour's stretch is over the half hour threshold since this read"
+        "an hour's stretch is over the 45-minute threshold since this read"
     );
     // One factor per account: the other session's turn reads the same figure and the entry holds it.
     let d = decide(&mut st, &s, &main_turn(&s, "s0", T), &mut rng());
@@ -20413,9 +20711,33 @@ fn the_stretch_is_the_time_the_unslowed_demand_passes_the_ceiling_before_the_res
 }
 
 #[test]
+fn the_stretch_is_the_time_to_the_horizon_less_the_reach_rounded_once_to_the_millisecond() {
+    let s = slowed_pool();
+    // One pin burns 0.07 of the 5-hour window an hour on a at 0.80 with its reset three hours out: the 0.15 of room
+    // lasts 54,000 / 7 seconds, 7,714,285.71 milliseconds, which the reach rounds to 7,714,286. A reach cut short of
+    // its fraction would read a stretch one millisecond longer.
+    let mut st = rounding(vec![burning("s1", "a", 7.0, true, T)]);
+    st.record_sample("a", refreshing(0.80, T + 3 * HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + 3 * HOUR, T + 72 * HOUR, T));
+    let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+    let stretch_ms = 3 * HOUR - 7_714_286;
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "stretch_ms"),
+        &FactValue::Int(stretch_ms)
+    );
+    assert_eq!(
+        st.slow_down_state("p", "a")
+            .expect("the read wrote a's entry")
+            .stretch_ms,
+        stretch_ms
+    );
+}
+
+#[test]
 fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and_a_factor_of_zero()
 {
-    let (_, s) = held_pools(120);
+    // A cap of 150 seconds, apart from the shipped 120, so the held turn below waits the pool's own cap.
+    let (_, s) = held_pools(150);
     // a at 0.96 with 27 minutes to its reset: the ceiling is already passed.
     let mut st = rounding(vec![burning("s1", "a", 7.0, true, T)]);
     reading(&mut st, "a", 0.96, 27 * MINUTE, T);
@@ -20446,7 +20768,7 @@ fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and
     assert_eq!(fact(shed, "stretch_ms"), &FactValue::Int(26 * MINUTE));
     assert_eq!(number(fact(shed, "factor")), 0.0);
     assert_eq!(number(fact(shed, "demand_five_hour")), 0.0);
-    let until = T + MINUTE + 120_000;
+    let until = T + MINUTE + 150_000;
     assert_eq!(held_on(&d).1.until, Some(until));
 
     // Under the ceiling with nothing priced the window carries the sessions to its reset: the stretch reads zero and
@@ -20474,7 +20796,7 @@ fn a_window_at_the_ceiling_reads_a_stretch_of_at_least_the_time_to_the_reset_and
             entry.held_ms,
             entry.over_since
         ),
-        (1.0, Some(T), Some(T + 2 * MINUTE), 0.0, 120_000, None),
+        (1.0, Some(T), Some(T + 2 * MINUTE), 0.0, 150_000, None),
         "the span stays open through the wait"
     );
 }
@@ -21097,7 +21419,18 @@ fn cycled(st: &mut RoutingState, off: &RegistrySnapshot, session: &str, gap: i64
 /// and writes the entry for, never held and folding no pace, so the ramp's stamp is a burn average old at `at` and a
 /// hold at `at` reads the read's full factor.
 fn stamped(st: &mut RoutingState, on: &RegistrySnapshot, session: &str, at: i64) {
-    let d = decide(st, on, &auxiliary(on, session, at - AVERAGE_MS), &mut rng());
+    stamped_over(st, on, session, at, AVERAGE_MS);
+}
+
+/// `stamped` on a pool whose burn average is `average_ms`.
+fn stamped_over(
+    st: &mut RoutingState,
+    on: &RegistrySnapshot,
+    session: &str,
+    at: i64,
+    average_ms: i64,
+) {
+    let d = decide(st, on, &auxiliary(on, session, at - average_ms), &mut rng());
     assert!(
         matches!(d.result, SelectResult::Selected(_)),
         "an auxiliary turn is never held: {:?}",
@@ -21137,9 +21470,12 @@ fn assert_cycle_over_factor(d: &Decided, received_at: i64) {
 
 #[test]
 fn a_slowed_pins_main_turn_is_held_for_its_cycle_over_the_factor_before_the_renewal() {
-    let (off, on) = held_pools(120);
+    // A burn average of twenty minutes, apart from `AVERAGE_MS`: a stamp that old ramps the read's whole factor only
+    // where the ramp reads the pool's own average.
+    let average_ms = 20 * MINUTE;
+    let (off, on) = paced_pools(120, average_ms);
     let mut st = slowed_s1(0.80);
-    stamped(&mut st, &on, "s1", T + 20 * SECOND);
+    stamped_over(&mut st, &on, "s1", T + 20 * SECOND, average_ms);
     cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
     let before = pinned(&st, "s1");
     let req = main_turn(&on, "s1", T + 20 * SECOND);
@@ -21972,6 +22308,28 @@ fn a_pin_without_a_cycle_runs_at_full_speed_and_the_held_pins_cover_its_burn() {
 }
 
 #[test]
+fn a_held_turns_shed_line_reads_the_speed_its_hold_outcome_names() {
+    let (off, on) = held_pools(120);
+    let at = T + 240 * SECOND;
+    let mut st = a_tenth_with_a_cycle(&off, &on, 0.80, at);
+    let d = decide(&mut st, &on, &main_turn(&on, "s1", at), &mut rng());
+    assert_eq!(held_on(&d).1.reason, "slow_down");
+    let speed = d
+        .record
+        .outcome
+        .hold
+        .as_ref()
+        .and_then(|outcome| outcome.speed)
+        .expect("the speed the hold's plan realizes");
+    assert!(speed < 1.0, "the account runs slowed: {speed}");
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "speed"),
+        &FactValue::Number(speed),
+        "the shed line and the hold's outcome read one speed"
+    );
+}
+
+#[test]
 fn the_stretch_read_over_an_unheld_pins_full_speed_stays_under_the_threshold() {
     let (off, on) = held_pools(120);
     // At 0.74 the factor reads above 0.8, so the stretch starts under the half hour threshold.
@@ -22714,7 +23072,7 @@ fn a_read_under_1_that_replaces_a_stamped_stale_entry_takes_a_fresh_stamp_at_its
     assert_eq!(
         (entry.read_at, entry.ramp_since, entry.slowed_since),
         (at, Some(at), Some(at)),
-        "the replacing read stamps the ramp and the span at its own instant, and no stamp of the old window carries over"
+        "the replacing read stamps the ramp and the span at its instant, and no stamp of the old window carries over"
     );
     let edges = st.take_slow_down_edges(at);
     assert_eq!(edges.len(), 2, "{edges:?}");
@@ -22760,6 +23118,107 @@ fn a_stale_entry_whose_factor_returned_before_the_reset_ends_its_span_at_the_ret
         st.take_slow_down_edges(at),
         vec![slowed_span_ended(29 * MINUTE)],
         "the span ends at the return, the earlier of the return and the reset"
+    );
+}
+
+#[test]
+fn the_purge_drops_an_entry_no_selection_has_written_for_the_reclaim_hour() {
+    let (_, on) = held_pools(120);
+    // a's entry was written ten minutes before s1's last use and its reset lies two hours out, so an hour after the
+    // write the pin still stands, the pool still slows and the window has not reset: the entry's age alone drops it.
+    let mut st = s1_on_a(15.0);
+    reading(&mut st, "a", 0.5, 2 * HOUR, T);
+    let written = T - 10 * MINUTE;
+    st.write_slow_down(
+        "p",
+        "a",
+        &SlowDownRead {
+            reset: Some(T + 2 * HOUR),
+            ..seeded_read(0.38, written)
+        },
+        0.52,
+        written,
+        AVERAGE_MS,
+    );
+    st.take_slow_down_edges(written);
+    st.purge(&on, written + IN_FLIGHT_RECLAIM_MS - 1);
+    assert!(
+        st.slow_down_state("p", "a").is_some(),
+        "a millisecond short of the hour the entry stands"
+    );
+    let at = written + IN_FLIGHT_RECLAIM_MS;
+    st.purge(&on, at);
+    assert!(
+        st.slow_down_state("p", "a").is_none(),
+        "an hour after its last write the purge drops the entry"
+    );
+    assert_eq!(pinned(&st, "s1").account_id, "a", "the pin still stands");
+    assert_eq!(
+        st.take_slow_down_edges(at),
+        vec![(
+            "p".to_string(),
+            "a".to_string(),
+            SlowDownEdge::Ended {
+                since: written,
+                duration_ms: 0,
+                factor_min: 0.38,
+                held_ms: 0,
+            }
+        )],
+        "a span whose factor never returned ends at the entry's last read"
+    );
+}
+
+#[test]
+fn a_lingering_entry_on_a_pool_switched_off_is_in_force_nowhere_and_reads_at_full_speed() {
+    let (off, on) = held_pools(120);
+    // A warm pin on a burns 60 input tokens a second, which the ratio pricer reads as sixty ten-millionths of the
+    // 5-hour window a second, and a slowed read left a's entry at half speed before the switch went off. The purge
+    // tick has not dropped it yet.
+    let lingering = || {
+        let mut st = priced(vec![gated_pin("w0", "a", 60.0)]);
+        reading(&mut st, "a", 0.1, 3 * HOUR, T);
+        reading(&mut st, "b", 0.3, 3 * HOUR, T);
+        st.write_slow_down("p", "a", &seeded_read(0.5, T), 0.5, T, AVERAGE_MS);
+        st
+    };
+    // A fresh session's prior divides the warm pin's rate by a's speed, so it shows the speed each twin reads.
+    let prior = |s: &RegistrySnapshot| {
+        let mut st = lingering();
+        let d = decide(&mut st, s, &placing(s, "r-1", "s1", T), &mut rng());
+        let reserve = line(&d.record, "reserve");
+        assert_eq!(reserve.verdict, "booked");
+        number(fact(reserve, "burn_five_hour"))
+    };
+    let unslowed = 60.0 / 10_000_000.0 * 3_600.0;
+    assert!(
+        close(prior(&on), unslowed / 0.5),
+        "switched on, the entry's half speed doubles the pin's rate"
+    );
+
+    let mut st = lingering();
+    let pool = off.pool("p").expect("the pool");
+    assert!(
+        st.slow_down_state("p", "a").is_some(),
+        "the entry stands until the purge tick"
+    );
+    assert!(
+        st.slow_down_in_force(pool, "a", T).is_none(),
+        "a pool switched off holds no entry in force"
+    );
+    assert!(
+        close(prior(&off), unslowed),
+        "switched off, the speed reads 1 and the prior takes the pin at its achieved rate"
+    );
+    let d = decide(&mut st, &off, &main_turn(&off, "w0", T), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "slow_down"), &FactValue::Text("off".into()));
+    assert!(
+        shed.facts
+            .iter()
+            .all(|f| !SLOW_DOWN_FACTS[1..].contains(&f.key)),
+        "the line reads the switch alone: {:?}",
+        shed.facts
     );
 }
 
@@ -25668,6 +26127,91 @@ fn a_rounds_desk_pin_reads_one_rate_over_the_span_beside_a_base_pin_whose_averag
 }
 
 #[test]
+fn a_window_share_round_lists_its_pins_in_the_order_of_the_spans_average_it_prices_them_by() {
+    // Over the hour to the reset the band enters half an hour in for the base regime and never for `desk`. At T the
+    // desk pin's 20 tokens a second rank over the base pin's 8, and its 0.10 of the window an hour over the base pin's
+    // 0.08, while over the span the base pin averages 0.12 an hour, half an hour at 0.08 and half at 0.16, against the
+    // desk pin's flat 0.10.
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = rounding(vec![
+        PinRow {
+            entrypoint: "desk".into(),
+            ..burning("s0", "a", 20.0, false, T)
+        },
+        burning("s1", "a", 8.0, false, T),
+    ]);
+    st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
+    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.unit),
+        ("five_hour", "window_share")
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s1", "s0"],
+        "the card lists the base pin, whose average over the span is the higher, before the desk pin"
+    );
+    for (session, expected) in [("s1", 0.12), ("s0", 0.10)] {
+        let read = round_burn(&round, session);
+        assert!(
+            (read - expected).abs() < 1e-9,
+            "{session}: {read} against {expected}"
+        );
+    }
+}
+
+#[test]
+fn a_window_share_round_orders_its_pins_on_the_plain_copy_where_the_banded_copy_ranks_them_the_other_way(
+) {
+    // Both pins run under the base regime over the hour to the reset, which the band enters half an hour in, so each
+    // pin's average is one and a half times its plain rate at T. s1 was charged inside an earlier band, so its banded
+    // copy reads twice its plain one: at T that copy ranks its 6 tokens a second over s2's 4, while over the span s2's
+    // plain 4 burns more than s1's 3.
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = rounding(vec![
+        PinRow {
+            burn_banded: input_rate(6.0),
+            ..burning("s1", "a", 3.0, false, T)
+        },
+        burning("s2", "a", 4.0, false, T),
+    ]);
+    st.set_share(banded_pricer(T + 30 * MINUTE, T + 10 * HOUR));
+    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T));
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T));
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        (round.window.as_str(), round.unit),
+        ("five_hour", "window_share")
+    );
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["s2", "s1"],
+        "the card lists the two cold pins in the order of the figures it shows"
+    );
+    for (session, expected) in [("s2", 0.04 * 1.5), ("s1", 0.03 * 1.5)] {
+        let read = round_burn(&round, session);
+        assert!(
+            (read - expected).abs() < 1e-9,
+            "{session}: {read} against {expected}"
+        );
+    }
+}
+
+#[test]
 fn a_pin_under_the_test_regime_projects_at_one_rate_beside_a_base_pin_that_weighs_the_band() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
     let mut st = a_desk_pin_and_a_base_pin();
@@ -26054,6 +26598,150 @@ fn a_row_idle_past_the_ttl_stands_through_a_cap_hold_and_the_landing_after_the_w
         pin_writes,
         ["delete", "upsert"],
         "the landing replaces the row under its key as a move does"
+    );
+}
+
+const STANDING_AT: i64 = T + 2 * HOUR;
+
+/// A Pace pool of `a`, `b` and `c` read alike at `STANDING_AT`, with `s1`'s row idle past the TTL on `a`, its burn of a
+/// thousand input tokens a second decayed over the two hours since `T`, and `w`'s warm row on `c`, whose burn is a
+/// fresh session's prior and bounds every runway. `a` and `b` then differ by `s1`'s row alone.
+fn standing_row_on_a() -> (RegistrySnapshot, RoutingState) {
+    let s = tiered(Pool {
+        strategy: Strategy::Pace,
+        ..Pool::default()
+    });
+    let mut st = priced(vec![
+        gated_pin("s1", "a", 1_000.0),
+        burning("w", "c", 1_000.0, true, STANDING_AT),
+    ]);
+    for id in ["a", "b", "c"] {
+        st.record_sample(
+            id,
+            refreshing(
+                0.5,
+                STANDING_AT + HOUR,
+                STANDING_AT + 72 * HOUR,
+                STANDING_AT - 500,
+            ),
+        );
+    }
+    (s, st)
+}
+
+#[test]
+fn a_placement_s_fit_and_pace_score_leave_out_the_session_s_own_row_on_the_account_it_left() {
+    let (s, mut st) = standing_row_on_a();
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], STANDING_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle"),
+        "the row stands on a at step 1"
+    );
+    let (a, b) = (candidate(&d.record, "a"), candidate(&d.record, "b"));
+    assert!(
+        a.burn[SEVEN_DAY] > 0.0,
+        "the candidate table's achieved burn reads the row: {:?}",
+        a.burn
+    );
+    assert!(b.runway_ms.is_some(), "the fresh prior bounds b's runway");
+    assert_eq!(
+        a.runway_ms, b.runway_ms,
+        "the fit projects a without the session's own row"
+    );
+    let pace = |c: &CandidateFacts| {
+        let pace = c.pace.as_ref().expect("Pace scores every member");
+        (pace.burn, pace.score)
+    };
+    assert_eq!(
+        pace(a),
+        pace(b),
+        "the record's Pace figures read a without the row"
+    );
+    assert_eq!(a.score, b.score, "the pick scores a without the row");
+}
+
+#[test]
+fn another_session_s_placement_reads_the_burn_of_a_row_idle_past_the_ttl_on_its_account() {
+    let (s, mut st) = standing_row_on_a();
+    let req = request(&s, Some("s2"), "claude-sonnet-5", true, &[], STANDING_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(d.record.pin.as_ref().map(|pin| pin.found), Some("none"));
+    let (a, b) = (candidate(&d.record, "a"), candidate(&d.record, "b"));
+    let runway = |c: &CandidateFacts| c.runway_ms.expect("the fresh prior bounds the runway");
+    assert!(
+        runway(a) < runway(b),
+        "the fit projects a with s1's row: {} against {}",
+        runway(a),
+        runway(b)
+    );
+    let pace = |c: &CandidateFacts| c.pace.clone().expect("Pace scores every member");
+    let (pace_a, pace_b) = (pace(a), pace(b));
+    assert!(
+        pace_a.burn > 0.0 && pace_a.score < pace_b.score,
+        "the record's Pace figures read a with s1's row: {pace_a:?} against {pace_b:?}"
+    );
+    assert!(
+        a.score < b.score,
+        "the pick scores a with s1's row: {:?} against {:?}",
+        a.score,
+        b.score
+    );
+}
+
+#[test]
+fn rung_four_s_gate_reads_the_fit_without_the_session_s_own_row_on_the_account_it_left() {
+    let s = tiered(Pool {
+        members: vec![("a", 1), ("b", 0)],
+        ..Pool::default()
+    });
+    // A hundred thousand input tokens a second, decayed over the two hours since `T`, would overrun a's 5-hour window
+    // before its reset an hour out, so a gate that counted the row would pass over a's warm prefix and the strategy
+    // would pick b.
+    let mut st = priced(vec![PinRow {
+        agent_id: "sub-1".into(),
+        ..gated_pin("s1", "a", 100_000.0)
+    }]);
+    for id in ["a", "b"] {
+        st.record_sample(
+            id,
+            refreshing(
+                0.5,
+                STANDING_AT + HOUR,
+                STANDING_AT + 72 * HOUR,
+                STANDING_AT - 500,
+            ),
+        );
+    }
+    seed_affinity(
+        &st,
+        vec![AffinityRow {
+            written_at: STANDING_AT - 1_000,
+            ..static_row(&s, "s1", "a", 20_000)
+        }],
+    );
+    let req = SelectRequest {
+        now: STANDING_AT,
+        received_at: STANDING_AT,
+        ..static_req(&s, &["s1"])
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle"),
+        "the row stands on a at step 1"
+    );
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("the request is placed, got {:?}", d.result)
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.trace.placement.as_ref().map(|p| p.rung)
+        ),
+        ("a", Some("static")),
+        "rung 4 places the request on a's warm prefix"
     );
 }
 
@@ -26444,5 +27132,292 @@ fn a_renewal_after_a_rewrite_wait_dates_the_pins_dispatch_at_the_release() {
             .map(|pace| (pace.dispatched_at, pace.gaps)),
         Some((moved_at + 11_500, gaps + 1)),
         "the next gap is measured from the release"
+    );
+}
+
+/// A main turn of `s1` on `model` under its own request id.
+fn turn_on(s: &RegistrySnapshot, model: &str, request_id: &str, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_id: request_id.into(),
+        ..with_facts(
+            request(s, Some("s1"), model, true, &[], now),
+            Some("main"),
+            false,
+            None,
+            &[],
+        )
+    }
+}
+
+/// `s1` placed on `a` under `claude-sonnet-5` at `T` by its request `r-1`, on a pool of `a` ahead of `b` whose hold
+/// cap is `REWRITE_HOLD_SECONDS`.
+fn sonnet_on_a() -> (RegistrySnapshot, RoutingState) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        slow_down: SlowDown {
+            slow_down_hold_seconds: REWRITE_HOLD_SECONDS,
+            ..SlowDown::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let (placed, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-1", T),
+        &mut rng(),
+    );
+    assert_eq!((picked(&placed), left_of(&placed)), ("a", None));
+    (s, st)
+}
+
+/// `a` cooled for `claude-opus-5` alone, so an opus turn lands on `b` while the sonnet pin on `a` stays eligible.
+fn opus_cooled_on_a(st: &mut RoutingState) {
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-opus-5",
+        T + 10 * MINUTE,
+        "retry_after",
+        "rate_limit",
+    ));
+}
+
+#[test]
+fn a_session_that_switches_model_onto_another_account_names_the_account_it_left_and_holds_the_new_pins_next_request(
+) {
+    let (s, mut st) = sonnet_on_a();
+    opus_cooled_on_a(&mut st);
+    let switched_at = T + MINUTE;
+    let (switched, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-opus-5", "r-2", switched_at),
+        &mut rng(),
+    );
+    assert_eq!(
+        (picked(&switched), left_of(&switched)),
+        ("b", Some("a")),
+        "the opus turn lands on b and names a, where the sonnet turn before it landed"
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-opus-5", "r-3", switched_at + 200),
+        &mut rng(),
+    );
+    let (account_id, hold) = held_on(&d);
+    assert_eq!(
+        (account_id.as_str(), hold.reason, hold.waits_for.as_deref()),
+        ("b", "rewrite", Some("r-2")),
+        "the new pin's next request waits for the landing's head"
+    );
+}
+
+#[test]
+fn a_session_that_switches_model_onto_the_same_account_names_none_and_marks_no_head() {
+    let (s, mut st) = sonnet_on_a();
+    let (switched, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-opus-5", "r-2", T + MINUTE),
+        &mut rng(),
+    );
+    assert_eq!((picked(&switched), left_of(&switched)), ("a", None));
+    let opus = PinKey {
+        model: "claude-opus-5".into(),
+        ..pin_key("s1")
+    };
+    assert_eq!(
+        st.head_mark(&opus),
+        None,
+        "a landing on the account the session's previous turn landed on marks nothing"
+    );
+}
+
+#[test]
+fn a_return_to_a_models_live_pin_after_a_turn_on_another_account_names_that_account_and_the_next_turn_none(
+) {
+    let (s, mut st) = sonnet_on_a();
+    opus_cooled_on_a(&mut st);
+    let (switched, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-opus-5", "r-2", T + MINUTE),
+        &mut rng(),
+    );
+    assert_eq!(picked(&switched), "b");
+    let (returned, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-3", T + 2 * MINUTE),
+        &mut rng(),
+    );
+    let SelectResult::Selected(ref sel) = returned else {
+        panic!("the sonnet pin on a is live, got {returned:?}")
+    };
+    assert!(sel.trace.renewed, "the return renews the sonnet pin");
+    assert_eq!(
+        (picked(&returned), left_of(&returned)),
+        ("a", Some("b")),
+        "the renewal names b, where the opus turn before it landed"
+    );
+    let (next, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-4", T + 3 * MINUTE),
+        &mut rng(),
+    );
+    assert_eq!(
+        (picked(&next), left_of(&next)),
+        ("a", None),
+        "the turn after the return follows a turn on a"
+    );
+}
+
+#[test]
+fn an_auxiliary_call_on_another_model_that_landed_elsewhere_is_no_previous_landing_of_the_sessions_main_turn(
+) {
+    let (s, mut st) = sonnet_on_a();
+    opus_cooled_on_a(&mut st);
+    let call = SelectRequest {
+        request_id: "r-2".into(),
+        ..with_facts(
+            request(&s, Some("s1"), "claude-opus-5", true, &[], T + MINUTE),
+            Some("quota"),
+            false,
+            None,
+            &[],
+        )
+    };
+    let (placed, _) = select(&mut st, &s, &call, &mut rng());
+    assert_eq!(
+        (picked(&placed), left_of(&placed)),
+        ("b", None),
+        "the auxiliary call reads its own model's row alone"
+    );
+    let (renewed, _) = select(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-3", T + 2 * MINUTE),
+        &mut rng(),
+    );
+    let SelectResult::Selected(ref sel) = renewed else {
+        panic!("the sonnet pin on a is live, got {renewed:?}")
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(
+        (picked(&renewed), left_of(&renewed)),
+        ("a", None),
+        "the main turn's previous landing is the sonnet turn's on a"
+    );
+}
+
+#[test]
+fn a_failovers_landing_after_a_model_switch_names_the_failovers_source_over_an_older_row_of_another_model(
+) {
+    let (s, mut st) = sonnet_on_a();
+    // a refuses opus until just before the failover, so the opus turn lands on b and the failover's landing on a.
+    let failed_at = T + MINUTE + 1_000;
+    st.record_cooldown(cooled(
+        "a",
+        "model:claude-opus-5",
+        failed_at - 500,
+        "retry_after",
+        "rate_limit",
+    ));
+    let switch = turn_on(&s, "claude-opus-5", "r-2", T + MINUTE);
+    let (switched, _) = select(&mut st, &s, &switch, &mut rng());
+    let SelectResult::Selected(ref sel) = switched else {
+        panic!("the opus turn lands, got {switched:?}")
+    };
+    assert_eq!(picked(&switched), "b");
+    let pin = sel.pin.clone().expect("the opus turn pins");
+    let row = st
+        .invalidate_pin(&pin, "b")
+        .expect("the failover takes the opus row off b");
+    let landing = SelectRequest {
+        attempt: 2,
+        seq: 2,
+        attempted: vec!["b".into()],
+        failed_over: Some(FailedOver {
+            from_account_id: "b".into(),
+            reason: "cooldown",
+            row,
+            cause: None,
+        }),
+        now: failed_at,
+        received_at: failed_at,
+        ..switch
+    };
+    let (landed, _) = select(&mut st, &s, &landing, &mut rng());
+    assert_eq!(
+        (picked(&landed), left_of(&landed)),
+        ("a", Some("b")),
+        "the landing names b, the failover's source, over the older sonnet row on a"
+    );
+    let opus = PinKey {
+        model: "claude-opus-5".into(),
+        ..pin_key("s1")
+    };
+    assert_eq!(
+        st.head_mark(&opus)
+            .map(|mark| (mark.request_id.as_str(), mark.attempt)),
+        Some(("r-2", 2)),
+        "the landing's write holds the opus pin's next request for its head"
+    );
+}
+
+#[test]
+fn a_renewal_after_a_hold_carries_the_wait_it_followed_in_its_trace_and_outcome() {
+    let (s, mut st, moved_at) = moved_to_b(vec![("a", 0), ("b", 1)]);
+    let req = turn_of(&s, "r-2", moved_at + 200);
+    let (_, hold) = held_on(&decide(&mut st, &s, &req, &mut rng()));
+    let released = SelectRequest {
+        seq: 2,
+        now: moved_at + 1_500,
+        holds: vec![HoldFacts {
+            held_ms: 1_300,
+            ..hold
+        }],
+        ..req
+    };
+    let d = decide(&mut st, &s, &released, &mut rng());
+    let SelectResult::Selected(ref sel) = d.result else {
+        panic!("the request that waited renews, got {:?}", d.result)
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(
+        sel.trace.cohort_hold.as_ref().map(|carried| (
+            carried.held_ms,
+            carried.waits.iter().map(|w| w.reason).collect::<Vec<_>>()
+        )),
+        Some((1_300, vec!["rewrite"])),
+        "the renewal's trace carries the rewrite wait"
+    );
+    assert_eq!(
+        d.record.outcome.cohort_hold, sel.trace.cohort_hold,
+        "the record's outcome reads the trace's"
+    );
+}
+
+#[test]
+fn a_renewal_without_a_hold_carries_no_cohort_hold() {
+    let (s, mut st) = sonnet_on_a();
+    let d = decide(
+        &mut st,
+        &s,
+        &turn_on(&s, "claude-sonnet-5", "r-2", T + MINUTE),
+        &mut rng(),
+    );
+    let SelectResult::Selected(ref sel) = d.result else {
+        panic!("the sonnet pin on a is live, got {:?}", d.result)
+    };
+    assert!(sel.trace.renewed);
+    assert_eq!(
+        (
+            sel.trace.cohort_hold.as_ref(),
+            d.record.outcome.cohort_hold.as_ref()
+        ),
+        (None, None)
     );
 }

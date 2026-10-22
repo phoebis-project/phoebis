@@ -111,7 +111,7 @@ async fn events_through_cache_map(
 }
 
 /// The decisions among `events` for `request_id` as `(seq, attempt, kind)`, in the order the router made them.
-fn decisions_of(events: &[RouterEvent], request_id: &str) -> Vec<(u32, u32, &'static str)> {
+fn decision_facts_of(events: &[RouterEvent], request_id: &str) -> Vec<(u32, u32, &'static str)> {
     events
         .iter()
         .filter_map(|event| match event {
@@ -171,7 +171,7 @@ async fn a_completed_first_request_s_decision_names_attempt_one_and_its_cache_ma
     let id = outcome(&resp).request_id;
     drain(resp).await;
     let seen = events_through_cache_map(&mut events, &id).await;
-    assert_eq!(decisions_of(&seen, &id), [(1, 1, "placed")]);
+    assert_eq!(decision_facts_of(&seen, &id), [(1, 1, "placed")]);
     assert_eq!(cache_map_of(&seen, &id), Some((1, 1)));
     assert_eq!(selected_attempts(&mut sub, &id).await, [1]);
     up.shutdown().await;
@@ -200,7 +200,7 @@ async fn a_retry_in_place_that_succeeds_reports_its_cache_map_under_the_selectin
     drain(resp).await;
     let seen = events_through_cache_map(&mut events, &o.request_id).await;
     assert_eq!(
-        decisions_of(&seen, &o.request_id),
+        decision_facts_of(&seen, &o.request_id),
         [(1, 1, "placed")],
         "the retry in place dispatched again without a new selection"
     );
@@ -323,7 +323,7 @@ async fn a_spent_window_resetting_inside_the_bound_is_waited_out_in_place_and_th
     drain(resp).await;
     seen.extend(events_through_cache_map(&mut events, &o.request_id).await);
     assert_eq!(
-        decisions_of(&seen, &o.request_id),
+        decision_facts_of(&seen, &o.request_id),
         [(1, 1, "held"), (2, 1, "renewed")],
         "the hold and the renewal are two decisions of one wire attempt"
     );
@@ -481,7 +481,7 @@ async fn a_reset_that_moves_during_the_wait_moves_the_pin_rather_than_holding_th
     drain(resp).await;
     seen.extend(events_through_cache_map(&mut events, &o.request_id).await);
     assert_eq!(
-        decisions_of(&seen, &o.request_id),
+        decision_facts_of(&seen, &o.request_id),
         [(1, 1, "held"), (2, 1, "moved")],
         "the request's decisions stay at one hold"
     );
@@ -560,11 +560,143 @@ async fn a_reset_wait_the_request_deadline_would_outlast_is_refused_and_the_sibl
     drain(resp).await;
     let seen = events_through_cache_map(&mut events, &o.request_id).await;
     assert_eq!(
-        decisions_of(&seen, &o.request_id),
+        decision_facts_of(&seen, &o.request_id),
         [(1, 1, "held"), (2, 1, "moved")],
         "the hold is answered, its wait refused, and the sibling tried"
     );
     assert_eq!(credentials_seen(&up), [A, A, B, B]);
+    up.shutdown().await;
+}
+
+/// The two-account harness under a 20-second head timeout, at or under the margin, so a request has no deadline and
+/// its waits are bounded by the head timeout itself. `s1` is pinned to `a`, `b` is polled with room, and another
+/// session's 429 reads `a`'s 5-hour window spent with its reset `reset_in` seconds out, which fails that session over
+/// to `b`. The harness's clock stands at `NOW`.
+async fn spent_under_a_short_head_timeout(up: &FakeUpstream, reset_in: i64) -> Harness {
+    up.add_credential_rule(A, "/v1/messages", json_200());
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    let h = harness_with_limits(
+        up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            head_timeout: Duration::from_secs(20),
+            ..default_limits()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&first).account_id, "a", "s1 pins to a");
+    drain(first).await;
+    let reading = |utilization: f64, reset: i64| WindowReading {
+        utilization,
+        reset: Some(reset),
+        observed_at: NOW,
+        source: WindowSource::Poll,
+    };
+    h.router
+        .report(Report::Sample {
+            account_id: "b".into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(0.3, NOW + 3 * 3_600_000))
+                .with(SEVEN_DAY, reading(0.1, NOW + 72 * 3_600_000)),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    up.push_credential_rule(A, "/v1/messages", json_429_spent(NOW / 1_000 + reset_in));
+    let spent = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&spent).account_id, "b");
+    drain(spent).await;
+    h
+}
+
+#[tokio::test]
+async fn a_reset_wait_a_short_head_timeout_would_outlast_is_refused_and_the_sibling_tried() {
+    let up = FakeUpstream::start(vec![]).await;
+    // a's reset 25 s out lies inside the retry bound and past the head timeout of a request admitted now.
+    let h = spent_under_a_short_head_timeout(&up, 25).await;
+    let mut events = h.router.subscribe_events();
+    // Bounded on the wall clock: a wait for the reset would run on the harness's clock, which never reaches it.
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s1")),
+    )
+    .await
+    .expect("the request answers without waiting for the reset")
+    .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 1),
+        "the pin moves to the sibling rather than waiting past the head timeout"
+    );
+    drain(resp).await;
+    let seen = events_through_cache_map(&mut events, &o.request_id).await;
+    assert_eq!(
+        decision_facts_of(&seen, &o.request_id),
+        [(1, 1, "held"), (2, 1, "moved")],
+        "the hold is answered, its wait refused, and the sibling tried"
+    );
+    assert_eq!(credentials_seen(&up), [A, A, B, B]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_reset_inside_a_short_head_timeout_is_waited_out_in_place_and_the_pin_renews_there() {
+    let up = FakeUpstream::start(vec![]).await;
+    // a's reset 10 s out, and the cooldown's one-second margin past it, lie inside the head timeout.
+    let h = spent_under_a_short_head_timeout(&up, 10).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let app = h.app.clone();
+    let waiting =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    // The hold's decision goes out before the wait starts, so the clock is stepped while the request waits, past the
+    // reset and the cooldown's margin.
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the hold's decision arrives")
+            .expect("not lagged");
+        let held =
+            matches!(&event, RouterEvent::Decision { summary, .. } if summary.kind == "held");
+        seen.push(event);
+        if held {
+            break;
+        }
+    }
+    h.clock.store(NOW + 11_000, Ordering::SeqCst);
+    let resp = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the request lands after the reset")
+        .unwrap();
+    tokio::time::resume();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "a", 1),
+        "one wire attempt, on the account the pin stayed on"
+    );
+    drain(resp).await;
+    seen.extend(events_through_cache_map(&mut events, &o.request_id).await);
+    assert_eq!(
+        decision_facts_of(&seen, &o.request_id),
+        [(1, 1, "held"), (2, 1, "renewed")],
+        "the hold and the renewal are two decisions of one wire attempt"
+    );
+    assert_eq!(credentials_seen(&up), [A, A, B, A]);
     up.shutdown().await;
 }
 
@@ -1328,6 +1460,85 @@ async fn a_slow_down_hold_is_cut_at_the_request_deadline_and_a_slot_wait_after_i
 }
 
 #[tokio::test]
+async fn a_slow_down_hold_under_a_short_head_timeout_runs_out_at_the_head_timeout_and_selects_again(
+) {
+    // 20 s is under the margin, so the request has no deadline and its waits are bounded by the head timeout itself.
+    // a reads at its ceiling, where the factor is zero whatever the demand, so the hold is the cap, which lies past
+    // the head timeout.
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            head_timeout: Duration::from_secs(20),
+            ..default_limits()
+        },
+    )
+    .await;
+    on_tier(&h, &["a"]).await;
+    cycle_then_slow(&h).await;
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.slow_down.slow_down_hold_seconds = 25;
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.router.reload().await.unwrap();
+    five_hour_at(&h, "a", 0.96, NOW + 3_600_000, NOW + 10_000).await;
+    let mut events = h.router.subscribe_events();
+    tokio::time::pause();
+    let app = h.app.clone();
+    let waiting =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    let hold = next_hold(&mut events).await;
+    assert_eq!(
+        (hold.reason, hold.until, hold.bound_ms),
+        ("slow_down", Some(NOW + 45_000), 25_000)
+    );
+    // Both clocks run with the hold: a second short of the head timeout the request still waits.
+    tokio::time::sleep(Duration::from_millis(19_000)).await;
+    h.clock.store(NOW + 39_000, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    while let Ok(event) = events.try_recv() {
+        if let RouterEvent::Decision { summary, .. } = event {
+            panic!("no selection before the head timeout, got {}", summary.kind);
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    h.clock.store(NOW + 40_000, Ordering::SeqCst);
+    tokio::time::resume();
+    let selected = next_selected(&mut events).await;
+    let held = selected
+        .request
+        .holds
+        .iter()
+        .map(|hold| (hold.reason, hold.ran_out, hold.held_ms))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        held.iter()
+            .map(|(reason, ran_out, _)| (*reason, *ran_out))
+            .collect::<Vec<_>>(),
+        [("slow_down", true)],
+        "the head timeout ended the hold short of its cap"
+    );
+    assert!(
+        (20_000..21_000).contains(&held[0].2),
+        "the hold ran to the head timeout: {held:?}"
+    );
+    let resp = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the request selects again after the hold")
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "a", 1),
+        "the selection after the hold places the request"
+    );
+    assert_eq!(credentials_seen(&up), [A, A, A]);
+    drain(resp).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_slot_that_frees_inside_the_bound_dispatches_the_pin_at_the_admission_and_its_next_gap_holds_no_wait(
 ) {
     // The path of the case above, a's slow-down hold, a cools and the selection after it waits for b's one slot, with
@@ -1447,7 +1658,7 @@ async fn a_slow_down_hold_then_a_spent_window_waits_out_the_reset_under_its_own_
         &[oauth("a", A, 0)],
         PoolSpec {
             failover: Failover {
-                retry_in_place_seconds: 10,
+                retry_in_place_seconds: 8,
                 ..Failover::default()
             },
             ..PoolSpec::default()
@@ -1467,16 +1678,17 @@ async fn a_slow_down_hold_then_a_spent_window_waits_out_the_reset_under_its_own_
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
     let hold = next_hold(&mut events).await;
     assert_eq!((hold.reason, hold.until), ("slow_down", Some(NOW + 22_000)));
-    // a's window reads spent during the hold with its reset nine seconds after the hold ends: inside a ten-second
-    // bound that starts with the reset wait, past one that started with the slow-down hold.
-    five_hour_at(&h, "a", 1.0, NOW + 31_000, NOW + 21_000).await;
+    // a's window reads spent during the hold with its reset seven seconds after the hold ends: inside an eight-second
+    // bound that starts with the reset wait, past one that started with the slow-down hold, and before the harness's
+    // ten-second head timeout runs out.
+    five_hour_at(&h, "a", 1.0, NOW + 29_000, NOW + 21_000).await;
     h.clock.store(NOW + 22_000, Ordering::SeqCst);
     let hold = next_hold(&mut events).await;
     assert_eq!(
         (hold.reason, hold.until, hold.bound_ms),
-        ("reset", Some(NOW + 31_000), 10_000)
+        ("reset", Some(NOW + 29_000), 8_000)
     );
-    h.clock.store(NOW + 31_000, Ordering::SeqCst);
+    h.clock.store(NOW + 29_000, Ordering::SeqCst);
     tokio::time::resume();
     let resp = tokio::time::timeout(Duration::from_secs(5), waiting)
         .await

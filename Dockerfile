@@ -29,6 +29,10 @@ COPY --from=planner /src/recipe.json recipe.json
 # The recipe carries dummy sources and an empty build script, so no npm runs here.
 RUN cargo chef cook --release --locked --recipe-path recipe.json --package phoebis-router
 COPY . .
+# The context leaves `.git` out, so the commit reaches the build only as this argument, in the environment of both
+# steps below. It sits after the cook, since every RUN after an argument misses the cache when its value changes,
+# and a new commit would otherwise cook the dependencies again.
+ARG PHOEBIS_BUILD_COMMIT=unknown
 # The console is its own step so a failed npm command fails the image: the crate's build script would catch
 # the failure and embed a placeholder page in a binary that builds green.
 RUN cd web && npm ci --no-audit --no-fund && npm run build

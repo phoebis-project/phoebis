@@ -18,13 +18,17 @@ mod quota;
 mod reconcile;
 mod record;
 mod refold;
+mod refusals;
 mod rollup;
 mod schema;
 mod task;
 mod usage;
 
 pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
-pub use bodies::{run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE};
+pub use bodies::{
+    run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,
+    PURGE_SLICE_BYTES,
+};
 pub use db::LedgerDb;
 pub use events::{catalog_changed, event_of, poll_backoff, spawn_event_mirror, MirrorBaseline};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
@@ -71,6 +75,7 @@ pub use query::{
 };
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
 pub use query::{list_request_page, RequestPage};
+pub use query::{agent_models, AgentModel};
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
     POLL_INTERVAL, PROFILE_EVERY_POLLS,
@@ -84,6 +89,9 @@ pub use record::{
     GuardrailMatchRecord, KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
 };
 pub use refold::{refold_bands, PRICE_BANDS_KEY, PRICE_BANDS_REFOLD_KEY};
+pub use refusals::{
+    is_refusal, refold_refusals, REFUSALS_BACKFILL_CURSOR_KEY, REFUSALS_BACKFILL_KEY, REFUSAL_CODES,
+};
 pub use rollup::{
     bucket_of, deltas_of, fold_account, fold_effort, fold_event, fold_identifier, fold_keepalive,
     fold_request, fold_routing_conditions, fold_user_agent, hour_of, read_account_rollups,

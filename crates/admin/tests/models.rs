@@ -1,8 +1,7 @@
-//! The processed rule list per key and the cooldown state grouped by model, both read-only routes.
+//! The processed rule list per key, and the model state path, which answers as any admin path nothing serves.
 mod common;
 
 use common::{get, json, login, NOW};
-use phoebis_ledger::EventRecord;
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
     ApiKeyRow, CooldownRow, MemberWrite, ModelRule, OveragePolicy, PoolRow, RulesMode, Strategy,
@@ -177,80 +176,23 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
 }
 
 #[tokio::test]
-async fn the_models_state_route_groups_live_cooldowns_by_model_and_lists_the_last_rejections_and_permits(
-) {
+async fn the_model_state_path_answers_the_catch_alls_404_behind_the_gate() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    let model_scope = format!("model:{MODEL}");
-    parts
-        .router
-        .report(report_cooldown("business", &model_scope, NOW + 1_800_000))
-        .await;
-    parts
-        .router
-        .report(report_cooldown("direct", &model_scope, NOW + 1_800_000))
-        .await;
-    parts
-        .router
-        .report(report_cooldown("business", "account", NOW + 3_600_000))
-        .await;
 
-    parts
-        .ledger
-        .db()
-        .insert_event(&EventRecord {
-            at: NOW - 500,
-            kind: "model_rejected".into(),
-            account_id: Some("business".into()),
-            key_id: Some("desktop".into()),
-            session_id: Some("s1".into()),
-            model: Some(MODEL.into()),
-            actor: None,
-            detail: Some(
-                j!({ "attempt": 1, "request_id": "req-1", "source_request_id": "r-1", "wire_model": "claude-haiku-4-5" })
-                    .to_string(),
-            ),
-            pool_id: None,
-            agent_id: None,
-            request_id: Some("r-1".into()),
-        })
-        .unwrap();
-    parts
-        .ledger
-        .db()
-        .insert_event(&EventRecord {
-            at: NOW - 100,
-            kind: "model_permitted".into(),
-            account_id: Some("direct".into()),
-            key_id: Some("desktop".into()),
-            session_id: Some("s1".into()),
-            model: Some(MODEL.into()),
-            actor: None,
-            detail: Some(
-                j!({ "attempt": 2, "rejected_by": ["business"], "request_id": "req-2", "source_request_id": "r-1", "wire_model": "claude-haiku-4-5" })
-                    .to_string(),
-            ),
-            pool_id: None,
-            agent_id: None,
-            request_id: Some("r-1".into()),
-        })
-        .unwrap();
-
-    let body = json(get(&parts.app, "/admin/models/state", Some(&cookie)).await).await;
-    let groups = body["cooldowns"].as_array().unwrap();
-    assert_eq!(groups.len(), 1, "the account-wide row is not grouped here");
-    assert_eq!(groups[0]["model"], MODEL);
-    let rows = groups[0]["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 2, "one row per account, rows sorted by account");
-    assert_eq!(rows[0]["account_id"], "business");
-    assert_eq!(rows[1]["account_id"], "direct");
-
+    let signed_in = get(&parts.app, "/admin/models/state", Some(&cookie)).await;
     assert_eq!(
-        body["rejections"],
-        j!([{ "at": NOW - 500, "account_id": "business", "key_id": "desktop", "session_id": "s1", "model": MODEL, "wire_model": "claude-haiku-4-5", "request_id": "r-1", "upstream_request_id": "req-1" }]),
+        signed_in.status(),
+        404,
+        "a session reads the path as one nothing serves"
     );
+    assert_eq!(json(signed_in).await, j!({ "error": "not found" }));
+
+    let anonymous = get(&parts.app, "/admin/models/state", None).await;
     assert_eq!(
-        body["permits"],
-        j!([{ "at": NOW - 100, "account_id": "direct", "key_id": "desktop", "session_id": "s1", "model": MODEL, "wire_model": "claude-haiku-4-5", "request_id": "r-1", "upstream_request_id": "req-2", "rejected_by": ["business"] }]),
+        anonymous.status(),
+        401,
+        "without a session the gate answers before the path is read"
     );
+    assert_eq!(json(anonymous).await, j!({ "error": "no admin session" }));
 }

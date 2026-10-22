@@ -83,7 +83,7 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// An unattended browser must not keep an admin session usable, and no session outlives the day it was
-/// opened on.
+/// opened on. A login that asks to stay lives by its signed token's 30 days instead.
 const SESSION_ABSOLUTE: Duration = Duration::from_secs(43_200);
 const SESSION_IDLE: Duration = Duration::from_secs(900);
 
@@ -118,16 +118,19 @@ pub async fn run_until(
 
     let extra_ca = match &config.upstream.extra_ca_pem {
         None => None,
-        Some(path) => Some(
+        Some(path) => Some((
+            path,
             std::fs::read_to_string(path)
                 .with_context(|| format!("reading upstream.extra_ca_pem {}", path.display()))?,
-        ),
+        )),
     };
     let mut inference_builder = connector_builder(profile, Plane::Inference)?;
     let mut control_builder = connector_builder(profile, Plane::Control)?;
-    if let Some(pem) = &extra_ca {
-        trust_extra_ca(&mut inference_builder, pem)?;
-        trust_extra_ca(&mut control_builder, pem)?;
+    if let Some((path, pem)) = &extra_ca {
+        trust_extra_ca(&mut inference_builder, pem)
+            .with_context(|| format!("upstream.extra_ca_pem {}", path.display()))?;
+        trust_extra_ca(&mut control_builder, pem)
+            .with_context(|| format!("upstream.extra_ca_pem {}", path.display()))?;
     }
 
     let clock: Clock = Arc::new(|| jiff::Timestamp::now().as_millisecond());
@@ -245,6 +248,13 @@ pub async fn run_until(
             "re-folded the requests whose prompt-length band moved"
         );
     }
+    phoebis_ledger::refold_refusals(
+        &ledger_db,
+        &pricing.revisions(),
+        config.stats.retention_days,
+        clock(),
+    )
+    .context("moving the stored refusals out of their hours' counts")?;
     let metrics = Arc::new(Metrics::new());
     let ledger = phoebis_ledger::spawn(
         ledger_db.clone(),
@@ -389,7 +399,15 @@ pub async fn run_until(
     let keepalive_gauge_source = keepalive.gauge_source();
     let vault = Arc::new(PairingVault::new());
     let pairing = Arc::new(PairingSessions::new());
-    let sessions = Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE));
+    let sessions = Arc::new(
+        Sessions::new(
+            SESSION_IDLE,
+            SESSION_ABSOLUTE,
+            Secret::new(config.admin.secret.expose()),
+            store.clone(),
+        )
+        .context("reading the admin session epoch from the store")?,
+    );
     // The admin state takes the manager; the shutdown drains its refreshes after the admin listener is gone.
     let refreshes = manager.clone();
     let admin = Arc::new(AdminState {
@@ -408,6 +426,7 @@ pub async fn run_until(
         tls_reload: Some(tls_live.clone()),
         vault: vault.clone(),
         started_at: (clock)(),
+        build: crate::BUILD_COMMIT,
         router: router_task.clone(),
         catalog: catalog.clone(),
         body_capture_max_hours: config.stats.body_capture_max_hours,

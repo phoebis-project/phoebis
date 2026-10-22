@@ -104,9 +104,10 @@ restoration and the record). The router reads them for the request log and the a
 sent, the tool durations as their sum, and the drawer shows them ([Requests](console.md#requests)).
 `x-claude-code-context-compacted` also reaches routing: the session's pin reads cold on the request that carries it, so
 a move that waits for a cold cache may take the session and a shedding round orders it first
-([Moves](routing.md#moves)). The router reads `x-claude-code-request-class` on every Claude Code request: a `main`,
-`subagent` or `compaction` class refreshes the session's pin and re-arms its keepalive recipe, and any other class does
-neither ([Which requests re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). The compaction header is
+([Moves](routing.md#moves)). The router reads `x-claude-code-request-class` on every Claude Code request: a `main` or
+`subagent` class refreshes the session's pin and re-arms its keepalive recipe, a `compaction` class refreshes the pin
+and stops the recipe at its completion instead of re-arming it, and any other class does neither ([Which requests
+re-arm a recipe](keepalive.md#which-requests-re-arm-a-recipe)). The compaction header is
 required on a request of the class `compaction`, and the other headers are optional, a request without one relayed the
 same way. `0` stops them on every connection, and the router then refuses every inference request for the missing class
 header.
@@ -145,11 +146,12 @@ binding a session to its process needs no wrapper script. Installing and configu
 
 `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is an optional line the block does not carry, worth setting for Fable 5.1 sessions in
 a pool of API-key accounts with cache warming on: at a 0.025x read price, a five-minute entry kept warm by probes stays
-cheaper on a metered account than a one-hour entry ([Cache TTL](routing.md#cache-ttl)). Leave it unset in a pool of
-plan-funded accounts, where a write costs the same window share at either TTL and a five-minute entry takes 15 probes an
-hour against 1.11 for a one-hour entry ([The four fields](keepalive.md#the-four-fields)), and unset without warming.
-Through a pool with a cache TTL policy the variable has no effect, since the pool decides
-([Cache TTL](routing.md#cache-ttl), [Keepalive](keepalive.md)).
+cheaper on a metered account than a one-hour entry for idle warming of up to about 2.2 hours, past which the one-hour
+entry costs less ([Cache TTL](routing.md#cache-ttl)). Leave it unset in a pool of plan-funded accounts, where a write
+costs the same window share at either TTL and a five-minute entry takes 15 probes an hour against 1.11 for a one-hour
+entry ([The four fields](keepalive.md#the-four-fields)), and unset without warming. Through a pool with a cache TTL
+policy the variable has no effect, since the pool decides ([Cache TTL](routing.md#cache-ttl),
+[Keepalive](keepalive.md)).
 
 ## The required set
 
@@ -265,11 +267,11 @@ with.
 | `body_budget_exhausted` | 503 | `api_error` | `the router holds as many request bytes as it allows` | Send the request again. The bodies in flight held `proxy.body_budget_bytes`. |
 | `body_shape` | 400 | `invalid_request_error` | `the request body carries a billing stamp the relay can neither check nor restamp`, `the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it`, `the request body has no metadata.user_id the account can be bound to`, `the request body has no top-level model to resolve`, `the request body carries a safeguards member the relay cannot place under this key's auto-mode setting`, `the request body carries the top-level member "{name}" more than once` for `metadata`, `model`, `safeguards`, `stream` and `system`, and `the request body carries the member "{name}" more than once` for `metadata.user_id` and `system[0].text` | Send the body as Claude Code sends it. The relay edits that shape and no other. |
 | `client_contract` | 400 | `invalid_request_error` | `the request carries no x-claude-code-session-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them`, `the request carries no x-claude-code-request-class header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`, `the request carries no attribution line at system[0] the router requires of a Claude Code client. Leave CLAUDE_CODE_ATTRIBUTION_HEADER unset`, `the request body has no metadata.user_id the router requires of a Claude Code client. Send the body as Claude Code sends it`, `the request names a subagent class and carries no x-claude-code-agent-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them`, `the request names the compaction class and carries no x-claude-code-compaction header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` | Set the lines of the environment block above, and send the requests as Claude Code sends them ([The required set](#the-required-set)). |
-| `client_drift` | 400 | `invalid_request_error` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version`, `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` | The client build moved past the one the router is pinned to ([Client drift](relay.md#client-drift)). The operator re-pins ([re-pinning the client build](operations.md#re-pinning-the-client-build)). |
+| `client_drift` | 400 | `invalid_request_error` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version`, `the conversation was resumed, and the client's version suffix does not reproduce from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this client version`, `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` | The client build moved past the one the router is pinned to, in a resumed conversation as in any other, and the second message names the resume ([Client drift](relay.md#client-drift)). The operator re-pins ([re-pinning the client build](operations.md#re-pinning-the-client-build)). |
 | `client_not_allowed` | 403 | `permission_error` | `this key admits Claude Code clients only`, `the pool has no API-key member to serve a client that is not Claude Code` | Use Claude Code with this key, or ask the operator for a key whose pool admits your client ([clients](routing.md#clients)). |
 | `fast_credits_unavailable` | 429 | `rate_limit_error` | `no account in this pool can draw usage credits for fast mode` | Turn fast mode off, or wait for the credits. |
 | `fast_lane_exhausted` | 429 | `rate_limit_error` | `every account in this pool is at its fast limit` | Wait out the `Retry-After`, or turn fast mode off. |
-| `guardrail_blocked` | 400 | `invalid_request_error` | `blocked by guardrail "{name}"` | A guardrail the operator attached to your key matched the request, and the answer carries `x-should-retry: false`, so do not send it again unchanged. The Requests view names the guardrail ([Guardrails](guardrails.md)). |
+| `guardrail_blocked` | 403 | `permission_error` | `blocked by guardrail "{name}"`, the guardrail's id standing in for a stored name that carries "model:", "OAuth token has been revoked" or "prompt is too long" | A guardrail the operator attached to your key matched the request, and the answer carries `x-should-retry: false`, so do not send it again unchanged. Claude Code reads a 403 as final, so it neither heals, retries nor tries a fallback model on it, and a blocked request costs one request. The Requests view names the guardrail ([Guardrails](guardrails.md)). |
 | `invalid_body` | 400 | `invalid_request_error` | `the request body is not valid gzip`, `the request body nests deeper than the relay reads`, `the request body is not a valid Messages request` | Send a Messages request as Claude Code sends it. |
 | `invalid_limit` | 400 | `invalid_request_error` | `limit must be between 1 and 1000` | Ask `GET /v1/models` for 1 to 1000 rows. |
 | `invalid_model` | 400 | `invalid_request_error` | `the request body's model is not a usable model name` | Set a model the listing names ([the models listing](#the-models-listing)). |
@@ -343,20 +345,18 @@ wrong or missing key is refused exactly as `/v1/messages` refuses it, in the Ant
 
 ## The models listing
 
-`GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every
-enabled account of the key's pool in state `ready` is asked for its catalog through the router's cache
-([Catalogs](routing.md#catalogs)),
-the same cache the router derives a model's dated id from, so a request naming an undated id is routed, priced and
-recorded under the newest dated snapshot the listing holds for it. The pool's and the key's
-[model rules](routing.md#model-rules) are applied to each id, one row is kept per id (the first account in priority
-order that lists it), and the rows are sorted by id. The shape is the API's own: `data[]` of `id`, `type`,
+`GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every enabled
+account of the key's pool in state `ready` is asked for its catalog through the router's cache
+([Catalogs](routing.md#catalogs)), the same cache the router derives a model's dated id from, so a request naming an
+undated id is routed, priced and recorded under the newest dated snapshot the listing holds for it. The pool's and the
+key's [model rules](routing.md#model-rules) are applied to each id, one row is kept per id (the first account in
+priority order that lists it), and the rows are sorted by id. The shape is the API's own: `data[]` of `id`, `type`,
 `display_name`, `created_at`, `max_input_tokens` and `max_tokens` as the upstream reports them, with `first_id`,
-`last_id` and `has_more`. `limit` (1 to 1000, default 20), `after_id` and `before_id` page it, and a `limit` outside
-its range is refused `400` `invalid_limit`.
-An account whose fetch failed
-contributes nothing until the next fetch, and a model that is cooling down on an account still lists.
-`GET /v1/models/{id}` answers the one row, or `404` `model_not_found` with the message `model: {id}`. An id with a
-slash may be sent as is or percent-encoded.
+`last_id` and `has_more`. `limit` (1 to 1000, default 20), `after_id` and `before_id` page it, and a `limit` outside its
+range is refused `400` `invalid_limit`. The listing answers any user agent that holds a key. An account whose fetch
+failed contributes nothing until the next fetch, and a model that is cooling down on an account still lists. `GET
+/v1/models/{id}` answers the one row, or `404` `model_not_found` with the message `model: {id}`. An id with a slash may
+be sent as is or percent-encoded.
 
 Beside every model whose `max_input_tokens` is above 200,000 the listing carries a twin whose id ends in `[1m]` and
 whose display name ends in ` (1M Context)`, with the same figures. Claude Code behind a gateway sizes its context

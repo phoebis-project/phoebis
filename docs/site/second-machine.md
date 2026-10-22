@@ -7,11 +7,11 @@ console reached from your own machine, and the other clients the router serves.
 ## The shape
 
 One host runs the router. Its proxy listener binds a LAN address, with a certificate pair or without one, and every
-client machine points Claude Code at it with a key of its own. One pool can serve them all: the pool holds the
-accounts, and each machine's key routes into it. The admin listener stays on loopback, and you reach the console from
-your own machine through a tunnel. The metrics listener stays on `127.0.0.1:9464` as `init` wrote it, plain HTTP with
-no `tls` key. A client machine holds nothing of the router but
-[the client block](client.md#the-environment-block) with the LAN address and its key.
+client machine points Claude Code at it with a key of its own. One pool can serve them all: the pool holds the accounts,
+and each machine's key routes into it. The admin listener stays on loopback, and you reach the console from your own
+machine through a tunnel. The metrics listener stays on `127.0.0.1:9464` as `init` wrote it, plain HTTP with no `tls`
+key. A client machine holds nothing of the router but [the client block](client.md#the-environment-block) with the LAN
+address and its key.
 
 ## The proxy listener on the LAN
 

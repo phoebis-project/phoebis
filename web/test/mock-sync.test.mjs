@@ -57,7 +57,8 @@ const SYNC = {
   analytics_series: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries(query)).filter((p) => p.groups.length) },
   analytics_series_accounts: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries({ ...query, groupBy: 'account' })).filter((p) => p.groups.length) },
   attention: { decode: (b) => b.items.map(d.decodeAttention), mock: (api) => api.getAttention() },
-  dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview() },
+  // The route answers a null refusal code on a day with no refusal, so a null there is the wire's own.
+  dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview(), opaque: (path) => (path === '.topRefusalCode' ? ['string', 'null'] : false) },
   // The story's static placement, whose `raw` is the record the mock answers where the fixture's is the route's body.
   decision: { decode: (b) => recordShape(d.decodeDecisionRecord(b)), mock: async (api) => recordShape(await api.getDecision('req_b2bed817-a58', 1)), opaque: (path) => path === '.settings' || path === '.raw' },
   // From the preset with a pool, so the answer carries the stamp and an attachment as the captured create does.
@@ -87,7 +88,7 @@ const SYNC = {
 };
 /** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */
 // `models_state`: its route and its fixture file leave on the other branch, and this entry leaves at the merge.
-const UNCONSUMED = ['bound_refusals', 'models_state', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
+const UNCONSUMED = ['bound_refusals', 'models_state', 'oauth_session', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');

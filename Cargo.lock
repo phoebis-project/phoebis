@@ -1887,6 +1887,7 @@ dependencies = [
  "bytes",
  "fake-upstream",
  "http-body-util",
+ "jiff",
  "phoebis-bus",
  "phoebis-cch",
  "phoebis-keepalive",
@@ -2011,6 +2012,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "tracing-subscriber",
  "url",
  "xxhash-rust",
 ]

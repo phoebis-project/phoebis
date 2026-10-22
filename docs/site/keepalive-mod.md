@@ -29,7 +29,7 @@ The mod needs a URL to report to and the router key to report under. It takes ea
 | Source | Value | Fallback |
 | --- | --- | --- |
 | `management_url` option | where to report | `ANTHROPIC_BASE_URL`, unless the key comes from `token_file` |
-| `token_file` option | a private file holding the router key | `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY`, then `CLAUDE_CODE_OAUTH_TOKEN`, unless the key file it names cannot be read |
+| `token_file` option | a private file holding the router key | `ANTHROPIC_AUTH_TOKEN`, then `ANTHROPIC_API_KEY`, then `CLAUDE_CODE_OAUTH_TOKEN`, unless the key file it names cannot be read or is blank |
 
 An empty or blank value counts as unset. Without a URL or without a key from any source, the mod reports nothing. The
 three variables rank as Claude Code ranks them when it picks its own credential, so the key the mod reports under is
@@ -59,10 +59,12 @@ Code handles their TLS.
 
 `token_file` takes the absolute path of a file whose trimmed text is the key, written without `~`. A file the mod cannot
 read makes this process report nothing, with one line in Claude Code's debug log naming the path, until the next session
-start reads the file: no variable stands in for it. Reading the key file fails for a misspelled or moved file, for a
-path starting with `~/`, which the mod does not expand, and for a relative path in any session whose working directory
-does not hold the file, since Claude Code resolves a relative path against that directory. The mod reads the file's text
-and cannot read its mode, so keeping that file private (mode `0600`) falls to you.
+start reads the file: no variable stands in for it. A key file whose content is blank (empty, or whitespace alone) is
+refused as one the mod cannot read, with its own line in Claude Code's debug log naming the path. Reading the key file
+fails for a misspelled or moved file, for a path starting with `~/`, which the mod does not expand, and for a relative
+path in any session whose working directory does not hold the file, since Claude Code resolves a relative path against
+that directory. The mod reads the file's text and cannot read its mode, so keeping that file private (mode `0600`) falls
+to you.
 
 The backoff, the heartbeat interval and the presence throttle are constants, and the mod has no other setting. A report
 that did not get through, for a transport failure, a 5xx or a limit, goes out again along a fixed backoff. A heartbeat
@@ -206,9 +208,9 @@ The mod runs wherever Claude Code loads the plugin: the Agent SDK, `claude -p`, 
 the Desktop app, the terminal and the VS Code extension's chat panel. It behaves the same everywhere: with a URL and a
 key it reports unless Claude Code refuses its fetch (see [Configure](#configure)), and without them it does nothing. A
 `claude -p` run registers, reports its turns, its background commands and its subagents, and ends its session when it
-exits. The mod draws nothing. Its only messages are the conflict line in the transcript and five kinds of line in Claude
-Code's debug log: a dropped report, a key file that could not be read, a key file without `management_url`, a refused
-key and a report whose fetch threw.
+exits. The mod draws nothing. Its only messages are the conflict line in the transcript and six kinds of line in Claude
+Code's debug log: a blank key file, a dropped report, a key file that could not be read, a key file without
+`management_url`, a refused key and a report whose fetch threw.
 
 ## Verify
 

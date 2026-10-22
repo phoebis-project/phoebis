@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
-use phoebis_bus::{Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
+use phoebis_bus::{Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
 use phoebis_oauth::Clock;
 use phoebis_routing::{AffinityReport, PinRef, PinUsage, Report, RouterHandle};
 use phoebis_transport::decode::Decoder;
@@ -127,6 +127,9 @@ pub(crate) struct Publish {
     /// Set once the decoder above rejected a piece, and never cleared: what follows it is no more readable
     /// than the piece that failed.
     pub decode_failed: bool,
+    /// The coding the client was handed as the upstream sent it, named on the completion whatever the decoder above
+    /// makes of the bytes. `None` where the relay decodes for the caller or the body carries no coding.
+    pub passthrough: Option<String>,
     /// Parses the decoded copy for phases on an event stream, and is `None` for any other body. It skips an event
     /// past its bound and keeps parsing, so an oversized event costs a bounded buffer and its own phase while the
     /// events after it still reach the completion. A held stream's is the hold's own, already past the held events.
@@ -581,7 +584,15 @@ impl Publish {
         // keeps the head's word. Any other status answered no message to cut short, so it stays `failed`, and a cut
         // or a stall still names its cause.
         let committed = self.status == 200;
-        let outcome = match (end, self.stream_error.take()) {
+        let stream_error = self.stream_error.take();
+        // The error's own words for a body the upstream or the account's cancel ended short. A stream that carried an
+        // `error` event ended in the upstream's own words, which its code already names.
+        let words = match (end, &stream_error) {
+            (BodyEnd::Cancelled, _) => Some(cancelled().to_string()),
+            (BodyEnd::Failed { text, .. }, None) => Some(text.clone()),
+            _ => None,
+        };
+        let outcome = match (end, stream_error) {
             (BodyEnd::Complete, None) if committed && self.parser.is_some() && !self.saw_stop => {
                 Some((Outcome::Incomplete, Some(STREAM_INCOMPLETE.into())))
             }
@@ -589,12 +600,34 @@ impl Publish {
             (BodyEnd::Complete, Some(error)) => Some((Outcome::Failed, Some(error))),
             (BodyEnd::Cancelled, _) => Some((Outcome::Canceled, Some("account_cancelled".into()))),
             (BodyEnd::ClientGone, _) => Some((Outcome::Canceled, Some("client_gone".into()))),
-            (BodyEnd::Failed(_), Some(error)) => Some((Outcome::Failed, Some(error))),
-            (BodyEnd::Failed(cut), None) if committed => {
+            (BodyEnd::Failed { .. }, Some(error)) => Some((Outcome::Failed, Some(error))),
+            (BodyEnd::Failed { cut, .. }, None) if committed => {
                 Some((Outcome::Incomplete, Some(cut.code().into())))
             }
-            (BodyEnd::Failed(cut), None) => Some((Outcome::Failed, Some(cut.code().into()))),
+            (BodyEnd::Failed { cut, .. }, None) => Some((Outcome::Failed, Some(cut.code().into()))),
         };
+        let interruption = words
+            .zip(outcome.as_ref().and_then(|(_, code)| code.clone()))
+            .map(|(text, code)| Interruption {
+                code,
+                text,
+                bytes_relayed: self.bytes,
+            });
+        if let Some(interruption) = &interruption {
+            tracing::warn!(
+                account = %self.outcome.account_id,
+                request_id = %self.trace.request_id,
+                upstream_request_id = self
+                    .outcome
+                    .upstream_request_id
+                    .as_deref()
+                    .map(tracing::field::display),
+                bytes_relayed = interruption.bytes_relayed,
+                code = %interruption.code,
+                error = %interruption.text,
+                "the upstream body ended short after the head"
+            );
+        }
         let ttfc_ms = self
             .first_content_at
             .map(|at| at - self.outcome.received_at);
@@ -626,6 +659,8 @@ impl Publish {
                 outcome,
                 self.message_id.clone(),
                 skipped,
+                interruption,
+                self.passthrough.take(),
                 (self.clock)(),
             )
             .await;
@@ -735,8 +770,9 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     }
                     Err(error) => {
                         let cut = Cut::of_decode(&error);
+                        let text = error.to_string();
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed(cut);
+                        break 'body BodyEnd::Failed { cut, text };
                     }
                 }
             }
@@ -753,11 +789,19 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 let next = match read {
                     Err(_) => {
                         let _ = send(&tx, &cancel, Err(stalled())).await;
-                        break 'body BodyEnd::Failed(Cut::Stalled);
+                        // In fractional seconds, since a bound under a second would read 0 in whole ones.
+                        break 'body BodyEnd::Failed {
+                            cut: Cut::Stalled,
+                            text: format!("no chunk for {} s", idle_timeout.as_secs_f64()),
+                        };
                     }
                     Ok(Err(error)) => {
+                        let text = error.to_string();
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed(Cut::Transport);
+                        break 'body BodyEnd::Failed {
+                            cut: Cut::Transport,
+                            text,
+                        };
                     }
                     Ok(Ok(next)) => next,
                 };
@@ -768,8 +812,9 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     Ok(piece) => piece,
                     Err(error) => {
                         let cut = Cut::of_decode(&error);
+                        let text = error.to_string();
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed(cut);
+                        break 'body BodyEnd::Failed { cut, text };
                     }
                 };
                 // Published before the piece goes out, so a late rate-limit error is acted on no later than the
@@ -800,8 +845,9 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     }
                     Err(error) => {
                         let cut = Cut::of_decode(&error);
+                        let text = error.to_string();
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed(cut);
+                        break 'body BodyEnd::Failed { cut, text };
                     }
                     Ok(_) => {}
                 }
@@ -816,7 +862,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 drop(reader);
                 let _ = tx.try_send(Err(cancelled()));
             }
-            BodyEnd::ClientGone | BodyEnd::Failed(_) => {}
+            BodyEnd::ClientGone | BodyEnd::Failed { .. } => {}
             // Checking in before the sender drops is what makes the connection available again by the time the
             // caller sees the end of the body, which is the only ordering a sequential caller can observe.
             BodyEnd::Complete => {
@@ -837,7 +883,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
         } else {
             Some(match end {
                 BodyEnd::Complete => REFUSED,
-                BodyEnd::Failed(_) => TRANSPORT_ERROR,
+                BodyEnd::Failed { .. } => TRANSPORT_ERROR,
                 BodyEnd::Cancelled | BodyEnd::ClientGone => CANCELED,
             })
         });
@@ -866,8 +912,12 @@ enum BodyEnd {
     /// The caller is no longer listening.
     ClientGone,
     Complete,
-    /// The body ended in an error the caller has already been sent; `Cut` is the cause the completion names.
-    Failed(Cut),
+    /// The body ended in an error the caller has already been sent. `cut` is the cause the completion names and
+    /// `text` the error's own words, which the warning and the event carry.
+    Failed {
+        cut: Cut,
+        text: String,
+    },
 }
 
 #[derive(Clone, Copy)]

@@ -1,5 +1,5 @@
-//! The dashboard: the last day from the rollups, the newest quota sample per account and window, the recent
-//! requests, and the live pin count.
+//! The dashboard: the last day from the rollups, the newest quota sample per account and window, and the live pin
+//! count.
 
 use std::sync::Arc;
 
@@ -11,16 +11,15 @@ use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
 use crate::openapi::{HourPointView, LedgerFailure, SharedEquivalentView};
-use crate::requests::{request_summary, RequestSummary, ShareContext};
 use crate::AdminState;
 
-/// The ledger's dashboard rollup with the recent requests, the newest quota sample per account and window, and
-/// the live pin count. The rollup reads the last 24 hours up to the end of the current hour and leaves the probe
-/// rows out.
+/// The ledger's dashboard rollup with the newest quota sample per account and window, and the live pin count. The
+/// rollup reads the last 24 hours up to the end of the current hour and leaves the probe rows out.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Dashboard {
-    /// The requests of the window.
+    /// The requests of the window, not counting the ones the router refused before any account was asked, which
+    /// `refused_24h` counts.
     pub requests_24h: u64,
     /// The window's tokens of the five types: uncached input, cache reads, both cache writes and output.
     pub tokens_24h: u64,
@@ -37,16 +36,19 @@ pub(crate) struct Dashboard {
     /// Whether a plan-funded row of the window priced at its model tier's latest weight, for a model the cost model
     /// does not weight.
     pub estimated_24h: bool,
-    /// The requests that did not succeed over the requests, both without the requests a guardrail blocked, null
-    /// with none left.
+    /// The requests that did not succeed over the requests, null with none. The refused requests are in neither.
     pub error_rate_24h: Option<f64>,
-    /// The window's most frequent error code, `guardrail_blocked` left out, null with none.
+    /// The window's most frequent error code, null with none.
     pub top_error_code: Option<String>,
+    /// The requests the router refused before any account was asked over the window, by the codes of the refusals
+    /// map, not in `requests_24h`.
+    pub refused_24h: u64,
+    /// The window's most frequent refusal code, null with none.
+    pub top_refusal_code: Option<String>,
     /// The window's 24 hours, oldest first: each hour's start as `at`, and its `billed`, `cost`, `equivalent`,
-    /// `errors` (the requests that did not succeed, the ones a guardrail blocked left out), `requests` and `tokens`.
+    /// `errors` (the requests that did not succeed), `refused` (the requests the router refused before any account
+    /// was asked, not in `requests`), `requests` and `tokens`.
     pub hourly: Vec<HourPointView>,
-    /// One row per recent request and attempt.
-    pub recent: Vec<RequestSummary>,
     pub accounts: Vec<AccountWindows>,
     pub sessions: DashboardSessions,
 }
@@ -86,7 +88,6 @@ pub(crate) struct DashboardSessions {
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
-    let shares = ShareContext::read(&state);
     let board = match dashboard(
         state.ledger.db(),
         now,
@@ -126,6 +127,8 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         estimated_24h: board.estimated_24h,
         error_rate_24h: board.error_rate_24h,
         top_error_code: board.top_error_code,
+        refused_24h: board.refused_24h,
+        top_refusal_code: board.top_refusal_code,
         hourly: board
             .hourly
             .iter()
@@ -135,14 +138,10 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
                 cost: h.cost,
                 equivalent: (&h.equivalent).into(),
                 errors: h.errors,
+                refused: h.refused,
                 requests: h.requests,
                 tokens: h.tokens,
             })
-            .collect(),
-        recent: board
-            .recent
-            .iter()
-            .map(|(r, a)| request_summary(r, a, &shares))
             .collect(),
         accounts: accounts
             .into_iter()

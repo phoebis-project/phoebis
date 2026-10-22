@@ -995,6 +995,35 @@ fn a_weekly_wall_reads_no_projection_error_from_a_round_on_the_five_hour_window(
 }
 
 #[test]
+fn the_drift_dates_from_its_oldest_off_windows_end_and_never_after_the_fold() {
+    const HOUR: i64 = 3_600_000;
+    let t = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    // `ahead`'s window closed early, its reset two hours past the fold, and `ended`'s reset passed an hour before it.
+    reconciled(&db, "ahead", "five_hour", t + 2 * HOUR, 0.5, 0.25, 2.0, 3);
+    reconciled(&db, "ended", "five_hour", t - HOUR, 0.5, 0.25, 2.0, 3);
+    let tables = phoebis_ledger::test_tables::subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_routing_conditions(&tx, &tables, t)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.kind == "meter_drift")
+            .map(|r| (r.subject_id.as_str(), r.since))
+            .collect::<Vec<_>>(),
+        [("ahead", t), ("ended", t - HOUR)],
+        "an early-closed window dates its drift from the fold's instant, an ended one from its end: {rows:?}"
+    );
+}
+
+#[test]
 fn a_wall_after_a_slow_down_round_reads_how_early_it_came_and_the_account_rollup_keeps_the_hours_longest(
 ) {
     const MINUTE: i64 = 60_000;
@@ -1747,7 +1776,7 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
 fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically() {
     use phoebis_ledger::EVENT_KINDS;
     use phoebis_routing::{CacheMapEntry, CreditsState, PinKeyFacts, ShedRoundFacts, WindowSource};
-    const KINDS: [&str; 33] = [
+    const KINDS: [&str; 34] = [
         "account_state_changed",
         "budget_period_ended",
         "budget_reached",
@@ -1776,6 +1805,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         "shedding_round",
         "slow_down_ended",
         "slow_down_started",
+        "stream_interrupted",
         "warm_prefix_expired",
         "wind_down_started",
         "window_cleared",

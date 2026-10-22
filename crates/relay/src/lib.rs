@@ -103,8 +103,11 @@ pub enum RelayError {
     /// router cannot verify never travels under an account's credential, edited or not: a wrong hash is
     /// indistinguishable from tampering and the cost falls on the account, not on the request. Relaying the
     /// body unedited under the client's stamp and stripping the stamp are the two alternatives this rejects.
+    /// The cure is a re-pin to the client that moved. `resumed` marks a body whose first user message is the
+    /// client's resume placeholder, a body the client stamped over a prompt the wire no longer carries, so the
+    /// version suffix refusal's words name the resume apart.
     #[error("request body carries a billing hash this build's rules do not reproduce ({kind})")]
-    ClientDrift { kind: &'static str },
+    ClientDrift { kind: &'static str, resumed: bool },
     #[error("blocked by guardrail \"{name}\"")]
     GuardrailBlocked { name: String },
     #[error("request body names a model the relay will not repeat")]

@@ -171,6 +171,7 @@ reasons! {
     AwaitingSelection => "awaiting_selection",
     Budget => "budget",
     BusGap => "bus_gap",
+    Compacted => "compacted",
     Cooled => "cooled",
     Evicted => "evicted",
     Expired => "expired",
@@ -247,6 +248,7 @@ pub(crate) fn utc_day(ms: i64) -> i64 {
 #[serde(rename_all = "snake_case")]
 pub enum Guard {
     Auxiliary,
+    Compaction,
     Foreign,
     Rearm,
     Restart,
@@ -264,6 +266,11 @@ pub fn guard(
     model_matches: bool,
 ) -> Guard {
     if let Some(class) = request_class {
+        // A compaction reads the old prefix to write a context the next turn starts from, so a recipe armed from it
+        // would keep warm a body no turn reads again.
+        if class == "compaction" {
+            return Guard::Compaction;
+        }
         return if phoebis_routing::REFRESHING_CLASSES.contains(&class) {
             Guard::Rearm
         } else {
@@ -543,6 +550,9 @@ pub(crate) struct Agent {
     pub last_prefix: Option<(String, String)>,
     pub generation: u64,
     pub current: Option<Observation>,
+    /// The compaction open on the agent, held apart from `current` so none of its events moves the recipe. Never saved:
+    /// a restart drops it with the events that would have completed it.
+    pub compaction: Option<OpenCompaction>,
     /// The recipe was set or replaced since the last landed save that carried its body, so the next save seals it.
     pub body_dirty: bool,
     /// Whether the registry may hold a sealed body under this agent's row, so a save without a recipe clears it. A new
@@ -574,6 +584,9 @@ pub(crate) struct Agent {
     /// The entrypoint of the observed request's `client` label, what its probes price under, and `None` for a label
     /// that names none.
     pub entrypoint: Option<String>,
+    /// The client label of the last turn admitted, whole, which that turn's kept-warm credit keys. Never saved: only a
+    /// request admitted in this process earns a credit.
+    pub client_label: Option<String>,
     pub reason: Reason,
     /// The guard's verdict on the last request the agent observed, `None` before the first one. Never `reason`
     /// itself: an auxiliary or a foreign request never reaches `reason`, which stays the recipe's own gating
@@ -639,6 +652,7 @@ impl Agent {
             last_prefix: None,
             generation: 0,
             current: None,
+            compaction: None,
             body_dirty: false,
             body_saved: true,
             expires: None,
@@ -656,6 +670,7 @@ impl Agent {
             pool_id: String::new(),
             canonical_model: String::new(),
             entrypoint: None,
+            client_label: None,
             reason: Reason::AwaitingRequest,
             last_guard: None,
             hold_counted: false,
@@ -678,8 +693,8 @@ impl Agent {
     }
 
     /// Moves every model name the agent holds that `canonical` dates, and answers whether any moved: the recipe's
-    /// own, the one its open observation took from the recipe before it, and its kept and unanswered probes', which
-    /// an agent keeps after its recipe ended.
+    /// own, the one its open observation took from the recipe before it, an open compaction's own and the one it took,
+    /// and its kept and unanswered probes', which an agent keeps after its recipe ended.
     pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) -> bool {
         let mut moved = false;
         if let Some(dated) = canonical.get(&self.canonical_model) {
@@ -690,6 +705,20 @@ impl Agent {
             if let Some(dated) = canonical.get(&prior.model) {
                 prior.model = dated.clone();
                 moved = true;
+            }
+        }
+        // The completion credits through the compaction's `prior` and settles the probes against its own model, so
+        // both follow the probes' move, or a credit would sit beside a cold return of the probe that earned it.
+        if let Some(compaction) = self.compaction.as_mut() {
+            if let Some(dated) = canonical.get(&compaction.canonical_model) {
+                compaction.canonical_model = dated.clone();
+                moved = true;
+            }
+            if let Some(prior) = compaction.prior.as_mut() {
+                if let Some(dated) = canonical.get(&prior.model) {
+                    prior.model = dated.clone();
+                    moved = true;
+                }
             }
         }
         for kept in &mut self.kept {
@@ -852,6 +881,169 @@ pub(crate) struct PriorCoverage {
     pub until: Option<i64>,
 }
 
+impl PriorCoverage {
+    /// The kept-warm credit's test for a request that started at `request_started` on `model` at the speed `fast`, was
+    /// served by `account` and read `read` from the cache: it arrived after the previous turn's own entry would have
+    /// lapsed and read the entry the covering probe kept.
+    pub(crate) fn credits(
+        &self,
+        request_started: i64,
+        model: &str,
+        fast: bool,
+        account: Option<&str>,
+        read: u64,
+    ) -> bool {
+        let ttl = self.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
+        let gap_exceeded = request_started - self.real_at > ttl;
+        // The entry the probe kept has to be there when this request arrives, on the boundary the settlement and the
+        // scheduler read (`answer.started` before `chain_end`, `now >= expires`): a request at or after the lapse read
+        // a cache nothing the probe paid for kept, so that probe settles as expired, and a credit here would contradict
+        // that settlement.
+        let entry_alive = self.until.is_some_and(|until| request_started < until);
+        let same_model = self.model == model;
+        // The upstream shares no cached prefix across speeds, so a probe on the other lane kept nothing this request
+        // read.
+        let same_speed = self.fast == fast;
+        // The account that served this request, after any failover, has to be the one the covering probe warmed. A
+        // prefix cached elsewhere by ordinary traffic is no probe's to credit.
+        let same_account = self.account.as_deref() == account;
+        // A probe whose answer named no account (one the relay built before any selection) settled in no unit and
+        // funds nothing to credit, whatever `same_account` says of the account it was meant for.
+        self.covered
+            && gap_exceeded
+            && entry_alive
+            && same_model
+            && same_speed
+            && same_account
+            && read > 0
+            && self.unit.is_some()
+    }
+}
+
+/// The compaction the agent has open, held apart from the retained observation: its own receipt, start, lineage, head,
+/// read and TTL, and the coverage its credit reads. The recipe and its probes wait as they stood until its completion
+/// decides them, so the completion judges the agent's own lists.
+pub(crate) struct OpenCompaction {
+    pub request_id: String,
+    /// The relay's receipt, the instant the compaction's own request row keys its band at.
+    pub received_at: i64,
+    /// When it reached the engine, the arrival its answer to the probes before it is judged by.
+    pub started: i64,
+    pub canonical_model: String,
+    pub fast: bool,
+    pub attempt: u8,
+    pub account: Option<String>,
+    pub kind: Option<AccountKind>,
+    pub in_overage: bool,
+    /// Whether the current attempt's head was a 2xx, without which its stream's usage is no evidence about the cache.
+    pub ok_head: bool,
+    /// What the current attempt's stream read from the cache, for a completion that carries no usage of its own.
+    pub read: u64,
+    /// The TTL the relay dispatched the attempt's body with, or where it went as sent, the one the recipe's evidence
+    /// settled on, the same conversation's markers, refined by the compaction's own usage: the bucket its kept-warm
+    /// credit files under.
+    pub ttl_ms: i64,
+    /// What the previous recipe had proved at the admission, as a turn's observation takes it.
+    pub prior: Option<PriorCoverage>,
+    /// The compaction request's own client label, the one its kept-warm credit keys.
+    pub client_label: String,
+}
+
+/// What a request that completed answers the probes before it with: when it reached the cache, the lineage it read on
+/// and what it read.
+struct Answer {
+    started: Option<i64>,
+    account: Option<String>,
+    model: String,
+    fast: bool,
+    read: u64,
+}
+
+/// A kept-warm credit a completion earned, its keys read under the lock and recorded once the lock is released. `at` is
+/// the credited request's receipt and `ttl_ms` the TTL its own write would have taken.
+struct Credit {
+    at: i64,
+    key: SessionKey,
+    key_generation: i64,
+    pool_id: String,
+    account: Option<String>,
+    model: String,
+    read: u64,
+    ttl_ms: i64,
+    fast: bool,
+    kind: Option<AccountKind>,
+    in_overage: bool,
+    client: Option<String>,
+}
+
+/// Whether a request the engine follows is open on `agent`: the turn its observation follows, while `pending` holds
+/// it, or a compaction. Its completion decides the probes and the recipe, so no lapse, eviction or sweep decides them
+/// first.
+fn request_open(pending: &HashMap<String, (SessionKey, String)>, agent: &Agent) -> bool {
+    agent.compaction.is_some()
+        || agent
+            .current
+            .as_ref()
+            .is_some_and(|o| pending.contains_key(&o.id))
+}
+
+/// What the agent's previous recipe proved for a request admitted at `now`: the kept-warm credit reads this and nothing
+/// on the agent. The newest unanswered probe whose coverage held is taken, a rewrite included, then the newest
+/// unanswered probe where none held, so a late probe's `covered: false` never shadows an older covered one whose entry
+/// still lives, and the coverage leaves with the probes the request keeps. A recipe the idle limit ended leaves its
+/// probes kept and pending, as a failed turn hands back the probes it took, so the newest of those whose entry still
+/// lives stands in for it. The gap runs from the last turn that answered, since a failed turn is no evidence about the
+/// cache.
+fn prior_coverage(agent: &Agent, now: i64) -> Option<PriorCoverage> {
+    let newest_kept = agent
+        .kept
+        .iter()
+        .rev()
+        .find(|kept| kept.pending.is_some() && now < kept.entry_expires);
+    let newest_unanswered = agent
+        .unanswered
+        .iter()
+        .rev()
+        .find(|p| p.covered)
+        .or(agent.unanswered.last());
+    let answered_at = agent.last_answered_at.or(agent.last_real_at);
+    answered_at.map(|real_at| {
+        let ttl_ms = agent.ttl_ms;
+        match (newest_unanswered, newest_kept) {
+            (Some(probe), _) => PriorCoverage {
+                account: probe.account.clone(),
+                covered: probe.covered,
+                unit: probe.unit,
+                model: probe.model.clone(),
+                fast: probe.fast,
+                real_at,
+                ttl_ms,
+                until: Some(probe.expires),
+            },
+            (None, Some(kept)) => PriorCoverage {
+                account: kept.account.clone(),
+                covered: kept.covered,
+                unit: kept.unit,
+                model: kept.canonical_model.clone(),
+                fast: kept.fast,
+                real_at,
+                ttl_ms,
+                until: Some(kept.entry_expires),
+            },
+            (None, None) => PriorCoverage {
+                account: None,
+                covered: false,
+                unit: None,
+                model: agent.canonical_model.clone(),
+                fast: false,
+                real_at,
+                ttl_ms,
+                until: None,
+            },
+        }
+    })
+}
+
 /// One real request the engine is following from its observation to its completion.
 pub(crate) struct Observation {
     pub id: String,
@@ -936,7 +1128,8 @@ impl Skipped {
 }
 
 /// One probe the next real request has not answered yet: what it used and the unit it settled in, the lineage a
-/// request has to match to be read as its answer, and the end of the entry it wrote, which settles it on its own.
+/// request has to match to be read as its answer, and the end of the entry it wrote, which a later probe of its chain
+/// extends by reading the entry back.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct UnansweredProbe {
     /// The relay's request id of the probe's exchange, which the probe's own ledger request row carries, so a
@@ -984,7 +1177,8 @@ pub(crate) struct Kept {
     /// probe's hour and prices its counts at the cells and the revision the probe ran at.
     pub at: i64,
     pub band: Band,
-    /// When the entry this probe wrote expires: a read arriving at or past it found the entry gone.
+    /// When the entry this probe wrote expires. A later probe of its chain that read the entry back extended it, so a
+    /// settlement reads the chain's last entry (`chain_expires`).
     pub entry_expires: i64,
     pub kind: Option<AccountKind>,
     pub in_overage: bool,
@@ -992,11 +1186,11 @@ pub(crate) struct Kept {
     /// ceiling moved the probe here reads the evidence the unanswered list held.
     pub covered: bool,
     pub unit: Option<SavingsUnit>,
-    /// The label a probe written off at a ceiling settles under when its entry lapses with no turn: `idle_limit`
-    /// today. A turn that reads the probe leaves the label in place, so one that ends without deciding the probe
-    /// hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
-    /// request's completion. A failed completion hands such a probe back under `expired`, the label its recipe's
-    /// own lapse settles it under.
+    /// The label a probe written off at a ceiling settles under when its chain's last entry lapses with no turn:
+    /// `idle_limit` today. A turn that reads the probe leaves the label in place, so one that ends without deciding the
+    /// probe hands it back to the lapse sweep. `None` for a probe a real request superseded, which waits for that
+    /// request's completion. A failed completion hands such a probe back under `expired`, the label its recipe's own
+    /// lapse settles it under.
     pub pending: Option<Wasted>,
 }
 
@@ -1059,6 +1253,9 @@ pub(crate) struct Inner {
     pub sessions: BTreeMap<SessionKey, Session>,
     /// Request id to the agent following it.
     pub pending: HashMap<String, (SessionKey, String)>,
+    /// A compaction's request id to the agent it is open on, read before `pending` by every request event, so the
+    /// observation's paths never see a compaction.
+    pub compactions: HashMap<String, (SessionKey, String)>,
     pub reasons: BTreeMap<Reason, u64>,
     pub retained: usize,
     pub agents: usize,
@@ -1258,10 +1455,18 @@ impl Engine {
         }
         inner.sessions.clear();
         inner.pending.clear();
+        inner.compactions.clear();
         inner.agents = 0;
         inner.retained = 0;
         self.cancel.cancel();
     }
+}
+
+/// `ms` as the UTC time a log line names, or the raw milliseconds for one out of range.
+pub(crate) fn utc_stamp(ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(ms)
+        .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|_| ms.to_string())
 }
 
 impl Inner {
@@ -1271,6 +1476,7 @@ impl Inner {
         Inner {
             sessions: BTreeMap::new(),
             pending: HashMap::new(),
+            compactions: HashMap::new(),
             reasons: BTreeMap::new(),
             retained: 0,
             agents: 0,
@@ -1321,8 +1527,8 @@ impl Inner {
 
     /// `discard` for a real request that supersedes the recipe: the probes the recipe leaves unanswered were paying
     /// for that request, so it keeps them until the first of these decides them: its successful completion (each
-    /// probe on its own: a warm return on its lineage inside its entry clears it, one past its entry settles it
-    /// under `expired`, and any other return, on another lineage or with no read, under `cold_return`), a labeled
+    /// probe by its chain's last entry: a warm return on its lineage inside that entry clears it, one past it settles
+    /// it under `expired`, and any other return, on another lineage or with no read, under `cold_return`), a labeled
     /// discard (under its label), or the agent's lapse or eviction. A request the engine takes no observation of
     /// leaves them kept for whichever comes next, and one that fails hands them back for the next turn to read or
     /// the lapse sweep to settle.
@@ -1336,16 +1542,39 @@ impl Inner {
         self.set_reason(key, agent_id, reason);
     }
 
+    /// The entry a kept probe is judged against: the greatest `entry_expires` among the probes of its chain. The chain
+    /// is the probe and each later kept probe of its lineage (model, speed, account), in exchange order, up to the
+    /// first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
+    /// read nothing or only part of the prefix found the entry gone, whole or in part, and wrote a new one, which
+    /// starts a chain of its own. The read is tested beside `covered`, since the landing marks a cold complete rewrite
+    /// covered too.
+    fn chain_expires(kept: &[Kept], probe: &Kept) -> i64 {
+        let mut later: Vec<&Kept> = kept
+            .iter()
+            .filter(|other| {
+                other.at > probe.at
+                    && other.canonical_model == probe.canonical_model
+                    && other.fast == probe.fast
+                    && other.account == probe.account
+            })
+            .collect();
+        later.sort_by_key(|other| other.at);
+        later
+            .into_iter()
+            .take_while(|other| other.usage.read > 0 && other.covered)
+            .map(|other| other.entry_expires)
+            .fold(probe.entry_expires, i64::max)
+    }
+
     /// The decision `discard_keeping_unanswered` defers, taken by the successful completion of the request that
     /// kept the probes, `read` being what the completion read from the cache. Each probe answers to the lineage it
-    /// was paid under and to the entry it wrote, since a request that failed leaves its probes behind with the agent
-    /// already moved to that request's model and entry: a warm return is one on the probe's model, speed and
-    /// account, arriving before that probe's entry expired, that read the cache. A kept-warm credit takes no
-    /// shortcut here: a probe off the lineage the credited request read kept nothing it read. The model is the
-    /// probe's as resolutions followed it. A probe sent while the request was open is not among them: it pays for
-    /// the request after this one.
+    /// was paid under, since a request that failed leaves its probes behind with the agent already moved to that
+    /// request's model and entry, and each probe of a chain is judged against the chain's last entry
+    /// (`chain_expires`): a warm return is one on the probe's model, speed and account, arriving before that entry
+    /// expired, that read the cache. A kept-warm credit takes no shortcut here: a probe off the lineage the credited
+    /// request read kept nothing it read. The model is the probe's as resolutions followed it. A probe sent while the
+    /// request was open is not among them: it pays for the request after this one.
     pub(crate) fn decide_unanswered(&mut self, key: &SessionKey, agent_id: &str, read: u64) {
-        self.touch_agent(key, agent_id);
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -1353,19 +1582,43 @@ impl Inner {
         else {
             return;
         };
-        let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
-        // The read happened when the request reached the cache, so a stream that outlives the entry still read it.
-        let arrived = agent.current.as_ref().map(|o| o.started);
-        for kept in std::mem::take(&mut agent.kept) {
-            let lineage = kept.canonical_model == agent.canonical_model
-                && kept.fast == fast
-                && kept.account == agent.account;
-            // A probe whose entry was gone when the request arrived kept nothing the request could read, whatever it
-            // read: `expired` is its own label, so a credited request never sits beside a cold return it
+        let answer = Answer {
+            // The read happened when the request reached the cache, so a stream that outlives the entry still read it.
+            started: agent.current.as_ref().map(|o| o.started),
+            account: agent.account.clone(),
+            model: agent.canonical_model.clone(),
+            fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+            read,
+        };
+        let probes = std::mem::take(&mut agent.kept);
+        self.decide_against(key, agent_id, probes, answer);
+    }
+
+    /// `decide_unanswered`'s test over `probes` against the arrival, the lineage and the read `answer` holds: a turn's
+    /// observation and its agent's, or a compaction's own. `probes` is every probe the request answers in one slice,
+    /// so a chain that runs from the kept probes into the unanswered ones settles against its last entry.
+    fn decide_against(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        probes: Vec<Kept>,
+        answer: Answer,
+    ) {
+        self.touch_agent(key, agent_id);
+        let chain_ends: Vec<i64> = probes
+            .iter()
+            .map(|probe| Self::chain_expires(&probes, probe))
+            .collect();
+        for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
+            let lineage = kept.canonical_model == answer.model
+                && kept.fast == answer.fast
+                && kept.account == answer.account;
+            // A probe whose chain's last entry was gone when the request arrived kept nothing the request could read,
+            // whatever it read: `expired` is its own label, so a credited request never sits beside a cold return it
             // contradicts.
-            let label = match arrived {
-                Some(at) if at >= kept.entry_expires => Some(Wasted::Expired),
-                Some(_) if read > 0 && lineage => None,
+            let label = match answer.started {
+                Some(at) if at >= chain_end => Some(Wasted::Expired),
+                Some(_) if answer.read > 0 && lineage => None,
                 _ => Some(Wasted::ColdReturn),
             };
             if let Some(label) = label {
@@ -1384,6 +1637,12 @@ impl Inner {
         unanswered: Unanswered,
     ) {
         self.touch_agent(key, agent_id);
+        // A labeled stop settles or writes off the probes an open compaction would answer, so the compaction ends as a
+        // failed one, since its completion would credit a probe the stop wasted and relabel the stop. A registration
+        // that takes a released agent back follows such a stop, so it finds no compaction open.
+        if wasted.is_some() {
+            self.end_compaction(key, agent_id);
+        }
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -1406,7 +1665,7 @@ impl Inner {
         let probes = std::mem::take(&mut agent.unanswered);
         if unanswered == Unanswered::Keep {
             // A row apiece: a request whose completion never came leaves its probes for the next one, which may
-            // keep probes paid under other keys, and each settles by the entry it wrote. A ceiling's label rides
+            // keep probes paid under other keys, and each settles by its chain's last entry. A ceiling's label rides
             // along, for the lapse sweep to settle under when no turn reads them first.
             let kept: Vec<Kept> = probes
                 .iter()
@@ -1430,33 +1689,61 @@ impl Inner {
         }
     }
 
-    /// Settles every kept probe whose `pending` label is set and whose `entry_expires <= now` under that label, on
-    /// each agent with no turn open, and touches each agent it settled for the next save, which releases the
-    /// settlements.
+    /// Ends the compaction open on the agent as a failed one: it leaves the agent and the map, settles nothing and
+    /// leaves the recipe as it stood, so its later events miss both maps as an unknown request's do.
+    pub(crate) fn end_compaction(&mut self, key: &SessionKey, agent_id: &str) {
+        let Some(open) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+            .and_then(|agent| agent.compaction.take())
+        else {
+            return;
+        };
+        self.compactions.remove(&open.request_id);
+    }
+
+    /// Settles every kept probe whose `pending` label is set and whose chain's last entry (`chain_expires`) ended at or
+    /// before `now` under that label, on each agent with no request open, and touches each agent it settled for the
+    /// next save, which releases the settlements. A probe whose own entry ended inside a live chain waits with the
+    /// chain, so a turn inside the chain's last entry still answers every probe of it.
     pub(crate) fn settle_lapsed_pending(&mut self, now: i64) {
-        let lapsed = |kept: &Kept| kept.pending.is_some() && kept.entry_expires <= now;
         let open = &self.pending;
         let mut settled: Vec<(SessionKey, String)> = Vec::new();
         for (key, session) in self.sessions.iter_mut() {
             for (agent_id, agent) in session.agents.iter_mut() {
-                // An open turn's completion decides the probes, as `lapse` waits for it. A turn that fails, past a head
-                // or not, or ends at a bus gap decides nothing and leaves them here.
-                let turn_open = agent
-                    .current
-                    .as_ref()
-                    .is_some_and(|o| open.contains_key(&o.id));
-                if turn_open || !agent.kept.iter().any(lapsed) {
+                // An open turn's or compaction's completion decides the probes, as `lapse` waits for it. A request that
+                // fails, past a head or not, or ends at a bus gap decides nothing and leaves them here.
+                // The sweep settles labeled probes alone, so an agent holding none builds no chain.
+                if request_open(open, agent)
+                    || !agent.kept.iter().any(|kept| kept.pending.is_some())
+                {
                     continue;
                 }
-                let (due, waiting): (Vec<Kept>, Vec<Kept>) = std::mem::take(&mut agent.kept)
-                    .into_iter()
-                    .partition(lapsed);
-                agent.kept = waiting;
-                for kept in due {
-                    if let Some(label) = kept.pending {
-                        self.settlements_after_save.push(kept.settle(key, label));
+                let chain_ends: Vec<i64> = agent
+                    .kept
+                    .iter()
+                    .map(|probe| Self::chain_expires(&agent.kept, probe))
+                    .collect();
+                if !agent
+                    .kept
+                    .iter()
+                    .zip(&chain_ends)
+                    .any(|(kept, &chain_end)| kept.pending.is_some() && chain_end <= now)
+                {
+                    continue;
+                }
+                let mut waiting = Vec::new();
+                let probes = std::mem::take(&mut agent.kept);
+                for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
+                    match kept.pending {
+                        Some(label) if chain_end <= now => {
+                            self.settlements_after_save.push(kept.settle(key, label));
+                        }
+                        _ => waiting.push(kept),
                     }
                 }
+                agent.kept = waiting;
                 settled.push((key.clone(), agent_id.clone()));
             }
         }
@@ -1521,9 +1808,10 @@ impl Inner {
     /// nothing: the recipe ends under `expired` rather than being probed, held or not, its unanswered probes wasted,
     /// and the next real request re-arms it. A probe already in flight was sent in time and settles on its own answer,
     /// a hold that already ledgered the probe it withheld is not counted again, and the skip takes the recipe's speed
-    /// before the discard drops the recipe. While the request the observation follows is still open, the recipe is
-    /// held unprobed instead: its completion earns its credit and decides the probes it kept, and the next tick lapses
-    /// it. A paused recipe loses its prompt alone (`drop_paused_prompt`). True when the tick is done with the recipe.
+    /// before the discard drops the recipe. While a request is open on the agent, the one the observation follows or a
+    /// compaction, the recipe is held unprobed instead: its completion earns its credit and decides the probes, and the
+    /// next tick lapses it. A paused recipe loses its prompt alone (`drop_paused_prompt`). True when the tick is done
+    /// with the recipe.
     fn lapse(
         &mut self,
         key: &SessionKey,
@@ -1538,21 +1826,27 @@ impl Inner {
         else {
             return false;
         };
-        if agent
-            .current
-            .as_ref()
-            .is_some_and(|o| self.pending.contains_key(&o.id))
-        {
+        if request_open(&self.pending, agent) {
             return true;
         }
         if agent.paused {
-            tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
-                "a paused keepalive recipe's entry expired, so its prompt was dropped");
+            tracing::info!(
+                key = %key.0,
+                agent = %agent_id,
+                expires = %utc_stamp(expires),
+                late_ms = now - expires,
+                "a paused keepalive recipe's entry expired, so its prompt was dropped"
+            );
             self.drop_paused_prompt(key, agent_id);
             return true;
         }
-        tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
-            "a keepalive recipe lapsed before its probe, so the probe was skipped");
+        tracing::info!(
+            key = %key.0,
+            agent = %agent_id,
+            expires = %utc_stamp(expires),
+            late_ms = now - expires,
+            "a keepalive recipe lapsed before its probe, so the probe was skipped"
+        );
         if !agent.hold_counted {
             // The lapse is what withholds the probe, so it counts under the state the discard below leaves.
             lapsed.push(Skipped::of(
@@ -1732,18 +2026,26 @@ impl Inner {
     }
 
     /// Every model name a live recipe compares against the router's rows: the recipe's own, and the one its
-    /// open observation took from the recipe before it.
+    /// open observation took from the recipe before it. An open compaction's own and the one it took count too, since
+    /// its completion compares them while the recipe it would answer may have ended.
     pub(crate) fn retained_models(&self) -> Vec<String> {
         let mut models = BTreeSet::new();
         for (key, session) in &self.sessions {
             for (agent_id, agent) in &session.agents {
-                let Some(observation) = agent.current.as_ref().filter(|_| self.live(key, agent_id))
-                else {
+                if !self.live(key, agent_id) {
                     continue;
-                };
-                models.insert(agent.canonical_model.clone());
-                if let Some(prior) = &observation.prior {
-                    models.insert(prior.model.clone());
+                }
+                if let Some(observation) = &agent.current {
+                    models.insert(agent.canonical_model.clone());
+                    if let Some(prior) = &observation.prior {
+                        models.insert(prior.model.clone());
+                    }
+                }
+                if let Some(compaction) = &agent.compaction {
+                    models.insert(compaction.canonical_model.clone());
+                    if let Some(prior) = &compaction.prior {
+                        models.insert(prior.model.clone());
+                    }
                 }
             }
         }
@@ -1791,7 +2093,7 @@ impl Inner {
                 };
                 if (!session.attended || agent.state == AgentState::Idle)
                     && !agent.in_flight
-                    && !self.pending.contains_key(&observation.id)
+                    && !request_open(&self.pending, agent)
                 {
                     candidates.push((
                         session.attended,
@@ -1990,6 +2292,11 @@ impl Engine {
             inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
             inner.set_reason(&key, &agent_id, Reason::BusGap);
         }
+        // A compaction's completion may be among the lost events too, and an open compaction holds its agent's recipe
+        // and sweep until it completes, so each ends as a failed one.
+        for (key, agent_id) in std::mem::take(&mut inner.compactions).into_values() {
+            inner.end_compaction(&key, &agent_id);
+        }
     }
 
     pub fn parts_bus(&self) -> Bus {
@@ -2086,6 +2393,10 @@ impl Engine {
             .current
             .as_ref()
             .is_some_and(|o| o.id == observed.request_id)
+            || agent
+                .compaction
+                .as_ref()
+                .is_some_and(|c| c.request_id == observed.request_id)
         {
             return;
         }
@@ -2140,24 +2451,12 @@ impl Engine {
         if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;
         }
-        // Apart from the recipe, which keepalive off, an opt-out or a refused body leaves unretained: the next idle
-        // window judges a return against this request's prefix either way. A request without both hashes leaves none.
-        if agent_id == MAIN_AGENT {
-            inner
-                .sessions
-                .get_mut(&key)
-                .unwrap()
-                .agents
-                .get_mut(&agent_id)
-                .unwrap()
-                .last_prefix = observed
-                .static_hash
-                .clone()
-                .zip(observed.boundaries.last().cloned());
-        }
+        // A turn or a second compaction moves the agent past the context an open compaction was reading, so that one
+        // ends as a failed one and leaves the recipe to this request's own path.
+        inner.end_compaction(&key, &agent_id);
         // A tick asks the router only about the models of retained recipes, so a probe an agent keeps past its
         // recipe's end can miss a resolution: the one this request carries for its own spelling dates it here,
-        // before the credit compares its model with the request's.
+        // before the credit compares its model with the request's, a compaction's as a turn's.
         let mut resolved = HashMap::new();
         if observed.wire_model != observed.canonical_model {
             resolved.insert(
@@ -2173,64 +2472,57 @@ impl Engine {
             .get_mut(&agent_id)
             .unwrap()
             .follow_resolutions(&resolved);
-        // What the previous recipe proved, taken before anything below overwrites it and consumed with the
-        // observation: the kept-warm credit reads this and nothing on the agent. The newest unanswered probe whose
-        // coverage held is taken, a rewrite included, then the newest unanswered probe where none held, so a late
-        // probe's `covered: false` never shadows an older covered one whose entry still lives, and the coverage
-        // leaves with the probes this request keeps. A recipe the idle limit ended leaves its probes kept and
-        // pending, as a failed turn hands back the probes it took, so the newest of those whose entry still lives
-        // stands in for it. The gap runs from the last turn that answered, since a failed turn is no evidence about
-        // the cache.
-        let prior = {
+        if verdict == Guard::Compaction {
+            // The recipe, its schedule and its probes wait as they stood, so a compaction that fails leaves the old
+            // context the live one. Nothing of the turn's admission below runs: the idle window's prefix, the agent's
+            // activity and model, and the agent cap all belong to the turn after it.
             let agent = &inner.sessions[&key].agents[&agent_id];
-            let newest_kept = agent
-                .kept
-                .iter()
-                .rev()
-                .find(|kept| kept.pending.is_some() && now < kept.entry_expires);
-            let newest_unanswered = agent
-                .unanswered
-                .iter()
-                .rev()
-                .find(|p| p.covered)
-                .or(agent.unanswered.last());
-            let answered_at = agent.last_answered_at.or(agent.last_real_at);
-            answered_at.map(|real_at| {
-                let ttl_ms = agent.ttl_ms;
-                match (newest_unanswered, newest_kept) {
-                    (Some(probe), _) => PriorCoverage {
-                        account: probe.account.clone(),
-                        covered: probe.covered,
-                        unit: probe.unit,
-                        model: probe.model.clone(),
-                        fast: probe.fast,
-                        real_at,
-                        ttl_ms,
-                        until: Some(probe.expires),
-                    },
-                    (None, Some(kept)) => PriorCoverage {
-                        account: kept.account.clone(),
-                        covered: kept.covered,
-                        unit: kept.unit,
-                        model: kept.canonical_model.clone(),
-                        fast: kept.fast,
-                        real_at,
-                        ttl_ms,
-                        until: Some(kept.entry_expires),
-                    },
-                    (None, None) => PriorCoverage {
-                        account: None,
-                        covered: false,
-                        unit: None,
-                        model: agent.canonical_model.clone(),
-                        fast: false,
-                        real_at,
-                        ttl_ms,
-                        until: None,
-                    },
-                }
-            })
-        };
+            let compaction = OpenCompaction {
+                request_id: observed.request_id.clone(),
+                received_at: observed.received_at,
+                started: now,
+                canonical_model: observed.canonical_model.clone(),
+                fast: observed.shape.speed.as_deref() == Some("fast"),
+                attempt: 0,
+                account: None,
+                kind: None,
+                in_overage: false,
+                ok_head: false,
+                read: 0,
+                ttl_ms: 0,
+                prior: prior_coverage(agent, now),
+                client_label: observed.client.class.clone(),
+            };
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .compaction = Some(compaction);
+            inner
+                .compactions
+                .insert(observed.request_id, (key, agent_id));
+            return;
+        }
+        // Apart from the recipe, which keepalive off, an opt-out or a refused body leaves unretained: the next idle
+        // window judges a return against this request's prefix either way. A request without both hashes leaves none.
+        if agent_id == MAIN_AGENT {
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .last_prefix = observed
+                .static_hash
+                .clone()
+                .zip(observed.boundaries.last().cloned());
+        }
+        // Taken before anything below overwrites it and consumed with the observation.
+        let prior = prior_coverage(&inner.sessions[&key].agents[&agent_id], now);
         let poisoned = inner.gap_backlog > 0;
         inner.discard_keeping_unanswered(&key, &agent_id, Reason::AwaitingSelection);
         inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
@@ -2297,6 +2589,7 @@ impl Engine {
         // The probe replays this request's headers, so it meters under the entrypoint they carry.
         agent.entrypoint =
             phoebis_ledger::entrypoint_of_client(&observed.client.class).map(String::from);
+        agent.client_label = Some(observed.client.class.clone());
         agent.current = Some(Observation {
             id: observed.request_id.clone(),
             attempt: 0,
@@ -2321,6 +2614,27 @@ impl Engine {
     fn on_selected(&self, selected: AccountSelected) {
         let snapshot = self.parts.router.snapshot();
         let mut inner = self.lock();
+        if inner.compactions.contains_key(&selected.request_id) {
+            if inner.closed {
+                inner.late_updates += 1;
+                return;
+            }
+            if let Some(agent) = inner.compaction_agent(&selected.request_id) {
+                // A body the relay sent as it came carries the conversation's own markers, whose TTL the recipe's
+                // evidence settled on.
+                let ttl_ms = selected.cache_ttl_ms.unwrap_or(agent.ttl_ms);
+                if let Some(compaction) = agent.compaction.as_mut() {
+                    compaction.attempt = selected.attempt;
+                    compaction.account = Some(selected.account_id);
+                    compaction.kind = kind_of_word(&selected.account_kind);
+                    compaction.in_overage = false;
+                    compaction.ok_head = false;
+                    compaction.read = 0;
+                    compaction.ttl_ms = ttl_ms;
+                }
+            }
+            return;
+        }
         let Some((key, agent_id)) = inner.pending.get(&selected.request_id).cloned() else {
             return;
         };
@@ -2402,6 +2716,23 @@ impl Engine {
 
     fn on_head(&self, head: ResponseHead) {
         let mut inner = self.lock();
+        if inner.compactions.contains_key(&head.request_id) {
+            if inner.closed {
+                inner.late_updates += 1;
+                return;
+            }
+            if let Some(compaction) = inner
+                .compaction_agent(&head.request_id)
+                .and_then(|agent| agent.compaction.as_mut())
+                .filter(|compaction| compaction.attempt == head.attempt)
+            {
+                compaction.in_overage = phoebis_relay::UnifiedHeaders::parse_list(&head.headers)
+                    .and_then(|unified| unified.overage_in_use)
+                    == Some(true);
+                compaction.ok_head = (200..300).contains(&head.status);
+            }
+            return;
+        }
         let Some((key, agent_id)) = inner.pending.get(&head.request_id).cloned() else {
             return;
         };
@@ -2446,6 +2777,24 @@ impl Engine {
         };
         let now = self.now();
         let mut inner = self.lock();
+        if inner.compactions.contains_key(&chunk.request_id) {
+            if inner.closed {
+                inner.late_updates += 1;
+                return;
+            }
+            // A failed attempt's stream is no evidence about the cache, as for a turn.
+            if let Some(compaction) = inner
+                .compaction_agent(&chunk.request_id)
+                .and_then(|agent| agent.compaction.as_mut())
+                .filter(|compaction| compaction.attempt == chunk.attempt && compaction.ok_head)
+            {
+                compaction.read = compaction.read.max(usage.read);
+                // The credit files under the TTL the compaction's own write would take, which its usage proves over
+                // the selection's figure, as a turn's `observe_usage` settles it.
+                compaction.ttl_ms = usage.ttl_ms(compaction.ttl_ms, 0);
+            }
+            return;
+        }
         let Some((key, agent_id)) = inner.pending.get(&chunk.request_id).cloned() else {
             return;
         };
@@ -2469,6 +2818,15 @@ impl Engine {
     fn on_complete(&self, complete: RequestComplete) {
         let now = self.now();
         let mut inner = self.lock();
+        if inner.compactions.contains_key(&complete.request_id) {
+            if inner.closed {
+                inner.late_updates += 1;
+                return;
+            }
+            let credit = inner.complete_compaction(&complete, now);
+            self.book_credit(inner, credit, &complete);
+            return;
+        }
         let Some((key, agent_id)) = inner.pending.get(&complete.request_id).cloned() else {
             return;
         };
@@ -2495,8 +2853,8 @@ impl Engine {
         if let Some(reason) = reason {
             // A failed turn is no evidence about the cache, past a head or not, so it decides none of the probes it
             // kept and hands them back for the next turn to read. A label the turn found stays, and a probe that
-            // carries none takes `expired`, which the lapse sweep settles it under at its entry's end if no turn
-            // reads it first, as its recipe's own lapse would have.
+            // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
+            // no turn reads it first, as its recipe's own lapse would have.
             if let Some(agent) = inner
                 .sessions
                 .get_mut(&key)
@@ -2516,54 +2874,33 @@ impl Engine {
         // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
         let credited = {
             let agent = &inner.sessions[&key].agents[&agent_id];
+            let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
             agent
                 .current
                 .as_ref()
                 .and_then(|o| o.prior.as_ref())
-                .and_then(|prior| {
-                    let ttl = prior.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
-                    let gap_exceeded = agent.last_real_at.unwrap_or(now) - prior.real_at > ttl;
-                    // The entry the probe kept has to be there when this request arrives, on the boundary the
-                    // settlement and the scheduler read (`arrived < entry_expires`, `now >= expires`): a request
-                    // at or after the lapse read a cache nothing the probe paid for kept, so that probe settles as
-                    // expired, and a credit here would contradict that settlement.
-                    let entry_alive = prior
-                        .until
-                        .is_some_and(|until| agent.last_real_at.unwrap_or(now) < until);
-                    let same_model = prior.model == agent.canonical_model;
-                    let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
-                    // The upstream shares no cached prefix across speeds, so a probe on the other lane kept
-                    // nothing this request read.
-                    let same_speed = prior.fast == fast;
-                    // The account that served this request, after any failover, has to be the one the
-                    // covering probe warmed. A prefix cached elsewhere by ordinary traffic is no probe's to
-                    // credit.
-                    let same_account = prior.account == agent.account;
-                    // A probe whose answer named no account (one the relay built before any selection)
-                    // settled in no unit and funds nothing to credit, whatever `same_account` says of the
-                    // account it was meant for.
-                    let unit = prior.unit;
-                    (prior.covered
-                        && gap_exceeded
-                        && entry_alive
-                        && same_model
-                        && same_speed
-                        && same_account
-                        && read > 0
-                        && unit.is_some())
-                    .then(|| {
-                        let served = agent.current.as_ref();
-                        (
-                            read,
-                            agent.key_generation,
-                            agent.pool_id.clone(),
-                            agent.account.clone(),
-                            agent.canonical_model.clone(),
-                            fast,
-                            served.and_then(|o| o.kind),
-                            served.is_some_and(|o| o.in_overage),
-                        )
-                    })
+                .filter(|prior| {
+                    prior.credits(
+                        agent.last_real_at.unwrap_or(now),
+                        &agent.canonical_model,
+                        fast,
+                        agent.account.as_deref(),
+                        read,
+                    )
+                })
+                .map(|_| {
+                    let served = agent.current.as_ref();
+                    (
+                        read,
+                        agent.key_generation,
+                        agent.pool_id.clone(),
+                        agent.account.clone(),
+                        agent.canonical_model.clone(),
+                        fast,
+                        served.and_then(|o| o.kind),
+                        served.is_some_and(|o| o.in_overage),
+                        agent.client_label.clone(),
+                    )
                 })
         };
         // Set once the credit has read its gap from the turn before, so the next request's gap runs from this one.
@@ -2573,8 +2910,8 @@ impl Engine {
                 .get_mut(&key)
                 .and_then(|s| s.agents.get_mut(&agent_id))
             {
-                if let Some(arrived) = agent.current.as_ref().map(|o| o.started) {
-                    agent.last_answered_at = Some(arrived);
+                if let Some(request_started) = agent.current.as_ref().map(|o| o.started) {
+                    agent.last_answered_at = Some(request_started);
                 }
             }
         }
@@ -2603,7 +2940,7 @@ impl Engine {
         // stream, by the reading just above. The write a credited request avoided would have taken it, and a discard
         // below clears the observation. Its receipt picks the hour the credit files in and the revision its band and
         // its saving price at, as its own request row's does, though the answer may land past either boundary.
-        let (observed_ttl, arrived) = inner.sessions[&key]
+        let (observed_ttl, request_received) = inner.sessions[&key]
             .agents
             .get(&agent_id)
             .and_then(|a| a.current.as_ref())
@@ -2640,11 +2977,39 @@ impl Engine {
                 agent.count_credit(now);
             }
         }
+        let credit = credited.map(
+            |(read, key_generation, pool_id, account, model, fast, kind, in_overage, client)| {
+                Credit {
+                    at: request_received,
+                    key,
+                    key_generation,
+                    pool_id,
+                    account,
+                    model,
+                    read,
+                    ttl_ms: observed_ttl,
+                    fast,
+                    kind,
+                    in_overage,
+                    client,
+                }
+            },
+        );
+        self.book_credit(inner, credit, &complete);
+    }
+
+    /// Books the credit a completion earned and releases the lock on the way.
+    fn book_credit(
+        &self,
+        mut inner: std::sync::MutexGuard<'_, Inner>,
+        credit: Option<Credit>,
+        complete: &RequestComplete,
+    ) {
         // The serving account's tier as the store names it, as a settlement reads it, so the credit keys the tier its
         // request row does. Read under the lock the once-only warning keeps its set behind.
-        let tier = credited
+        let tier = credit
             .as_ref()
-            .and_then(|(_, _, _, account, ..)| account.as_deref())
+            .and_then(|credit| credit.account.as_deref())
             .and_then(|account| match self.parts.store.subscription(account) {
                 Ok(row) => {
                     inner.unreadable_tiers.remove(account);
@@ -2662,39 +3027,135 @@ impl Engine {
                 }
             });
         drop(inner);
-        if let Some((read, key_generation, pool_id, account, model, fast, kind, in_overage)) =
-            credited
-        {
-            // The band the request's own row keys, read off its prompt as the ledger reads the serving attempt's.
-            let band = complete.usage.as_ref().map_or(Band::Standard, |usage| {
-                let counts = crate::savings::typed(ProbeUsage::from_bus(usage));
-                self.parts.pricing.revisions().in_force(arrived).band_of(
-                    &model,
-                    phoebis_ledger::prompt_tokens(
-                        counts.input,
-                        counts.cache_read,
-                        counts.write_5m,
-                        counts.write_1h,
-                    ),
-                )
-            });
-            self.record_kept_warm(
-                arrived,
-                &key,
-                key_generation,
-                &pool_id,
-                account.as_deref(),
-                &model,
-                &complete.request_id,
-                read,
-                observed_ttl,
-                tier,
-                band,
-                fast,
-                kind,
-                in_overage,
-            );
+        let Some(credit) = credit else {
+            return;
+        };
+        // The band the request's own row keys, read off its prompt as the ledger reads the serving attempt's.
+        let band = complete.usage.as_ref().map_or(Band::Standard, |usage| {
+            let counts = crate::savings::typed(ProbeUsage::from_bus(usage));
+            self.parts.pricing.revisions().in_force(credit.at).band_of(
+                &credit.model,
+                phoebis_ledger::prompt_tokens(
+                    counts.input,
+                    counts.cache_read,
+                    counts.write_5m,
+                    counts.write_1h,
+                ),
+            )
+        });
+        self.record_kept_warm(
+            credit.at,
+            &credit.key,
+            credit.key_generation,
+            &credit.pool_id,
+            credit.account.as_deref(),
+            &credit.model,
+            &complete.request_id,
+            credit.read,
+            credit.ttl_ms,
+            tier,
+            band,
+            credit.fast,
+            credit.kind,
+            credit.in_overage,
+            credit.client.as_deref(),
+        );
+    }
+}
+
+impl Inner {
+    /// The agent holding the compaction `request_id` opened while it may still take a result, `None` for one its
+    /// agent no longer holds, as for a request the engine never followed.
+    fn compaction_agent(&mut self, request_id: &str) -> Option<&mut Agent> {
+        let (key, agent_id) = self.compactions.get(request_id)?.clone();
+        if !self.live(&key, &agent_id) {
+            return None;
         }
+        self.sessions
+            .get_mut(&key)?
+            .agents
+            .get_mut(&agent_id)
+            .filter(|agent| {
+                agent
+                    .compaction
+                    .as_ref()
+                    .is_some_and(|compaction| compaction.request_id == request_id)
+            })
+    }
+
+    /// The completion of an open compaction. Only a complete answer (`Outcome::Succeeded`) decides anything: every
+    /// probe the recipe paid for, the kept ones and then the unanswered ones as one slice in exchange order, is judged
+    /// against the compaction's own arrival, lineage and read, its kept-warm credit is its own, and the recipe stops
+    /// under `compacted`, since it keeps a context the next turn never reads, so no probe goes out until that turn
+    /// re-arms. Any other outcome leaves the recipe, its schedule and its probes as they stood, the old context the
+    /// live one. The credit it earned comes back for the caller to book.
+    fn complete_compaction(&mut self, complete: &RequestComplete, now: i64) -> Option<Credit> {
+        let (key, agent_id) = self.compactions.remove(&complete.request_id)?;
+        let live = self.live(&key, &agent_id);
+        let agent = self.sessions.get_mut(&key)?.agents.get_mut(&agent_id)?;
+        let compaction = agent
+            .compaction
+            .take_if(|compaction| compaction.request_id == complete.request_id)?;
+        if !live || complete.outcome != Outcome::Succeeded {
+            return None;
+        }
+        let read = complete
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.cache_read_tokens)
+            .unwrap_or(compaction.read);
+        // An answer without a stream proves its TTL here alone, as the stream's phases do in `on_chunk`.
+        let ttl_ms = complete.usage.as_ref().map_or(compaction.ttl_ms, |usage| {
+            ProbeUsage::from_bus(usage).ttl_ms(compaction.ttl_ms, 0)
+        });
+        let mut probes = std::mem::take(&mut agent.kept);
+        let unanswered = std::mem::take(&mut agent.unanswered);
+        probes.extend(unanswered.iter().map(|probe| Kept::of(agent, probe)));
+        let credit = compaction
+            .prior
+            .as_ref()
+            .filter(|prior| {
+                prior.credits(
+                    compaction.started,
+                    &compaction.canonical_model,
+                    compaction.fast,
+                    compaction.account.as_deref(),
+                    read,
+                )
+            })
+            .map(|_| Credit {
+                at: compaction.received_at,
+                key: key.clone(),
+                key_generation: agent.key_generation,
+                pool_id: agent.pool_id.clone(),
+                account: compaction.account.clone(),
+                model: compaction.canonical_model.clone(),
+                read,
+                ttl_ms,
+                fast: compaction.fast,
+                kind: compaction.kind,
+                in_overage: compaction.in_overage,
+                client: Some(compaction.client_label.clone()),
+            });
+        if credit.is_some() {
+            agent.count_credit(now);
+        }
+        self.decide_against(
+            &key,
+            &agent_id,
+            probes,
+            Answer {
+                started: Some(compaction.started),
+                account: compaction.account,
+                model: compaction.canonical_model,
+                fast: compaction.fast,
+                read,
+            },
+        );
+        // No label: a probe still in flight lands orphaned and unsettled, since nothing around a compaction reads as
+        // wasted.
+        self.discard(&key, &agent_id, Reason::Compacted, None);
+        credit
     }
 }
 
@@ -2733,18 +3194,25 @@ impl Inner {
         let Some(observation) = agent.current.as_mut() else {
             return;
         };
-        if !observation.ready || agent.paused || usage.evidence() == 0 {
+        if !observation.ready || usage.evidence() == 0 {
             return;
         }
-        observation.expected = usage.evidence();
         let previous_ms = agent.ttl_ms;
         let requested_ms = observation
             .dispatched_ms
             .unwrap_or(observation.recipe.ttl_ms);
-        agent.ttl_ms = usage.ttl_ms(previous_ms, requested_ms);
-        if observation.ttl_ms > 0 && observation.ttl_ms < agent.ttl_ms {
-            agent.ttl_ms = observation.ttl_ms;
+        let mut ttl_ms = usage.ttl_ms(previous_ms, requested_ms);
+        if observation.ttl_ms > 0 && observation.ttl_ms < ttl_ms {
+            ttl_ms = observation.ttl_ms;
         }
+        // A paused recipe takes nothing from this usage, but the request's credit from a probe sent before the pause
+        // still files under the TTL its own write would have taken, so the observation keeps that TTL.
+        if agent.paused {
+            observation.ttl_ms = ttl_ms;
+            return;
+        }
+        observation.expected = usage.evidence();
+        agent.ttl_ms = ttl_ms;
         note_ttl_change(
             key,
             agent_id,
@@ -2844,8 +3312,9 @@ impl Engine {
                 let agent = &inner.sessions[&key].agents[&agent_id];
                 // The ceilings and the gate run for every retained recipe, armed or not: a pause clears the
                 // schedule, so an opt-out could otherwise never discard a recipe paused by a 429 and a ceiling
-                // could never settle it while the companion keeps reporting.
-                if agent.current.is_none() {
+                // could never settle it while the companion keeps reporting. A recipe an open compaction holds
+                // waits as it stood for the compaction's completion to keep or stop it.
+                if agent.current.is_none() || agent.compaction.is_some() {
                     continue;
                 }
                 let ready = agent
@@ -3375,6 +3844,12 @@ pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Re
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_log_lines_instant_prints_in_utc_with_the_zone_named_or_raw_when_out_of_range() {
+        assert_eq!(utc_stamp(1_760_961_787_123), "2025-10-20 12:03:07 UTC");
+        assert_eq!(utc_stamp(i64::MAX), i64::MAX.to_string());
+    }
+
     /// `ALL` is kept by hand. The cycle below names every variant with no wildcard, so a variant the enum gains stops
     /// this test compiling until it joins the cycle, and the walk then wants it in `ALL`.
     #[test]
@@ -3401,11 +3876,39 @@ mod tests {
 
     #[test]
     fn a_refreshing_class_rearms_whatever_the_chain_says() {
-        for class in phoebis_routing::REFRESHING_CLASSES.iter().copied() {
+        for class in phoebis_routing::REFRESHING_CLASSES
+            .iter()
+            .copied()
+            .filter(|class| *class != "compaction")
+        {
             assert_eq!(
                 guard(Some(class), None, &[], Some(("s", "t")), false),
                 Guard::Rearm,
                 "{class}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_compaction_answers_its_own_verdict_whatever_the_chain_says() {
+        let continuing = ["t".to_string()];
+        let fresh = ["fresh".to_string()];
+        for (static_hash, boundaries, recipe, model_matches) in [
+            (None, &[][..], Some(("s", "t")), false),
+            (None, &[][..], None, false),
+            (Some("s"), &continuing[..], Some(("s", "t")), true),
+            (Some("s"), &fresh[..], Some(("s", "t")), true),
+        ] {
+            assert_eq!(
+                guard(
+                    Some("compaction"),
+                    static_hash,
+                    boundaries,
+                    recipe,
+                    model_matches
+                ),
+                Guard::Compaction,
+                "{static_hash:?} {boundaries:?} {recipe:?}"
             );
         }
     }

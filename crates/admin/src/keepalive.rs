@@ -124,7 +124,7 @@ struct PoolDay {
 pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
     let day = hour_of(now) - 24 * 3_600;
-    let to = hour_of(now) + 3_600;
+    let to = crate::analytics::hour_end(hour_of(now));
     let rows = match state
         .ledger
         .db()

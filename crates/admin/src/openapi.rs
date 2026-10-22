@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use axum::body::Bytes;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use phoebis_guardrails::{Condition, ConditionWords};
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ const INTRODUCTION: &str = r#"Every operation here lives under `/admin/` on the 
 
 ## Access
 
-Log in with `POST /admin/session` and the admin secret. The answer sets the `phoebis_admin` cookie, which every later call carries. Five failed logins in a minute refuse every login for the rest of that minute (`429 too many failed logins, try again in a minute`), and a wrong secret answers `401 secret does not match`. A session ends after 15 minutes idle or 12 hours in all. Every `DELETE`, `PATCH`, `POST` or `PUT` that carries an `Origin` must name the request's own `Host` with it, the authority equal ignoring case, port included, and the scheme `https` where the admin listener terminates TLS or the request carries a front's `X-Forwarded-Proto: https`, `http` or `https` otherwise (`403 origin is not allowed`). One with no `Origin` is admitted. Behind a front that terminates TLS the front passes `Host` through and sets the header, so both headers name it and the scheme is required. Every `PATCH`, `POST` or `PUT` that carries a body must send `Content-Type: application/json` (`415 content type must be application/json`). A missing or unknown cookie answers `401 no admin session`, except on `DELETE /admin/session`, which answers its clear whatever the cookie names. Every answer carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`.
+Log in with `POST /admin/session` and the admin secret. The answer sets the `phoebis_admin` cookie, which every later call carries. Five failed logins in a minute refuse every login for the rest of that minute (`429 too many failed logins, try again in a minute`), and a wrong secret answers `401 secret does not match`. A session ends after 15 minutes idle or 12 hours in all. A login with `stay_logged_in` true keeps its session for 30 days from its last read, across a restart: every answer to it but its logout's sets a renewed cookie of the same 30 days, and a secret rotation or the logout of a kept login ends it, the logout ending every kept login of the install. Every `DELETE`, `PATCH`, `POST` or `PUT` that carries an `Origin` must name the request's own `Host` with it, the authority equal ignoring case, port included, and the scheme `https` where the admin listener terminates TLS or the request carries a front's `X-Forwarded-Proto: https`, `http` or `https` otherwise (`403 origin is not allowed`). One with no `Origin` is admitted. Behind a front that terminates TLS the front passes `Host` through and sets the header, so both headers name it and the scheme is required. Every `PATCH`, `POST` or `PUT` that carries a body must send `Content-Type: application/json` (`415 content type must be application/json`). A missing or unknown cookie answers `401 no admin session`, except on `DELETE /admin/session`, which answers its clear whatever the cookie names. Every answer carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and `x-phoebis-build`, the full commit the router was built from or `unknown` for a build that had none.
 
 A request that carries `Authorization: Bearer` with the admin secret is admitted without a cookie and without the `Origin` check. A wrong bearer answers `401 secret does not match` and counts toward the login throttle, so a throttled process answers it `429` too. A bearer on `POST /admin/session` is ignored: the login stays the cookie's door. This page's Authorization input sends the admin secret as that bearer on every call it makes and keeps it in memory alone, so the secret is gone with the tab.
 
@@ -38,9 +38,9 @@ Every error is `{"error": "<message>"}`. A `503` from a registry reload also car
 Each operation names its request (path segments, query parameters, or body fields with their bounds), its answer (the top-level keys, with an example captured from the route where one exists) and its refusals (status and message per refusal). The gate's own refusals above apply to every operation and are not repeated under each. Any other path under `/admin/` answers `404 not found`, behind the same gate: an anonymous caller sees the gate's `401` first, whatever the path, and a session that reaches the `404` learns only that nothing serves the path. The proxy listener's routes, `GET /v1/usage` among them, and the metrics listener are not part of this document.
 "#;
 
-/// The document's static half: the info block, the one relative server, the eighteen tags in the API page's area order
+/// The document's static half: the info block, the one relative server, the seventeen tags in the API page's area order
 /// (`docs/site/api-reference.md`), the bearer requirement on every operation, and the four shared responses. The paths
-/// join it in `router()`.
+/// join it in `routes::parts()`.
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Phoebis Router admin API"),
@@ -69,12 +69,11 @@ Each operation names its request (path segments, query parameters, or body field
         (name = "Dashboard"),
         (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \
             before any account is selected, attached to pools and keys in order. `observe` records each match on the \
-            request, `enforce` refuses a matching request with `400 guardrail_blocked`."),
+            request, `enforce` refuses a matching request with `403 guardrail_blocked`."),
         (name = "Keepalive"),
         (name = "Keys", description = "The secret is answered on `POST /admin/keys` and `POST /admin/keys/{id}/rotate` \
             and nowhere else. A `key_json` answer never carries the digest either."),
         (name = "Ledger"),
-        (name = "Models"),
         (name = "Pairing", description = "Pairing is a stateful, multi-step flow: start a session, receive the upstream's \
             callback, confirm it into a committed credential. The documentation site's pairing page works the flow \
             through with `curl`."),
@@ -292,8 +291,8 @@ impl From<&Condition> for ConditionView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeepalivePolicyView {
     pub enabled: bool,
-    /// The idle window of the main conversation. 0 resolves to the recipe's break-even, as does any value above
-    /// it.
+    /// The idle window of the main conversation, taken as set, above the recipe's break-even too. 0 resolves to the
+    /// break-even.
     pub max_idle_seconds: u64,
     /// How long a park on a background command or a subagent is probed. Null is the recipe's break-even.
     pub max_parked_seconds: Option<u64>,
@@ -594,15 +593,16 @@ pub(crate) struct BreakdownRow {
     /// request no attempt answered files under the speed its last attempt reported, else under `fast` when it asked
     /// for `fast` and under `standard` otherwise.
     pub key: String,
-    /// Under `group_by=key` an earlier holder's rows read `<id> (deleted, created 2026-09-14 09:31 UTC)`, the
-    /// generation's date and time at minute precision in UTC, and `<id> (deleted)` at generation 0, which holds no
-    /// creation time. Under `group_by=client` the `-` row reads `unattributed`.
+    /// Under `group_by=key` an earlier holder's rows read `<id> (deleted)` whatever the generation, the creation
+    /// instant being `key_created_at`'s to format. Under `group_by=model` the empty key, the requests the router
+    /// rejected before routing, reads `no model`. Under `group_by=client` the `-` row reads `unattributed`.
     pub label: String,
     /// The key's id under `group_by=key`. Absent for another dimension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_id: Option<String>,
-    /// An earlier holder's `created_at` in Unix milliseconds, 0 for a generation with no creation time. The console
-    /// prints it in the viewer's zone. Absent for the key that holds the id now and for another dimension.
+    /// An earlier holder's `created_at` in Unix milliseconds, 0 for a generation with no creation time. The label
+    /// carries no instant, so a reader formats this one in its own zone. Absent for the key that holds the id now and
+    /// for another dimension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_created_at: Option<i64>,
     pub requests: u64,
@@ -623,6 +623,10 @@ pub(crate) struct BreakdownRow {
     pub cost_usd: f64,
     /// By error code.
     pub errors: BTreeMap<String, u64>,
+    /// The refused requests of the group, the sum of `refusals`, not in `requests`.
+    pub refused: u64,
+    /// The refused requests of the group by error code.
+    pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
     pub histograms: HistogramsView,
     pub percentiles: PercentilesView,
@@ -814,6 +818,7 @@ pub(crate) struct HourPointView {
     /// The hour's plan-funded rows as the share of a Max 20x account's two shared windows, whatever tier served them.
     pub equivalent: SharedEquivalentView,
     pub errors: u64,
+    pub refused: u64,
     pub requests: u64,
     pub tokens: u64,
 }
@@ -886,8 +891,8 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("key_models", "200"),
     fixture!("replay", "200"),
     fixture!("replay_held", "503"),
-    fixture!("models_state", "200"),
     fixture!("pairing_started", "201"),
+    fixture!("oauth_session", "200"),
     fixture!("pools", "200"),
     fixture!("pool_traffic", "200"),
     fixture!("pricing", "200"),
@@ -984,16 +989,26 @@ fn matches(pattern: &str, path: &str) -> bool {
     }
 }
 
+/// The header naming the commit the binary was built from on every admin answer.
+pub(crate) const BUILD_HEADER: &str = "x-phoebis-build";
+
+/// `build` as the header's value. A hand-set `PHOEBIS_BUILD_COMMIT` can hold a byte no header carries, and such a
+/// build answers `unknown` rather than fail every answer.
+pub(crate) fn build_value(build: &str) -> HeaderValue {
+    HeaderValue::from_str(build).unwrap_or_else(|_| HeaderValue::from_static("unknown"))
+}
+
 /// The document's answer. The gate's middleware never runs on this route, so the headers every admin answer carries
 /// are set here. `no-store`, because the document changes with every binary and names the version, and a browser
 /// holding an old copy across an upgrade would list operations the new binary no longer serves.
-pub(crate) fn document(text: Bytes) -> Response {
+pub(crate) fn document(text: Bytes, build: &str) -> Response {
     (
         StatusCode::OK,
         [
             (CONTENT_TYPE, HeaderValue::from_static("application/json")),
             (CACHE_CONTROL, HeaderValue::from_static("no-store")),
             (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
+            (HeaderName::from_static(BUILD_HEADER), build_value(build)),
         ],
         text,
     )

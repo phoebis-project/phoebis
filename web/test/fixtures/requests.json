@@ -133,7 +133,8 @@
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
-        "guardrails": []
+        "guardrails": [],
+        "refused": false
       },
       {
         "id": "r-captured",
@@ -266,7 +267,8 @@
         "held": null,
         "diagnostics_source": "client",
         "guardrail_id": null,
-        "guardrails": []
+        "guardrails": [],
+        "refused": false
       },
       {
         "id": "r-failed",
@@ -399,7 +401,8 @@
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
-        "guardrails": []
+        "guardrails": [],
+        "refused": false
       },
       {
         "id": "r-incomplete",
@@ -536,7 +539,8 @@
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
-        "guardrails": []
+        "guardrails": [],
+        "refused": false
       },
       {
         "id": "r-earlier-holder",
@@ -669,7 +673,8 @@
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
-        "guardrails": []
+        "guardrails": [],
+        "refused": false
       },
       {
         "id": "r-failover",
@@ -896,7 +901,8 @@
             "position": 0,
             "blocked": false
           }
-        ]
+        ],
+        "refused": false
       },
       {
         "id": "r-blocked",
@@ -919,7 +925,7 @@
         "classifier": null,
         "forked_from": null,
         "fork_depth": null,
-        "status": 400,
+        "status": 403,
         "outcome": "rejected",
         "error_code": "guardrail_blocked",
         "client_drift": null,
@@ -995,7 +1001,8 @@
             "position": 1,
             "blocked": true
           }
-        ]
+        ],
+        "refused": true
       },
       {
         "id": "r-classifier",
@@ -1128,7 +1135,8 @@
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
-        "guardrails": []
+        "guardrails": [],
+        "refused": false
       },
       {
         "id": "r-contract",
@@ -1216,7 +1224,8 @@
         "held": null,
         "diagnostics_source": null,
         "guardrail_id": null,
-        "guardrails": []
+        "guardrails": [],
+        "refused": true
       }
     ],
     "next_cursor": null,

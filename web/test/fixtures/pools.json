@@ -55,12 +55,12 @@
             "max": 255960.0
           },
           "idle_seconds": {
-            "min": 2760.0,
+            "min": 3600.0,
             "max": 3600.0
           },
           "idle_share": {
             "min": 0.013888888888888886,
-            "max": 0.9199999999999999
+            "max": 1.2
           },
           "parked_seconds": {
             "min": 2760.0,
@@ -85,8 +85,8 @@
         "auto_mode_server": true,
         "body_capture_hours": 24,
         "created_at": 1791721000000,
-        "updated_at": 1791721000000,
-        "revision": 6189767511104,
+        "updated_at": 1791721000001,
+        "revision": 6189767511105,
         "members": [
           {
             "account_id": "business",
@@ -103,7 +103,7 @@
                 "period_end": 1793491200000
               }
             ],
-            "active_pins": 1,
+            "active_pins": 3,
             "pace_score": 0.005952380952380952,
             "burn": null,
             "speed": null
@@ -123,7 +123,7 @@
                 "period_end": 1793491200000
               }
             ],
-            "active_pins": 0,
+            "active_pins": 1,
             "pace_score": 1.0,
             "burn": null,
             "speed": null
@@ -138,7 +138,7 @@
           }
         ],
         "status": "active",
-        "requests_24h": 10,
+        "requests_24h": 8,
         "cost_24h": 0.028450000000000007,
         "billed_24h": 0.010700000000000001,
         "equivalent_24h": {
@@ -150,7 +150,7 @@
           }
         },
         "estimated_24h": true,
-        "active_pins": 1,
+        "active_pins": 4,
         "traffic_24h": [
           {
             "at": 1791633600000,
@@ -545,8 +545,8 @@
           },
           {
             "at": 1791716400000,
-            "requests": 6,
-            "failed": 3,
+            "requests": 4,
+            "failed": 1,
             "tokens": 9000,
             "cost_usd": 0.017750000000000002,
             "billed_usd": 0.0071,

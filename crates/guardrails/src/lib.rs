@@ -5,6 +5,7 @@ pub mod body;
 pub mod compile;
 pub mod condition;
 pub mod evaluate;
+pub mod name;
 pub mod path;
 pub mod presets;
 
@@ -21,5 +22,6 @@ pub use evaluate::{
     evaluate, evaluate_all, texts, Evaluation, HeaderLookup, HintLookup, Lookup, Match,
     RequestFacts, Verdict,
 };
+pub use name::client_phrase;
 pub use path::{BodyPath, PathError, Segment, PATH_MAX_CHARS, PATH_MAX_SEGMENTS};
 pub use presets::{presets, Preset};

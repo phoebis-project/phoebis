@@ -125,12 +125,18 @@ empty file, and any other shape is refused with `storage key file must hold exac
 with at most one trailing newline`.
 
 The registry carries a canary sealed under the key at its first open, and every open proves the key against it before
-any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
-is refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry
-from before the canary existed is proved against its sealed rows instead, the first 32 of each kind (credential bundles
-and API-key secrets), passing when any of them opens, and the next start seals its canary. `check-config` names such a
+any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved, is
+refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry from
+before the canary existed is proved against its sealed rows instead, the first 32 of each kind (credential bundles and
+API-key secrets), passing when any of them opens, and the next start seals its canary. `check-config` names such a
 registry with `registry at {path} has no key canary yet. A sealed row opens under the key, and the next start seals
-one`.
+one`. The proof's scope, the first 32 credential bundles and the first 32 API-key secrets, leaves a dead end in two
+shapes: a registry without a canary whose readable credential or API-key rows all sit past the 32nd of their kind
+refuses the right key at the start, and so does one whose readable rows sit only among the keepalive recipe bodies,
+which the proof never reads, beside credential or API-key rows that do not open. `phoebis recover-key` scans every
+sealed row, so it reads the right key as matching and refuses to discard, and it seals no canary, so no command leads
+out of either shape with the rows kept: a registry in one needs a backup taken after its canary was sealed, or a
+recovery under a new key, which discards every sealed row.
 
 `init` refuses a key file that exists with `{path} already exists, and init never replaces a key, since every stored
 credential is sealed under it`, and refuses a data directory that already holds a registry, so a lost key is never
@@ -240,6 +246,7 @@ each call under the `--timeout` deadline, and prints one screen:
 
 ```text title="phoebis status"
 phoebis 0.1.0, up 3d 4h, ready
+  build 9f3c2a7e5b1d4c6f8a0e2b4d6f8a1c3e5b7d9f0a
   proxy https://0.0.0.0:8317  admin http://127.0.0.1:8081
   metrics http://127.0.0.1:9464
   ledger:
@@ -267,9 +274,11 @@ pins (one per session, the main agent's)
 
 The header carries the version and the uptime from `GET /admin/system` and one of three readings: `ready`, `not ready:`
 with each dead component (`ledger`, `router`, `store`), or `proxy down:` with the probe's line when the proxy listener
-did not answer `200`, which wins over the other two. When the admin API could not be read, the header carries the
-binary's own version and `readiness unknown`, unless the proxy is down. The listeners follow with their schemes as the
-file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
+did not answer `200`, which wins over the other two. The line under it names the build as `build {commit}` from the same
+answer, the full commit the router was built from or `unknown` for a build that had none. When the admin API could not
+be read, the header carries the binary's own version and `readiness unknown`, unless the proxy is down, and the line
+under it the binary's own build. The listeners follow with their schemes as the file names them. Under them, a
+listener's certificate whose leaf expires within 30 days prints
 `proxy.tls.cert_file {path} expires in {n} days ({date})` (or `admin.tls.cert_file`), and a certificate file the loader
 refuses when the operator reads it prints the loader's line for it
 ([TLS on the listeners](installation.md#tls-on-the-listeners)). The running router keeps the pair it loaded until
@@ -284,17 +293,19 @@ hours, then one line per member by priority, then account id: the account's labe
 off on it), the member's eligibility, the five-hour and seven-day windows in whole percent (`-` with no sample) and the
 Fable week when the account has one, then the nearest reset as `resets {HH:MM}` or, under a cooldown, `until {HH:MM}
 {reason}`, with the scope ahead of the reason (`fast`, `fast_credits`, `model:{canonical}`) when the cooldown holds less
-than the whole account. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts no
-pool holds, with their state, and is left out when there are none.
+than the whole account. A member in the `disconnected` or `reauth_required` state prints `-` under both windows, since
+the router answers it none. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts
+no pool holds, with their state, and is left out when there are none.
 
 The pins block is the sessions route's answer, one line per session that holds a pin: the route groups pins by key
 generation and session and prefers the main agent's pin, so a session whose subagent is pinned to another account shows
 its main agent's line. Each line carries the first twelve characters of the session id, the agent id or `-`, the
 account, and `pinned {age} ago, {model}`, or, on a pin a move stamped, `shed from {account}, {age} ago` when a shedding
 round moved the session off that account and `failed over from {account}, {age} ago` when a failover landed it, followed
-by `, keepalive {state}` and `next probe {HH:MM}` while the keepalive engine tracks it. Times print in the local zone as
-`HH:MM`, with the date in front as `MM-DD` when it is not today, and ages print in their largest whole unit as `12s`,
-`4m`, `3h` or `2d`. The block reads `pins: none` when no session holds a pin.
+by `, keepalive {state}` and `next probe {HH:MM}` while the keepalive engine tracks it. Times on the screen print in the
+host's zone as `HH:MM`, with the date in front as `MM-DD` when it is not today, while the router's log lines print their
+instants in UTC with the zone named. Ages print in their largest whole unit as `12s`, `4m`, `3h` or `2d`. The block
+reads `pins: none` when no session holds a pin.
 
 A read that fails prints one line in its section, such as `pools: the admin listener did not answer on {url}: {reason}`
 or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is down, the
@@ -332,7 +343,7 @@ On the host:
    optional here (an unset one prints `warning: environment variable {name} is unset or empty`), and `check-config`
    takes no lock and opens no socket, so it is safe to run while the old binary still serves traffic. It reads the key
    file and proves it against the registry's canary, so a key file that drifted is caught before the restart.
-3. Read the [changelog](changelog.md) for a bootstrap key that changed.
+3. Read the release's [changelog](changelog.md) entry for a bootstrap key it names as changed.
 4. Take a [backup](#backup): `phoebis backup --to <dir>`.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.
 6. Restart the service: `sudo systemctl restart phoebis`. The stop runs under one budget of 35 seconds, which cuts its
@@ -386,7 +397,7 @@ until a reload lands and `certificate_expiring` from 30 days before a loaded lea
 Schema migrations run when the new binary opens each database, every migration above the stored version in order, each
 inside its own transaction, so a crash leaves the last version that landed. The registry's migrations may drop or
 rebuild a table, and a ledger migration can drop or rebuild one too. This build writes the registry at schema 59 and the
-ledger at schema 41. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
+ledger at schema 42. Both refuse to open a file a newer build wrote: the registry with `the registry's schema version
 {found} is newer than this build supports ({supported}), so restore the backup taken before the upgrade`, and the ledger
 with the same words after `the ledger's schema version`. `phoebis check-config` reads both versions read-only, taking no
 lock, and refuses first with `the registry at {path} is at schema {found}, newer than the {supported} this build reads`

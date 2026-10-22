@@ -4,8 +4,9 @@
 
 use phoebis_ledger::test_tables::{api_prices, subscription_costs, JANUARY_2026};
 use phoebis_ledger::{
-    bucket_of, newest_rows, read_reconciliations, reconcile, AttemptRecord, LedgerDb,
-    QuotaSampleRecord, ReconciliationRow, RequestRecord, MIN_RISE, RATIO_HIGH, RATIO_LOW,
+    bucket_of, fold_routing_conditions, newest_rows, read_reconciliations, reconcile,
+    routing_conditions, AttemptRecord, LedgerDb, QuotaSampleRecord, ReconciliationRow,
+    RequestRecord, MIN_RISE, RATIO_HIGH, RATIO_LOW,
 };
 use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 
@@ -151,6 +152,15 @@ fn reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> QuotaSampl
     }
 }
 
+/// A head's reading of account `a`'s `window` observed at `at`. A head and a poll in one five-minute bucket leave the
+/// head alone, so a case mixing the two puts every reading in a bucket of its own.
+fn head_reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> QuotaSampleRecord {
+    QuotaSampleRecord {
+        source: "head".into(),
+        ..reading(window, at, utilization, reset_at)
+    }
+}
+
 /// One hourly reconciliation at `now` on the test tables, on its own transaction as the fold's.
 fn fold(db: &LedgerDb, now: i64) {
     let (prices, tables) = (api_prices(), subscription_costs());
@@ -192,17 +202,17 @@ fn a_complete_run_prices_its_attempts_and_writes_the_ratio() {
         [],
         "the reset lies ahead and no later one was read, so the window can still take charges"
     );
-    // The window reset early: a reading names the next reset, which closes the run.
     db.insert_samples(
         &[reading(
             FIVE_HOUR,
-            SATURDAY + 25 * MINUTE,
+            reset + 5 * MINUTE,
             0.0,
             reset + 5 * HOUR,
         )],
         None,
     )
     .unwrap();
+    let now = reset + 10 * MINUTE;
     fold(&db, now);
     let rows = rows(&db, now);
     assert_eq!(
@@ -253,7 +263,7 @@ fn a_five_point_rise_between_whole_percent_readings_meets_the_least_rise() {
     served(&db, "r1", SONNET, SATURDAY + 5 * MINUTE, 2, None);
     let now = reset + HOUR;
     fold(&db, now);
-    let newest = db.read_blocking(newest_rows).unwrap();
+    let newest = db.read_blocking(|c| newest_rows(c, now)).unwrap();
     let rows = newest.get("a").map(Vec::as_slice).unwrap_or_default();
     assert_eq!(
         rows.iter().map(|r| r.window.as_str()).collect::<Vec<_>>(),
@@ -265,7 +275,7 @@ fn a_five_point_rise_between_whole_percent_readings_meets_the_least_rise() {
     assert!(close(row.ratio, 2.5), "0.05 over 0.02: {}", row.ratio);
     assert!(
         !(RATIO_LOW..=RATIO_HIGH).contains(&row.ratio),
-        "the row is off by its ratio alone, once its rise counts: {}",
+        "the row reads off by its ratio only over a priced share above the floor: {}",
         row.ratio
     );
 }
@@ -302,16 +312,336 @@ fn a_run_of_one_reading_is_skipped() {
 }
 
 #[test]
-fn a_fall_in_utilization_is_skipped() {
+fn a_fall_inside_a_run_splits_it_and_the_row_sums_its_parts() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // A grant empties the window between the second and third readings: a rise of 0.84 before it and 0.10 after.
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.05, reset),
+            reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.89, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.0, reset),
+            reading(FIVE_HOUR, SATURDAY + 30 * MINUTE, 0.10, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    // 0.84 of the window from 84 Sonnet units before the grant, and 0.10 after it from five tokens of Opus 5 at Opus
+    // 5.5's weight of 2, an estimate.
+    served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 84, None);
+    served(
+        &db,
+        "after",
+        OPUS_UNWEIGHTED,
+        SATURDAY + 25 * MINUTE,
+        5,
+        None,
+    );
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.window.as_str(),
+                r.first_reading_at,
+                r.last_reading_at,
+                r.requests,
+                r.estimated
+            ))
+            .collect::<Vec<_>>(),
+        [(FIVE_HOUR, SATURDAY, SATURDAY + 30 * MINUTE, 2, 1)],
+        "one row for the window, from the first part's first reading to the second part's last: {rows:?}"
+    );
+    let row = &rows[0];
+    assert!(
+        close(row.observed_rise, 0.94),
+        "0.84 and 0.10: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 0.94), "{}", row.predicted_share);
+    assert!(close(row.ratio, 1.0), "{}", row.ratio);
+}
+
+/// The readings of a run split at a fall: 0.05 to 0.89 before a grant empties the window, then 0.0 to 0.10.
+fn a_run_split_at_a_fall(db: &LedgerDb, reset: i64) {
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.05, reset),
+            reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.89, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.0, reset),
+            reading(FIVE_HOUR, SATURDAY + 30 * MINUTE, 0.10, reset),
+        ],
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_attempt_the_tables_cannot_price_in_one_part_skips_the_whole_row() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    a_run_split_at_a_fall(&db, reset);
+    // 0.84 of the window from 84 Sonnet units before the grant, and after it an attempt on a model of a tier with no
+    // weighted model, which the tables price to no share whatever its tokens.
+    served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 84, None);
+    served(&db, "after", MYSTERY, SATURDAY + 25 * MINUTE, 20, None);
+    let now = reset + HOUR;
+    fold(&db, now);
+    assert_eq!(
+        rows(&db, now),
+        [],
+        "the second part's rise carries a draw no share prices, so the window writes no row"
+    );
+}
+
+#[test]
+fn a_part_with_no_priced_attempt_adds_nothing_and_the_other_part_writes_the_row() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    a_run_split_at_a_fall(&db, reset);
+    // 0.84 of the window from 84 Sonnet units before the grant, and no attempt after it.
+    served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 84, None);
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.window.as_str(),
+                r.first_reading_at,
+                r.last_reading_at,
+                r.requests,
+                r.estimated
+            ))
+            .collect::<Vec<_>>(),
+        [(FIVE_HOUR, SATURDAY, SATURDAY + 10 * MINUTE, 1, 0)],
+        "the row reads the first part alone: {rows:?}"
+    );
+    let row = &rows[0];
+    assert!(close(row.observed_rise, 0.84), "{}", row.observed_rise);
+    assert!(close(row.predicted_share, 0.84), "{}", row.predicted_share);
+}
+
+/// A run its own reset closed reads as one that slid only where its key lies past the closing reading's instant by
+/// more than the reset tolerance: the key rounds a fractional reset up by up to half a second, and a router clock that
+/// lags moves the closing instant earlier, while a live slide moves the reset by whole 10-minute steps.
+#[test]
+fn a_run_closed_inside_the_reset_tolerance_before_its_key_writes_its_row_and_one_closed_earlier_slid(
+) {
+    let reset = SATURDAY + HOUR;
+    for (early, written) in [(MINUTE, true), (MINUTE + 1_000, false)] {
+        let db = LedgerDb::open_in_memory().unwrap();
+        seed_request(&db, "seed", SATURDAY - MINUTE);
+        db.insert_samples(
+            &[
+                reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+                reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.30, reset),
+                reading(FIVE_HOUR, reset - early, 0.0, reset + 5 * HOUR),
+            ],
+            None,
+        )
+        .unwrap();
+        served(&db, "r1", SONNET, SATURDAY + 10 * MINUTE, 20, None);
+        let now = reset + HOUR;
+        fold(&db, now);
+        let expected: &[i64] = if written { &[reset] } else { &[] };
+        assert_eq!(
+            rows(&db, now)
+                .iter()
+                .map(|r| r.window_end)
+                .collect::<Vec<_>>(),
+            expected,
+            "the next reset read {early} ms before the run's own"
+        );
+    }
+}
+
+#[test]
+fn a_run_a_later_reset_closed_while_its_own_lay_ahead_writes_no_row() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // The 5-hour reset slides ten minutes with each pair of polls, so each pair's run closes hours before its own
+    // reset, until the last pair's reset passes.
+    let slides = 4;
+    let reset_of = |slide: i64| SATURDAY + 5 * HOUR + slide * 10 * MINUTE;
+    for slide in 0..slides {
+        let at = SATURDAY + slide * 10 * MINUTE;
+        db.insert_samples(
+            &[
+                reading(FIVE_HOUR, at, 0.10, reset_of(slide)),
+                reading(FIVE_HOUR, at + 5 * MINUTE, 0.20, reset_of(slide)),
+            ],
+            None,
+        )
+        .unwrap();
+        served(&db, &format!("r{slide}"), SONNET, at + 2 * MINUTE, 10, None);
+    }
+    let last = reset_of(slides - 1);
+    let now = last + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter().map(|r| r.window_end).collect::<Vec<_>>(),
+        [last],
+        "a slid reset ended no window, and the one row is the window that passed: {rows:?}"
+    );
+}
+
+#[test]
+fn a_drift_holds_only_where_the_rise_and_the_priced_share_both_reach_the_least_rise() {
+    let now = SATURDAY + DAY;
+    let db = LedgerDb::open_in_memory().unwrap();
+    // One ratio outside the band, 0.05 over 0.0381, on a light window and on a window priced at 0.06.
+    let ratio = 0.05 / 0.0381;
+    db.write(|c| {
+        for (account, rise, predicted) in [("light", 0.05, 0.0381), ("priced", 0.06 * ratio, 0.06)] {
+            c.execute(
+                "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+                 VALUES (?1, 'five_hour', ?2, ?2 - 10800000, ?2 - 3600000, ?3, ?4, ?5, 1, 0, ?2)",
+                rusqlite::params![account, now - HOUR, rise, predicted, ratio],
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let tables = subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_routing_conditions(&tx, &tables, now)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let held = db.read_blocking(routing_conditions).unwrap();
+    assert_eq!(
+        held.iter()
+            .filter(|r| r.kind == "meter_drift")
+            .map(|r| r.subject_id.as_str())
+            .collect::<Vec<_>>(),
+        ["priced"],
+        "a light window's one reading step reads far off its priced share, so it holds nothing: {held:?}"
+    );
+}
+
+#[test]
+fn a_run_opening_on_a_head_and_closing_on_a_poll_reads_its_polls_alone() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
     seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
-            reading(FIVE_HOUR, SATURDAY, 0.80, reset),
-            reading(SEVEN_DAY, SATURDAY, 0.10, reset),
-            reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.10, reset),
-            reading(SEVEN_DAY, SATURDAY + 10 * MINUTE, 0.12, reset),
+            head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.20, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.40, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    // 0.10 of the window before the first poll, outside the polls' rise, and 0.20 between the polls.
+    served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 10, None);
+    served(&db, "between", SONNET, SATURDAY + 15 * MINUTE, 20, None);
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
+            .collect::<Vec<_>>(),
+        [(SATURDAY + 10 * MINUTE, SATURDAY + 20 * MINUTE, 1)],
+        "the polls' instants and the attempt between them: {rows:?}"
+    );
+    assert!(
+        close(rows[0].observed_rise, 0.20),
+        "the polls' rise: {}",
+        rows[0].observed_rise
+    );
+    assert!(
+        close(rows[0].predicted_share, 0.20),
+        "{}",
+        rows[0].predicted_share
+    );
+}
+
+#[test]
+fn a_run_of_heads_alone_reconciles_as_a_run_of_polls_does() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.30, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    served(&db, "r1", SONNET, SATURDAY + 5 * MINUTE, 20, None);
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
+            .collect::<Vec<_>>(),
+        [(SATURDAY, SATURDAY + 20 * MINUTE, 1)],
+        "{rows:?}"
+    );
+    assert!(
+        close(rows[0].observed_rise, 0.20),
+        "{}",
+        rows[0].observed_rise
+    );
+    assert!(close(rows[0].ratio, 1.0), "{}", rows[0].ratio);
+}
+
+#[test]
+fn a_run_with_one_poll_among_its_heads_reconciles_between_its_first_and_last_heads() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.30, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.40, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    // 0.20 of the window between the heads, and 0.10 after the last head.
+    served(&db, "between", SONNET, SATURDAY + 5 * MINUTE, 20, None);
+    served(&db, "after", SONNET, SATURDAY + 15 * MINUTE, 10, None);
+    let now = reset + HOUR;
+    fold(&db, now);
+    let rows = rows(&db, now);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
+            .collect::<Vec<_>>(),
+        [(SATURDAY, SATURDAY + 10 * MINUTE, 1)],
+        "the heads' instants and the attempt between them: {rows:?}"
+    );
+    assert!(
+        close(rows[0].observed_rise, 0.20),
+        "the heads' rise: {}",
+        rows[0].observed_rise
+    );
+}
+
+#[test]
+fn a_run_of_one_head_and_one_poll_writes_no_row() {
+    let reset = SATURDAY + HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.30, reset),
         ],
         None,
     )
@@ -320,12 +650,47 @@ fn a_fall_in_utilization_is_skipped() {
     let now = reset + HOUR;
     fold(&db, now);
     assert_eq!(
+        rows(&db, now),
+        [],
+        "neither source read the window twice, so no two ends share a quantization"
+    );
+}
+
+#[test]
+fn a_head_one_percent_under_the_poll_before_it_joins_the_run_and_two_percent_under_opens_a_part() {
+    let reset = SATURDAY + HOUR;
+    let now = reset + HOUR;
+    // 0.40 of the window between the first two polls and 0.10 after the head.
+    let fold_with = |head: f64| {
+        let db = LedgerDb::open_in_memory().unwrap();
+        seed_request(&db, "seed", SATURDAY - MINUTE);
+        db.insert_samples(
+            &[
+                reading(FIVE_HOUR, SATURDAY, 0.10, reset),
+                reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.50, reset),
+                head_reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, head, reset),
+                reading(FIVE_HOUR, SATURDAY + 30 * MINUTE, 0.60, reset),
+            ],
+            None,
+        )
+        .unwrap();
+        served(&db, "first", SONNET, SATURDAY + 5 * MINUTE, 40, None);
+        served(&db, "second", SONNET, SATURDAY + 25 * MINUTE, 10, None);
+        fold(&db, now);
         rows(&db, now)
             .iter()
-            .map(|r| r.window.as_str())
-            .collect::<Vec<_>>(),
-        [SEVEN_DAY],
-        "a fall under one reset is a reset the readings missed, while the week's rise reads"
+            .map(|r| (r.last_reading_at, r.requests, r.observed_rise))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        fold_with(0.49),
+        [(SATURDAY + 30 * MINUTE, 2, 0.5)],
+        "the head truncates what the poll rounded, so one percent under it is the same draw"
+    );
+    assert_eq!(
+        fold_with(0.48),
+        [(SATURDAY + 10 * MINUTE, 1, 0.4)],
+        "two percent under is a fall, and the part the head opens holds one head and one poll, so it adds nothing"
     );
 }
 
@@ -466,6 +831,61 @@ fn rows_older_than_thirty_days_leave_with_the_fold() {
         kept,
         [now - 30 * DAY],
         "a row whose window ended more than 30 days before the fold leaves, one at the edge stays"
+    );
+}
+
+#[test]
+fn the_drift_reads_the_windows_that_ended_inside_eight_days_while_the_route_keeps_thirty() {
+    let now = SATURDAY + 40 * DAY;
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Each account's one window charged twice the table: `fresh`'s ended a millisecond inside the eight days, `edge`'s
+    // at their bound and `stale`'s twenty days before the fold, as an account that stopped serving leaves it.
+    db.write(|c| {
+        for (account, window_end) in [
+            ("edge", now - 8 * DAY),
+            ("fresh", now - 8 * DAY + 1),
+            ("stale", now - 20 * DAY),
+        ] {
+            c.execute(
+                "INSERT INTO window_reconciliations (account_id, window, window_end, first_reading_at, \
+                 last_reading_at, observed_rise, predicted_share, ratio, requests, estimated, computed_at) \
+                 VALUES (?1, 'five_hour', ?2, ?2 - 10800000, ?2 - 3600000, 0.5, 0.25, 2.0, 3, 0, ?2)",
+                rusqlite::params![account, window_end],
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let newest = db.read_blocking(|c| newest_rows(c, now)).unwrap();
+    assert_eq!(
+        newest.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["fresh"],
+        "a window that ended eight days or more before the fold is not read, so its account is absent: {newest:?}"
+    );
+    assert_eq!(
+        rows(&db, now)
+            .iter()
+            .map(|r| r.account_id.as_str())
+            .collect::<Vec<_>>(),
+        ["fresh", "edge", "stale"],
+        "the route keeps every row of the trailing 30 days with its ratio"
+    );
+    let tables = subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_routing_conditions(&tx, &tables, now)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let held = db.read_blocking(routing_conditions).unwrap();
+    assert_eq!(
+        held.iter()
+            .filter(|r| r.kind == "meter_drift")
+            .map(|r| r.subject_id.as_str())
+            .collect::<Vec<_>>(),
+        ["fresh"],
+        "a row outside the eight days holds nothing: {held:?}"
     );
 }
 

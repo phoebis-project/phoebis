@@ -1,6 +1,6 @@
 # The console's bundle is built on the runner before cross runs; the build script embeds it as it is.
 [build.env]
-passthrough = ["BORING_BSSL_RUST_CPPLIB", "PHOEBIS_SKIP_UI_BUILD"]
+passthrough = ["BORING_BSSL_RUST_CPPLIB", "PHOEBIS_BUILD_COMMIT", "PHOEBIS_SKIP_UI_BUILD"]
 
 # BoringSSL builds from source with cmake and a C++ compiler, and its bindings need libclang; the image carries the
 # musl C and C++ toolchain, the three packages are added once per image.

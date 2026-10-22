@@ -1,14 +1,18 @@
 //! What the engine retains from the bus, and what it refuses: the registration rule, the owner header, the
 //! pool and key gates, the account kinds, and the storage bounds; the Go admission cases.
 mod common;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use common::*;
-use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage};
-use phoebis_keepalive::{
-    AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState,
+use phoebis_bus::{
+    AttemptOutcome, Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, ResponseHead, Usage,
 };
-use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
+use phoebis_keepalive::{
+    AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, KeepaliveSummary, Reason,
+    RecipeState,
+};
+use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 
 /// The ledger row for a request, once the writer has landed it.
 async fn landed(r: &Rig, id: &str) {
@@ -960,29 +964,561 @@ async fn a_tool_loop_request_re_arms_the_recipe() {
     );
 }
 
-#[tokio::test]
-async fn a_compaction_restart_replaces_the_recipe() {
-    let mut r = rig(RigSpec::default()).await;
-    r.observe("main").await;
-    r.engine.observe(r.observed_with(
-        "compaction",
+/// A `compaction`-class request on main, observed on the engine's side alone.
+fn compaction(r: &Rig, id: &str) -> BusEvent {
+    r.observed_with(
+        id,
         "main",
         Some("compaction"),
         None,
         &[],
         BODY.as_bytes(),
         "claude-sonnet-4-5",
+    )
+}
+
+/// The head of `id`'s first attempt, answered at `status`.
+fn head(r: &Rig, id: &str, status: u16) -> BusEvent {
+    BusEvent::ResponseHead(ResponseHead {
+        request_id: id.into(),
+        attempt: 1,
+        status,
+        headers: Vec::new(),
+        first_event: None,
+        outcome: if (200..300).contains(&status) {
+            AttemptOutcome::Succeeded
+        } else {
+            AttemptOutcome::UpstreamError
+        },
+        cooldown: None,
+        written_at: r.now(),
+        observed_at: r.now(),
+    })
+}
+
+/// The first stream event of `id`'s first attempt, carrying the cache it read and wrote.
+fn message_start(id: &str, read: u64, write: u64) -> BusEvent {
+    BusEvent::ResponseChunk(ResponseChunk {
+        request_id: id.into(),
+        attempt: 1,
+        index: 0,
+        body: Default::default(),
+        phase: Some(Phase::MessageStart {
+            usage: usage(read, write),
+        }),
+    })
+}
+
+/// A turn of main on the engine's side alone: its observation, its selection on `a` and its first stream event, which
+/// arms the schedule from the turn's start.
+fn open_turn(r: &Rig, id: &str, read: u64, write: u64) {
+    r.engine.observe(r.observed(id, "main", BODY));
+    r.engine.observe(r.selected(id, "a"));
+    r.engine.observe(message_start(id, read, write));
+}
+
+/// `id`'s successful completion, reading `read` and writing the prefix where it read nothing.
+fn completed(r: &Rig, id: &str, read: u64) -> BusEvent {
+    r.complete(
+        id,
+        Outcome::Succeeded,
+        Some(usage(read, if read == 0 { 2_000 } else { 0 })),
+    )
+}
+
+/// A compaction's whole sequence on main: its admission, its selection on `account`, a head answered at `status`, a
+/// usage chunk reading `read`, and its completion under `outcome`.
+fn compact(r: &Rig, id: &str, account: &str, status: u16, read: u64, outcome: Outcome) {
+    r.engine.observe(compaction(r, id));
+    r.engine.observe(r.selected(id, account));
+    r.engine.observe(head(r, id, status));
+    r.engine.observe(message_start(id, read, 0));
+    r.engine.observe(r.complete(
+        id,
+        outcome,
+        Some(usage(read, if read == 0 { 2_000 } else { 0 })),
     ));
+}
+
+/// Every rollup row, read once the ledger has landed everything the case sent it.
+async fn final_rollups(r: &Rig) -> Vec<RollupRow> {
+    r.ledger.clone().shutdown().await.unwrap();
+    r.db.read_blocking(|c| {
+        read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+    })
+    .unwrap()
+}
+
+/// The probes the rows count, the wasted ones among them by label, and the requests credited as kept warm.
+fn probes_and_credits(rows: &[RollupRow]) -> (u64, BTreeMap<String, u64>, u64) {
+    let mut wasted = BTreeMap::new();
+    for row in rows.iter().filter(|row| row.kind == "probe") {
+        for (label, count) in &row.wasted_probe_reasons {
+            *wasted.entry(label.clone()).or_insert(0) += count;
+        }
+    }
+    (
+        rows.iter()
+            .filter(|row| row.kind == "probe")
+            .map(|row| row.requests)
+            .sum(),
+        wasted,
+        rows.iter().map(|row| row.kept_warm_requests).sum(),
+    )
+}
+
+/// The recipes route's row of main.
+fn main_recipe(r: &Rig) -> phoebis_keepalive::RecipeView {
+    r.engine
+        .recipes()
+        .into_iter()
+        .find(|v| v.agent_id == "main")
+        .expect("main's row")
+}
+
+/// A compaction request neither re-arms nor restarts the recipe: the armed recipe, its schedule, its retained bytes and
+/// its reason stay as the turn before left them, and the guard's verdict reads `compaction` on the recipes route and on
+/// the Sessions row while the compaction is open.
+#[tokio::test]
+async fn a_compaction_leaves_the_armed_recipe_its_retained_bytes_and_its_reason_unchanged() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let armed = r.status("main");
+    let retained = r.engine.stats().retained_bytes;
+    r.engine.observe(compaction(&r, "compaction"));
     assert_eq!(
-        r.status("main").reason,
-        Reason::AwaitingSelection,
-        "the compaction class re-arms the recipe as any other real request would"
+        (r.status("main"), r.engine.stats().retained_bytes),
+        (armed, retained),
+        "the compaction left the recipe, its schedule and its bytes as they stood"
     );
-    assert!(
-        r.engine.stats().retained_bytes > 0,
-        "a fresh recipe replaced the discarded one"
+    assert_eq!(last_guard(&r, "main"), Some(Guard::Compaction));
+    assert_eq!(
+        r.engine.sessions()[0].keepalive.last_guard,
+        Some(Guard::Compaction),
+        "the Sessions row reads the verdict while the compaction is open"
     );
-    // Without the class, the same static prefix on a fresh message chain restarts the recipe too.
+}
+
+/// A compaction that fails or is canceled leaves the old context the live one: after its selection on another account
+/// than the recipe's, its head and its usage, the recipe, its schedule, its account and the probe it paid for stand as
+/// they stood before the compaction, nothing settled, and the schedule resumes on that recipe.
+async fn a_compaction_that_ends_short_keeps_the_previous_recipe(
+    outcome: Outcome,
+    status: u16,
+    read: u64,
+) {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    let before = r.status("main");
+    assert_eq!(
+        (
+            before.account_id.as_deref(),
+            before.probes,
+            before.unanswered,
+            before.reason
+        ),
+        (Some("a"), 1, 1, Reason::Scheduled),
+        "{before:?}"
+    );
+    let retained = r.engine.stats().retained_bytes;
+    r.advance_attended(10_000);
+    compact(&r, "compaction", "b", status, read, outcome);
+    assert_eq!(
+        (r.status("main"), r.engine.stats().retained_bytes),
+        (before, retained),
+        "{outcome:?}: the recipe, its schedule, its account and its probe stand as they stood"
+    );
+    assert_eq!(last_guard(&r, "main"), Some(Guard::Compaction));
+    // 540 s in, the probe the first probe's entry scheduled.
+    r.advance_attended(260_000);
+    r.step().await;
+    let resumed = r.status("main");
+    assert_eq!(
+        (
+            resumed.probes,
+            resumed.unanswered,
+            resumed.reason,
+            resumed.account_id.as_deref()
+        ),
+        (2, 2, Reason::Scheduled, Some("a")),
+        "{outcome:?}: the schedule resumed on the previous recipe"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_compaction_keeps_the_previous_recipe_its_schedule_and_its_probes() {
+    a_compaction_that_ends_short_keeps_the_previous_recipe(Outcome::Failed, 529, 0).await;
+}
+
+#[tokio::test]
+async fn a_canceled_compaction_keeps_the_previous_recipe_its_schedule_and_its_probes() {
+    a_compaction_that_ends_short_keeps_the_previous_recipe(Outcome::Canceled, 200, 2_000).await;
+}
+
+/// A recipe armed on the engine's side 0 s in, and two probes 270 and 540 s in that each read the entry back, their own
+/// entries ending 570 and 840 s in: one chain, its last entry ending 840 s in.
+async fn a_chain_of_two_probes(r: &mut Rig) {
+    open_turn(r, "first", 0, 2_000);
+    r.engine.observe(completed(r, "first", 0));
+    for _ in 0..2 {
+        r.advance_attended(270_000);
+        r.step().await;
+    }
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.unanswered, status.reason),
+        (2, 2, Reason::Scheduled),
+        "{status:?}"
+    );
+}
+
+/// A completed compaction reads the old prefix, so it answers the chain before it: 600 s in, past the first probe's own
+/// entry and inside the second's, a compaction that read the cache leaves neither wasted and earns its own credit. It
+/// then stops the recipe under `compacted`, no probe goes out on the old context, and the next main turn re-arms.
+#[tokio::test]
+async fn a_completed_compaction_answers_the_chain_earns_its_credit_and_stops_the_recipe_until_the_next_turn(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_chain_of_two_probes(&mut r).await;
+    r.advance_attended(60_000);
+    compact(&r, "compaction", "a", 200, 2_000, Outcome::Succeeded);
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.reason,
+            status.next_probe_at,
+            status.unanswered,
+            r.engine.stats().retained_bytes
+        ),
+        (Reason::Compacted, None, 0, 0),
+        "{status:?}"
+    );
+    let view = main_recipe(&r);
+    assert_eq!(
+        (view.state, view.cause, view.last_guard),
+        (
+            RecipeState::Ended,
+            Reason::Compacted,
+            Some(Guard::Compaction)
+        ),
+        "{view:?}"
+    );
+    assert_eq!(
+        r.engine.sessions()[0].keepalive,
+        KeepaliveSummary {
+            cause: None,
+            last_guard: None,
+            next_probe_at: None,
+            state: None
+        },
+        "the Sessions row's keepalive member reads null once the recipe stopped"
+    );
+    // 870 s in, past the stopped recipe's next due time.
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 2, "no probe on the old context");
+    open_turn(&r, "next", 0, 2_000);
+    r.engine.observe(completed(&r, "next", 0));
+    let rearmed = r.status("main");
+    assert_eq!(
+        (rearmed.reason, last_guard(&r, "main")),
+        (Reason::Scheduled, Some(Guard::Rearm)),
+        "the next main turn re-armed: {rearmed:?}"
+    );
+    assert!(rearmed.next_probe_at.is_some(), "{rearmed:?}");
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (2, BTreeMap::new(), 1),
+        "two probes, none wasted, and the compaction's own credit"
+    );
+}
+
+/// The completion judges the probes a failed turn handed back and the ones sent while that turn was open as one chain:
+/// the first probe's own entry ended 570 s in, and the second, which read the entry back 550 s in, extended it to
+/// 850 s, so a compaction 600 s in that read the cache answers both.
+#[tokio::test]
+async fn a_completed_compaction_judges_the_kept_and_the_unanswered_probes_as_one_chain() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_turn(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    r.advance_attended(10_000);
+    open_turn(&r, "second", 2_000, 0);
+    r.advance_attended(270_000);
+    r.step().await;
+    r.engine
+        .observe(r.complete("second", Outcome::Failed, Some(usage(0, 0))));
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.unanswered, status.reason),
+        (2, 2, Reason::RequestFailed),
+        "one probe handed back, one sent while the failed turn was open: {status:?}"
+    );
+    r.advance_attended(50_000);
+    compact(&r, "compaction", "a", 200, 2_000, Outcome::Succeeded);
+    let status = r.status("main");
+    assert_eq!(
+        (status.unanswered, status.reason),
+        (0, Reason::Compacted),
+        "{status:?}"
+    );
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (2, BTreeMap::new(), 1),
+        "both probes answered as one chain, and the compaction's credit"
+    );
+}
+
+/// A completed compaction that read nothing settles the probes before it under the standard test, the count the Cache
+/// warming card reads: 600 s in, the first probe's chain ended with its own entry 570 s in, since the second probe read
+/// nothing and wrote a new entry, so the first settles `expired` and the second, whose entry ends 840 s in, a cold
+/// return. The recipe stops under `compacted` all the same.
+#[tokio::test]
+async fn a_completed_compaction_that_reads_nothing_settles_the_probes_before_it_and_stops_the_recipe(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_turn(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (2, 2)
+    );
+    r.advance_attended(60_000);
+    compact(&r, "compaction", "a", 200, 0, Outcome::Succeeded);
+    let status = r.status("main");
+    assert_eq!(
+        (status.reason, status.unanswered),
+        (Reason::Compacted, 0),
+        "{status:?}"
+    );
+    let view = main_recipe(&r);
+    assert_eq!(
+        (view.state, view.last_guard),
+        (RecipeState::Ended, Some(Guard::Compaction)),
+        "{view:?}"
+    );
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (
+            2,
+            BTreeMap::from([("cold_return".to_string(), 1), ("expired".to_string(), 1)]),
+            0
+        )
+    );
+}
+
+/// While a compaction is open the recipe waits as it stood: a tick past its due time sends no probe and moves nothing.
+/// A bus gap may have dropped the compaction's completion, so the gap ends it as a failed one, its completion lands
+/// nowhere, and the schedule resumes on the recipe.
+#[tokio::test]
+async fn an_open_compaction_holds_the_recipe_unprobed_and_a_bus_gap_ends_it_as_a_failed_one() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let armed = r.status("main");
+    r.engine.observe(compaction(&r, "compaction"));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(head(&r, "compaction", 200));
+    // 280 s in, past the probe due 270 s in and inside the entry, which ends 300 s in.
+    r.advance_attended(280_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main"),
+        armed,
+        "the open compaction held the recipe unprobed and unmoved"
+    );
+    r.engine.bus_gap(1, 0);
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    assert_eq!(
+        (r.status("main").reason, r.engine.stats().retained_bytes > 0),
+        (Reason::Scheduled, true),
+        "the completion of the compaction the gap ended landed nowhere"
+    );
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::Scheduled),
+        "the schedule resumed on the recipe"
+    );
+}
+
+/// A turn admitted while a compaction is open moves the agent past the context the compaction was reading, so the
+/// compaction ends as a failed one: its later events land nowhere, and the turn's recipe and the probe it keeps stand.
+#[tokio::test]
+async fn a_turn_admitted_while_a_compaction_is_open_ends_the_compaction_as_a_failed_one() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_turn(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    r.advance_attended(10_000);
+    r.engine.observe(compaction(&r, "compaction"));
+    r.advance_attended(10_000);
+    open_turn(&r, "next", 2_000, 0);
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(head(&r, "compaction", 200));
+    r.engine.observe(message_start("compaction", 2_000, 0));
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.reason,
+            status.unanswered,
+            r.engine.stats().retained_bytes > 0
+        ),
+        (Reason::Scheduled, 1, true),
+        "the turn's recipe and the probe it keeps stand: {status:?}"
+    );
+    r.engine.observe(completed(&r, "next", 2_000));
+    let status = r.status("main");
+    assert_eq!(
+        (status.reason, status.unanswered),
+        (Reason::Scheduled, 0),
+        "the turn's completion answered the probe: {status:?}"
+    );
+}
+
+/// A labeled stop of the agent settles the probes the recipe paid for, so it ends an open compaction as a failed one:
+/// after the operator's release, the compaction's completion that read the cache books no credit for the probe the
+/// release settled, and the cause stays `released`.
+#[tokio::test]
+async fn the_operators_release_ends_an_open_compaction_as_a_failed_one() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    // 310 s in, past the first turn's own entry and inside the probe's, which ends 570 s in.
+    r.advance_attended(40_000);
+    r.engine.observe(compaction(&r, "compaction"));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(head(&r, "compaction", 200));
+    r.engine.observe(message_start("compaction", 2_000, 0));
+    r.engine.release("desktop", "session").unwrap();
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    let status = r.status("main");
+    assert_eq!(
+        (status.reason, status.credited_today),
+        (Reason::Released, 0),
+        "{status:?}"
+    );
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (1, BTreeMap::from([("released".to_string(), 1)]), 0),
+        "the probe settled under the release, with no credit beside it"
+    );
+}
+
+/// A subagent's release is a labeled stop too, so the registration that takes the agent back finds no compaction
+/// open: the compaction's completion that read the cache books no credit for the probe the release settled, and the
+/// cause stays the registration's.
+#[tokio::test]
+async fn a_subagent_registered_again_after_its_release_holds_no_open_compaction() {
+    let mut r = rig(RigSpec::default()).await;
+    start_agent(&mut r, "worker");
+    r.observe("worker").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    // 310 s in, past the first turn's own entry and inside the probe's, which ends 570 s in.
+    r.advance_attended(40_000);
+    r.engine.observe(r.observed_with(
+        "compaction",
+        "worker",
+        Some("compaction"),
+        None,
+        &[],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(head(&r, "compaction", 200));
+    r.engine.observe(message_start("compaction", 2_000, 0));
+    r.state("worker", "released");
+    let generation = r.status("worker").request_generation;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("worker".into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    let status = r.status("worker");
+    assert_eq!(
+        (status.reason, status.credited_today),
+        (Reason::AwaitingRequest, 0),
+        "{status:?}"
+    );
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (1, BTreeMap::from([("released".to_string(), 1)]), 0),
+        "the probe settled under the release, with no credit beside it"
+    );
+}
+
+/// The lapse sweep leaves the probes of an agent with an open compaction to the compaction's completion: a chain a
+/// failed turn handed back, whose last entry ends 840 s in, outlives a tick 850 s in while the compaction opened 560 s
+/// in is open, and the completion that read the cache answers both probes, none settled `expired` by the sweep.
+#[tokio::test]
+async fn the_lapse_sweep_leaves_the_probes_of_an_open_compaction_to_its_completion() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_chain_of_two_probes(&mut r).await;
+    r.advance_attended(10_000);
+    open_turn(&r, "second", 2_000, 0);
+    r.engine
+        .observe(r.complete("second", Outcome::Failed, Some(usage(0, 0))));
+    r.advance_attended(10_000);
+    r.engine.observe(compaction(&r, "compaction"));
+    r.engine.observe(r.selected("compaction", "a"));
+    r.engine.observe(head(&r, "compaction", 200));
+    r.engine.observe(message_start("compaction", 2_000, 0));
+    // 850 s in, past the chain's last entry.
+    r.advance_attended(290_000);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        r.status("main").unanswered,
+        2,
+        "the sweep left the open compaction's probes"
+    );
+    r.engine.observe(completed(&r, "compaction", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    assert_eq!(
+        probes_and_credits(&final_rollups(&r).await),
+        (2, BTreeMap::new(), 1),
+        "both probes answered, and the compaction's credit"
+    );
+}
+
+/// Without a class, the same static prefix on a fresh message chain restarts the recipe, replacing its body.
+#[tokio::test]
+async fn the_same_static_prefix_on_a_fresh_chain_restarts_the_recipe() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let before_restart = r.engine.stats().retained_bytes;

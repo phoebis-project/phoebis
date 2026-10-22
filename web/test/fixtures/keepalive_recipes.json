@@ -22,6 +22,48 @@
         "state": "retained",
         "ttl_seconds": 300,
         "wake_at": null
+      },
+      {
+        "account_id": "business",
+        "agent_id": "worker-1",
+        "agent_state": "busy",
+        "cause": "scheduled",
+        "credited_today": 0,
+        "deadline": null,
+        "key_id": "desktop",
+        "last_guard": "rearm",
+        "last_probe_at": null,
+        "last_request_at": 1791721000000,
+        "model": "claude-sonnet-5",
+        "next_probe_at": 1791721240000,
+        "park_kind": null,
+        "pool_id": "main",
+        "probes_today": 0,
+        "session_id": "s1",
+        "state": "retained",
+        "ttl_seconds": 300,
+        "wake_at": null
+      },
+      {
+        "account_id": "direct",
+        "agent_id": "worker-2",
+        "agent_state": "busy",
+        "cause": "scheduled",
+        "credited_today": 0,
+        "deadline": null,
+        "key_id": "desktop",
+        "last_guard": "rearm",
+        "last_probe_at": null,
+        "last_request_at": 1791721000000,
+        "model": "claude-sonnet-5-5",
+        "next_probe_at": 1791721240000,
+        "park_kind": null,
+        "pool_id": "main",
+        "probes_today": 0,
+        "session_id": "s1",
+        "state": "retained",
+        "ttl_seconds": 300,
+        "wake_at": null
       }
     ]
   }

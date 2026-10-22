@@ -9,8 +9,8 @@ use phoebis_ledger::{Assembler, Record};
 use phoebis_oauth::AcquireError;
 use phoebis_profile::fixtures::{body, BodyFixture};
 use phoebis_routing::{
-    DecisionRecord, DecisionSummary, FactValue, MoveCause, Report, RouterConfig, RouterEvent,
-    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
+    FactValue, MoveCause, Report, RouterConfig, RouterEvent, SharePricer, UtilizationSample,
+    WindowReading, WindowSource, FIVE_HOUR,
 };
 use phoebis_store::{AccountState, Failover, StateCause, SubscriptionRow};
 use tokio::sync::broadcast;
@@ -28,43 +28,6 @@ async fn two_accounts(up: &FakeUpstream) -> Harness {
         PoolSpec::default(),
     )
     .await
-}
-
-/// The router's events up to and including the first one `last` accepts, under a five-second bound.
-async fn router_events_until(
-    events: &mut broadcast::Receiver<RouterEvent>,
-    last: impl Fn(&RouterEvent) -> bool,
-) -> Vec<RouterEvent> {
-    let mut seen = Vec::new();
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-            .await
-            .expect("the router's event arrives")
-            .expect("not lagged");
-        let done = last(&event);
-        seen.push(event);
-        if done {
-            return seen;
-        }
-    }
-}
-
-/// The decisions among `events` for `request_id`, in the order the router made them.
-fn decisions_of(
-    events: &[RouterEvent],
-    request_id: &str,
-) -> Vec<(DecisionSummary, DecisionRecord)> {
-    events
-        .iter()
-        .filter_map(|event| match event {
-            RouterEvent::Decision {
-                summary, record, ..
-            } if record.request.request_id == request_id => {
-                Some(((**summary).clone(), (**record).clone()))
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 /// Every event already on the broadcast: a selection's decision goes out before its answer reaches the relay.

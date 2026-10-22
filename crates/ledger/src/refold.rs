@@ -6,9 +6,11 @@
 //! The mark holds every revision's thresholds rather than a hash of the file, since taking a request's old deltas
 //! back out needs the band each attempt fell in then, which only the old thresholds give. It carries `since`, the
 //! first start that wrote it, because the requests folded before it landed under the migration's `standard` and
-//! never used an older band: taking an older band out of their rows would subtract what was never added. The pass in
-//! progress is a row of `meta` of its own, written by every page's transaction, so a start that fails after a page
-//! committed resumes after that page rather than subtracting its old deltas a second time.
+//! never used an older band: taking an older band out of their rows would subtract what was never added. A request
+//! received before `since` and landed after it folds at the thresholds loaded at its landing and is never re-folded
+//! when a threshold moves later, by design, since every pass reads the requests received at or after `since`. The
+//! pass in progress is a row of `meta` of its own, written by every page's transaction, so a start that fails after a
+//! page committed resumes after that page rather than subtracting its old deltas a second time.
 //!
 //! A threshold move re-bands the request rows alone. The wasted-probe counts and the probes the keepalive still holds
 //! keep the band they settled or were recorded in, which leaves the waste of a probe whose prompt falls between the old
@@ -321,7 +323,7 @@ fn requests_after(
         .collect()
 }
 
-fn read_meta<T: for<'de> Deserialize<'de>>(
+pub(crate) fn read_meta<T: for<'de> Deserialize<'de>>(
     conn: &Connection,
     key: &str,
 ) -> Result<Option<T>, LedgerError> {
@@ -333,7 +335,11 @@ fn read_meta<T: for<'de> Deserialize<'de>>(
     Ok(text.map(|text| serde_json::from_str(&text)).transpose()?)
 }
 
-fn write_meta(tx: &Transaction<'_>, key: &str, value: &impl Serialize) -> Result<(), LedgerError> {
+pub(crate) fn write_meta(
+    tx: &Transaction<'_>,
+    key: &str,
+    value: &impl Serialize,
+) -> Result<(), LedgerError> {
     tx.execute(
         "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
         params![key, serde_json::to_string(value)?],
@@ -345,23 +351,23 @@ fn write_meta(tx: &Transaction<'_>, key: &str, value: &impl Serialize) -> Result
 const PAGE: usize = 1_000;
 
 #[cfg(not(test))]
-fn page_size() -> usize {
+pub(crate) fn page_size() -> usize {
     PAGE
 }
 
 #[cfg(test)]
-fn page_size() -> usize {
+pub(crate) fn page_size() -> usize {
     TEST_PAGE.get().unwrap_or(PAGE)
 }
 
 #[cfg(not(test))]
-fn fail_after_page(_pages: usize) -> Result<(), LedgerError> {
+pub(crate) fn fail_after_page(_pages: usize) -> Result<(), LedgerError> {
     Ok(())
 }
 
 /// The failure a test injects once a pass has committed the pages it names, so the resume has a pass to finish.
 #[cfg(test)]
-fn fail_after_page(pages: usize) -> Result<(), LedgerError> {
+pub(crate) fn fail_after_page(pages: usize) -> Result<(), LedgerError> {
     if FAIL_AFTER_PAGES.get() == Some(pages) {
         return Err(LedgerError::Io(std::io::Error::other(
             "injected failure after a committed page",
@@ -373,9 +379,9 @@ fn fail_after_page(pages: usize) -> Result<(), LedgerError> {
 #[cfg(test)]
 thread_local! {
     /// The page size a test sets in place of `PAGE`, so a pass of three requests runs three pages.
-    static TEST_PAGE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    pub(crate) static TEST_PAGE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// The pages a pass commits before it fails, which a test sets to interrupt a pass after a committed page.
-    static FAIL_AFTER_PAGES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    pub(crate) static FAIL_AFTER_PAGES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]

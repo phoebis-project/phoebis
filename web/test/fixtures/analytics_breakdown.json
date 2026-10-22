@@ -9,18 +9,18 @@
         "key": "desktop",
         "label": "desktop",
         "key_id": "desktop",
-        "requests": 9,
+        "requests": 7,
         "succeeded": 5,
         "rate_limited": 0,
         "failed": 1,
         "exhausted": 0,
-        "rejected": 2,
+        "rejected": 0,
         "attempts": 8,
         "failovers": 1,
         "incomplete": 1,
         "cache_hits": 7,
         "cache_misses": 0,
-        "uncached": 2,
+        "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
           "cache_read": 4000,
@@ -40,10 +40,13 @@
         },
         "cost_usd": 0.0249,
         "errors": {
-          "client_contract": 1,
-          "guardrail_blocked": 1,
           "stream_incomplete": 1,
           "upstream_error": 1
+        },
+        "refused": 2,
+        "refusals": {
+          "client_contract": 1,
+          "guardrail_blocked": 1
         },
         "cache_miss_reasons": {
           "none": 6,
@@ -57,8 +60,8 @@
             0,
             0,
             0,
-            1,
-            1,
+            0,
+            0,
             0,
             0,
             0,
@@ -364,7 +367,7 @@
         "cost_shares": null,
         "cache_shares": null,
         "probe_shares": null,
-        "plan_requests": 7,
+        "plan_requests": 5,
         "plan_output_tokens": 500,
         "cost_equivalent": {
           "five_hour": 0.0000393625,
@@ -410,7 +413,7 @@
       },
       {
         "key": "desktop@1791720940000",
-        "label": "desktop (deleted, created 2026-10-11 12:15 UTC)",
+        "label": "desktop (deleted)",
         "key_id": "desktop",
         "key_created_at": 1791720940000,
         "requests": 1,
@@ -444,6 +447,8 @@
         },
         "cost_usd": 0.00355,
         "errors": {},
+        "refused": 0,
+        "refusals": {},
         "cache_miss_reasons": {
           "none": 1
         },

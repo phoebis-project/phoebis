@@ -27,7 +27,8 @@ use crate::analytics::ledger_failure;
 use crate::openapi::{ConditionView, ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::pools::valid_slug;
 use crate::routes::{
-    failure, failure_with_code, fence_token, present, reload_or_refuse, store_failure, CreatedId,
+    failure, failure_with_code, fence_token, parse_object, present, reload_or_refuse,
+    store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -48,8 +49,9 @@ pub(crate) struct GuardrailInput {
     /// `[a-z0-9][a-z0-9-]{0,63}`, neither `presets` nor `test`.
     #[serde(default)]
     id: Option<String>,
-    /// At most 256 bytes, not empty, and never containing `prompt is too long` in any case, since the name is the
-    /// part of a refusal's message the operator writes.
+    /// At most 256 bytes, not empty, and never containing `model:`, `OAuth token has been revoked` or
+    /// `prompt is too long` in any case, since the name is the part of a refusal's message the operator writes and
+    /// the client reads each of the three specially.
     #[serde(default)]
     name: Option<String>,
     /// At most 256 bytes, default empty.
@@ -204,7 +206,22 @@ pub(crate) struct PresetList {
 }
 
 /// Rows per `read` call, so a console read waits for at most one page of the dry run.
-const SAMPLE_PAGE: usize = 50;
+pub const SAMPLE_PAGE: usize = 50;
+
+/// The cursor the next read starts after: the last row this read consumed where it stopped early with its room
+/// filled, else the page's own next cursor, so a read past a full page skips none of its unconsumed rows. A read
+/// stops early only once the sample is full and the loop then ends, so this guards a later read the loop does not
+/// issue.
+fn sample_cursor(
+    last_consumed: Option<(i64, &str)>,
+    next: Option<String>,
+    stopped_early: bool,
+) -> Option<String> {
+    match last_consumed {
+        Some((received_at, id)) if stopped_early => Some(format!("{received_at}:{id}")),
+        _ => next,
+    }
+}
 
 /// A definition and the requests to test it on: `guardrail` or `conditions`, and `pool_id` or `key_id`. The mode and
 /// the action play no part, since the test answers whether the definition matches. An unknown field in the body is
@@ -471,8 +488,8 @@ pub(crate) fn distinct_ids(field: &str, ids: &[String]) -> Result<(), Response> 
     }
 }
 
-/// The name's bound, an empty name, and the phrase the client reads in a `400` as its compaction trigger: a
-/// guardrail's refusal carries the name in its message, and the name is the one part of it the operator writes.
+/// The name's bound, an empty name, and the three phrases the client reads specially in a `400` or a `403` answer:
+/// a guardrail's refusal carries the name in its message, and the name is the one part of it the operator writes.
 // The error is a rendered HTTP response, returned once per request and dropped, so boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
@@ -481,10 +498,10 @@ fn validate_name(name: &str) -> Result<(), Response> {
     if name.is_empty() {
         return Err(failure(StatusCode::BAD_REQUEST, "name is required"));
     }
-    if name.to_lowercase().contains("prompt is too long") {
+    if let Some(phrase) = phoebis_guardrails::client_phrase(name) {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "name must not contain \"prompt is too long\"",
+            &format!("name must not contain \"{phrase}\""),
         ));
     }
     Ok(())
@@ -605,7 +622,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = GuardrailInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The guardrail, the same shape as a row of `GET /admin/guardrails`.", body = Guardrail),
-        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `id is required`\n- `id is reserved`: `presets` and `test`, which the routes beside `GET /admin/guardrails/{id}` take\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`\n- `name must not contain \"prompt is too long\"`\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset_version applies on edit`\n- `unknown preset {id}`: an id `GET /admin/guardrails/presets` does not list", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `id is required`\n- `id is reserved`: `presets` and `test`, which the routes beside `GET /admin/guardrails/{id}` take\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`\n- `name must not contain \"{phrase}\"`: the phrase the name carries, `model:`, `OAuth token has been revoked` or `prompt is too long`, each matched in any case\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset_version applies on edit`\n- `unknown preset {id}`: an id `GET /admin/guardrails/presets` does not list", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `key {id} not found`, with nothing written\n- `pool {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "pool {id} not found"})),
         (status = 409, description = "`a guardrail with this id exists`", body = ErrorBody, example = json!({"error": "a guardrail with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -613,8 +630,9 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     ),
 )]
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
-    let Ok(input) = serde_json::from_slice::<GuardrailInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: GuardrailInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     // A new guardrail takes its stamp from `preset`, so the member that moves the stamp applies to a saved one.
     if input.preset_version.is_some() {
@@ -735,8 +753,9 @@ pub(crate) async fn presets() -> Response {
     ),
 )]
 pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
-    let Ok(input) = serde_json::from_slice::<GuardrailTestInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: GuardrailTestInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     match (&input.guardrail, &input.conditions) {
         (Some(_), Some(_)) => {
@@ -804,10 +823,12 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
     let mut sampled: Vec<(String, i64, Verdict)> = Vec::new();
     let mut cursor: Option<String> = None;
     // One `read` per page, so the reader mutex is released between pages and a console read waits for one page at
-    // most. A page asks for no more rows than the sample still has room for, and each body is parsed and dropped
-    // inside the closure, so no body outlives its row.
+    // most. A page stays full rather than sized to the room left: a row whose body aged out takes no room, and with
+    // room-sized pages a sample one short of its limit would walk the rest of the window in pages of one. Each body
+    // is parsed and dropped inside the closure, so no body outlives its row.
     loop {
-        let page = SAMPLE_PAGE.min(limit_rows - sampled.len());
+        let page = SAMPLE_PAGE;
+        let room = limit_rows - sampled.len();
         let compiled = Arc::clone(&compiled);
         let subject_id = subject_id.clone();
         let after = cursor.take();
@@ -822,8 +843,13 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                     after.as_deref(),
                     page,
                 )?;
-                let mut out = Vec::with_capacity(rows.len());
-                for row in rows {
+                let mut out = Vec::with_capacity(rows.len().min(room));
+                let mut consumed = 0;
+                for row in &rows {
+                    if out.len() == room {
+                        break;
+                    }
+                    consumed += 1;
                     // The body aged out, or its own key's capture window ended before the purge reached it, so the
                     // row answers nothing and takes no place in the sample.
                     let Some(body) = request_body(c, &row.id, now)? else {
@@ -848,9 +874,13 @@ pub(crate) async fn test(State(state): State<Arc<AdminState>>, body: Bytes) -> R
                         body: tree.as_ref(),
                     };
                     let verdict = evaluate(&compiled, &facts);
-                    out.push((row.id, row.received_at, verdict));
+                    out.push((row.id.clone(), row.received_at, verdict));
                 }
-                Ok((out, next))
+                let last_consumed = rows[..consumed]
+                    .last()
+                    .map(|row| (row.received_at, row.id.as_str()));
+                let stopped_early = consumed < rows.len();
+                Ok((out, sample_cursor(last_consumed, next, stopped_early)))
             })
             .await;
         let (verdicts, next) = match read {
@@ -970,7 +1000,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
     request_body(content = GuardrailInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The guardrail, the same shape as a row of `GET /admin/guardrails`.", body = Guardrail),
-        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `guardrail has no preset`: a `preset_version` on a guardrail created without one\n- `id cannot change`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`: an empty name\n- `name must not contain \"prompt is too long\"`\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset applies on create`\n- `preset_version is not a shipped version of {preset}`: a version the build does not ship of the guardrail's preset", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `action is block`\n- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `conditions holds 1 to 16 entries`\n- `conditions[{i}]: {reason}`: the condition's index and the reason it is refused (`conditions[1]: value is required`)\n- `description is at most 256 bytes`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `guardrail has no preset`: a `preset_version` on a guardrail created without one\n- `id cannot change`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `keys lists {id} twice`\n- `mode is observe or enforce`\n- `name is at most 256 bytes`\n- `name is required`: an empty name\n- `name must not contain \"{phrase}\"`: the phrase the name carries, `model:`, `OAuth token has been revoked` or `prompt is too long`, each matched in any case\n- `pool {id} would hold more than 64 guardrails`, with nothing written\n- `pools lists {id} twice`\n- `preset applies on create`\n- `preset_version is not a shipped version of {preset}`: a version the build does not ship of the guardrail's preset", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `guardrail not found`\n- `key {id} not found`, with nothing written\n- `pool {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "guardrail not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
@@ -986,8 +1016,9 @@ pub(crate) async fn patch(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    let Ok(input) = serde_json::from_slice::<GuardrailInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input: GuardrailInput = match parse_object(&body) {
+        Ok(input) => input,
+        Err(response) => return response,
     };
     let mut row = match state.store.guardrail(&id) {
         Ok(Some(row)) => row,
@@ -1083,5 +1114,24 @@ pub(crate) async fn remove(
             failure(StatusCode::NOT_FOUND, "guardrail not found")
         }
         Err(error) => store_failure(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_cursor_names_the_last_consumed_row_where_the_read_stopped_early_and_the_pages_next_otherwise(
+    ) {
+        assert_eq!(
+            sample_cursor(Some((5, "r5")), Some("1:r1".to_string()), true),
+            Some("5:r5".to_string())
+        );
+        assert_eq!(
+            sample_cursor(Some((5, "r5")), Some("1:r1".to_string()), false),
+            Some("1:r1".to_string())
+        );
+        assert_eq!(sample_cursor(None, None, false), None);
     }
 }

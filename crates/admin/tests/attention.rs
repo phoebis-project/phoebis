@@ -71,6 +71,8 @@ fn complete(id: &str, outcome: Outcome, drift: Option<&str>, at: i64) -> Event {
         diagnostics: None,
         message_id: None,
         skipped_events: 0,
+        interruption: None,
+        passthrough: None,
         finished_at: at,
     })
 }
@@ -492,12 +494,12 @@ async fn a_held_model_unweighted_condition_lists_on_the_route_after_every_degrad
         ),
         (
             &j!({ "type": "model", "id": "claude-opus-5", "label": "claude-opus-5" }),
-            &j!({ "page": "models", "id": "claude-opus-5" }),
+            &j!(null),
             &j!([]),
             &j!(common::NOW),
             &j!({ "model": "claude-opus-5", "requests": 1, "tier": "opus", "weight_of": weight_of }),
         ),
-        "the item opens the Models page on the model, belongs to no pool and dates from the request: {item}"
+        "the item opens no page, belongs to no pool and dates from the request: {item}"
     );
     let metrics = phoebis_ledger::metrics_router(
         Arc::new(Metrics::new()),

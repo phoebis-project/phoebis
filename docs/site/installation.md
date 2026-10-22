@@ -36,14 +36,15 @@ GitHub CLI: `GH_TOKEN=<token> gh release download <version> --repo daystrom-labs
 cargo build --release
 ```
 
-The binary lands at `target/release/phoebis`. The build needs a Unix host, Linux or macOS: the store's lock and
-permission checks, the backup and the bootstrap file's loader use `std::os::unix::fs`, and the service's stop signal is
-the Unix `SIGTERM`, so the router does not build on Windows. A Windows machine runs it on a Linux host or in a Linux
-runtime instead. The toolchain is pinned in `rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which
-needs cmake, clang and libclang. The embedded console needs Node 26 or later, and npm on the path: the build script
-checks `node --version` against that range, then runs `npm ci` and `npm run build` in `web/` whenever the bundle is
-missing or older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds `web/dist` as it is, and a
-build with no bundle on disk embeds a placeholder page, which the admin listener then serves in place of the console.
+The binary lands at `target/release/phoebis`. The build needs a Unix host, Linux or macOS (untested): the store's lock
+and permission checks, the backup and the bootstrap file's loader use `std::os::unix::fs`, and the service's stop signal
+is the Unix `SIGTERM`, so the router does not build on Windows. A Windows machine runs it on a Linux host or in a Linux
+runtime instead and reaches it as [A second machine](second-machine.md) describes. The toolchain is pinned in
+`rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which needs cmake, clang and libclang. The embedded
+console needs Node 26 or later, and npm on the path: the build script checks `node --version` against that range, then
+runs `npm ci` and `npm run build` in `web/` whenever the bundle is missing or older than its sources.
+`PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds `web/dist` as it is, and a build with no bundle on disk embeds
+a placeholder page, which the admin listener then serves in place of the console.
 
 ## Install as a service
 
@@ -66,10 +67,11 @@ environment file as root. A proxy listener that serves the LAN takes `--proxy-li
 `deploy/phoebis.service` runs the process as the `phoebis` user from `/var/lib/phoebis` with
 `EnvironmentFile=/etc/phoebis/phoebis.env`, which systemd reads and hands over, so the process never opens the file.
 `TimeoutStopSec=40` covers the 35-second shutdown budget, and `ProtectSystem=strict` with `StateDirectory=phoebis` and
-`ProtectHome=true` is the hardening around it. The file `init` wrote names `/etc/phoebis/api_prices.yaml` as
-`stats.api_prices_path` and `/etc/phoebis/subscription_costs.yaml` as `stats.subscription_costs_path`. Leave both files
-uninstalled: the shipped files carry every revision and a release adds the next, and a copy at either path would shadow
-every later release's revisions until it was copied again.
+`ProtectHome=true` is the hardening around it. `StateDirectoryMode=0700` has systemd create `/var/lib/phoebis` for the
+`phoebis` user alone, the mode `check-config` expects of the data directory. The file `init` wrote names
+`/etc/phoebis/api_prices.yaml` as `stats.api_prices_path` and `/etc/phoebis/subscription_costs.yaml` as
+`stats.subscription_costs_path`. Leave both files uninstalled: the shipped files carry every revision and a release adds
+the next, and a copy at either path would shadow every later release's revisions until it was copied again.
 
 A router that already runs from a file in your home directory moves under the unit after every line of the block but
 `init`, which refuses every file that exists: stop the router, create `/var/lib/phoebis` at `0700` (`useradd --system`
@@ -92,7 +94,8 @@ Then validate the file before enabling the service:
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
 ```
 
-With both price files left uninstalled, `check-config` names the shipped revisions on its two table lines:
+With both price files left uninstalled, `check-config` names the shipped revisions on its two table lines, and its
+`account tiers` count names the tiers the base rows size, leaving out a tier only a regime sizes:
 
 ```text
 api prices: built in (2 revisions, in force 2026-10-08, 9 models), since /etc/phoebis/api_prices.yaml was not found
@@ -107,10 +110,10 @@ while an entry is held.
 
 `check-config` reads `admin.secret_env` from the process environment when it is set and prints `warning: environment
 variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the environment file is optional for it.
-The service, `phoebis health`, `status` and `tls reload` refuse an unset secret, and the start, `check-config`,
-`health`, `status` and `tls reload` refuse a secret of another shape with the line
-[Environment variables](#environment-variables) gives. Once the check is clean, the owner warnings for the key file and
-the data directory aside, since root runs it and `phoebis` owns them, `sudo systemctl enable --now phoebis`.
+The service, `status` and `tls reload` refuse an unset secret, and the start, `check-config`, `status` and `tls reload`
+refuse a secret of another shape with the line [Environment variables](#environment-variables) gives. `phoebis health`
+loads the file without resolving its secrets and refuses none. Once the check is clean, the owner warnings for what
+`phoebis` owns aside, since root runs the check, `sudo systemctl enable --now phoebis`.
 
 ## Run the container
 
@@ -150,13 +153,12 @@ docker compose logs -f phoebis
 docker compose down          # SIGTERM, then up to 40 seconds for the 35-second shutdown budget
 ```
 
-The health check runs `phoebis health`, which loads and validates the configuration, secrets included, from the
-container's own environment and then asks the proxy listener whether the router is ready: a file it cannot read, a value
-it refuses, an unset secret variable, or a router loop, ledger consumer or store that died therefore reads as
-`unhealthy` rather than as a passing check, with the reason in `docker inspect`. `health` speaks TLS to a proxy listener
-that terminates it. A ledger writer that stops draining fills its queue, and once the queue is half full the router
-refuses new requests with its own `503 ledger_behind` rather than accepting requests it cannot record
-([the refusal codes](client.md#refusal-codes)).
+The health check runs `phoebis health`, which loads and validates the configuration file and then asks the proxy
+listener whether the router is ready: a file it cannot read, a value it refuses, or a router loop, ledger consumer or
+store that died therefore reads as `unhealthy` rather than as a passing check, with the reason in `docker inspect`.
+`health` speaks TLS to a proxy listener that terminates it. A ledger writer that stops draining fills its queue, and
+once the queue is half full the router refuses new requests with its own `503 ledger_behind` rather than accepting
+requests it cannot record ([the refusal codes](client.md#refusal-codes)).
 
 The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone, so it
 is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
@@ -252,13 +254,14 @@ On shutdown, Ctrl-C or SIGTERM, the router stops under one budget of 35 seconds,
 credential refresh still in flight is waited for up to its own 30-second timeout or what is left of the budget,
 whichever is shorter, so a token the upstream already rotated is stored rather than lost to the next start's quarantine.
 
-`health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
-the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, over TLS
-when `proxy.tls` terminates it, without checking the certificate (the probe dials its own process and asks whether
-`/api/ready` answers, not who answers), and prints `proxy answers on {addr}` on a `200` or one line saying why not
-(`proxy on {addr} answered 503, not 200` when the router loop, the ledger consumer or the store is dead). The whole
-probe, connect included, is bounded by three seconds. `/api/hello` stays the liveness answer the client itself probes.
-The container image runs `health` as its health check every 30 seconds ([the container](#run-the-container)).
+`health` loads the file without resolving its secrets, so it needs the file and not the secret's environment. It
+connects to `proxy.listen`, or to the loopback address of the same family when the listener is bound on every interface,
+sends `HEAD /api/ready`, over TLS when `proxy.tls` terminates it, without checking the certificate (the probe dials its
+own process and asks whether `/api/ready` answers, not who answers), and prints `proxy answers on {addr}` on a `200` or
+one line saying why not (`proxy on {addr} answered 503, not 200` when the router loop, the ledger consumer or the store
+is dead). The whole probe, connect included, is bounded by three seconds. `/api/hello` stays the liveness answer the
+client itself probes. The container image runs `health` as its health check every 30 seconds
+([the container](#run-the-container)).
 
 `init` writes a first installation and refuses to touch anything that exists. It writes, in this order, the storage key
 file (64 hex characters and a newline, created at `0600` in one open), the environment file when `--env-file` names one
@@ -394,7 +397,7 @@ proxy:
   # body_read_seconds: 60
   # key_body_reads: 128
   # max_request_bytes: 33554432
-  # Signs a restored cch=00000 with this build's formula, off until a server rejects the placeholder.
+  # Signs a restored cch=00000 with this build's formula. Leave it off until a server rejects the placeholder.
   # sign_cch_placeholder: false
   # How the edited body leaves: auto mirrors the client, on always gzip, off always identity.
   # upstream_gzip: auto
@@ -434,7 +437,7 @@ storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite
 upstream:
-  # Both unset by default: an extra trust anchor for a lab upstream, and one address every host resolves to.
+  # Both unset by default: extra trust anchors for a lab upstream, and one address every host resolves to.
   # extra_ca_pem: ./lab-ca.pem
   # resolve_override: 127.0.0.1:8443
 usage:
@@ -478,7 +481,8 @@ unauthenticated caller can reach, and it ignores a bearer.
 
 A wrong secret answers `401 secret does not match`. Five failed logins within a minute refuse every login after them
 with `429 too many failed logins, try again in a minute` until the minute passes. A session ends after 15 minutes idle
-or 12 hours after it was opened, whichever comes first.
+or 12 hours after it was opened, whichever comes first. A login with "Stay logged in" keeps its session for 30 days from
+its last read, across a restart, until a secret rotation or a logout of a kept login, which ends every kept login.
 
 Refused with:
 
@@ -664,7 +668,7 @@ Defaults whole and is rarely set.
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `extra_ca_pem` | unset | One extra trust anchor for a lab upstream not signed by a public authority, the first certificate of the file. |
+| `extra_ca_pem` | unset | Extra trust anchors for a lab upstream not signed by a public authority, every certificate of the file. The start refuses a file that holds none. |
 | `resolve_override` | unset | Sends every host to this address instead of DNS. |
 
 ### usage
@@ -789,7 +793,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Limit | Value |
 | --- | --- |
 | Admin login throttle | Five failed logins per minute, then `too many failed logins, try again in a minute`. |
-| Admin session lifetime | 15 minutes idle, 12 hours absolute. |
+| Admin session lifetime | 15 minutes idle, 12 hours absolute. With "Stay logged in", 30 days from the last read, across a restart, until a secret rotation or a kept logout. |
 | Chunk framing | 1 KiB per chunk-size line and 16 KiB of trailers from an upstream. |
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
 | Cooldown booking | Seven days ahead of each announcement, and a later announcement books the next stretch. |

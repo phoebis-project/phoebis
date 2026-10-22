@@ -25,8 +25,8 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, projection_of, release_reasons, BurnRead, Decided, FailedOver, MigrateReason,
-    Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
+    decide, pace_of, projection_of, projections_of, release_reasons, BurnRead, Decided, FailedOver,
+    MigrateReason, Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -1420,6 +1420,22 @@ impl RouterHandle {
     pub async fn pins_standing(&self) -> Result<Vec<PinStanding>, RouterGone> {
         self.ask(|reply| Command::PinsStanding { reply }).await
     }
+    /// The greatest live cache-map prefix on the account and incarnation whose root is `root` and whose model is
+    /// `model`, `None` where none stands. Read under the shared map's lock, so the sessions list asks it per pin
+    /// without a command round trip.
+    pub fn cached_prefix(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+        root: &str,
+        model: &str,
+        now: i64,
+    ) -> Option<u64> {
+        self.affinity
+            .read()
+            .expect("affinity lock poisoned")
+            .cached_prefix(account_id, incarnation, root, model, now)
+    }
     /// Every member of `pool_id` with its projections, its Pace score and its slow-down entry in force under that
     /// pool's settings (the pins the pool keeps, its burn average, its ceiling), one ask, one instant, by account: an
     /// api_key account answers its score alone, and a pool the registry does not hold answers none.
@@ -1690,9 +1706,9 @@ struct Task {
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     /// The reset each account and window's wall was announced for, `None` where the reading named no reset, as a
-    /// 5-hour window open past its reset does, beside the instant of the announcement: a charge, a booking or a sample
-    /// announces a wall once per reset cycle, and the sample that confirms it names that cycle's reset and announces
-    /// nothing.
+    /// 5-hour window open past its reset does, beside the instant of the announcement, or of the reset's passing for a
+    /// wall that went on past it: a charge, a booking or a sample announces a wall once per reset cycle, and the sample
+    /// that confirms it names that cycle's reset and announces nothing.
     spent_announced: HashMap<(String, String), (Option<i64>, i64)>,
     state: RoutingState,
     store: Arc<Store>,
@@ -2425,11 +2441,12 @@ fn destination_fit(
 }
 
 /// Whether a reading at `now` naming `reset` is in the cycle of a wall `announced` as `(reset, at)` on `window`. Two
-/// named resets are one within `RESET_SLACK_MS`, as `announce_reset` compares them. A wall announced with none was in a
-/// window open past its stored reset, which opened by `at` and runs the window's length at most, so a reset inside
-/// that length after `at` names it, and a second reading with none inside it is the same open window. Both bounds,
-/// the named reset's and the reading with none, take the same slack, since the request that opened the window can
-/// reach the upstream after `at`.
+/// named resets are one within `RESET_SLACK_MS`, as `announce_reset` compares them. A reading with none over a wall
+/// announced with a reset is of that reset's cycle at or before the reset, with the same slack past it, and of another
+/// cycle after. A wall announced with none was in a window open past its stored reset, which opened by `at` and runs
+/// the window's length at most, so a reset inside that length after `at` names it, and a second reading with none
+/// inside it is the same open window. Both bounds, the named reset's and the reading with none, take the same slack,
+/// since the request that opened the window can reach the upstream after `at`.
 fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, window: &str) -> bool {
     let (announced_reset, at) = announced;
     let open_until = at.saturating_add(if window == FIVE_HOUR {
@@ -2444,7 +2461,7 @@ fn same_cycle(announced: (Option<i64>, i64), reset: Option<i64>, now: i64, windo
         }
         (None, Some(reset)) => at <= reset && reset <= bound,
         (None, None) => now <= bound,
-        (Some(_), None) => false,
+        (Some(announced), None) => now <= announced.saturating_add(RESET_SLACK_MS),
     }
 }
 
@@ -2473,10 +2490,10 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 }
 
 /// The members of `pool_id` in account order, each with its projection per plan window and its Pace score at `now`
-/// under that pool's settings: the windows from `projection_of` on the achieved burn and on the demand with `pace_of`'s
-/// spare rate on each, the score from `pace_of` on `seven_day`, the window Pace reads for a model without a week of its
-/// own, and the slow-down entry in force, which the last pinned selection on the account wrote. Empty for a pool the
-/// snapshot does not hold.
+/// under that pool's settings: the windows from one `projections_of` read on the achieved burn and one on the demand,
+/// so each window is built once per read, with `pace_of`'s spare rate on each, the score from `pace_of` on
+/// `seven_day`, the window Pace reads for a model without a week of its own, and the slow-down entry in force, which
+/// the last pinned selection on the account wrote. Empty for a pool the snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2503,28 +2520,30 @@ fn projections(
                 upstream_model: String::new(),
             };
             let tier = snapshot.tier(account_id).unwrap_or_default();
+            let achieved = projections_of(
+                state,
+                snapshot,
+                pool,
+                account_id,
+                tier,
+                now,
+                BurnRead::Achieved,
+                None,
+            );
+            let demands = projections_of(
+                state,
+                snapshot,
+                pool,
+                account_id,
+                tier,
+                now,
+                BurnRead::Demand,
+                None,
+            );
             let windows = all_plan_windows()
                 .filter_map(|window| {
-                    let projection = projection_of(
-                        state,
-                        snapshot,
-                        pool,
-                        account_id,
-                        tier,
-                        window,
-                        now,
-                        BurnRead::Achieved,
-                    )?;
-                    let demand = projection_of(
-                        state,
-                        snapshot,
-                        pool,
-                        account_id,
-                        tier,
-                        window,
-                        now,
-                        BurnRead::Demand,
-                    )?;
+                    let projection = achieved.get(window)?;
+                    let demand = demands.get(window)?;
                     Some((
                         window.to_string(),
                         WindowProjection {
@@ -2533,8 +2552,10 @@ fn projections(
                             horizon: projection.horizon,
                             burn: projection.burn * 3_600.0,
                             demand: demand.burn * 3_600.0,
-                            spare_rate: pace_of(state, snapshot, pool, &candidate, window, now)
-                                .score,
+                            spare_rate: pace_of(
+                                state, snapshot, pool, &candidate, window, now, None,
+                            )
+                            .score,
                         },
                     ))
                 })
@@ -2542,7 +2563,7 @@ fn projections(
             AccountProjection {
                 account_id: account_id.to_string(),
                 windows,
-                pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now).score,
+                pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now, None).score,
                 slow_down: state
                     .slow_down_in_force(pool, account_id, now)
                     .map(|entry| AccountSlowDown {
@@ -3924,7 +3945,7 @@ impl Task {
                     })
                     .collect();
                 let now = (self.clock)();
-                let sample = self.held_at_the_wall(sample, &stored, now);
+                let sample = self.held_at_the_wall(&account_id, sample, &stored, now);
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: a head and a poll can cross, and the older one's reading is one
@@ -4429,7 +4450,7 @@ impl Task {
     /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
     /// reset names, or no reset on a reading taken past it, then the window cleared, which a reading under 1.0 names
     /// over one at 1.0 or above with no reset passed, or the window spent, which a reading at 1.0 or above names over
-    /// one under it.
+    /// one under it, or over any one where it names the next reset after a passed one.
     fn window_edges(
         &mut self,
         account_id: &str,
@@ -4464,6 +4485,25 @@ impl Task {
                     at: now,
                 });
             }
+            // A wall announced under the passed reset that goes on into the window open past it is the same wall: its
+            // announcement moves to the reset's passing, so its clamp runs from here and it is announced no second
+            // time. A reading below the wall leaves the old cycle's announcement standing, and a reading at the wall
+            // that names the next reset is that cycle's own wall, announced below.
+            let key = (account_id.to_string(), window.to_string());
+            let goes_on =
+                utilization_before >= 1.0 && reading.utilization >= 1.0 && next_reset.is_none();
+            if goes_on
+                && self
+                    .spent_announced
+                    .get(&key)
+                    .is_some_and(|(announced, _)| {
+                        announced.is_some_and(|announced| {
+                            announced.abs_diff(reset_at) <= RESET_SLACK_MS.unsigned_abs()
+                        })
+                    })
+            {
+                self.spent_announced.insert(key, (reading.reset, now));
+            }
         }
         // The clear leaves the reset to the next sample or the clock walk, and the wall's announcement, the
         // prediction's or a sample's, leaves with it, so a reading back at the limit under the same reset is spent
@@ -4485,14 +4525,17 @@ impl Task {
                 });
             }
         }
-        // The prediction may have announced this wall already: the reading then names the reset it did, or names none
-        // before the stored reset passed and stands under that one.
+        // A wall the prediction or an earlier sample announced is not announced again by a reading of its cycle, and
+        // a reading that names no reset before the stored reset passed stands under that one.
         let reset = reset_under(stored.as_ref(), &reading);
         let announced = self
             .spent_announced
             .get(&(account_id.to_string(), window.to_string()))
             .is_some_and(|announced| same_cycle(*announced, reset, now, window));
-        if stored.is_none_or(|stored| stored.utilization < 1.0)
+        // A reading at the wall that names the reset after a passed one is a new wall, over a stored reading at the
+        // wall too.
+        let next_cycle = matches!(passed, Some((_, _, Some(_))));
+        if (next_cycle || stored.is_none_or(|stored| stored.utilization < 1.0))
             && reading.utilization >= 1.0
             && !announced
         {
@@ -4518,13 +4561,16 @@ impl Task {
     /// reading's reset passed, is of that reset's cycle and takes that reset, raised or not, so the reading the fold
     /// stores keeps it and the next edge reads it passed. A reading within `SPENT_MARGIN` of 1.0 over a stored reading
     /// at the wall under the same reset cycle is then raised to the stored utilization with its own instant and source,
-    /// so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the wall again. A
-    /// reading under the margin is a real clear and lands at its own utilization, so `window_edges` reads the window
-    /// cleared and forgets the announcement, and the next crossing announces anew. A reading of another cycle lands as
-    /// read. Only a reading newer than the stored one counts, since the fold drops any other: an older reading, or one
-    /// of the stored instant, goes to the fold as read.
+    /// so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the wall again. The cycle
+    /// is the announcement's for the account and window where one stands and the stored reading's reset and instant
+    /// where none does, and since no raised reading moves the announcement's instant, readings with no reset on either
+    /// side are held for the window's length from it and no longer. A reading under the margin is a real clear and
+    /// lands at its own utilization, so `window_edges` reads the window cleared and forgets the announcement, and the
+    /// next crossing announces anew. A reading of another cycle lands as read. Only a reading newer than the stored one
+    /// counts, since the fold drops any other: an older reading, or one of the stored instant, goes to the fold as read.
     fn held_at_the_wall(
         &self,
+        account_id: &str,
         mut sample: UtilizationSample,
         stored: &HashMap<String, WindowReading>,
         now: i64,
@@ -4541,9 +4587,12 @@ impl Task {
             if stored.utilization < 1.0 || reading.utilization >= 1.0 {
                 continue;
             }
-            if reading.utilization >= 1.0 - SPENT_MARGIN
-                && same_cycle((stored.reset, stored.observed_at), reset, now, window)
-            {
+            let anchor = self
+                .spent_announced
+                .get(&(account_id.to_string(), window.to_string()))
+                .copied()
+                .unwrap_or((stored.reset, stored.observed_at));
+            if reading.utilization >= 1.0 - SPENT_MARGIN && same_cycle(anchor, reset, now, window) {
                 reading.utilization = stored.utilization;
             }
         }
@@ -5292,6 +5341,32 @@ mod tests {
         );
     }
 
+    /// A reading that names no reset over a wall announced with one is of that wall's cycle until the announced reset
+    /// passes, with the slack the named-reset arm takes, and of another cycle past it.
+    #[test]
+    fn a_reading_with_no_reset_is_of_the_announced_resets_cycle_up_to_the_reset_and_its_slack() {
+        let at = 1_000;
+        let reset = at + FIVE_HOUR_MS;
+        assert!(
+            !same_cycle(
+                (Some(reset), at),
+                None,
+                reset + RESET_SLACK_MS + 1,
+                FIVE_HOUR
+            ),
+            "past the slack another cycle"
+        );
+        assert!(
+            same_cycle((Some(reset), at), None, reset - 1_000, FIVE_HOUR),
+            "before the reset the announced cycle"
+        );
+        assert!(same_cycle((Some(reset), at), None, reset, FIVE_HOUR));
+        assert!(
+            same_cycle((Some(reset), at), None, reset + RESET_SLACK_MS, FIVE_HOUR),
+            "inside the slack, as the named-reset arm reads it"
+        );
+    }
+
     /// A reading taken after the shutdown closed the mailbox and before the final drain lands with that drain and
     /// counts no drop; one taken after the final drain lands nowhere and counts one.
     #[test]
@@ -5543,5 +5618,232 @@ mod tests {
                 shed_rounds_stale: 0,
             }
         );
+    }
+
+    #[test]
+    fn the_projections_answer_each_windows_projection_and_demand_as_two_projection_of_reads_do() {
+        use phoebis_store::{ApiKeyRow, PoolMember, SubscriptionTerm};
+
+        use crate::select::{Banded, SlowDownRead};
+        use crate::state::BandSegment;
+
+        const HOUR: i64 = 3_600_000;
+        const T: i64 = 10 * HOUR;
+        let tier = "default_claude_max_20x";
+        let mut pool = PoolRow::for_tests("p");
+        pool.slow_down.slow_down = true;
+        let snapshot = RegistrySnapshot::from_load(
+            RegistryLoad {
+                accounts: vec![AccountRow {
+                    id: "a".into(),
+                    kind: AccountKind::Oauth,
+                    label: "a".into(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision: 1,
+                    state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
+                }],
+                keys: vec![ApiKeyRow {
+                    id: "k".into(),
+                    label: "k".into(),
+                    notes: None,
+                    pool_id: "p".into(),
+                    enabled: true,
+                    revoked_at: None,
+                    expires_at: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: Default::default(),
+                    long_context_twins: false,
+                    keepalive_opt_out: false,
+                    body_capture_hours: None,
+                    secret_digest: Vec::new(),
+                    prefix: "k".into(),
+                    incarnation: 1,
+                    created_at: 0,
+                    updated_at: 0,
+                    rotated_at: None,
+                    last_used_at: None,
+                    retired_secret_last_used_at: None,
+                    auto_mode_server: None,
+                }],
+                members: vec![PoolMember {
+                    pool_id: "p".into(),
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                }],
+                pools: vec![pool],
+                terms: vec![SubscriptionTerm {
+                    account_id: "a".into(),
+                    tier: Some(tier.into()),
+                    ..SubscriptionTerm::default()
+                }],
+                ..RegistryLoad::default()
+            },
+            [0; 32],
+            0,
+            1,
+        );
+        let pool = snapshot.pool("p").expect("the case's pool");
+        let model = "claude-sonnet-5";
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![PinRow {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: model.into(),
+                account_id: "a".into(),
+                epoch: 1,
+                created_at: 0,
+                last_used_at: T,
+                key_generation: 0,
+                incarnation: 1,
+                burn: PinBurn {
+                    input: 1.0,
+                    ..PinBurn::default()
+                },
+                burn_at: Some(T),
+                burn_banded: PinBurn::default(),
+                burn_fast: PinBurn::default(),
+                burn_unmetered: PinBurn::default(),
+                last_input_tokens: 0,
+                last_classifier: false,
+                last_refresh_at: T,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                shed_reason: None,
+                static_hash: None,
+                tail_hash: None,
+                lane: crate::lane_key(model, "standard", "none", "-"),
+                entrypoint: String::new(),
+                marked_at: None,
+                marked_on: None,
+                marked_window: None,
+            }],
+            ..RoutingLoad::default()
+        });
+        // The case's own rates and band: the 5-hour window weighs twice inside the band, so its projection reads the
+        // band's segments and not one flat rate.
+        let (band_from, band_to) = (T + HOUR / 2, T + 3 * HOUR);
+        state.set_share(
+            SharePricer::default()
+                .with_rate(|window, _, _, _, _, _| {
+                    Some(if window == FIVE_HOUR { 1e-5 } else { 2e-6 })
+                })
+                .with_band_segments(move |window, _, from, to| {
+                    if window != FIVE_HOUR {
+                        return vec![BandSegment {
+                            from,
+                            to,
+                            weight: 1.0,
+                        }];
+                    }
+                    let mut edges = vec![from];
+                    edges.extend(
+                        [band_from, band_to]
+                            .into_iter()
+                            .filter(|edge| from < *edge && *edge < to),
+                    );
+                    edges.push(to);
+                    edges
+                        .windows(2)
+                        .map(|pair| BandSegment {
+                            from: pair[0],
+                            to: pair[1],
+                            weight: if band_from <= pair[0] && pair[0] < band_to {
+                                2.0
+                            } else {
+                                1.0
+                            },
+                        })
+                        .collect()
+                }),
+        );
+        let reading = |utilization: f64, reset: i64| WindowReading {
+            utilization,
+            reset: Some(reset),
+            observed_at: T,
+            source: WindowSource::Poll,
+        };
+        state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: T,
+                ..Default::default()
+            }
+            .with(FIVE_HOUR, reading(0.4, T + 2 * HOUR))
+            .with(SEVEN_DAY, reading(0.3, T + 72 * HOUR)),
+        );
+        // An entry in force at a realized speed of a half, so the demand reads the pin's burn at twice the achieved.
+        state.write_slow_down(
+            "p",
+            "a",
+            &SlowDownRead {
+                utilization: 0.4,
+                horizon: T + 2 * HOUR,
+                reset: Some(T + 2 * HOUR),
+                demand: 0.0,
+                banded: Banded::default(),
+                stretch_ms: 0,
+                threshold_ms: 0,
+                factor: 0.8,
+                ramp: 1.0,
+                ramped: 0.8,
+                speed: 1.0,
+                plan: Vec::new(),
+                realized: 0.5,
+            },
+            0.5,
+            T,
+            HOUR,
+        );
+        assert_eq!(state.slow_down_speed(pool, "a", T), 0.5);
+
+        let answer = projections(&state, &snapshot, "p", T);
+        let [account] = &answer[..] else {
+            panic!("one member answers: {answer:?}");
+        };
+        assert_eq!(
+            account
+                .windows
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [FIVE_HOUR, SEVEN_DAY],
+            "the windows the account holds a reading of"
+        );
+        for (window, answered) in &account.windows {
+            let read = |burn| {
+                projection_of(&state, &snapshot, pool, "a", tier, window, T, burn)
+                    .expect("a window with a reading projects")
+            };
+            let (projection, demand) = (read(BurnRead::Achieved), read(BurnRead::Demand));
+            assert_eq!(
+                (
+                    answered.predicted,
+                    answered.projection,
+                    answered.horizon,
+                    answered.burn,
+                    answered.demand,
+                ),
+                (
+                    projection.predicted,
+                    projection.at_horizon,
+                    projection.horizon,
+                    projection.burn * 3_600.0,
+                    demand.burn * 3_600.0,
+                ),
+                "{window}: one answer carries the projection and the demand to the bit"
+            );
+            assert!(
+                answered.demand > answered.burn,
+                "{window}: the demand divides the burn by the speed: {answered:?}"
+            );
+        }
     }
 }

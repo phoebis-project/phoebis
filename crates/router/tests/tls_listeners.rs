@@ -310,6 +310,7 @@ async fn attention(admin_port: u16, config: &Path) -> (Vec<serde_json::Value>, V
         &reads,
         &listeners,
         "0.1.0",
+        "unknown",
         jiff::Timestamp::now(),
         &jiff::tz::TimeZone::UTC,
         false,

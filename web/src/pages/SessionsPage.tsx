@@ -605,8 +605,9 @@ function SessionRows({
   // ledgered request stands in for it and the expiry counts from there.
   const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
   const expiresAt = expireAfterSeconds === null || lastUsed === null ? null : new Date(Date.parse(lastUsed) + expireAfterSeconds * 1000).toISOString();
-  // Analytics and the request log read the ledger, so a session that never reached it has nothing to open.
-  const hasTraffic = session.requests > 0;
+  // Analytics and the request log read the ledger, so a session that never reached it has nothing to open. The count
+  // leaves a refused request out while the log lists it, so a ledgered row reads off the last request instead.
+  const hasTraffic = session.lastRequestAt !== null;
   const trafficSession = session.sessionId;
   // The base's row where the list holds it: the fork badge reads the account relation off the two listed rows, and
   // only while both pins are live, since a released or expired pin leaves the last ledgered request's account on the
@@ -714,7 +715,7 @@ function SessionRows({
         )}
         {visible.has('requests') && (
           <td className="right num col-fit" title={hasTraffic ? undefined : NO_TRAFFIC_HINT}>
-            {hasTraffic ? fmtInt(session.requests) : <span className="muted">0</span>}
+            {session.requests > 0 ? fmtInt(session.requests) : <span className="muted">0</span>}
           </td>
         )}
         {visible.has('lastRequest') && (

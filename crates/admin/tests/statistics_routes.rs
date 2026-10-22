@@ -106,7 +106,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         .unwrap_or_default();
     members.sort();
     let expected: Vec<(String, Vec<String>)> = [
-        ("about", &["profile", "version"][..]),
+        ("about", &["build", "profile", "version"][..]),
         ("access", &["admin_configured"]),
         (
             "api_prices",
@@ -308,8 +308,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(41), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that adds the landing stamp"
+        (Some(42), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that flags the router's refusals before any account"
     );
     assert_eq!(
         (
@@ -3200,6 +3200,125 @@ async fn the_burn_key_grouping_names_the_live_holder_by_its_id_and_an_earlier_on
 }
 
 #[tokio::test]
+async fn the_breakdown_and_the_series_label_an_earlier_key_deleted_and_the_empty_model_no_model() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let earlier = common::generation(&parts.store, "desktop") - 60_000;
+    let at = common::NOW - HOUR;
+    parts.ledger.record(record_at(
+        "label-earlier",
+        at,
+        "claude-sonnet-5-5",
+        "s1",
+        earlier,
+    ));
+    // A request the router rejected before routing names no model and no attempt.
+    let mut rejected = record("label-rejected", at, "", "s2");
+    if let Record::Request {
+        request, attempts, ..
+    } = &mut rejected
+    {
+        request.outcome = "rejected".into();
+        request.status = Some(400);
+        request.attempts = 0;
+        attempts.clear();
+    }
+    parts.ledger.record(rejected);
+    landed(&parts, &["label-earlier", "label-rejected"]).await;
+    let earlier_key = format!("desktop@{earlier}");
+    let group_in = |series: &serde_json::Value, key: &str| -> serde_json::Value {
+        series["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|p| {
+                p["groups"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|g| g["key"] == key)
+                    .cloned()
+            })
+            .unwrap_or_else(|| panic!("a bucket carries the group {key}: {series}"))
+    };
+    let by_key = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=key",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let row = row_of(&by_key, &earlier_key);
+    assert_eq!(
+        (&row["label"], &row["key_id"], &row["key_created_at"]),
+        (
+            &serde_json::json!("desktop (deleted)"),
+            &serde_json::json!("desktop"),
+            &serde_json::json!(earlier)
+        ),
+        "an earlier holder reads deleted, its creation instant the member's to format: {row}"
+    );
+    let series_by_key = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=key",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        group_in(&series_by_key, &earlier_key)["label"],
+        "desktop (deleted)",
+        "the series labels the earlier holder as the breakdown does"
+    );
+    let by_model = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=model",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        row_of(&by_model, "")["label"],
+        "no model",
+        "the model grouping's empty key reads no model: {by_model}"
+    );
+    let series_by_model = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=model",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        group_in(&series_by_model, "")["label"],
+        "no model",
+        "the series labels the empty key as the breakdown does"
+    );
+}
+
+#[tokio::test]
 async fn the_burn_files_an_agent_under_the_user_agent_group_its_pattern_names() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -4638,6 +4757,59 @@ async fn the_routing_log_refuses_an_unknown_kind_a_bad_time_a_bad_cursor_and_a_l
             "{query}"
         );
     }
+}
+
+#[tokio::test]
+async fn the_routing_log_filters_on_the_stream_interrupted_kind() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    parts.ledger.record(Record::Event(EventRecord {
+        at: now - 2_000,
+        kind: "stream_interrupted".into(),
+        account_id: Some("direct".into()),
+        detail: Some(
+            r#"{"code":"stream_cut","text":"malformed response: connection closed inside chunked body","bytes_relayed":42,"upstream_request_id":"req_up","attempt":1}"#
+                .into(),
+        ),
+        request_id: Some("r1".into()),
+        ..Default::default()
+    }));
+    parts
+        .ledger
+        .record(routing_event(now - 1_000, "cooldown_set"));
+    let route = |kinds: &str| {
+        format!(
+            "/admin/routing-log?from={}&to={}&kinds={kinds}",
+            now - 10_000,
+            now - 1
+        )
+    };
+    let first = get(&parts.app, &route("stream_interrupted"), Some(&cookie)).await;
+    let status = first.status();
+    assert_eq!(status, 200, "{}", json(first).await);
+    // Both rows landed before the filtered read, so the cooldown's absence is the filter's.
+    wait_json(
+        &parts.app,
+        &route("cooldown_set,stream_interrupted"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 2),
+    )
+    .await;
+    let page = json(get(&parts.app, &route("stream_interrupted"), Some(&cookie)).await).await;
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (
+                row["type"].as_str(),
+                row["kind"].as_str(),
+                row["request_id"].as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [(Some("event"), Some("stream_interrupted"), Some("r1"))],
+        "the cut's row alone, the cooldown left out"
+    );
+    assert_eq!(rows[0]["detail"]["code"], "stream_cut");
 }
 
 #[tokio::test]

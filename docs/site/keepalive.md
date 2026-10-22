@@ -93,27 +93,38 @@ lease and the four probe workers are fixed.
 ## Which requests re-arm a recipe
 
 A recipe's cache stays warm only for a request that continues the conversation it was built from. The engine reads the
-request's class first: `compaction`, `main` and `subagent` re-arm the recipe, and any other class, a title or a summary
-request among them, leaves the recipe, its schedule and its credit untouched, and shows as `last_guard: auxiliary`.
+request's class first: `main` and `subagent` re-arm the recipe, and a completed compaction stops it until the next main
+turn. Any other class, a title or a summary request among them, leaves the recipe, its schedule and its credit
+untouched, and shows as `last_guard: auxiliary`.
+
+A `compaction` request reads the conversation's old prefix to write the context the next turn starts from, so a recipe
+armed from it would keep warm a body no turn reads again. While the compaction runs, the recipe waits as it stood with
+no probe sent, and shows as `last_guard: compaction`. Once the compaction completes, it answers the probes before it as
+a turn does, and the recipe ends under `compacted`: no probe goes out until the next main turn arms a recipe for the
+new context. A compaction that failed or was canceled keeps the previous recipe, since the old context stays the live
+one, and the engine resumes its schedule on it.
 
 Without a class, the request's own two boundary-hash chains decide. A boundary that holds the recipe's last message hash
 re-arms it, since the request continues the same conversation. The same static prefix, the tools array and the system
-blocks, on the same model, with no continuation restarts the recipe, replacing its cached body the way a compaction
-does. A request matching neither the chain nor the prefix shows as `last_guard: foreign`, and its recipe is left alone
-the same way an auxiliary one is. A body carrying no chain at all re-arms on every request, the fallback the router's
-own warmth check applies for a client that sends none.
+blocks, on the same model, with no continuation restarts the recipe, replacing its cached body. A request matching
+neither the chain nor the prefix shows as `last_guard: foreign`, and its recipe is left alone the same way an auxiliary
+one is. A body carrying no chain at all re-arms on every request, the fallback the router's own warmth check applies for
+a client that sends none.
 
-The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it, and it goes to the probe
-whose entry that request read, a probe that rewrote the entry included, the newest probe that covered the entry taking
-it over a later one that did not cover it. An auxiliary or a foreign request may still read a warm cache, but it never
-resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no evidence about the cache, so
-a retry inside the probe's entry earns the credit the failed turn could not, its gap measured from the last turn that
-answered.
+The kept-warm credit follows the same rule: only a request that re-armed the recipe or a completed compaction earns it,
+and it goes to the probe whose entry that request read, a probe that rewrote the entry included, the newest probe that
+covered the entry taking it over a later one that did not cover it. An auxiliary or a foreign request may still read a
+warm cache, but it never resets the recipe's schedule and settles nothing. A failed turn decides no probe and is no
+evidence about the cache, so a retry inside the probe's entry earns the credit the failed turn could not, its gap
+measured from the last turn that answered. Probes on one model, speed and account form a chain while each later probe
+reads the whole entry back, since that read extends the entry, and a probe that reads nothing or only part of the prefix
+starts a chain of its own. A request on that model, speed and account that reads the cache inside the chain's last
+entry answers every probe of the chain, and one that arrives past that entry settles them all `expired`.
 
-A request a guardrail blocks is a refused request to the engine. A blocked `compaction`, `main` or `subagent` request,
-or one with no class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does, and a
-blocked auxiliary request leaves the recipe, its schedule and its credit untouched
-([Guardrails](guardrails.md#what-a-guardrail-is)).
+A request a guardrail blocks is a refused request to the engine. A blocked `main` or `subagent` request, or one with no
+class whose chain re-arms the recipe, ends the armed recipe and its schedule as any refusal does. A blocked `compaction`
+request is a compaction that did not complete, so it keeps the recipe as a failed one does, and a blocked auxiliary
+request leaves the recipe, its schedule and its credit untouched ([Guardrails](guardrails.md#what-a-guardrail-is)).
 
 ## The four fields
 
@@ -122,7 +133,7 @@ The pool's `keepalive` object carries four fields:
 | Field | Default | Bounds | Meaning |
 | --- | --- | --- | --- |
 | `enabled` | `false` | | Probing on for the pool's sessions, every member kind. |
-| `max_idle_seconds` | `3600` | 0 to 31536000 | The main conversation's idle window, at most the break-even. |
+| `max_idle_seconds` | `3600` | 0 to 31536000 | The main conversation's idle window, taken as set, 0 the break-even. |
 | `max_parked_seconds` | `null` | null or 60 to 604800 | Time a park on a background command or a subagent is probed. |
 | `scheduled_horizon_seconds` | `null` | null or 60 to 604800 | The farthest wakeup a scheduled park is probed toward. |
 
@@ -139,11 +150,12 @@ a plan-funded recipe breaks even after 44.1 hours on a one-hour entry and 3 hour
 Every tick reads the price table and the cost model at the revisions in force then, so an entry that takes effect moves
 the break-even from the next tick, without a restart.
 
-A `max_idle_seconds` of 0, a `null` ceiling and any number above the break-even resolve to the break-even, so a field's
-number takes effect only below the break-even. `GET /admin/pools` answers `null` where null was set. An out-of-range
-value is refused with `keepalive.{field} must be between {min} and {max}, not {value}`, for example
-`keepalive.max_parked_seconds must be between 60 and 604800, not 59`. A value that is not an object, or a field the
-policy does not hold, is refused with `keepalive is not a policy object: {detail}`, the detail naming the fault.
+A `max_idle_seconds` of 0 resolves to the break-even and any other number is taken as set, above the break-even too,
+where the pool dialog notes it. A `null` parked or horizon ceiling, and a parked or horizon number above the break-even,
+resolve to the break-even, so those two numbers take effect only below it. `GET /admin/pools` answers `null` where null
+was set. An out-of-range value is refused with `keepalive.{field} must be between {min} and {max}, not {value}`, for
+example `keepalive.max_parked_seconds must be between 60 and 604800, not 59`. A value that is not an object, or a field
+the policy does not hold, is refused with `keepalive is not a policy object: {detail}`, the detail naming the fault.
 
 For the console, `GET /admin/pools` also answers each pool's `keepalive_resolved`: the break-even and the three ceilings
 in seconds and the idle window's cost as a share of one re-write, each as the lowest and the highest figure over the
@@ -174,12 +186,13 @@ subagent completes. The two park rules are loss bounds. The idle window is the o
 the main conversation, because the user can type while a background command, a subagent or a cron is open.
 
 **The idle window.** The main conversation is probed until `max_idle_seconds` after the latest of its last real request,
-its last presence report and the end of a park without a request, a deadline or a wakeup that passed. The window never
-runs past the recipe's break-even. A wakeup is a real request, so a cron that fires or a command that exits restarts the
-window. A silent session, one whose lease lapsed, is probed under the window from its last real request for every agent,
-and the park rules do not apply to it. A session saved attended reads silent after a router restart but keeps its park
-rules until its registration arrives or one lease length passes, and the silent rule follows only when the lease length
-passes first.
+its last presence report and the end of a park without a request, a deadline or a wakeup that passed. The window runs to
+the set limit, above the recipe's break-even too, and a `max_idle_seconds` of 0 runs it to the break-even. The pool
+dialog notes a window set past the break-even, whose share of one re-write can read above one. A wakeup is a real
+request, so a cron that fires or a command that exits restarts the window. A silent session, one whose lease lapsed, is
+probed under the window from its last real request for every agent, and the park rules do not apply to it. A session
+saved attended reads silent after a router restart but keeps its park rules until its registration arrives or one lease
+length passes, and the silent rule follows only when the lease length passes first.
 
 **Parked on a background command or a subagent.** The main conversation or a subagent reported `parked` with kind
 `background` is probed until the return, at most `max_parked_seconds` after the park began. A real request or a state
@@ -227,8 +240,8 @@ only once its start moves past the one in force at that close, at a park's end, 
 or the session's revival. A busy report pauses the count without closing the window, and a subagent or a silent session
 opens none.
 
-No rule reads the counters: the idle window is the pool's `max_idle_seconds`, capped at the break-even. The pool dialog
-shows them by bucket.
+No rule reads the counters: the idle window is the pool's `max_idle_seconds`, taken as set. The pool dialog shows them
+by bucket.
 
 ## The five states
 
@@ -246,7 +259,7 @@ session leaves.
 | `held` | The prompt is kept and no probe is sent while a condition holds that clears by itself or by an operator. |
 | `paused` | The engine paused the recipe after a probe's answer or a failed request, until the next real request. |
 | `not_retained` | The last request was not kept, for its shape or size, the engine's limits, or no cache evidence. |
-| `ended` | The recipe was discarded: a ceiling, a lapse, an eviction, a release or an end. |
+| `ended` | The recipe was discarded: a ceiling, a completed compaction, an end, an eviction, a lapse or a release. |
 
 Each state reads these causes:
 
@@ -260,8 +273,8 @@ Each state reads these causes:
 - `not_retained`: `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`, `invalid_cache_control`,
   `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`, `request_too_large`,
   `storage_limit`, `structured_output`, `unsupported_shape`.
-- `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `evicted`, `expired`, `expired_at_restart`, `idle_limit`,
-  `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
+- `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `compacted`, `evicted`, `expired`, `expired_at_restart`,
+  `idle_limit`, `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
   `session_expired`.
 
 A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's error answer pauses the recipe
@@ -285,9 +298,10 @@ would travel with a stale stamp or a doubled member.
 ### The guard field
 
 Every request the recipe observes also updates `last_guard`, `null` before the first one: `rearm` or `restart` for a
-request that continued or restarted the conversation, `auxiliary` or `foreign` for one the guard set aside (see [Which
-requests re-arm a recipe](#which-requests-re-arm-a-recipe)). `last_guard` never holds the recipe by itself. An auxiliary
-or a foreign request leaves `state` and `cause` exactly as they were, so a recipe `held` under `cooled` with
+request that continued or restarted the conversation, `compaction` for a compaction request, which leaves the recipe as
+it stood and stops it at its completion, and `auxiliary` or `foreign` for one the guard set aside (see [Which requests
+re-arm a recipe](#which-requests-re-arm-a-recipe)). `last_guard` never holds the recipe by itself. An auxiliary or a
+foreign request leaves `state` and `cause` exactly as they were, so a recipe `held` under `cooled` with
 `last_guard: rearm` is a real request that re-armed it, followed later by a cooldown on its account, not a
 contradiction.
 
@@ -325,16 +339,17 @@ first ends it under its own reason.
 ### The wasted probes
 
 A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered (at the idle
-limit, once the probe's entry lapses before a real request reads it) or is held under `horizon`, when the recipe lapses
-or is evicted, or when the next request after the probe reads nothing from the entry it kept:
+limit, once the last entry of the probe's [chain](#which-requests-re-arm-a-recipe) lapses before a real request reads
+it) or is held under `horizon`, when the recipe lapses or is evicted, or when the next request after the probe reads
+nothing from the entry its chain kept:
 
 | Reason | What settles it |
 | --- | --- |
-| `cold_return` | The next request read no cache, or on another account, model or speed, inside the probe's entry. |
+| `cold_return` | The next request read no cache, or on another account, model or speed, inside the last entry of the probe's chain. |
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
-| `expired` | The probe's entry expired before the next request arrived, or the recipe's before its probe was due. |
+| `expired` | The last entry of the probe's chain expired before the next request arrived, or the recipe's before its probe was due. |
 | `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
-| `idle_limit` | The idle window ran out and the probe's entry lapsed before a real request read it. |
+| `idle_limit` | The idle window ran out and the last entry of the probe's chain lapsed before a real request read it. |
 | `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
 | `released` | By an operator's release, a key's opt-out, or the mod reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
@@ -350,16 +365,17 @@ ledger's rollup carries the keepalive fields the console reads. `kept_warm_reque
 `kept_warm_1h_tokens` count the requests a probe kept off a cache miss on any model the request named and the tokens
 they read warm, booked under the TTL the credited request's own cache evidence settled on. The ledger's analytics read
 prices the saving from the two counts at read time, and the console reads it: the write each count avoided at its TTL's
-rate less the read it paid. A probe's cost is its own request row's counts priced when read, at the dearest listed cells
-for a model the price table does not know, and `probe_migrated` counts a probe that landed on a different account than
-the recipe's. `wasted_probes` counts the probes settled wasted by one of the reasons above, and `wasted_probe_reasons`
-counts them by the reason. The wasted probes' five token counts sit on the hourly rollup beside their count, priced the
-same way. Each wasted probe files beside its own cost row, in the hour the relay received the probe and under the
-funding that row took (the kind of the account that served it, the speed its answer reported and whether its answer
-reported overage in use), so the wasted part of a probe share reads the plan-funded probes' waste against their own
-cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for example because a
-cooldown already held the recipe. `probes_held` counts a probe the router refused with `503 ledger_behind` while its
-ledger caught up and sent again, outside the failed probes since no account answered it.
+rate less the read it paid. The credit row is keyed under the client of the request it credits, so the saving prices
+under that client's regime as the request's own row does. A probe's cost is its own request row's counts priced when
+read, at the dearest listed cells for a model the price table does not know, and `probe_migrated` counts a probe that
+landed on a different account than the recipe's. `wasted_probes` counts the probes settled wasted by one of the reasons
+above, and `wasted_probe_reasons` counts them by the reason. The wasted probes' five token counts sit on the hourly
+rollup beside their count, priced the same way. Each wasted probe files beside its own cost row, in the hour the relay
+received the probe and under the funding that row took (the kind of the account that served it, the speed its answer
+reported and whether its answer reported overage in use), so the wasted part of a probe share reads the plan-funded
+probes' waste against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than
+sending, for example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
+`503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
 `plan_ok`, `skipped`, where `plan_ok` counts the answered probes a subscription window paid for, inside `ok`), and per

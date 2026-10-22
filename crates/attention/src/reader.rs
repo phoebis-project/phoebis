@@ -195,7 +195,8 @@ pub struct Condition {
     /// The pools the condition belongs to, so a pool card filters the same list the dashboard reads.
     pub pools: Vec<String>,
     /// `None` for a drift refusal that carried no key, a router subject, and a pool deleted under a parked record,
-    /// which leave nothing to open.
+    /// which leave nothing to open, and for an unweighted model, whose cost reference dialog opens from a link on a
+    /// tab and has no address of its own.
     pub link: Option<Link>,
     pub detail: serde_json::Value,
 }
@@ -665,10 +666,7 @@ pub(crate) fn conditions(
             holds: entry.since.is_some(),
             since: entry.since,
             pools: Vec::new(),
-            link: Some(Link {
-                page: "models",
-                id: entry.model.clone(),
-            }),
+            link: None,
             detail: json!({
                 "model": entry.model,
                 "requests": entry.requests,

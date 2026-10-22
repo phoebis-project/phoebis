@@ -27,8 +27,8 @@ pub(crate) struct AttentionItem {
     #[schema(example = "pool_exhausted")]
     pub kind: String,
     pub subject: AttentionSubject,
-    /// Null for a drift item whose refused request named no key, a router subject, a deleted pool, and a routing
-    /// condition whose account or pool the registry no longer holds.
+    /// Null for a drift item whose refused request named no key, a router subject, a deleted pool, a routing condition
+    /// whose account or pool the registry no longer holds, and an unweighted model.
     pub link: Option<AttentionLink>,
     /// The pools the item belongs to: an account's memberships, a pool's own id, the pool of a drift item's key.
     /// Empty for a router subject, a model, a deleted pool, and a routing condition whose account or pool the
@@ -36,11 +36,11 @@ pub(crate) struct AttentionItem {
     pub pools: Vec<String>,
     /// Unix milliseconds: the start of the backoff run, the first failed attempt of a refresh run, the first exhaustion
     /// or refusal of a run, the oldest parked row, the refused certificate reload, 30 days before a certificate's end,
-    /// the first plan-funded landing of an unweighted model's run, the `window_end` of the oldest off window among each
-    /// window's newest reconciled row with a rise of at least 0.05 for `meter_drift`, the oldest qualifying event of
-    /// the trailing 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of the oldest
-    /// slow-down span counted for `slowed_long`, which can predate the day for a span open from before it, or for the
-    /// two account states and a degraded writer the first read of this process that saw the state.
+    /// the first plan-funded landing of an unweighted model's run, the `window_end` of the oldest window the detail's
+    /// `windows` lists, or the fold's instant where that end lies after it, for `meter_drift`, the oldest qualifying
+    /// event of the trailing 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of
+    /// the oldest slow-down span counted for `slowed_long`, which can predate the day for a span open from before it,
+    /// or for the two account states and a degraded writer the first read of this process that saw the state.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`, or
@@ -50,21 +50,22 @@ pub(crate) struct AttentionItem {
     /// `expires` (the leaf's end) and `days_left` (whole days from the read, negative once past). `model_unweighted`
     /// carries `model`, `requests` (the plan-funded requests its run served), `tier` (its model tier) and `weight_of`
     /// (the tier's latest weighted model, whose weight prices it). `meter_drift` carries `windows` (per window whose
-    /// newest reconciled row with a rise of at least 0.05 read a ratio under 0.8 or over 1.25, so a newer row with a
-    /// smaller rise leaves it standing: `window`, `ratio`, `observed_rise`, `predicted_share`, `window_end` and
-    /// `requests`), `source` (`shipped` or `file`, where the cost model came from) and `effective` (the date of the
-    /// revision in force), and names no setting, since the fix is the cost model file. The other routing conditions
-    /// carry `setting`, the names of the settings they read against: `wall_reached` with `walls`, `windows`,
-    /// `projection_error` and `early_ms`, read off the newest shedding round on the account on the wall's window inside
-    /// the window's length before the wall (`projection_error` one less a projection round's projection, `early_ms`
-    /// after a stretch round the milliseconds the newest wall arrived before its window's reset, 0 at or after it, each
-    /// null after the other trigger's round and both null with none), `destination_spent` with `moves`, `fits` (the
-    /// moves' destination fits with counts) and `windows`, `shed_no_runway` with `rounds` and `accounts`, and
-    /// `slowed_long` with `spans` (the slow-down spans counted), `slowed_ms` (their parts inside the day, summed),
-    /// `bar_ms` (the bar the sum passed, twice the stretch threshold of the newest counted span's start and at least an
-    /// hour), `open` (whether a span still stands) and `factor_min` (the lowest factor of the spans). `shed_no_runway`
-    /// and `slowed_long` add `setting_values` (the pool's value of each setting `setting` names, present only for a
-    /// pool the registry still holds).
+    /// newest reconciled row among those that ended in the last eight days with a rise of at least 0.05 read a ratio
+    /// under 0.8 or over 1.25 over a priced share of at least 0.05, so a newer row with a smaller rise leaves it
+    /// standing: `window`, `ratio`, `observed_rise`, `predicted_share`, `window_end` and `requests`), `source`
+    /// (`shipped` or `file`, where the cost model came from) and `effective` (the date of the revision in force), and
+    /// names no setting, since the fix is the cost model file. The other routing conditions carry `setting`, the names
+    /// of the settings they read against: `wall_reached` with `walls`, `windows`, `projection_error` and `early_ms`,
+    /// read off the newest shedding round on the account on the wall's window inside the window's length before the
+    /// wall (`projection_error` one less a projection round's projection, `early_ms` after a stretch round the
+    /// milliseconds the newest wall arrived before its window's reset, 0 at or after it, each null after the other
+    /// trigger's round and both null with none), `destination_spent` with `moves`, `fits` (the moves' destination fits
+    /// with counts) and `windows`, `shed_no_runway` with `rounds` and `accounts`, and `slowed_long` with `spans` (the
+    /// slow-down spans counted), `slowed_ms` (their parts inside the day, summed), `bar_ms` (the bar the sum passed,
+    /// twice the stretch threshold of the newest counted span's start and at least an hour), `open` (whether a span
+    /// still stands) and `factor_min` (the lowest factor of the spans). `shed_no_runway` and `slowed_long` add
+    /// `setting_values` (the pool's value of each setting `setting` names, present only for a pool the registry still
+    /// holds).
     #[schema(value_type = Object)]
     pub detail: Value,
 }
@@ -86,7 +87,7 @@ pub(crate) struct AttentionSubject {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AttentionLink {
-    /// `accounts`, `pools`, `keys` or `models`.
+    /// `accounts`, `keys` or `pools`.
     #[schema(example = "accounts")]
     pub page: String,
     /// Where the operator fixes it.

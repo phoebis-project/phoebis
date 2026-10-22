@@ -29,6 +29,9 @@ pub(crate) struct Settings {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct About {
+    /// The full commit the router was built from, or `unknown` for a build that had none, as every answer carries it
+    /// in `x-phoebis-build`.
+    pub build: String,
     pub profile: String,
     pub version: String,
 }
@@ -95,6 +98,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     } = crate::pricing::table_envelopes(&state.pricing.revisions(), &state.tables, (state.clock)());
     Json(Settings {
         about: About {
+            build: state.build.into(),
             profile: s.profile.clone(),
             version: env!("CARGO_PKG_VERSION").into(),
         },

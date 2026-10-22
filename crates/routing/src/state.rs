@@ -740,10 +740,16 @@ pub(crate) fn burn_folded(
     burn_decayed(burn, burn_at, now, window_ms) + tokens / (window_ms.max(1) as f64 / 1_000.0)
 }
 
-/// Whether the pin's cache entry is still alive at `now`: its last refresh is younger than the TTL in force
-/// for it.
-pub fn warm(pin: &PinRow, now: i64) -> bool {
-    now - pin.last_refresh_at < pin.cache_ttl_ms
+/// Whether the pin's cache entry is still alive at `now`. A pin only auxiliary requests have used since its placement
+/// (`auxiliary_only`) is kept warm by those requests, so its last use is the measure, and any other pin reads its last
+/// refresh, the last turn that rewrote its prefix.
+pub fn warm(pin: &PinRow, auxiliary_only: bool, now: i64) -> bool {
+    let since = if auxiliary_only {
+        pin.last_used_at
+    } else {
+        pin.last_refresh_at
+    };
+    now - since < pin.cache_ttl_ms
 }
 
 /// Past this age a permit or a ticket is a guard whose drop never reached the table: the relay bounds a
@@ -1157,6 +1163,9 @@ pub struct RoutingState {
     accounting_degraded: bool,
     /// Shared with the handle the way `in_flight` is, so a lookup never waits on a command round trip.
     affinity: Arc<RwLock<AffinityMap>>,
+    /// The pins no `Refresh` verdict has renewed since their placement, whose warmth reads their last use. Memory only,
+    /// with no column: a load derives it from each row's history.
+    auxiliary_only: HashSet<PinKey>,
     /// The router's own requests since each account's readings, what `predicted` adds to them. Memory only: a
     /// restart loads the newest readings and predicts from them alone until the next request completes.
     charges: HashMap<String, Charges>,
@@ -1238,6 +1247,14 @@ impl RoutingState {
         RoutingState {
             accounting_degraded: false,
             affinity: Arc::new(RwLock::new(affinity_map)),
+            // The row carries no flag, so a pin a main turn placed and no second refreshing turn renewed derives it
+            // too, and reads warm by its last use for at most one TTL past its last auxiliary request.
+            auxiliary_only: load
+                .pins
+                .iter()
+                .filter(|p| p.last_refresh_at == p.created_at)
+                .map(PinRow::key)
+                .collect(),
             charges: HashMap::new(),
             cooldowns: load
                 .cooldowns
@@ -1346,11 +1363,12 @@ impl RoutingState {
     }
 
     /// A fresh pin under a key another pin held (a release that lands the session elsewhere) takes the old one off
-    /// its account with its mark and starts unrenewed. A renewal keeps the epoch and the renewal, and the row it
-    /// writes carries the mark as the caller read it. A fresh pin on another account than the row it replaces clears
-    /// the slow-down deadline standing on the key's pace and keeps the cycle and the last dispatch: the hold was sized
-    /// for the source's window, and the new account's own factor decides the next one. A fresh pin with no row to
-    /// replace counts as such a landing, since a move and a failover take the row off the source before they write.
+    /// its account with its mark and starts unrenewed and unflagged, for its placement to set its own flag after the
+    /// put. A renewal keeps the epoch, the renewal and the flag, and the row it writes carries the mark as the caller
+    /// read it. A fresh pin on another account than the row it replaces clears the slow-down deadline standing on the
+    /// key's pace and keeps the cycle and the last dispatch: the hold was sized for the source's window, and the new
+    /// account's own factor decides the next one. A fresh pin with no row to replace counts as such a landing, since a
+    /// move and a failover take the row off the source before they write.
     pub(crate) fn put_pin(&mut self, mut pin: PinRow) {
         pin.model = self.canonical(&pin.model).to_string();
         let key = pin.key();
@@ -1360,6 +1378,7 @@ impl RoutingState {
             Some(replaced) if replaced.epoch == epoch => false,
             replaced => {
                 self.renewed.remove(&key);
+                self.auxiliary_only.remove(&key);
                 replaced.is_none_or(|replaced| replaced.account_id != account_id)
             }
         };
@@ -1419,6 +1438,42 @@ impl RoutingState {
         self.renewed.contains(&key)
     }
 
+    /// Whether no `Refresh` verdict has renewed the pin since its placement, or, after a restart, whether the row's
+    /// last refresh is its creation.
+    pub fn auxiliary_only(&self, key: &PinKey) -> bool {
+        // Read on every renewal, so a key is built only for a model that resolved to another id.
+        match self.resolutions.get(&key.model) {
+            Some(dated) => self.auxiliary_only.contains(&PinKey {
+                model: dated.clone(),
+                ..key.clone()
+            }),
+            None => self.auxiliary_only.contains(key),
+        }
+    }
+
+    /// The pin's warmth under its own flag, the read every selector path takes.
+    pub fn pin_warm(&self, pin: &PinRow, now: i64) -> bool {
+        warm(pin, self.auxiliary_only(&pin.key()), now)
+    }
+
+    /// Sets the flag of the pin held under the key, as its placement decides it.
+    pub(crate) fn set_auxiliary_only(&mut self, key: &PinKey, auxiliary_only: bool) {
+        let key = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
+        if auxiliary_only && self.pins.contains_key(&key) {
+            self.auxiliary_only.insert(key);
+        } else {
+            self.auxiliary_only.remove(&key);
+        }
+    }
+
+    /// Clears the flag of the pin under the key, as a `Refresh` verdict on it does.
+    pub(crate) fn clear_auxiliary_only(&mut self, key: &PinKey) {
+        self.set_auxiliary_only(key, false);
+    }
+
     pub(crate) fn remove_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let key = PinKey {
             model: self.canonical(&key.model).to_string(),
@@ -1432,6 +1487,7 @@ impl RoutingState {
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
+        self.auxiliary_only.remove(key);
         self.head_marks.remove(key);
         Some(pin)
     }
@@ -2502,12 +2558,11 @@ impl RoutingState {
     }
 
     /// The pins of `account_id` that `keep` admits, each priced in `unit` through `rates` and decayed to `now`, and
-    /// the sum over the priced pins; `keep` is the account's current pool, built by the caller from the snapshot
+    /// the sum over the priced pins. `keep` is the account's current pool, built by the caller from the snapshot
     /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
-    /// `WindowShare` a burn is the subscription cost model's anchor share per second, which orders the pins as the
-    /// tier's share does, and under `Usd` the pin's fast usage and the usage of the client's own classifier calls
-    /// count beside its row's copy, as `BurnRates::price_pin` sums them. `None` for a pin burning a type its row
-    /// cannot price.
+    /// `WindowShare` a burn is the subscription cost model's anchor share per second, and under `Usd` the pin's fast
+    /// usage and the usage of the client's own classifier calls count beside its row's copy, as
+    /// `BurnRates::price_pin` sums them. `None` for a pin burning a type its row cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,
@@ -2559,7 +2614,8 @@ impl RoutingState {
 
     /// The twin of `burn_shares` that the slow-down's readers take: the kept pins' sum on every window over `speed`,
     /// the account's realized speed, and the live reservations' `burn` undivided, since a booking is a fresh session's
-    /// prior or a moving pin's figure, neither of them slowed on the account yet.
+    /// prior or a moving pin's figure, neither of them slowed on the account yet. `keep` decides which of the account's
+    /// rows count, as `pin_rates` reads it.
     pub fn demand_shares(
         &self,
         account_id: &str,
@@ -2575,7 +2631,8 @@ impl RoutingState {
     /// The account's rates as `shares` sums them, each over `[now, horizon(window))` as the band weighs it, for the
     /// windows `horizon` names: each kept pin's at its own regime's segments, the pins' sum over `speed`, then each
     /// live booking's undivided at its own regime's segments, its plain rate read under the band of its `booked_at`,
-    /// since its `burn` was priced there. An unpriced pin adds nothing.
+    /// since its `burn` was priced there. An unpriced pin adds nothing. `keep` decides which of the account's rows
+    /// count, as `pin_rates` reads it.
     #[allow(clippy::too_many_arguments)]
     pub fn banded_shares(
         &self,
@@ -2667,7 +2724,9 @@ impl RoutingState {
     }
 
     /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws, with the pin's
-    /// entrypoint, in the pin map's order. A priced pin alone reaches `add`.
+    /// entrypoint, in the pin map's order. A priced pin alone reaches `add`. `keep` decides which rows count, beside
+    /// the skip of a row a live booking names, with no idle test: a row idle past the TTL stands until its placement
+    /// replaces it or the purge takes it, and a placement's own reads leave the request's own row out through `keep`.
     fn pin_rates<'a>(
         &'a self,
         account_id: &str,
@@ -2950,8 +3009,9 @@ impl RoutingState {
         for pin in moved_pins {
             let spelled = pin.key();
             // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
-            // its fast and unmetered usage move with it.
+            // its flag and its fast and unmetered usage move with it.
             let renewed = self.renewed.contains(&spelled);
+            let auxiliary_only = self.auxiliary_only.contains(&spelled);
             // Read ahead of `take_pin`, which drops it: the mark lives as long as its row, so a `Head` report still
             // finds it under the dated id.
             let mark = self.head_marks.remove(&spelled);
@@ -2990,6 +3050,11 @@ impl RoutingState {
                     self.renewed.insert(dated_key.clone());
                 } else {
                     self.renewed.remove(&dated_key);
+                }
+                if auxiliary_only {
+                    self.auxiliary_only.insert(dated_key.clone());
+                } else {
+                    self.auxiliary_only.remove(&dated_key);
                 }
                 rekey.upsert_pins.push(moved);
             }
@@ -3081,6 +3146,38 @@ impl RoutingState {
         self.pins
             .values()
             .filter(move |p| p.key_id == key_id && p.session_id == session_id && p.model == model)
+    }
+
+    /// The session's newest pin under one key and agent whatever the model, the row that says where the session's
+    /// previous request landed, `None` for a session with no row. A pin only auxiliary requests use is left out, so
+    /// an auxiliary call that landed elsewhere is never the previous landing. Rows used at one instant answer the
+    /// later placement, then the row under `model`, the request's own, then the greater model id, so the answer never
+    /// rests on the map's order.
+    pub(crate) fn session_latest_pin(
+        &self,
+        key_id: &str,
+        session_id: &str,
+        agent_id: &str,
+        model: &str,
+    ) -> Option<&PinRow> {
+        let own = self.canonical(model);
+        self.pins
+            .iter()
+            .filter(|(key, p)| {
+                p.key_id == key_id
+                    && p.session_id == session_id
+                    && p.agent_id == agent_id
+                    && !self.auxiliary_only.contains(*key)
+            })
+            .map(|(_, p)| p)
+            .max_by_key(|&p| {
+                (
+                    p.last_used_at,
+                    p.created_at,
+                    p.model == own,
+                    p.model.as_str(),
+                )
+            })
     }
 
     /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, bucket windows read
@@ -3564,6 +3661,204 @@ mod tests {
                 .values()
                 .any(|p| p.burn_unmetered != PinBurn::default()),
             "the unmetered usage leaves with the pin"
+        );
+    }
+
+    #[test]
+    fn a_flagged_pin_reads_warm_by_its_last_use_and_an_unflagged_one_by_its_last_refresh() {
+        // Refreshed at its placement at 0, used last at 200 000, under a five-minute TTL.
+        let pin = PinRow {
+            last_used_at: 200_000,
+            ..burning("s", 1.0).0
+        };
+        assert!(
+            warm(&pin, true, 499_999),
+            "flagged, a millisecond short of one TTL after the last use"
+        );
+        assert!(
+            !warm(&pin, true, 500_000),
+            "flagged, one TTL after the last use"
+        );
+        assert!(
+            warm(&pin, false, 299_999),
+            "unflagged, a millisecond short of one TTL after the last refresh"
+        );
+        assert!(
+            !warm(&pin, false, 300_000),
+            "unflagged, one TTL after the last refresh, whatever used it since"
+        );
+    }
+
+    #[test]
+    fn a_load_flags_the_pins_whose_last_refresh_is_their_creation() {
+        let placed = PinRow {
+            created_at: 1_000,
+            last_refresh_at: 1_000,
+            ..burning("placed", 1.0).0
+        };
+        let refreshed = PinRow {
+            created_at: 1_000,
+            last_refresh_at: 2_000,
+            ..burning("refreshed", 1.0).0
+        };
+        let state = RoutingState::from_load(RoutingLoad {
+            pins: vec![placed.clone(), refreshed.clone()],
+            ..RoutingLoad::default()
+        });
+        assert!(
+            state.auxiliary_only(&placed.key()),
+            "no refreshing turn moved the stamp since the placement"
+        );
+        assert!(
+            !state.auxiliary_only(&refreshed.key()),
+            "a refreshing turn moved the stamp after the placement"
+        );
+    }
+
+    #[test]
+    fn a_pins_flag_leaves_with_its_row_and_a_fresh_row_under_its_key_starts_without_it() {
+        let pin = PinRow {
+            last_refresh_at: 1_000,
+            ..burning("s", 1.0).0
+        };
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        state.set_auxiliary_only(&pin.key(), true);
+        state.put_pin(PinRow {
+            last_used_at: 5_000,
+            ..pin.clone()
+        });
+        assert!(
+            state.auxiliary_only(&pin.key()),
+            "a renewal under the same epoch keeps the flag"
+        );
+        state.put_pin(PinRow {
+            epoch: 2,
+            ..pin.clone()
+        });
+        assert!(
+            !state.auxiliary_only(&pin.key()),
+            "a fresh row under the key starts without the replaced pin's flag"
+        );
+        state.set_auxiliary_only(&pin.key(), true);
+        state.remove_pin(&pin.key());
+        assert!(
+            state.auxiliary_only.is_empty(),
+            "the flag leaves with the row"
+        );
+    }
+
+    #[test]
+    fn a_flagged_pin_rekeyed_to_its_dated_id_stays_flagged() {
+        let pin = PinRow {
+            last_refresh_at: 1_000,
+            ..burning("s", 1.0).0
+        };
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        state.set_auxiliary_only(&pin.key(), true);
+        state.apply_resolution("m", "m-20260101", 0);
+        let dated = PinKey {
+            model: "m-20260101".into(),
+            ..pin.key()
+        };
+        assert_eq!(
+            state.auxiliary_only.iter().cloned().collect::<Vec<_>>(),
+            vec![dated],
+            "the rekey carries the flag to the dated id and leaves none under the spelling"
+        );
+    }
+
+    /// A pin of session `s`'s main agent under `model` on `account`, placed at `created_at` and used last at
+    /// `last_used_at`.
+    fn landing(model: &str, account: &str, created_at: i64, last_used_at: i64) -> PinRow {
+        PinRow {
+            model: model.into(),
+            account_id: account.into(),
+            created_at,
+            last_used_at,
+            ..burning("s", 1.0).0
+        }
+    }
+
+    /// The model and account of the row `session_latest_pin` answers for session `s`'s main agent under `model`.
+    fn latest<'a>(state: &'a RoutingState, model: &str) -> Option<(&'a str, &'a str)> {
+        state
+            .session_latest_pin("k", "s", "main", model)
+            .map(|p| (p.model.as_str(), p.account_id.as_str()))
+    }
+
+    #[test]
+    fn the_sessions_latest_pin_is_its_newest_row_across_the_model_keys_and_none_for_a_session_with_no_row(
+    ) {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        for pin in [
+            landing("m", "a", 0, 1_000),
+            landing("n", "b", 0, 2_000),
+            PinRow {
+                agent_id: "sub".into(),
+                ..landing("o", "c", 0, 3_000)
+            },
+            PinRow {
+                session_id: "t".into(),
+                ..landing("o", "c", 0, 3_000)
+            },
+            PinRow {
+                key_id: "j".into(),
+                ..landing("o", "c", 0, 3_000)
+            },
+        ] {
+            state.put_pin(pin);
+        }
+        assert_eq!(
+            latest(&state, "m"),
+            Some(("n", "b")),
+            "the row the session's other model used last, the rows of another agent, session or key aside"
+        );
+        assert_eq!(state.session_latest_pin("k", "none", "main", "m"), None);
+    }
+
+    #[test]
+    fn the_sessions_latest_pin_leaves_out_a_pin_only_auxiliary_requests_use() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let auxiliary = landing("n", "b", 1_500, 2_000);
+        state.put_pin(landing("m", "a", 0, 1_000));
+        state.put_pin(auxiliary.clone());
+        state.set_auxiliary_only(&auxiliary.key(), true);
+        assert_eq!(
+            latest(&state, "m"),
+            Some(("m", "a")),
+            "the auxiliary call's landing is no landing of the session"
+        );
+        state.clear_auxiliary_only(&auxiliary.key());
+        assert_eq!(
+            latest(&state, "m"),
+            Some(("n", "b")),
+            "a refreshing turn on the pin makes it one"
+        );
+    }
+
+    #[test]
+    fn rows_used_at_one_instant_answer_the_later_placement_then_the_requests_own_model() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.put_pin(landing("m", "a", 500, 1_000));
+        state.put_pin(landing("n", "b", 600, 1_000));
+        assert_eq!(latest(&state, "m"), Some(("n", "b")), "the later placement");
+        state.put_pin(landing("o", "c", 600, 1_000));
+        assert_eq!(
+            latest(&state, "n"),
+            Some(("n", "b")),
+            "placed at one instant too, the row under the request's own model"
+        );
+        assert_eq!(latest(&state, "o"), Some(("o", "c")));
+        assert_eq!(
+            latest(&state, "m"),
+            Some(("o", "c")),
+            "neither row the request's own, the greater model id"
         );
     }
 

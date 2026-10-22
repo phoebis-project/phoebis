@@ -15,8 +15,8 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_routing::{
-    DecisionRecord, DecisionSummary, FactValue, HoldOutcome, Report, RouterConfig, RouterEvent,
-    SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    DecisionRecord, FactValue, HoldOutcome, Report, RouterConfig, RouterEvent, SharePricer,
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
 use phoebis_store::{Failover, SlowDown, SubscriptionRow};
 use tokio::sync::broadcast;
@@ -279,43 +279,6 @@ async fn a_hold_followed_by_a_dispatch_names_the_hold_in_the_attempts_trace() {
     drop(first);
     up.release();
     up.shutdown().await;
-}
-
-/// The router's events up to and including the first one `last` accepts, under a five-second bound.
-async fn router_events_until(
-    events: &mut broadcast::Receiver<RouterEvent>,
-    last: impl Fn(&RouterEvent) -> bool,
-) -> Vec<RouterEvent> {
-    let mut seen = Vec::new();
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-            .await
-            .expect("the router's event arrives")
-            .expect("not lagged");
-        let done = last(&event);
-        seen.push(event);
-        if done {
-            return seen;
-        }
-    }
-}
-
-/// The decisions among `events` for `request_id`, in the order the router made them.
-fn decisions_of(
-    events: &[RouterEvent],
-    request_id: &str,
-) -> Vec<(DecisionSummary, DecisionRecord)> {
-    events
-        .iter()
-        .filter_map(|event| match event {
-            RouterEvent::Decision {
-                summary, record, ..
-            } if record.request.request_id == request_id => {
-                Some(((**summary).clone(), (**record).clone()))
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 #[tokio::test]
@@ -2650,12 +2613,16 @@ fn last_wait(record: &DecisionRecord) -> Option<(&'static str, bool)> {
 async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_head() {
     let up = FakeUpstream::start(vec![]).await;
     up.add_credential_rule(B, "/v1/messages", json_200());
-    // The fork's first pass on b reads a throttle it waits out on b, and its retry's head commits at the release.
-    up.push_credential_rule(B, "/v1/messages", json_429_retry_after("1"));
+    // The fork's first pass on b reads a throttle, which the gate holds back until the turn waits and which the fork
+    // waits out on b, and its retry's head commits at the release.
+    up.push_credential_rule(
+        B,
+        "/v1/messages",
+        Respond::Gated(Box::new(json_429_retry_after("1"))),
+    );
     up.push_credential_rule(B, "/v1/messages", stalled_stream());
     let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
-    // The throttle cools b on the relay's clock until its retry is due and a margin past it, so the turn comes after
-    // that, under a cap long enough to hold it there.
+    // A cap long enough to hold the turn through the throttle and the retry's delay.
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.slow_down.slow_down_hold_seconds = 10;
     h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
@@ -2664,18 +2631,26 @@ async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_he
     tokio::time::pause();
     let fork = sent(&h, fork_of("s1"));
     let fork_id = moved_to(&mut events, "b").await;
-    wait_for(Duration::from_secs(5), || (posts(&up) == 3).then_some(())).await;
-    h.clock.store(NOW + 22_500, Ordering::SeqCst);
+    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
     let turn = sent(&h, request_for(KEY, MODEL, "s1"));
     let held = next_held(&mut events).await;
     let hold = held.outcome.hold.expect("a held outcome");
     assert_eq!(
         (hold.reason, hold.waits_for.as_deref(), hold.until),
         ("rewrite", Some(fork_id.as_str()), Some(NOW + 30_000)),
-        "the throttle the fork retried in place answered nothing for its leg"
+        "the turn waits for the fork's head before the fork's throttle comes"
     );
+    still_held(&up, &turn, 2);
+    up.release_one().await;
+    // The throttle's head answers nothing for the fork's leg, so the turn stays held while the fork waits out the
+    // delay on b and dials its retry.
+    wait_for(Duration::from_secs(5), || (posts(&up) == 3).then_some(())).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     still_held(&up, &turn, 3);
+    // The turn was held before the 429, through it and through the retry's delay, and the retry's commit releases it.
+    // The clock steps past the cooldown the throttle set on the relay's clock, so the selection after the wait meets
+    // none.
+    h.clock.store(NOW + 22_500, Ordering::SeqCst);
     up.release();
     let released = tokio::time::Instant::now();
     let turn = answered(turn).await;
@@ -2692,8 +2667,9 @@ async fn the_first_requests_retry_in_place_keeps_its_waiters_until_the_retrys_he
             .collect::<Vec<_>>(),
         ["rewrite"]
     );
+    let after = after_the_wait(&mut events, &held.request.request_id).await;
     assert_eq!(
-        last_wait(&after_the_wait(&mut events, &held.request.request_id).await),
+        last_wait(&after),
         Some(("rewrite", false)),
         "the retry's head ended the wait inside its bound"
     );

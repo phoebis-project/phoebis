@@ -39,6 +39,7 @@ use utoipa::{Modify, OpenApi, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
+use crate::session::{Authenticated, PERSISTENT_LIFE};
 use crate::{
     accounts, analytics, attention, dashboard, guardrails, keepalive, keys, models, openapi, pools,
     pricing, requests, sessions, settings, tls, AdminState, LoginError, NewAccount,
@@ -52,7 +53,9 @@ const COOKIE_NAME: &str = "phoebis_admin";
 
 const LOGIN_PATH: &str = "/admin/session";
 
-pub fn router(state: Arc<AdminState>) -> Router {
+/// The route table and the document its registrations build, with no state bound, so the path count reads the
+/// document without an `AdminState`.
+pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
     let (router, mut api) = OpenApiRouter::with_openapi(openapi::Document::openapi())
         .routes(routes!(list_accounts, accounts::create))
         .routes(routes!(show_account, accounts::patch, accounts::remove))
@@ -93,7 +96,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .routes(routes!(keys::revoke))
         .routes(routes!(keys::rotate))
         .routes(routes!(crate::ledger::replay_parked))
-        .routes(routes!(models::state))
         .routes(routes!(pairing_start))
         .routes(routes!(pairing_show, pairing_cancel))
         .routes(routes!(pairing_callback))
@@ -119,17 +121,29 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/{*rest}", any(unknown_admin_route))
         .split_for_parts();
     openapi::Examples.modify(&mut api);
+    (router, api)
+}
+
+pub fn router(state: Arc<AdminState>) -> Router {
+    let (router, api) = parts();
     let document = Bytes::from(api.to_json().expect("the admin document serializes"));
+    let build = state.build;
     router
         .layer(from_fn_with_state(state.clone(), gate))
         .route(
             openapi::DOCUMENT_PATH,
             get(move || {
                 let document = document.clone();
-                async move { openapi::document(document) }
+                async move { openapi::document(document, build) }
             }),
         )
         .with_state(state)
+}
+
+/// How many paths the served document holds, read off the document itself, so the merged-app test asserts the
+/// router serves the admin crate's document rather than a figure written twice.
+pub fn path_count() -> usize {
+    parts().1.paths.paths.len()
 }
 
 /// Who is calling, as the gate resolved them: the handle that names this admin session in pairing
@@ -140,6 +154,9 @@ pub(crate) struct Caller {
     pub session_id: String,
     /// `"bearer"` or `"session"`.
     pub credential: &'static str,
+    /// A kept login's token the gate verified. False for a map session and the bearer, so only a verified token
+    /// moves the session epoch at a logout.
+    pub persistent: bool,
 }
 
 /// The session id every bearer caller carries, so a pairing one scripted call starts the next confirms.
@@ -154,8 +171,8 @@ pub(crate) struct CreatedId(pub String);
 #[derive(Clone)]
 pub(crate) struct LoggedEntity(pub &'static str, pub String);
 
-/// Authentication, the origin check, `Cache-Control`, `X-Content-Type-Options` and the mutation log for every route
-/// at once, so no handler can be added that quietly skips one of them.
+/// Authentication, the origin check, `Cache-Control`, `X-Content-Type-Options`, `x-phoebis-build` and the mutation
+/// log for every route at once, so no handler can be added that quietly skips one of them.
 async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let mutation = is_mutation(&method);
@@ -168,7 +185,12 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
     let mut response = match admit(&state, &mut request) {
         None => {
             let caller = request.extensions().get::<Caller>().cloned();
-            let response = next.run(request).await;
+            // Taken out before the handler runs, so the renewed token never reaches a handler.
+            let renewal = request.extensions_mut().remove::<Renewal>();
+            let mut response = next.run(request).await;
+            if let Some(Renewal(cookie)) = renewal {
+                response.headers_mut().append(SET_COOKIE, cookie);
+            }
             if mutation {
                 log_mutation(&method, &route, &path, caller.as_ref(), &response);
             }
@@ -186,6 +208,11 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
     let headers = response.headers_mut();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    // On refusals too, so a console that compares it to its own bundle's commit reads it before any login.
+    headers.insert(
+        HeaderName::from_static(openapi::BUILD_HEADER),
+        openapi::build_value(state.build),
+    );
     response
 }
 
@@ -328,6 +355,7 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
                 request.extensions_mut().insert(Caller {
                     session_id: BEARER_SESSION_ID.to_string(),
                     credential: "bearer",
+                    persistent: false,
                 });
                 None
             }
@@ -341,13 +369,31 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         };
     }
 
-    let session_id = presented_cookie(request.headers())
+    let session = presented_cookie(request.headers())
         .and_then(|cookie| state.sessions.authenticate(&cookie, (state.clock)()));
-    match session_id {
-        Some(session_id) => {
+    match session {
+        Some(Authenticated::Map { id }) => {
             request.extensions_mut().insert(Caller {
-                session_id,
+                session_id: id,
                 credential: "session",
+                persistent: false,
+            });
+            None
+        }
+        Some(Authenticated::Persistent { id, renewed_cookie }) => {
+            // The logout answers its clear alone: a renewal beside it would leave the browser a live token.
+            if !(method == Method::DELETE && path == LOGIN_PATH) {
+                let secure = state.tls || forwarded_https(request.headers());
+                // A base64url token and fixed attributes always make a header value. Were one ever refused, the
+                // answer would go without its renewal and the presented token would stay valid to its own end.
+                if let Ok(cookie) = HeaderValue::from_str(&kept_cookie(&renewed_cookie, secure)) {
+                    request.extensions_mut().insert(Renewal(cookie));
+                }
+            }
+            request.extensions_mut().insert(Caller {
+                session_id: id,
+                credential: "session",
+                persistent: true,
             });
             None
         }
@@ -417,11 +463,33 @@ fn presented_cookie(headers: &HeaderMap) -> Option<String> {
     })
 }
 
+/// The `Set-Cookie` a kept login's answer carries, the gate's handoff from `admit` to the answer.
+#[derive(Clone)]
+struct Renewal(HeaderValue);
+
+/// The login's attributes with the token's 30 days as `Max-Age`, so the browser keeps the cookie as long as the
+/// router would verify it.
+fn kept_cookie(token: &str, secure: bool) -> String {
+    let mut attributes = format!(
+        "{COOKIE_NAME}={token}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age={}",
+        PERSISTENT_LIFE.as_secs()
+    );
+    if secure {
+        attributes.push_str("; Secure");
+    }
+    attributes
+}
+
 /// The login's body.
 #[derive(serde::Deserialize, ToSchema)]
 pub(crate) struct LoginInput {
     /// The admin secret.
     pub secret: String,
+    /// Keep the login for 30 days from its last read, across a restart, until a secret rotation or a logout of a kept
+    /// login. False or absent, the session lives 15 minutes idle and 12 hours in all.
+    #[serde(default)]
+    #[schema(default = false)]
+    pub stay_logged_in: bool,
 }
 
 /// Whether the cookie the console holds still names a session, by the id pairing ownership uses, never by the
@@ -429,7 +497,10 @@ pub(crate) struct LoginInput {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionView {
-    /// The session's id as pairing ownership and the mutation log name it. `bearer` for a bearer caller.
+    /// True for a login that asked to stay, false for a plain login and for a bearer caller.
+    pub persistent: bool,
+    /// The session's id as pairing ownership and the mutation log name it, the same across a kept login's renewals.
+    /// `bearer` for a bearer caller.
     #[schema(example = "bearer")]
     pub session_id: String,
 }
@@ -445,10 +516,10 @@ pub(crate) struct SessionView {
     path = "/admin/session",
     operation_id = "session_login",
     tag = "Session",
-    request_body(content = LoginInput, description = "The admin secret", content_type = "application/json"),
+    request_body(content = LoginInput, description = "The admin secret, and `stay_logged_in` for a login that stays", content_type = "application/json"),
     responses(
         (status = 204, description = "Logged in. The `phoebis_admin` cookie is set and the answer carries no body.",
-            headers(("Set-Cookie" = String, description = "`phoebis_admin=<token>; Path=/admin; HttpOnly; SameSite=Strict`, with `; Secure` where the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`"))),
+            headers(("Set-Cookie" = String, description = "`phoebis_admin=<token>; Path=/admin; HttpOnly; SameSite=Strict`, with `; Secure` where the admin listener terminates TLS or the request carries `X-Forwarded-Proto: https`. The session lives 15 minutes idle and 12 hours in all. With `stay_logged_in` true the token is signed and the cookie carries `; Max-Age=2592000` before any `; Secure`: the session lives 30 days from its last read, across a restart, every answer to it but its logout's sets a renewed cookie of the same shape and life, and a secret rotation or a logout of a kept login ends it."))),
         (status = 400, description = "`body must carry a secret`", body = ErrorBody, example = json!({"error": "body must carry a secret"})),
         (status = 401, description = "`secret does not match`", body = ErrorBody, example = json!({"error": "secret does not match"})),
         (status = 429, description = "`too many failed logins, try again in a minute`", body = ErrorBody, example = json!({"error": "too many failed logins, try again in a minute"})),
@@ -459,18 +530,28 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
     let Ok(input) = serde_json::from_slice::<LoginInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must carry a secret");
     };
-    match state
-        .sessions
-        .login(&input.secret, &state.secrets, (state.clock)())
-    {
-        Ok(cookie) => {
-            let mut attributes =
-                format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
-            if state.tls || forwarded_https(&headers) {
-                attributes.push_str("; Secure");
-            }
-            set_cookie(StatusCode::NO_CONTENT, &attributes)
-        }
+    let now = (state.clock)();
+    let secure = state.tls || forwarded_https(&headers);
+    let login = if input.stay_logged_in {
+        state
+            .sessions
+            .login_persistent(&input.secret, now)
+            .map(|token| kept_cookie(&token, secure))
+    } else {
+        state
+            .sessions
+            .login(&input.secret, &state.secrets, now)
+            .map(|cookie| {
+                let mut attributes =
+                    format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
+                if secure {
+                    attributes.push_str("; Secure");
+                }
+                attributes
+            })
+    };
+    match login {
+        Ok(attributes) => set_cookie(StatusCode::NO_CONTENT, &attributes),
         Err(LoginError::Throttled) => failure(
             StatusCode::TOO_MANY_REQUESTS,
             "too many failed logins, try again in a minute",
@@ -482,19 +563,33 @@ async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: B
 /// End the caller's own session.
 ///
 /// The gate admits this operation without a live session: a cookie that names no session, an expired one included,
-/// answers the same `204` and the same clear, so a tab holding a dead cookie can still drop it.
+/// answers the same `204` and the same clear, so a tab holding a dead cookie can still drop it. The logout of a kept
+/// login ends every kept login of the install, on this process and after a restart.
 #[utoipa::path(
     delete,
     path = "/admin/session",
     operation_id = "session_logout",
     tag = "Session",
     responses(
-        (status = 204, description = "The session is ended and the browser's cookie cleared.",
+        (status = 204, description = "The session is ended and the browser's cookie cleared. A kept login's logout ends every kept login, each browser's included, and the answer carries the clear alone.",
             headers(("Set-Cookie" = String, description = "`phoebis_admin=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0`"))),
+        (status = 500, response = StorageFailure),
     ),
     security(),
 )]
-async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Response {
+async fn logout(
+    State(state): State<Arc<AdminState>>,
+    caller: Option<Extension<Caller>>,
+    headers: HeaderMap,
+) -> Response {
+    // The gate's verdict alone moves the epoch: it admits this route with no live session, so a cookie that only
+    // looks like a token must end nothing.
+    if caller.is_some_and(|Extension(caller)| caller.persistent) {
+        // A refused bump leaves the kept logins valid, so the answer says the logout failed.
+        if let Err(error) = state.sessions.logout_persistent() {
+            return store_failure(error);
+        }
+    }
     if let Some(cookie) = presented_cookie(&headers) {
         state.sessions.logout(&cookie);
     }
@@ -508,8 +603,8 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
 
 /// Whether the cookie the console holds still names a session.
 ///
-/// Answers `session_id`, the id pairing ownership uses, never the cookie value. A bearer caller answers
-/// `session_id` `bearer`.
+/// Answers `session_id`, the id pairing ownership uses, never the cookie value, and `persistent`, true for a login
+/// that asked to stay. A bearer caller answers `session_id` `bearer` and `persistent` false.
 #[utoipa::path(
     get,
     path = "/admin/session",
@@ -519,6 +614,7 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
 )]
 async fn whoami(Extension(caller): Extension<Caller>) -> Response {
     Json(SessionView {
+        persistent: caller.persistent,
         session_id: caller.session_id,
     })
     .into_response()
@@ -1227,7 +1323,11 @@ async fn pairing_callback(
     responses(
         (status = 200, description = "The account, the confirmed status, and `first_poll_in_flight`, true when the confirm started the account's first usage poll.", body = Confirmed),
         (status = 404, description = "- `pairing session not found`\n- `admin session does not own this pairing session`\n- `account not found`", body = ErrorBody, example = json!({"error": "pairing session not found"})),
-        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session has no exchanged credential`\n- `the account was disconnected while pairing`\n- `the credential changed while pairing, so start the pairing again`\n- `this slot is already paired to a different upstream account`\n- `that upstream account is already paired to another slot`\n- `an account with this id exists`", body = ErrorBody, example = json!({"error": "pairing session expired"})),
+        // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
+        // attribute after it fails to parse.
+        (status = 409, description = "- `pairing session expired`\n- `pairing session already consumed`\n- `pairing session has no exchanged credential`\n- `the account was disconnected while pairing`\n- `the credential changed while pairing, so start the pairing again`\n- `{label} holds a credential sealed under another storage key, so disconnect it before pairing again`, which carries the `sealed_under_another_key` code\n- `this slot is already paired to a different upstream account`\n- `that upstream account is already paired to another slot`\n- `an account with this id exists`",
+            headers(("x-phoebis-error-code" = String, description = "`sealed_under_another_key`: the slot's stored credential does not open under this router's storage key")),
+            body = ErrorBody, example = json!({"error": "pairing session expired"})),
         (status = 500, response = StorageFailure),
         (status = 503, response = RegistryUnavailable),
     ),
@@ -1270,6 +1370,16 @@ async fn pairing_confirm(
             .fail(&id, &caller.session_id, "storage failure", now);
         state.vault.discard(&id, now);
         store_failure(error)
+    };
+    // AES-GCM cannot tell a blob sealed under another storage key from a damaged one, so both answer this, and the
+    // operator's way out of either is Disconnect, which deletes the blob.
+    let sealed = |state: &AdminState, label: &str| {
+        let message = format!(
+            "{label} holds a credential sealed under another storage key, so disconnect it before pairing again"
+        );
+        let _ = state.pairing.fail(&id, &caller.session_id, &message, now);
+        state.vault.discard(&id, now);
+        failure_with_code(StatusCode::CONFLICT, "sealed_under_another_key", &message)
     };
 
     let Some(pending) = state.vault.take_exchange(&id, now) else {
@@ -1358,6 +1468,7 @@ async fn pairing_confirm(
             }
             let expected = match state.store.credentials(&row.id) {
                 Ok(current) => current.map(|bundle| bundle.generation),
+                Err(StoreError::Crypto) => return sealed(&state, &row.label),
                 Err(error) => return unstored(&state, error),
             };
             // The lifecycle carried from the exchange, not `row`'s own read: the store's fence is the one that
@@ -1379,6 +1490,8 @@ async fn pairing_confirm(
                         &state,
                         "the credential changed while pairing, so start the pairing again",
                     ),
+                    // A bundle without a refresh token opens the row it replaces to carry that token forward.
+                    StoreError::Crypto => sealed(&state, &row.label),
                     other => unstored(&state, other),
                 };
             }
@@ -1471,6 +1584,9 @@ async fn pairing_confirm(
 #[serde(deny_unknown_fields)]
 pub(crate) struct System {
     pub version: String,
+    /// The full commit the router was built from, or `unknown` for a build that had none, as every answer carries it
+    /// in `x-phoebis-build`.
+    pub build: String,
     pub profile: String,
     pub uptime_seconds: i64,
     pub storage_ok: bool,
@@ -1640,6 +1756,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let prices = revisions.in_force(now);
     Json(System {
         version: env!("CARGO_PKG_VERSION").into(),
+        build: state.build.into(),
         profile: state.profile.name.to_string(),
         uptime_seconds: uptime,
         // From the one store read `dead` made, so a transient failure cannot show both a working and a dead store.
@@ -1918,9 +2035,7 @@ fn window_projection(
 pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
     let now = (state.clock)();
     let hour = phoebis_ledger::hour_of(now);
-    // The end of the current hour rather than `hour_ceil(now)`, which is `now` itself on the hour's first millisecond
-    // and would leave out the hour a request just landed in.
-    let to = hour + 3_600;
+    let to = crate::analytics::hour_end(hour);
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
     let ledger = state
@@ -2041,6 +2156,9 @@ pub(crate) struct Account {
     /// The whole object null for an `api_key` account or an `oauth` account with no profile document yet and not
     /// cancelled.
     pub subscription: Option<AccountSubscription>,
+    /// The account's quota windows: the router's reported sample first and the ledger's samples of the last day for
+    /// the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
+    /// account in the `disconnected` or `reauth_required` state, whose last reading the view no longer answers.
     pub windows: Vec<AccountWindow>,
     /// The account's slow-down entry in force as the router reads it, null on an api_key account, an untiered account
     /// or one with no 5-hour reading, an account in no pool, a pool with the slow-down off, and an account no pinned
@@ -2376,13 +2494,21 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             trial_ends_at: s.trial_ends_at,
             ends_at: term.ends_at,
         });
+    // The token manager hands out no token for an `oauth` account in either state, its credential gone or refused, so
+    // neither the poll nor a request reads it until it pairs again: what the router and the ledger still hold is its
+    // last reading, which both paths below would draw as live.
+    let windows_withheld = row.kind == AccountKind::Oauth
+        && matches!(
+            row.state,
+            AccountState::Disconnected | AccountState::ReauthRequired
+        );
     // The router holds a reading the moment the poll or a head reports it, while the ledger's row waits on the writer,
     // so a refresh's reading shows as soon as the refresh answers. The ledger's rows fill each plan window the router
     // holds no reading of, and every window of an api_key account.
     let reported = ctx
         .reported
         .get(&row.id)
-        .filter(|_| row.kind == AccountKind::Oauth);
+        .filter(|_| row.kind == AccountKind::Oauth && !windows_withheld);
     let mut windows: Vec<AccountWindow> = reported
         .map(|sample| held_windows(sample, end, now))
         .unwrap_or_default()
@@ -2406,7 +2532,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     windows.extend(
         ctx.quota
             .iter()
-            .filter(|q| q.account_id == row.id)
+            .filter(|q| !windows_withheld && q.account_id == row.id)
             .filter(|q| {
                 !reported
                     .is_some_and(|s| is_plan_window(&q.window) && s.reading(&q.window).is_some())
@@ -2811,6 +2937,26 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
+/// A JSON array deserializes into a struct whose members all default, so a route would answer `id is required` to
+/// `[]` in place of the sentence every route gives a body that is no object. The shape is checked on the parsed value
+/// before any member check, and the struct is read from the bytes, where the derive refuses a repeated member that a
+/// value would keep at its last occurrence.
+// The error is a rendered HTTP response, returned once per request and dropped, so boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn parse_object<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, Response> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| failure(StatusCode::BAD_REQUEST, "body must be a JSON object"))?;
+    if !value.is_object() {
+        return Err(failure(
+            StatusCode::BAD_REQUEST,
+            "body must be a JSON object",
+        ));
+    }
+    serde_json::from_slice(body)
+        .map_err(|_| failure(StatusCode::BAD_REQUEST, "body must be a JSON object"))
+}
+
 /// The reports of one member, any period: what `phoebis_routing::budget_deadline` reads, so the routes answer the
 /// selector's own verdict rather than a copy of its rule.
 pub(crate) fn spend_rows<'a>(
@@ -2915,10 +3061,14 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{same_authority, spend_rows};
+    use super::{parse_object, same_authority, spend_rows};
     use crate::openapi::round_trip::round_trips;
+    use axum::body::Bytes;
+    use axum::http::StatusCode;
     use phoebis_routing::MemberSpend;
     use phoebis_store::BudgetPeriod;
+    use serde::Deserialize;
+    use serde_json::{json, Value};
 
     #[test]
     fn same_authority_names_the_requests_own_host_and_requires_https_when_asked() {
@@ -2997,6 +3147,63 @@ mod tests {
         assert!(
             spend_rows(&spends, "other", "a").is_empty(),
             "the same account under another pool reads none"
+        );
+    }
+
+    #[tokio::test]
+    async fn parse_object_reads_an_object_and_refuses_an_array_a_string_and_malformed_bytes() {
+        #[derive(Debug, Default, Deserialize, PartialEq)]
+        #[serde(default)]
+        struct Pair {
+            a: u32,
+            b: u32,
+        }
+        assert_eq!(
+            parse_object::<Pair>(&Bytes::from_static(br#"{"a": 1}"#)).ok(),
+            Some(Pair { a: 1, b: 0 })
+        );
+        for body in [&b"[]"[..], br#""x""#, b"{"] {
+            let Err(response) = parse_object::<Pair>(&Bytes::copy_from_slice(body)) else {
+                panic!("{} read as an object", String::from_utf8_lossy(body));
+            };
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(
+                (status, serde_json::from_slice::<Value>(&bytes).unwrap()),
+                (
+                    StatusCode::BAD_REQUEST,
+                    json!({"error": "body must be a JSON object"})
+                ),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_object_refuses_a_body_that_repeats_a_member() {
+        #[derive(Debug, Default, Deserialize, PartialEq)]
+        #[serde(default)]
+        struct Pair {
+            a: u32,
+            b: u32,
+        }
+        let body = br#"{"a": 1, "a": 2}"#;
+        let Err(response) = parse_object::<Pair>(&Bytes::from_static(body)) else {
+            panic!("a repeated member read as an object");
+        };
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap()),
+            (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "body must be a JSON object"})
+            )
         );
     }
 

@@ -499,6 +499,16 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 }
             }
         }
+        // Apart from the usage block: a pass-through whose copy the router could not decode read no usage, and its
+        // trace still names the coding the client took.
+        if let (Some(coding), Some(trace)) = (&complete.passthrough, &last.selection) {
+            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trace) {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("passthrough".into(), json!(coding));
+                    last.selection = Some(value.to_string());
+                }
+            }
+        }
         let response = &complete.response;
         last.stop_reason = response.stop_reason.clone();
         last.stop_sequence = response.stop_sequence.clone();
@@ -557,6 +567,33 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             }));
         }
     }
+    // Apart from the serving block: a completion whose trail lost its selection still lands its cut, under the
+    // completion's account and with no upstream request id.
+    if let Some(interruption) = &complete.interruption {
+        let serving = serving.map(|i| &attempts[i]);
+        records.push(Record::Event(EventRecord {
+            at: complete.finished_at,
+            kind: "stream_interrupted".into(),
+            account_id: serving
+                .map(|a| a.account_id.clone())
+                .or_else(|| complete.account_id.clone()),
+            key_id: observed.key_id.clone(),
+            session_id: observed.session_id.clone(),
+            model: Some(observed.canonical_model.clone()),
+            detail: Some(
+                json!({
+                    "code": interruption.code,
+                    "text": interruption.text,
+                    "bytes_relayed": interruption.bytes_relayed,
+                    "upstream_request_id": serving.and_then(|a| a.upstream_request_id.as_deref()),
+                    "attempt": complete.attempt,
+                })
+                .to_string(),
+            ),
+            request_id: Some(observed.request_id.clone()),
+            ..Default::default()
+        }));
+    }
     for attempt in &mut attempts {
         attempt.client_drift = complete.client_drift.clone();
     }
@@ -580,6 +617,13 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         response_len_seen,
         expires_at: complete.finished_at + observed.body_capture_hours as i64 * 3_600_000,
     });
+    // An incomplete trail keeps the completion's attempt number, so a refusal after an attempt whose selection the
+    // bus lost keeps its count and stays a rejected request.
+    let attempt_count = if trail_complete {
+        attempts.len() as u32
+    } else {
+        complete.attempt as u32
+    };
     let request = RequestRecord {
         id: observed.request_id.clone(),
         received_at: observed.received_at,
@@ -597,11 +641,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         origin: observed.origin.as_str().into(),
         status: (complete.status != 0).then_some(complete.status),
         outcome: complete.outcome.as_str().into(),
-        attempts: if trail_complete {
-            attempts.len() as u32
-        } else {
-            complete.attempt as u32
-        },
+        attempts: attempt_count,
         request_bytes: Some(request_len),
         response_bytes: complete.response_bytes,
         ttfb_ms: complete.ttfb_ms,
@@ -674,6 +714,14 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                 blocked: m.blocked,
             })
             .collect(),
+        // The ledger's reading of the row's own facts, as the drift and the contract members above are: the relay's
+        // outcome and the bus's completion carry no flag.
+        refused: crate::refusals::is_refusal(
+            observed.kind.as_str(),
+            complete.outcome.as_str(),
+            complete.error_code.as_deref(),
+            attempt_count,
+        ),
     };
     records.push(Record::Request {
         request,
@@ -878,6 +926,8 @@ mod tests {
             diagnostics: None,
             message_id: None,
             skipped_events: 0,
+            interruption: None,
+            passthrough: None,
             finished_at: 1_500,
         })
     }
@@ -920,6 +970,8 @@ mod tests {
             diagnostics: None,
             message_id: None,
             skipped_events: 0,
+            interruption: None,
+            passthrough: None,
             finished_at: 1_500,
         }
     }
@@ -1454,6 +1506,43 @@ mod tests {
             (request.attempts, attempts.len()),
             (2, 1),
             "the count is the one the completion names, not the length of the trail that arrived"
+        );
+    }
+
+    /// The reselect after an attempt can refuse a request with a code the refusal list names. Where the bus lost
+    /// that attempt's selection the trail holds no row, so the flag has to read the count the row stores.
+    #[test]
+    fn a_refusal_after_a_lost_selection_keeps_its_attempt_count_and_is_not_refused() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r12", Some("k")));
+        let records = a.observe(complete(
+            "r12",
+            1,
+            Some("a"),
+            Outcome::Rejected,
+            403,
+            Some("client_not_allowed"),
+        ));
+        assert_eq!(records.len(), 2, "the request and a gap");
+        let Record::Event(gap) = &records[0] else {
+            panic!()
+        };
+        let detail: serde_json::Value =
+            serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            (detail["request_id"].as_str(), detail["reason"].as_str()),
+            (Some("r12"), Some("attempt_missing"))
+        );
+        let Record::Request {
+            request, attempts, ..
+        } = &records[1]
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (attempts.len(), request.attempts, request.refused),
+            (0, 1, false),
+            "an empty trail, the completion's count, and a rejected request rather than a refusal"
         );
     }
 

@@ -22,10 +22,12 @@ order, and the key's own run after them in the key's order. A key cannot drop a 
 guardrail applies router-wide, and a guardrail attached to both a key and its pool is evaluated once, at its pool
 position. A disabled guardrail stays attached and runs nowhere. A new pool and a new key start with no guardrail: the
 guardrail dialog's "Applies to" group attaches the guardrail to saved pools and keys, and the pool and key dialogs
-attach saved guardrails from their side and arrange the order ([Pools](console.md#pools), [Keys](console.md#keys)).
+attach saved guardrails from their side and arrange the order ([Pools](console.md#pools), [Keys](console.md#keys)). An
+attachment written from either dialog moves the stamps of every row whose list it changes, so a pool, key or guardrail
+save opened before it is refused as stale and its Reload reads the new list.
 
 In observe mode a match is recorded on the request row and the request goes on as if nothing had matched. In enforce
-mode a match refuses the request with a 400 before any account is selected ([What a blocked client
+mode a match refuses the request with a 403 before any account is selected ([What a blocked client
 receives](#what-a-blocked-client-receives)). Every attached guardrail is evaluated on every request it applies to,
 whatever an earlier one answered, so an observed match lands on the row beside an enforced one and a candidate can be
 compared with the guardrail in force. The first enforcing guardrail that matches decides the refusal, and the row
@@ -36,8 +38,9 @@ the body is read and the conversation is climbed, and before the request's facts
 account is resolved. It runs for an inference request and a token count and never for a keepalive probe. A blocked
 request touches no account, no pin, no hold, no window and no burn, so the slow-down never holds it and it refreshes no
 pin ([Slow-down](routing.md#slow-down)). The router reads its guardrails with the registry snapshot, so a save in the
-console takes effect on the next request without a restart. Deleting a guardrail removes its attachments and leaves the
-request rows that name it, which the Requests view marks `{id} (deleted)`.
+console takes effect on the next request without a restart. Deleting a guardrail removes its attachments, moves the
+stamps of the pools and keys it was attached to, so a save of one of them opened before the delete is refused as stale,
+and leaves the request rows that name it, which the Requests view marks `{id} (deleted)`.
 
 ## The subagent summary fork
 
@@ -175,11 +178,12 @@ the key, which answers for each sampled request whether the definition matches a
 the mode: the row's menu offers "Switch to enforce", and the dialog's Mode field does the same. From the next request
 on, a match is refused before any account is selected.
 
-A block is a refusal the operator asked for, so the Dashboard's "Error rate, 24h" tile leaves the blocked requests out
-of its rate and `Most common` skips the code, while "Requests, 24h" keeps counting them, since the router received them.
-The Analytics view follows the same rule: Traffic's `{pct} errors` figure, its table's "Error rate" column and its
-"Errors by code" card leave the blocked requests out. The `{n} requests` count, the table's "Requests" and "Rejected"
-columns and the Guardrails card keep counting them.
+A block is a refusal the router issued before any account was asked, and the ledger flags every such refusal on its
+row, a guardrail's beside the client's drift, a key's refusal and a malformed body. The hourly figures file a flagged
+request under a refusals map by code and under nothing else, so no request count, outcome, cache figure, latency or
+error rate carries it. The refused requests show where they are asked for: the Dashboard's "Refused, 24h" tile, the
+Analytics Traffic table's "Refused" column and its "Refusals by code" card, the Guardrails card by guardrail, and the
+Requests view, which lists every request the router answered ([Statistics](statistics.md#refused-requests)).
 
 ## Testing a guardrail
 
@@ -212,26 +216,32 @@ capture](statistics.md#body-capture).
 
 ## What a blocked client receives
 
-An enforcing match answers HTTP 400 in Anthropic's error shape with the type `invalid_request_error`, the message
+An enforcing match answers HTTP 403 in Anthropic's error shape with the type `permission_error`, the message
 `blocked by guardrail "{name}"`, the header `x-phoebis-error-code: guardrail_blocked` and the header `x-should-retry:
 false`, so a client that retries its 4xx answers does not send the request again unchanged. The answer names the
 guardrail and nothing else about it: the request row records its id, and the drawer shows it. The message never reads
 "prompt is too long", the phrase the client reads in a 400 as its compaction trigger, and a guardrail's name may not
-contain it. The status and the type are fixed: Claude Code treats a 400 as final and shows it as an API error on a
-visible turn, where a 429 or a 5xx would be retried. The row is on [Refusal codes](client.md#refusal-codes) beside the
-router's other refusals.
+contain it, nor "model:" or "OAuth token has been revoked", the two phrases the client reads in a 403 as a model-access
+or a credential matter. A guardrail whose stored name carries one of the three phrases is named by its id in the
+message, so the answer does not carry the phrase. The status and the type are fixed: Claude Code reads a 403 as final,
+so it neither heals the request by resending it without a header, as it does for a 400 it cannot attribute, nor retries
+it, nor tries a fallback model, and a blocked request costs one request per tick. The row is on
+[Refusal codes](client.md#refusal-codes) beside the router's other refusals.
 
-A blocked summary fork is no visible turn. In Claude Code 2.1.296 to 2.1.302 the Agent tool's status line stays at its
-last value, the client's debug log carries `[AgentSummary]` skip lines, and no error reaches the transcript. What the
-client shows for a blocked prompt suggestion or away recap is not measured, so run those two presets in observe until
-the Requests view has shown their matches.
+A session that runs an `apiKeyHelper`, or one on Bedrock, Vertex or a Mantle gateway, reads a 403 as a credential
+failure and runs its helper once before one more attempt, so a refusal there costs one script run and one more blocked
+request.
+
+A blocked summary fork is no visible turn, and the client reads its 403 as final, so the fork is sent once per tick and
+neither healed, retried nor moved to a fallback model. What the client shows for a blocked fork is not measured, so run
+a preset in observe until the Requests view has shown its matches.
 
 ## What guardrails do not do
 
 A guardrail blocks a request and edits nothing: it makes no regex replace within a selected text, drops no message or
 member and sets no member or header, since each would change the bytes toward the upstream, which the billing hash and
 the drift checks guard ([Client drift](relay.md#client-drift)). No guardrail answers with an empty success in place of
-the 400, a shape that would let a fork fail silently, and the action word is `block`.
+the 403, a shape that would let a fork fail silently, and the action word is `block`.
 
 A condition reads text blocks alone. Tool results, tool inputs, images and documents are not read, since every fork the
 presets catch is told apart by a text block. A guardrail has no logical OR, since two guardrails give one and the

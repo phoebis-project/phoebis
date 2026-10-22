@@ -19,8 +19,9 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, AutoMode, Bus, Classifier, ClientFacts, CooldownSet,
-    DiagnosticsSource, Event, Fork, GuardrailMatch, Kind, Origin, Outcome, RequestComplete,
-    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead as BusHead, Usage,
+    DiagnosticsSource, Event, Fork, GuardrailMatch, Interruption, Kind, Origin, Outcome,
+    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
+    ResponseHead as BusHead, Usage,
 };
 use phoebis_guardrails::{evaluate_all, Evaluation, HeaderLookup, Lookup, RequestFacts};
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
@@ -732,6 +733,8 @@ impl Trace {
         end: Option<(Outcome, Option<String>)>,
         message_id: Option<String>,
         skipped_events: u32,
+        interruption: Option<Interruption>,
+        passthrough: Option<String>,
         finished_at: i64,
     ) {
         // Held by value across the publish: a handler dropped while a durable slot is full drops the guard still
@@ -764,6 +767,8 @@ impl Trace {
             diagnostics: outcome.diagnostics,
             message_id,
             skipped_events,
+            interruption,
+            passthrough,
             finished_at,
         }))
         .await;
@@ -835,6 +840,8 @@ impl Drop for CompletionGuard {
             diagnostics: None,
             message_id: None,
             skipped_events: 0,
+            interruption: None,
+            passthrough: None,
             finished_at: (self.trace.clock)(),
         });
         // `Drop` cannot await, so the durable publish runs on the runtime that is dropping the handler, under the body
@@ -1703,9 +1710,13 @@ impl Relay {
             )
             .await;
         if let Some(id) = guardrail_id {
+            // The routes refuse a name that carries one of the client's phrases, but a stored row can predate that
+            // rule. "model:" or "OAuth token has been revoked" in a 403's message would start the client's own
+            // handling, so the id stands in for a stored name that carries any phrase of the list.
             let name = snapshot
                 .guardrails()
                 .name_of(&id)
+                .filter(|name| phoebis_guardrails::client_phrase(name).is_none())
                 .unwrap_or(&id)
                 .to_string();
             tracing::debug!(
@@ -1834,6 +1845,7 @@ impl Relay {
             Ok(None) => None,
             Ok(Some(kind)) => Some(self.drift_refusal(
                 kind,
+                facts.resumed,
                 &parts.headers,
                 &trace,
                 &key,
@@ -1863,6 +1875,7 @@ impl Relay {
                 if let Some(kind) = crate::body::version_drift(&raw, check) {
                     let refusal = self.drift_refusal(
                         kind,
+                        facts.resumed,
                         &parts.headers,
                         &trace,
                         &key,
@@ -1920,6 +1933,9 @@ impl Relay {
         );
         // Read once and reused on every attempt of this request: the lane does not change across a failover.
         let lane = crate::lane::lane_of(&identity.canonical_model, &facts, hints.per_turn_effort);
+        let deadline = (self.limits.head_timeout > ATTEMPT_DEADLINE_MARGIN).then(|| {
+            received_at + (self.limits.head_timeout - ATTEMPT_DEADLINE_MARGIN).as_millis() as i64
+        });
         let admitted = Admitted {
             auto_mode_server,
             auxiliary,
@@ -1930,10 +1946,7 @@ impl Relay {
             client_diagnostics,
             client_gzip,
             client_version,
-            deadline: (self.limits.head_timeout > ATTEMPT_DEADLINE_MARGIN).then(|| {
-                received_at
-                    + (self.limits.head_timeout - ATTEMPT_DEADLINE_MARGIN).as_millis() as i64
-            }),
+            deadline,
             diagnostics,
             fallback_ms,
             fast: facts.shape.speed.as_deref() == Some("fast"),
@@ -1952,6 +1965,8 @@ impl Relay {
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
             target: &target,
             trace: &trace,
+            wait_bound: deadline
+                .unwrap_or(received_at + self.limits.head_timeout.as_millis() as i64),
         };
         let mut attempted: Vec<String> = Vec::new();
         // Every hold this request waited through, oldest first: carried onto the next selection so the
@@ -2142,7 +2157,7 @@ impl Relay {
                     account_id,
                     mut hold,
                 } => {
-                    // A slowed pin waits to its deadline before its head, under the request's own deadline alone, and
+                    // A slowed pin waits to its deadline before its head, under the request's `wait_bound` alone, and
                     // selects again with the hold on the request, which answers no second one. The hold is its own
                     // stage: it starts no retry bound and passes no account over, so a slot or reset wait after it
                     // keeps its whole bound and a pool that exhausts after it answers as it would have without it.
@@ -2151,7 +2166,7 @@ impl Relay {
                         let waited = self
                             .wait_out(
                                 hold.until.unwrap_or(now),
-                                admitted.deadline,
+                                Some(admitted.wait_bound),
                                 &answer.cancel,
                                 None,
                             )
@@ -2178,7 +2193,7 @@ impl Relay {
                             Some(mut head) => {
                                 self.wait_out(
                                     hold.until.unwrap_or(now),
-                                    admitted.deadline,
+                                    Some(admitted.wait_bound),
                                     &answer.cancel,
                                     Some(&mut head),
                                 )
@@ -2209,25 +2224,20 @@ impl Relay {
                         )
                     });
                     // A spent window about to reset: the request sleeps to the hold's end, the later of the reset and
-                    // the cooldown's end, or to its one bound or its deadline when one of those comes first, and
+                    // the cooldown's end, or to its one bound or its `wait_bound` when one of those comes first, and
                     // selects again with the account still open to it, so the pin renews in place. A wait the bound
-                    // cut short, or one the account left during, passes the account over. A hold's end past the
-                    // request's deadline would end the wait with the request answered exhausted, so that wait is
-                    // refused and the account passed over, and the selection that follows tries a sibling as the
-                    // retry-in-place path does.
+                    // cut short, or one the account left during, passes the account over. A hold that ends at or past
+                    // `wait_bound` is refused and the account passed over, and the selection that follows tries a
+                    // sibling as the retry-in-place path does: where the head timeout is the bound the wait could not
+                    // end inside the head guard, and under the shipped 600 s guard `wait_bound` is the request's
+                    // `deadline`, at which the loop head answers the pool exhausted.
                     if hold.reason == "reset" {
-                        if admitted
-                            .deadline
-                            .zip(hold.until)
-                            .is_some_and(|(deadline, until)| until >= deadline)
-                        {
+                        if hold.until.is_some_and(|until| until >= admitted.wait_bound) {
                             held_out = true;
                             attempted.push(account_id);
                             continue;
                         }
-                        let end = admitted
-                            .deadline
-                            .map_or(hold_bound, |deadline| deadline.min(hold_bound));
+                        let end = admitted.wait_bound.min(hold_bound);
                         let waited = self
                             .wait_out(hold.until.unwrap_or(now), Some(end), &answer.cancel, None)
                             .await;
@@ -2567,11 +2577,11 @@ impl Relay {
                     t
                 }
             });
-            // A marker-less body that went as sent claims no TTL, whether because it is a count or because
-            // the toggle left it alone: no beta for it, none dropped for it, and none reported. A body that
-            // already carried a marker claims the rewrite's TTL even where the marker already read that way,
-            // so a leg does not lose its report to a rewrite that had nothing left to change. A beta naming an
-            // hour the body does not carry would be the relay's to answer for on a 400.
+            // A marker-less body that went as sent claims no TTL, whether because it is a count, because the
+            // toggle left it alone or because its class is auxiliary: no beta for it, none dropped for it, and
+            // none reported. A body that already carried a marker claims the rewrite's TTL even where the marker
+            // already read that way, so a leg does not lose its report to a rewrite that had nothing left to
+            // change. A beta naming an hour the body does not carry would be the relay's to answer for on a 400.
             let claims_its_ttl = |edits: &BodyEdits| carries_a_marker || edits.cache_ttl_edited;
             // Isolated per account, so a failover never carries one account's previous request id, or the
             // previous message id a diagnostics member names, into another account's memory.
@@ -4048,10 +4058,13 @@ impl Relay {
 
     /// A client-drift refusal with its trigger, the warn that tells the operator which client to re-pin to, and the
     /// refusal's record as the request's one decision. The record is try-sent, so a full router queue drops it
-    /// rather than delaying the 400.
+    /// rather than delaying the 400. A moved client is cured by the re-pin, and a resumed body warns `resume` and
+    /// its suffix refusal's words name the resume, so the operator sees the refused conversation was a resumed one.
+    #[allow(clippy::too_many_arguments)]
     fn drift_refusal(
         &self,
         kind: &'static str,
+        resumed: bool,
         headers: &HeaderMap,
         trace: &Trace,
         key: &ApiKeyRow,
@@ -4062,6 +4075,7 @@ impl Relay {
             drift = %kind,
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
+            resume = resumed,
             "a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client",
         );
         self.router.record_refusal(
@@ -4092,7 +4106,7 @@ impl Relay {
             },
         );
         LocalRefusal {
-            failure: relay_failure(&RelayError::ClientDrift { kind }),
+            failure: relay_failure(&RelayError::ClientDrift { kind, resumed }),
             client_drift: Some(kind),
             client_contract: None,
         }
@@ -4176,6 +4190,8 @@ impl Relay {
                 None,
                 None,
                 0,
+                None,
+                None,
                 (self.clock)(),
             )
             .await;
@@ -4454,6 +4470,15 @@ impl Relay {
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
         let caller_decodes = decoder.is_some();
+        // The client reads the upstream's coding as sent, so the completion names it whichever decoder the bus copy
+        // ends up with, and a copy the router cannot read says nothing of the answer the client received.
+        let passthrough = match encoding(head) {
+            Ok(Encoding::Identity) | Err(_) => None,
+            Ok(_) if caller_decodes => None,
+            Ok(_) => head
+                .get("content-encoding")
+                .map(|coding| coding.trim().to_ascii_lowercase()),
+        };
         // A held stream was decoded and parsed up to its commit by the hold, so the bus copy goes on from there
         // with the hold's decoder and parser.
         let handover = match held {
@@ -4518,6 +4543,7 @@ impl Relay {
                 catalog: self.catalog.clone(),
                 decoder: bus_decoder,
                 decode_failed: false,
+                passthrough,
                 parser,
                 held,
                 on_error,
@@ -4658,6 +4684,8 @@ impl Relay {
                 // An error document carries no message `id`.
                 None,
                 0,
+                None,
+                None,
                 (self.clock)(),
             )
             .await;
@@ -5160,6 +5188,9 @@ struct Admitted<'a> {
     retry_in_place: Duration,
     target: &'a str,
     trace: &'a Trace,
+    /// The bound a reset wait and the slow-down and rewrite holds sleep under: `deadline` where the head timeout leaves
+    /// one, else the head timeout itself, so a short head timeout bounds the waits that would otherwise outlast it.
+    wait_bound: i64,
 }
 
 /// What one selected account produced: an answer for the caller; nothing, in which case the loop selects the

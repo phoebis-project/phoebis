@@ -180,6 +180,9 @@ pub(crate) struct RequestSummary {
     pub guardrail_id: Option<String>,
     /// Every guardrail that matched, in evaluation order, observed or blocking.
     pub guardrails: Vec<GuardrailMatchView>,
+    /// True where the router refused the request before any account was asked, for the client's or a policy's cause.
+    /// The figures leave such a request out, the log lists it.
+    pub refused: bool,
 }
 
 /// A guardrail that matched a request: its id, its place in the evaluation order and whether it blocked.
@@ -270,7 +273,9 @@ pub(crate) struct Attempt {
     /// priority, overage_bit]` the choice was made in, null for a renewed pin), `renewed`, `moved` (the reason a
     /// fail-over or a move landed it here), `skipped` (array of `account_id`, `obstacle`, every candidate the
     /// choice passed over), `placement` (null, or `rung` (`content`, `static`, or `with_main`), `depth`, and
-    /// `prefix_tokens` for a fresh placement with no pin of its own).
+    /// `prefix_tokens` for a fresh placement with no pin of its own). The completion adds `cache_read`, the tokens the
+    /// answer read from the cache, and `passthrough`, the content coding (`gzip`, for instance) of an answer the client
+    /// took as the upstream sent it.
     #[schema(value_type = Option<Object>)]
     pub selection: Option<Value>,
     pub response: AttemptResponse,
@@ -311,12 +316,28 @@ pub(crate) struct AttemptResponse {
     pub stop_sequence: Option<String>,
 }
 
+/// The newest `stream_interrupted` event of the request, lifted so a reader takes one member rather than the list.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StreamCut {
+    pub at: i64,
+    /// One of `account_cancelled`, `stream_cut`, `stream_stalled` and `stream_undecodable`.
+    #[schema(example = "stream_cut")]
+    pub code: String,
+    pub text: String,
+    pub bytes_relayed: u64,
+    pub upstream_request_id: Option<String>,
+    pub attempt: u32,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestDetail {
     /// The same shape as one row of `GET /admin/requests`.
     pub request: RequestSummary,
     pub events: Vec<Event>,
+    /// Null on a request without such a row.
+    pub stream_cut: Option<StreamCut>,
 }
 
 /// One event the request names, the last three keys the pool the event is about, the agent the pin is held for,
@@ -383,9 +404,8 @@ pub(crate) struct Event {
     ///   prompt, their rewrite as the Max 20x equivalent of the pin's weekly window with that window named, their
     ///   planned destination and their mark, then the pins it left out, each pin's skip word among `fast_lane`,
     ///   `last_pin`, `no_runway`, `off_window`, `standing` and `unpriced` and its note among `cheapest` and `current`,
-    ///   and the outcome with its reason among `last_pin`, `no_runway`, `standing` and `unpriced`. The marks and the
-    ///   dwell are the pool's on that account, while a move's cool reading counts a round any pool ran on its
-    ///   destination.
+    ///   and the outcome with its reason among `last_pin`, `no_runway`, `off_window`, `standing` and `unpriced`. The
+    ///   marks and the dwell are the pool's on that account.
     /// - `slow_down_ended`: the account's slow-down on the pool ended, its factor back at 1 for the safety wait or
     ///   its entry dropped at the purge, with the span's `since`, `duration_ms` (to the factor's return, or to the
     ///   entry's last read where it never returned), `factor_min`, the lowest factor of the span, and `held_ms`, the
@@ -393,6 +413,10 @@ pub(crate) struct Event {
     /// - `slow_down_started`: the account's factor on the pool read under 1 for the first time since it last read 1,
     ///   with the read's `factor`, `stretch_ms`, `threshold_ms`, `demand` (share of the 5-hour window per hour) and
     ///   the window's `reset`.
+    /// - `stream_interrupted`: the request's body ended short after the head, with the `code` its `error_code` carries
+    ///   (`account_cancelled`, `stream_cut`, `stream_stalled` or `stream_undecodable`), the error's own words as
+    ///   `text`, `bytes_relayed`, the bytes the client received before the end, the head's `upstream_request_id`, null
+    ///   where the head carried none, and the `attempt`.
     /// - `warm_prefix_expired`: the cache-map entries the purge removed for one conversation root on one account,
     ///   with the largest of them and the cause, `ttl` or `incarnation`.
     /// - `wind_down_started`: a pool member entered its wind-down before its subscription ends, `cancelled` or
@@ -532,6 +556,7 @@ pub(crate) fn request_summary(
                 blocked: m.blocked,
             })
             .collect(),
+        refused: r.refused,
     }
 }
 
@@ -978,11 +1003,30 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
         Ok(Some((r, a, events))) => Json(RequestDetail {
             request: request_summary(&r, &a, &shares),
             events: events.iter().map(event_json).collect(),
+            stream_cut: stream_cut(&r.id, &events),
         })
         .into_response(),
         Ok(None) => failure(StatusCode::NOT_FOUND, "no such request"),
         Err(e) => ledger_failure(e),
     }
+}
+
+/// The newest `stream_interrupted` row the request wrote itself, last among `events` since the read orders them by
+/// `at`. Matched by its id: a subagent's call shares the session, so its cut can sit inside a main turn's window.
+fn stream_cut(request_id: &str, events: &[phoebis_ledger::EventRecord]) -> Option<StreamCut> {
+    let row = events
+        .iter()
+        .rev()
+        .find(|e| e.kind == "stream_interrupted" && e.request_id.as_deref() == Some(request_id))?;
+    let detail: Value = serde_json::from_str(row.detail.as_deref()?).ok()?;
+    Some(StreamCut {
+        at: row.at,
+        code: detail["code"].as_str()?.to_string(),
+        text: detail["text"].as_str()?.to_string(),
+        bytes_relayed: detail["bytes_relayed"].as_u64()?,
+        upstream_request_id: detail["upstream_request_id"].as_str().map(str::to_string),
+        attempt: u32::try_from(detail["attempt"].as_u64()?).ok()?,
+    })
 }
 
 pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Event {
@@ -1041,7 +1085,7 @@ pub(crate) async fn bodies(
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).into_owned()))
     };
     let db = state.ledger.db();
-    let b = match db.bodies(&id).await {
+    let b = match db.bodies(&id, (state.clock)()).await {
         Ok(Some(b)) => b,
         Ok(None) => return failure(StatusCode::NOT_FOUND, "no captured bodies for this request"),
         Err(e) => return ledger_failure(e),

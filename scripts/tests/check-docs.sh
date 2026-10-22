@@ -178,6 +178,11 @@ echo "$out" | grep -q "usage: check-docs.py" || fail "client with one argument d
 out=$(python3 "$check" client "$tmp/gone.rs" "$tmp/client.md" 2>&1) && fail "a missing route file passed"
 echo "$out" | grep -q "is missing; the proxy route table names it" || fail "missing route file did not report: $out"
 
+# A moved client page is a finding that names it, as a missing route file is, never a traceback.
+out=$(python3 "$check" client "$tmp/proxy.rs" "$tmp/moved-client.md" 2>&1) && fail "a missing client page passed"
+echo "$out" | grep -q "moved-client.md is missing" || fail "the missing client page did not report: $out"
+echo "$out" | grep -q "Traceback" && fail "the missing client page ended in a traceback: $out"
+
 # The six cases below each pair a route table with a client page whose table lists exactly its served set: a pass
 # proves the set (a missing and a stray row are both findings), and a second page proves the route the parser must
 # not serve is reported as unserved.
@@ -410,6 +415,10 @@ out=$(python3 "$check" codes "$tmp/codes/errors.rs" 2>&1) && fail "codes with on
 status=$?
 [ "$status" = 2 ] || fail "codes with one argument exited $status rather than 2: $out"
 echo "$out" | grep -qF "codes [RS_FILE... CLIENT_MD]" || fail "codes with one argument did not print the new usage: $out"
+# The codes check reads the same client page, so a moved one is named the same way.
+out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/moved-client.md" 2>&1) && fail "codes passed a missing client page"
+echo "$out" | grep -q "moved-client.md is missing" || fail "codes did not report the missing client page: $out"
+echo "$out" | grep -q "Traceback" && fail "codes ended in a traceback on a missing client page: $out"
 
 # The prose rules: each rule fires outside a code span and a fenced block and stays quiet inside them, a fence
 # closes only on its own character and length, and a span wrapped across two lines is code on both.

@@ -123,7 +123,7 @@ export function DashboardPage() {
         <ReadFailed title="Could not load the 24-hour figures" error={overview.error} retry={overview.reload} />
       ) : (
         <div className="stat-grid">
-          <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} color={ink.series[0]} />
+          <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} title="Requests the router asked an account for. The refused requests are in the Refused tile." color={ink.series[0]} />
           <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={hourly.map((h) => h.tokens)} color={ink.series[2]} />
           <StatTile label="Estimated cost, 24h" value={costTile?.value ?? null} note={costTile?.note ?? null} spark={costTile?.spark ?? []} title={costTile?.title} color={ink.series[1]} />
           <StatTile
@@ -131,8 +131,10 @@ export function DashboardPage() {
             value={o ? fmtPct(o.errorRate24h ?? 0, 1) : null}
             note={o ? (o.errorRate24h === null ? 'No requests' : o.topErrorCode ? `Most common: ${o.topErrorCode}` : 'No errors') : null}
             spark={hourly.map((h) => h.errors)}
+            title="Errors among the requests the router asked an account for, the refused requests left out"
             color={ink.series[7]}
           />
+          <StatTile label="Refused, 24h" value={o ? fmtInt(o.refused24h) : null} note={o ? (o.topRefusalCode ? `Most common: ${o.topRefusalCode}` : 'None') : null} spark={hourly.map((h) => h.refused)} color={ink.series[3]} />
         </div>
       )}
       {asOf && (

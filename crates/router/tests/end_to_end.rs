@@ -2463,6 +2463,163 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     up.shutdown().await;
 }
 
+/// A rollup row keeps the prompt-length band its request folded under, so only the start's re-fold moves an hour
+/// whose threshold a later price file moved. The twelve-token prompt sits under the first file's threshold of 100 and
+/// over the second file's 10, so the hour's dollars move from the standard cells to the long-context cells.
+#[tokio::test]
+async fn a_start_after_a_band_threshold_moved_re_prices_the_hour_at_the_new_band() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":3}}"#
+                    .to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    // The registry and the ledger carry over between the two starts, and each start reads the price file anew.
+    let configured = |over: u64| {
+        std::fs::write(
+            dir.path().join("api_prices.yaml"),
+            format!(
+                "revisions:\n  - effective: 2026-10-01\n    models:\n      claude-sonnet-4-5:\n        \
+                 input: 3\n        cache_write_5m: 3.75\n        cache_write_1h: 6\n        cache_read: 0.3\n        \
+                 output: 15\n        long_context: {{over: {over}, input: 6, cache_write_5m: 7.5, \
+                 cache_write_1h: 12, cache_read: 0.6, output: 22.5}}\n"
+            ),
+        )
+        .unwrap();
+        let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+        let yaml = format!(
+            "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n\
+             proxy:\n  listen: 127.0.0.1:{proxy_port}\n\
+             stats:\n  api_prices_path: {prices}\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
+             storage:\n  encryption_key_file: {key}\n  path: {db}\n\
+             upstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n\
+             usage:\n  refresh_concurrency: 2\n",
+            prices = dir.path().join("api_prices.yaml").display(),
+            ledger = dir.path().join("ledger.sqlite").display(),
+            key = dir.path().join("storage.key").display(),
+            db = dir.path().join("phoebis.sqlite").display(),
+            addr = up.addr(),
+            ca = dir.path().join("ca.pem").display(),
+        );
+        let cfg_path = dir.path().join("config.yaml");
+        std::fs::write(&cfg_path, yaml).unwrap();
+        let config = {
+            let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+            phoebis_router::config::load(&cfg_path).unwrap()
+        };
+        (config, proxy_port, admin_port)
+    };
+    /// The key's row of the last hour once it holds the case's one request.
+    async fn hour_row(client: &reqwest::Client, admin_port: u16) -> serde_json::Value {
+        let url = format!(
+            "http://127.0.0.1:{admin_port}/admin/analytics/breakdown?range=1h&group_by=key"
+        );
+        let give_up = std::time::Instant::now() + SETTLE;
+        loop {
+            let breakdown: serde_json::Value =
+                client.get(&url).send().await.unwrap().json().await.unwrap();
+            if breakdown["rows"][0]["requests"].as_u64() == Some(1) {
+                return breakdown["rows"][0].clone();
+            }
+            assert!(
+                std::time::Instant::now() < give_up,
+                "the hour's row never held the one request: {breakdown}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+    let close = |got: &serde_json::Value, want: f64| {
+        got["cost_usd"]
+            .as_f64()
+            .is_some_and(|usd| (usd - want).abs() < 1e-12)
+    };
+
+    // The first start writes the band mark, and the request folds under the standard cells.
+    let (config, proxy_port, admin_port) = configured(100);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }] })).send().await.unwrap().status(), 201);
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    let resp = fixture_request(&client, proxy_port, &secret, "refold")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.text().await.unwrap();
+    // 12 input tokens at 3 and 3 output tokens at 15 per million.
+    let standard = (12.0 * 3.0 + 3.0 * 15.0) / 1e6;
+    let row = hour_row(&client, admin_port).await;
+    assert!(close(&row, standard), "the standard cells: {row}");
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+
+    // The second start loads a threshold of 10, which the twelve-token prompt crosses.
+    let (config, _, admin_port) = configured(10);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    logged_in(
+        &client,
+        &format!("http://127.0.0.1:{admin_port}/admin/session"),
+    )
+    .await;
+    // 12 input tokens at 6 and 3 output tokens at 22.5 per million.
+    let long_context = (12.0 * 6.0 + 3.0 * 22.5) / 1e6;
+    let row = hour_row(&client, admin_port).await;
+    assert!(
+        close(&row, long_context),
+        "the start re-folded the hour's one request under the long-context cells: {row}"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 /// One `Ready` OAuth account and its credentials, written before `run` ever opens the store, the way the relay
 /// harness seeds one for its own tests. The lock this takes on the data directory is released when the
 /// returned `Store` drops at the end of the caller's scope, before `run` opens the same file.
@@ -3226,7 +3383,11 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
         }));
         let elapsed = first_success(proxy_port).await;
         // Well under the 30 s default bound, with room for a loaded build host that stretches the bind past 1 s.
-        assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "the proxy listener took {elapsed:?} to bind, over the 5 s bound: the test proves it binds after the \
+             startup fetch or its own bound, whichever comes first"
+        );
         let client = reqwest::Client::builder()
             .cookie_store(true)
             .build()
@@ -4420,7 +4581,11 @@ async fn the_reference_page_and_its_document_are_served_by_the_merged_app() {
     assert_eq!(document.headers()["cache-control"], "no-store");
     let document: serde_json::Value = document.json().await.unwrap();
     assert_eq!(document["openapi"], "3.1.0");
-    assert_eq!(document["paths"].as_object().unwrap().len(), 57);
+    assert_eq!(
+        document["paths"].as_object().unwrap().len(),
+        phoebis_admin::path_count(),
+        "the served document holds the admin crate's paths"
+    );
     let page = anonymous
         .get(format!("http://127.0.0.1:{admin_port}/api-reference/"))
         .send()

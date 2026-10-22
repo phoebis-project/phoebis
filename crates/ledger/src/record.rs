@@ -104,6 +104,9 @@ pub struct RequestRecord {
     pub guardrail_id: Option<String>,
     /// Every guardrail that matched, in evaluation order, empty on a row from before the table.
     pub guardrails: Vec<GuardrailMatchRecord>,
+    /// The router refused the request before it asked any account, for the client's or a policy's cause, so the
+    /// figures leave it out and the logs keep it. A row from before the column reads what the step's backfill set.
+    pub refused: bool,
 }
 
 /// One row of `request_guardrails`: a guardrail that matched the request, its place in the evaluation order and
@@ -166,7 +169,7 @@ pub struct AttemptRecord {
     pub cleared_input_tokens: Option<u64>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
-    /// The trace as stored, `cache_read` folded in at completion.
+    /// The trace as stored, `cache_read` and `passthrough` folded in at completion.
     pub selection: Option<String>,
     /// When the relay flushed the request body to this attempt's upstream, as the response head reported it.
     pub written_at: Option<i64>,
@@ -358,6 +361,10 @@ pub struct KeepaliveDelta {
     pub account_id: String,
     pub canonical_model: String,
     pub kind: String,
+    /// The client label the row keys under: the observed request's on a kept-warm credit, so the credit prices under
+    /// that client's regime as the request row does, and the reserved id on every other delta. An empty value folds
+    /// under the reserved id.
+    pub client: String,
     /// The request the credit is for, marked `kept_warm` by id.
     pub kept_warm_request_id: Option<String>,
     pub kept_warm_requests: u64,
@@ -383,13 +390,14 @@ pub struct KeepaliveDelta {
     /// request's own, read off its usage against the revision in force at its arrival. `None` (standard) for a probe
     /// row or a skip.
     pub band: Option<crate::pricing::Band>,
-    /// The serving account's kind as the engine read it once the probe's answer landed, which files an api_key
-    /// account's credit under `billed` beside its request row. `None` for a kept-warm credit, a skip or a
-    /// settlement, and for a probe whose account left the registry before its answer landed.
+    /// The serving account's kind as the engine read it, which files an api_key account's row under `billed` beside
+    /// its request row. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
+    /// settlement and the skip), `None` there where the registry no longer holds the account, and `None` on a delta
+    /// built by default.
     pub account_kind: Option<AccountKind>,
-    /// Whether the probe's answer reported overage in use, the fact its request row files under, so the credit row
-    /// keys the same funding. `None` for a kept-warm credit, a skip or a settlement, which have no probe of their
-    /// own and file under `plan`, or under `fast` for a fast recipe.
+    /// Whether the serving answer reported overage in use, the fact its request row files under, so the row keys the
+    /// same funding. Set on every delta the savings code records (the migration mark, the kept-warm credit, the
+    /// settlement and the skip), and `None` on a delta built by default.
     pub overage_in_use: Option<bool>,
     /// The speed that keys the credit row, the recipe's for a credit, a skip or a migration mark and the probe answer's
     /// for a settlement: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so the derived `Default`'s `None` files

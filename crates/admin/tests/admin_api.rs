@@ -104,6 +104,255 @@ fn cookie_attributes(response: &axum::http::Response<axum::body::Body>) -> Strin
         .to_string()
 }
 
+const KEPT_LOGIN: &str = r#"{"secret":"admin-secret","stay_logged_in":true}"#;
+
+/// The cookie a kept login's answer sets, after checking it is one line of the login's shape and 30-day life. The
+/// messages name the attributes alone, since the value is the session's credential.
+fn renewal_of(response: &axum::http::Response<axum::body::Body>, what: &str) -> String {
+    let lines: Vec<&str> = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "{what}: the answer renews the kept login's cookie"
+    );
+    let (_, attributes) = lines[0].split_once(';').unwrap();
+    assert_eq!(
+        attributes, " Path=/admin; HttpOnly; SameSite=Strict; Max-Age=2592000",
+        "{what}: the renewal keeps the login's attributes and its 30 days"
+    );
+    common::cookie_of(response)
+}
+
+/// One `Set-Cookie` line, the logout's clear, checked without printing a line that might carry a token.
+fn assert_clear_alone(response: &axum::http::Response<axum::body::Body>, what: &str) {
+    let lines: Vec<&str> = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "{what}: one Set-Cookie line");
+    assert!(
+        lines[0] == "phoebis_admin=; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=0",
+        "{what}: the line is the clear"
+    );
+}
+
+#[tokio::test]
+async fn a_kept_login_sets_a_thirty_day_cookie_that_a_restart_on_the_same_store_verifies() {
+    use common::{cookie_of, get, json, post};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let login = post(&app, "/admin/session", KEPT_LOGIN, None).await;
+    assert_eq!(login.status(), 204);
+    let attributes = cookie_attributes(&login);
+    let (_, attributes) = attributes.split_once(';').unwrap();
+    assert_eq!(
+        attributes, " Path=/admin; HttpOnly; SameSite=Strict; Max-Age=2592000",
+        "a kept login's cookie lives 30 days beside the login's attributes"
+    );
+    let cookie = cookie_of(&login);
+    // The same store under the same secret, as the next start of the router reads them.
+    let (restarted, _up, _, _) = common::admin_parts_on(store).await;
+    let shown = get(&restarted, "/admin/session", Some(&cookie)).await;
+    assert_eq!(
+        shown.status(),
+        200,
+        "the restarted sessions verify the token"
+    );
+    assert_eq!(json(shown).await["persistent"], true);
+}
+
+#[tokio::test]
+async fn every_answer_to_a_kept_login_renews_its_cookie_under_the_same_session_id() {
+    use common::{cookie_of, get, json, post};
+    let (app, _up) = common::admin_app().await;
+    let first = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let mut cookie = first.clone();
+    let mut ids = Vec::new();
+    for (method, path) in [
+        ("GET", "/admin/session"),
+        ("GET", "/admin/accounts"),
+        ("POST", "/admin/accounts/business/pause"),
+        ("GET", "/admin/no-such-route"),
+        ("GET", "/admin/session"),
+    ] {
+        let answer = match method {
+            "GET" => get(&app, path, Some(&cookie)).await,
+            _ => post(&app, path, "", Some(&cookie)).await,
+        };
+        let renewed = renewal_of(&answer, &format!("{method} {path}"));
+        assert!(
+            renewed != cookie,
+            "{method} {path}: a fresh issue instant and nonce"
+        );
+        if path == "/admin/session" {
+            ids.push(json(answer).await["session_id"].clone());
+        }
+        cookie = renewed;
+    }
+    let last = json(get(&app, "/admin/session", Some(&cookie)).await).await;
+    ids.push(last["session_id"].clone());
+    assert!(ids[0].is_string());
+    assert!(
+        ids.iter().all(|id| *id == ids[0]),
+        "one session id under every renewed cookie"
+    );
+    assert_eq!(
+        get(&app, "/admin/session", Some(&first)).await.status(),
+        200,
+        "a renewal leaves the earlier token valid to its own expiry"
+    );
+}
+
+#[tokio::test]
+async fn a_kept_logins_renewal_carries_secure_under_tls_or_a_fronts_https_and_not_otherwise() {
+    use common::{cookie_of, get, post, post_forwarded};
+    let (tls, _up) = common::admin_app_tls().await;
+    let cookie = cookie_of(&post(&tls, "/admin/session", KEPT_LOGIN, None).await);
+    let terminated = get(&tls, "/admin/session", Some(&cookie)).await;
+    assert_eq!(terminated.status(), 200);
+    assert!(
+        cookie_attributes(&terminated).ends_with("; Secure"),
+        "a read under TLS renews the cookie with the whole attribute"
+    );
+
+    let (plain, _up) = common::admin_app().await;
+    let login = post_forwarded(&plain, "/admin/session", KEPT_LOGIN, None, "https").await;
+    let cookie = cookie_of(&login);
+    let fronted = post_forwarded(
+        &plain,
+        "/admin/accounts/business/pause",
+        "",
+        Some(&cookie),
+        "https",
+    )
+    .await;
+    assert_eq!(fronted.status(), 204);
+    assert!(
+        cookie_attributes(&fronted).ends_with("; Secure"),
+        "an answer behind a front's https renews the cookie with the attribute"
+    );
+    let bare = get(&plain, "/admin/session", Some(&cookie)).await;
+    assert_eq!(bare.status(), 200);
+    assert!(
+        !cookie_attributes(&bare).contains("Secure"),
+        "a plain read's renewal carries none"
+    );
+}
+
+#[tokio::test]
+async fn the_session_answer_reads_persistent_for_a_kept_login_alone() {
+    use common::{cookie_of, get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let kept = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let plain = login(&app, "admin-secret").await;
+    assert_eq!(
+        json(get(&app, "/admin/session", Some(&kept)).await).await["persistent"],
+        true
+    );
+    let answer = get(&app, "/admin/session", Some(&plain)).await;
+    assert!(
+        answer.headers().get("set-cookie").is_none(),
+        "a login without the flag keeps today's cookie, renewed by nothing"
+    );
+    assert_eq!(json(answer).await["persistent"], false);
+}
+
+#[tokio::test]
+async fn a_pairing_started_under_a_kept_login_completes_under_each_renewed_cookie() {
+    use common::{cookie_of, delete, get, json, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let started = post(
+        &app,
+        "/admin/oauth/sessions",
+        r#"{"account_id":"business","login":"claude_ai"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(started.status(), 201);
+    let cookie = renewal_of(&started, "the pairing's start");
+    let id = json(started).await["id"].as_str().unwrap().to_string();
+    let shown = get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await;
+    assert_eq!(
+        shown.status(),
+        200,
+        "the renewed cookie names the session that started the pairing"
+    );
+    let cookie = renewal_of(&shown, "the pairing's show");
+    assert_eq!(json(shown).await["status"], "pending");
+    let cancelled = delete(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await;
+    assert_eq!(cancelled.status(), 204);
+    renewal_of(&cancelled, "the pairing's cancel");
+}
+
+#[tokio::test]
+async fn a_kept_logout_answers_its_clear_alone_and_ends_every_kept_token_across_a_restart() {
+    use common::{cookie_of, delete, get, post};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let first = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let renewed = renewal_of(&get(&app, "/admin/session", Some(&first)).await, "a read");
+    let other = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let out = delete(&app, "/admin/session", Some(&renewed)).await;
+    assert_eq!(out.status(), 204);
+    assert_clear_alone(&out, "the kept logout");
+    let (restarted, _up, _, _) = common::admin_parts_on(store).await;
+    for (cookie, what) in [
+        (&first, "the first token"),
+        (&renewed, "the renewed token"),
+        (&other, "another kept login's token"),
+    ] {
+        assert_eq!(
+            get(&app, "/admin/session", Some(cookie)).await.status(),
+            401,
+            "{what} on this process"
+        );
+        assert_eq!(
+            get(&restarted, "/admin/session", Some(cookie))
+                .await
+                .status(),
+            401,
+            "{what} after a restart"
+        );
+    }
+    let fresh = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    assert_eq!(
+        get(&app, "/admin/session", Some(&fresh)).await.status(),
+        200
+    );
+    assert_eq!(
+        get(&restarted, "/admin/session", Some(&fresh))
+            .await
+            .status(),
+        200,
+        "a kept login after the logout verifies after a restart"
+    );
+}
+
+#[tokio::test]
+async fn a_logout_under_a_token_shaped_cookie_that_fails_verification_leaves_the_epoch_unmoved() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use common::{cookie_of, delete, get, json, post};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let kept = cookie_of(&post(&app, "/admin/session", KEPT_LOGIN, None).await);
+    let mut forged = URL_SAFE_NO_PAD.decode(&kept).unwrap();
+    *forged.last_mut().unwrap() ^= 1;
+    let forged = URL_SAFE_NO_PAD.encode(forged);
+    let out = delete(&app, "/admin/session", Some(&forged)).await;
+    assert_eq!(out.status(), 204);
+    assert_clear_alone(&out, "a logout under a forged token");
+    assert_eq!(store.admin_session_epoch().unwrap(), 0);
+    let shown = get(&app, "/admin/session", Some(&kept)).await;
+    assert_eq!(shown.status(), 200, "the kept login was not ended");
+    assert_eq!(json(shown).await["persistent"], true);
+}
+
 #[tokio::test]
 async fn a_foreign_origin_is_refused_and_a_missing_one_is_admitted() {
     use common::{json, login, post, post_from, send_with_host};
@@ -436,7 +685,7 @@ async fn a_bearer_admits_a_read_and_a_mutation_without_a_cookie_or_an_origin() {
     assert_eq!(whoami.status(), 200);
     assert_eq!(
         json(whoami).await,
-        serde_json::json!({"session_id": "bearer"})
+        serde_json::json!({"persistent": false, "session_id": "bearer"})
     );
     // The scheme word is matched ignoring case, and the JSON rule still holds under a bearer.
     let lower = authorized(
@@ -896,6 +1145,94 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
         }),
         "the confirm stored the plan and the start with no poll having run"
     );
+}
+
+#[tokio::test]
+async fn a_confirm_on_a_slot_sealed_under_another_key_answers_409_naming_the_account() {
+    use common::{get, json, login, post};
+    let (app, _up, store, _manager) = common::paired_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    // AES-GCM cannot tell a blob sealed under another storage key from a damaged one, so a blob this key cannot
+    // open stands for the slot sealed elsewhere, and the refusal answers both alike.
+    store.debug_corrupt_credentials("business").unwrap();
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        confirmed.headers()["x-phoebis-error-code"],
+        "sealed_under_another_key"
+    );
+    assert_eq!(
+        json(confirmed).await["error"],
+        "Business holds a credential sealed under another storage key, so disconnect it before pairing again"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
+}
+
+/// The commit's own refusal: a token answer without a refresh token makes the commit open the credential it replaces
+/// to carry that token forward, so a credential sealed under another key after the confirm's read refuses the commit
+/// as the read's refusal does. The read parks on another thread, so the runtime has two.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_confirm_whose_commit_opens_a_credential_sealed_under_another_key_answers_409_naming_the_account(
+) {
+    use common::{get, json, login, post};
+    let (app, up, store, _manager) = common::paired_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let mut token: serde_json::Value =
+        serde_json::from_slice(phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Token,
+        ))
+        .unwrap();
+    token.as_object_mut().unwrap().remove("refresh_token");
+    up.set_rule_after(
+        0,
+        "/v1/oauth/token",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&token).unwrap(),
+        },
+    );
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    let hold = store.debug_hold_after_next_credential_read();
+    let confirm = tokio::spawn({
+        let (app, cookie, path) = (
+            app.clone(),
+            cookie.clone(),
+            format!("/admin/oauth/sessions/{id}/confirm"),
+        );
+        async move { post(&app, &path, "", Some(&cookie)).await }
+    });
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !hold.is_parked() {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the confirm's credential read never parked"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    // The slot's credential keeps its generation, so the commit's fence passes and its open is what refuses it.
+    store.debug_corrupt_credentials("business").unwrap();
+    hold.release();
+    let confirmed = confirm.await.unwrap();
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        confirmed.headers()["x-phoebis-error-code"],
+        "sealed_under_another_key"
+    );
+    assert_eq!(
+        json(confirmed).await["error"],
+        "Business holds a credential sealed under another storage key, so disconnect it before pairing again"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
 }
 
 #[tokio::test]
@@ -2038,6 +2375,162 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
     assert_eq!(business["windows"], held, "{business}");
 }
 
+/// `business` as `GET /admin/accounts/{id}` and the list answer it, in that order.
+async fn business_as_read_and_listed(h: &common::Polled, cookie: &str) -> [serde_json::Value; 2] {
+    use common::{get, json};
+    let read = json(get(&h.app, "/admin/accounts/business", Some(cookie)).await).await;
+    let listed = json(get(&h.app, "/admin/accounts", Some(cookie)).await).await;
+    let row = listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap()
+        .clone();
+    [read, row]
+}
+
+/// `business` with a reading on each of the view's two windows paths, the router's reported 5-hour window beside a
+/// fast-lane reading and the ledger's rows of today for both plan windows, so the router's reading answers the 5-hour
+/// window and the ledger's row the week. The endpoint refuses one poll, so the row carries a poll standing that a
+/// moved state can drop. Answers the account as its own `GET` reads it before any state moves.
+async fn business_with_both_windows_paths() -> (common::Polled, String, serde_json::Value) {
+    use common::{login, wait_json, NOW};
+    use phoebis_ledger::QuotaSampleRecord;
+    use phoebis_routing::{Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let reading = |utilization, reset, observed_at| WindowReading {
+        utilization,
+        reset: Some(reset),
+        observed_at,
+        source: WindowSource::Head,
+    };
+    h.router
+        .report(Report::Sample {
+            account_id: "business".into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(0.25, NOW + 3_600_000, NOW - 60_000))
+                .with(
+                    phoebis_relay::FAST_INPUT,
+                    reading(0.3, NOW + 60_000, NOW - 30_000),
+                ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    let read_at = NOW - 42_000;
+    let row = |window: &str, utilization| QuotaSampleRecord {
+        account_id: "business".into(),
+        bucket: phoebis_ledger::bucket_of(read_at),
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: None,
+        source: "head".into(),
+        observed_at: Some(read_at),
+    };
+    h.db.insert_samples(&[row("five_hour", 0.4), row("seven_day", 0.5)], None)
+        .unwrap();
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    h.usage.poll("business").await.unwrap();
+    let before = wait_json(&h.app, "/admin/accounts/business", &cookie, |v| {
+        !v["fast_lane"].is_null()
+    })
+    .await;
+    let drawn: Vec<(&str, f64)> = before["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| {
+            (
+                w["id"].as_str().unwrap(),
+                w["utilization"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(drawn, [("five_hour", 0.25), ("seven_day", 0.5)], "{before}");
+    assert!(!before["usage"]["poll"].is_null(), "{before}");
+    (h, cookie, before)
+}
+
+/// The poll asks no disconnected account, so the moved row's poll standing reads as `poll_standing` answers it for one,
+/// while the router's held windows still compose its `error` and `fetched_at`.
+#[tokio::test]
+async fn a_disconnected_oauth_account_answers_no_window_whatever_the_router_and_the_ledger_hold() {
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    h.store
+        .set_state(
+            "business",
+            phoebis_store::AccountState::Disconnected,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    let poll_less = serde_json::json!({
+        "error": before["usage"]["error"],
+        "fetched_at": before["usage"]["fetched_at"],
+        "held_until": null,
+        "poll": null,
+    });
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["state"], "disconnected", "{after}");
+        assert_eq!(after["fast_lane"], before["fast_lane"], "{after}");
+        assert_eq!(after["usage"], poll_less, "{after}");
+        assert_eq!(after["windows"], serde_json::json!([]), "{after}");
+    }
+}
+
+#[tokio::test]
+async fn a_reauth_required_oauth_account_answers_no_window_whatever_the_router_and_the_ledger_hold()
+{
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    h.store
+        .set_state(
+            "business",
+            phoebis_store::AccountState::ReauthRequired,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["state"], "reauth_required", "{after}");
+        assert_eq!(after["fast_lane"], before["fast_lane"], "{after}");
+        assert_eq!(after["usage"], before["usage"], "{after}");
+        assert_eq!(after["windows"], serde_json::json!([]), "{after}");
+    }
+}
+
+#[tokio::test]
+async fn a_ready_oauth_account_answers_the_windows_the_router_and_the_ledger_hold() {
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["state"], "ready", "{after}");
+        assert_eq!(after["windows"], before["windows"], "{after}");
+    }
+}
+
+#[tokio::test]
+async fn a_funding_required_oauth_account_keeps_the_windows_the_router_and_the_ledger_hold() {
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    h.store
+        .set_state(
+            "business",
+            phoebis_store::AccountState::FundingRequired,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["state"], "funding_required", "{after}");
+        assert_eq!(after["windows"], before["windows"], "{after}");
+    }
+}
+
 #[tokio::test]
 async fn re_pairing_to_a_different_upstream_account_is_rejected() {
     use common::{delete, get, json, login, post};
@@ -2294,6 +2787,64 @@ async fn a_refused_origin_answers_no_store_and_nosniff_and_a_login_needs_no_orig
         200,
         "a read carries no Origin and needs none"
     );
+}
+
+#[tokio::test]
+async fn every_answer_and_every_refusal_of_the_gate_names_the_build_the_binary_was_built_from() {
+    use common::{cookie_of, delete, get, post, post_from, FIXTURE_BUILD_COMMIT};
+    let (app, _up) = common::admin_app().await;
+    let anonymous = get(&app, "/admin/accounts", None).await;
+    assert_eq!(anonymous.status(), 401);
+    assert_eq!(
+        anonymous.headers()["x-phoebis-build"],
+        FIXTURE_BUILD_COMMIT,
+        "the gate's refusal names the build too"
+    );
+    let refused = post(&app, "/admin/session", r#"{"secret":"nope"}"#, None).await;
+    assert_eq!(refused.status(), 401);
+    assert_eq!(refused.headers()["x-phoebis-build"], FIXTURE_BUILD_COMMIT);
+    let login = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
+    assert_eq!(login.status(), 204);
+    assert_eq!(login.headers()["x-phoebis-build"], FIXTURE_BUILD_COMMIT);
+    let cookie = cookie_of(&login);
+    let forged = post_from(
+        &app,
+        "/admin/accounts/business/pause",
+        "",
+        Some(&cookie),
+        "https://evil.example",
+    )
+    .await;
+    assert_eq!(forged.status(), 403);
+    assert_eq!(forged.headers()["x-phoebis-build"], FIXTURE_BUILD_COMMIT);
+    for path in ["/admin/accounts", "/admin/system", "/admin/no-such-route"] {
+        let answer = get(&app, path, Some(&cookie)).await;
+        assert_eq!(
+            answer.headers()["x-phoebis-build"],
+            FIXTURE_BUILD_COMMIT,
+            "{path} answered {}",
+            answer.status()
+        );
+    }
+    let logout = delete(&app, "/admin/session", Some(&cookie)).await;
+    assert_eq!(logout.status(), 204);
+    assert_eq!(logout.headers()["x-phoebis-build"], FIXTURE_BUILD_COMMIT);
+}
+
+#[tokio::test]
+async fn the_system_and_settings_answers_carry_the_build_beside_the_version() {
+    use common::{get, json, login, FIXTURE_BUILD_COMMIT};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let system = json(get(&app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(system["build"], FIXTURE_BUILD_COMMIT, "{system}");
+    assert_eq!(system["version"], env!("CARGO_PKG_VERSION"), "{system}");
+    let settings = json(get(&app, "/admin/settings", Some(&cookie)).await).await;
+    assert_eq!(
+        settings["about"]["build"], FIXTURE_BUILD_COMMIT,
+        "{settings}"
+    );
+    assert_eq!(settings["about"]["version"], env!("CARGO_PKG_VERSION"));
 }
 
 #[tokio::test]
@@ -3012,8 +3563,8 @@ async fn the_session_route_answers_the_session_id_and_settings_say_the_admin_sec
     assert_eq!(
         me.as_object()
             .map(|m| m.keys().cloned().collect::<Vec<_>>()),
-        Some(vec!["session_id".to_string()]),
-        "the session answer names the session and nothing else: {me}"
+        Some(vec!["persistent".to_string(), "session_id".to_string()]),
+        "the session answer names the session and its kind and nothing else: {me}"
     );
     assert!(
         me["session_id"].as_str().is_some_and(|id| id != cookie),
@@ -4704,6 +5255,452 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
     );
 }
 
+/// A pin of `agent` on `session` holding a last prompt of `last_input_tokens`, used at `last_used_at`.
+fn context_pin(
+    session: &str,
+    agent: &str,
+    model: &str,
+    account: &str,
+    key_generation: i64,
+    last_input_tokens: u64,
+    last_used_at: i64,
+) -> phoebis_store::PinRow {
+    phoebis_store::PinRow {
+        agent_id: agent.into(),
+        model: model.into(),
+        last_input_tokens,
+        last_used_at,
+        lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
+        ..burning_opus_pin(session, account, key_generation, common::NOW, 0.0, 0.0)
+    }
+}
+
+/// One live message entry rooted at `session` on `account` under `model`, as the answer to a turn of `agent` there
+/// reports it, the upstream's cached prefix `prefix_tokens`.
+async fn report_prefix(
+    parts: &common::Full,
+    session: &str,
+    agent: &str,
+    model: &str,
+    account: &str,
+    prefix_tokens: u64,
+) {
+    parts
+        .router
+        .report(phoebis_routing::Report::Affinity(
+            phoebis_routing::AffinityReport {
+                account_id: account.into(),
+                incarnation: 1,
+                key_id: "desktop".into(),
+                key_generation: common::generation(&parts.store, "desktop"),
+                canonical_model: model.into(),
+                lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
+                root: Some(session.into()),
+                static_boundaries: std::sync::Arc::from([]),
+                message_boundaries: std::sync::Arc::from([format!(
+                    "{session}-{agent}-{model}-{account}"
+                )]),
+                static_sizes: Vec::new(),
+                static_ttl_ms: None,
+                message_ttl_ms: Some(300_000),
+                cache_touched: true,
+                prefix_tokens,
+                now: common::NOW,
+                cache_write_5m_tokens: None,
+                cache_write_1h_tokens: None,
+                uniform_ttl_ms: None,
+                request_id: format!("r-{session}-{agent}"),
+                seq: 1,
+                attempt: 1,
+                message_id: None,
+            },
+        ))
+        .await;
+}
+
+/// Registers `session` with the companion and each of `agents` under it, each with one observed turn so the
+/// keepalive's view carries its recipe, then releases each of `released` as the mod reports it.
+fn register_companion(parts: &common::Full, session: &str, agents: &[&str], released: &[&str]) {
+    let generation = common::generation(&parts.store, "desktop");
+    let mut sequence = 0;
+    let mut report = |event: &str, agent: Option<&str>, state: Option<&str>| {
+        sequence += 1;
+        let request_generation = state.map(|_| {
+            parts
+                .keepalive
+                .agent_status("desktop", session, agent.unwrap())
+                .unwrap()
+                .request_generation
+        });
+        parts
+            .keepalive
+            .apply_event(
+                "desktop",
+                generation,
+                phoebis_keepalive::Event {
+                    event: event.into(),
+                    session_id: session.into(),
+                    instance_id: "i1".into(),
+                    sequence,
+                    agent_id: agent.map(String::from),
+                    state: state.map(String::from),
+                    request_generation,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    report("session_start", None, None);
+    for agent in agents {
+        report("agent_start", Some(agent), None);
+        parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: format!("k-{session}-{agent}"), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some(session.into()), agent_id: Some(agent.to_string()), parent_agent_id: Some("main".into()), owner_id: None, model: "claude-opus-5".into(), canonical_model: "claude-opus-5".into(), wire_model: "claude-opus-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-opus-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: common::NOW }));
+    }
+    for agent in released {
+        report("state", Some(agent), Some("released"));
+    }
+}
+
+/// A client request of `agent` on `session` under the desktop key's `key_generation`, naming its model `model`.
+fn spelled_request(
+    id: &str,
+    session: &str,
+    agent: &str,
+    model: &str,
+    at: i64,
+    key_generation: i64,
+) -> phoebis_ledger::Record {
+    phoebis_ledger::Record::Request {
+        request: phoebis_ledger::RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            key_generation,
+            session_id: Some(session.into()),
+            agent_id: Some(agent.into()),
+            model: model.into(),
+            canonical_model: model.trim_end_matches("[1m]").into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    }
+}
+
+/// A row's context window, share and cached prefix with its agent lines, each `None` where the row leaves it out.
+fn context_of(row: &serde_json::Value) -> [Option<serde_json::Value>; 4] {
+    [
+        "context_window_tokens",
+        "context_share",
+        "cached_prefix_tokens",
+        "agent_contexts",
+    ]
+    .map(|member| row.get(member).cloned())
+}
+
+/// An agent line as the route answers it.
+fn agent_line(
+    agent: &str,
+    model: &str,
+    last_input_tokens: u64,
+    window: Option<u64>,
+    share: Option<f64>,
+    prefix: Option<u64>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "agent_id": agent,
+        "model": model,
+        "last_input_tokens": last_input_tokens,
+        "context_window_tokens": window,
+        "context_share": share,
+        "cached_prefix_tokens": prefix,
+    })
+}
+
+#[tokio::test]
+async fn a_plain_session_row_answers_its_pins_context_window_share_and_cached_prefix_and_no_agent_lines(
+) {
+    use common::{login, wait_json, NOW};
+    use serde_json::{json, Value};
+    let parts = sessions_harness_with(|generation| {
+        vec![
+            context_pin(
+                "s-plain",
+                "main",
+                "claude-opus-5",
+                "business",
+                generation,
+                50_000,
+                NOW - 5,
+            ),
+            context_pin(
+                "s-cold",
+                "main",
+                "claude-opus-5",
+                "business",
+                generation,
+                30_000,
+                NOW - 5,
+            ),
+            context_pin(
+                "s-fresh",
+                "main",
+                "claude-opus-5",
+                "business",
+                generation,
+                0,
+                NOW - 5,
+            ),
+        ]
+    })
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    let cookie = login(&parts.app, "admin-secret").await;
+    report_prefix(
+        &parts,
+        "s-plain",
+        "main",
+        "claude-opus-5",
+        "business",
+        42_000,
+    )
+    .await;
+    report_prefix(
+        &parts,
+        "s-fresh",
+        "main",
+        "claude-opus-5",
+        "business",
+        42_000,
+    )
+    .await;
+    // A request of the key id's earlier holder, so the list carries a historical row.
+    parts.ledger.record(spelled_request(
+        "r-earlier",
+        "s-earlier",
+        "main",
+        "claude-opus-5",
+        NOW - 2_000,
+        generation - 1,
+    ));
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"] == "s-earlier")
+    })
+    .await;
+    let null = Some(Value::Null);
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-plain")),
+        [Some(json!(200_000)), Some(json!(0.25)), Some(json!(42_000)), null.clone()],
+        "the client's window for a model no request named as its long-context twin, the prompt's share of it and the \
+         entry's prefix, with no agent lines off a companion session"
+    );
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-cold")),
+        [
+            Some(json!(200_000)),
+            Some(json!(0.15)),
+            null.clone(),
+            null.clone()
+        ],
+        "no live entry stands on the session, so the prefix alone reads null"
+    );
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-fresh")),
+        [null.clone(), null.clone(), null.clone(), null.clone()],
+        "a pin with no turn yet reads no figure, whatever entry stands"
+    );
+    let earlier = session_row(&sessions, "s-earlier");
+    assert_eq!(earlier["historical"], json!(true));
+    assert_eq!(
+        context_of(&earlier),
+        [null.clone(), null.clone(), null.clone(), null],
+        "a historical row reads no figure"
+    );
+}
+
+#[tokio::test]
+async fn a_companion_session_lists_its_unreleased_agents_pins_beside_the_main_pins_figures() {
+    use common::{login, wait_json, NOW};
+    use serde_json::json;
+    let parts = sessions_harness_with(|generation| {
+        let pin = |session, agent, model, account, prompt, used| {
+            context_pin(session, agent, model, account, generation, prompt, used)
+        };
+        vec![
+            pin("s1", "main", "claude-opus-5", "business", 80_000, NOW - 5),
+            // Main's older pin on another model is main's, never an agent's line.
+            pin("s1", "main", "claude-sonnet-5", "business", 5_000, NOW - 50),
+            pin("s1", "worker-1", "claude-opus-5", "direct", 30_000, NOW - 5),
+            pin("s1", "worker-1", "claude-sonnet-5", "direct", 0, NOW - 5),
+            pin(
+                "s1",
+                "worker-2",
+                "claude-sonnet-5",
+                "business",
+                12_000,
+                NOW - 5,
+            ),
+            pin(
+                "s1",
+                "worker-3",
+                "claude-opus-5",
+                "business",
+                7_000,
+                NOW - 5,
+            ),
+            // An agent the companion never registered has no recipe.
+            pin("s1", "ghost", "claude-opus-5", "business", 9_000, NOW - 5),
+            pin("s2", "main", "claude-opus-5", "business", 20_000, NOW - 5),
+            pin(
+                "s2",
+                "worker-9",
+                "claude-opus-5",
+                "business",
+                1_000,
+                NOW - 5,
+            ),
+        ]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    report_prefix(&parts, "s1", "main", "claude-opus-5", "business", 64_000).await;
+    report_prefix(&parts, "s1", "worker-1", "claude-opus-5", "direct", 25_000).await;
+    report_prefix(&parts, "s2", "main", "claude-opus-5", "business", 15_000).await;
+    register_companion(
+        &parts,
+        "s1",
+        &["worker-1", "worker-2", "worker-3"],
+        &["worker-3"],
+    );
+    register_companion(&parts, "s2", &["worker-9"], &["worker-9"]);
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        ["s1", "s2"].iter().all(|session| {
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["session_id"] == *session && r["companion"] == "reporting")
+        })
+    })
+    .await;
+    let s1 = session_row(&sessions, "s1");
+    assert_eq!(
+        (s1["agent_id"].as_str(), s1["model"].as_str()),
+        (Some("main"), Some("claude-opus-5")),
+        "the row is main's newest pin"
+    );
+    assert_eq!(
+        context_of(&s1),
+        [
+            Some(json!(200_000)),
+            Some(json!(0.4)),
+            Some(json!(64_000)),
+            Some(json!([
+                agent_line("worker-1", "claude-opus-5", 30_000, Some(200_000), Some(0.15), Some(25_000)),
+                agent_line("worker-1", "claude-sonnet-5", 0, None, None, None),
+                agent_line("worker-2", "claude-sonnet-5", 12_000, Some(200_000), Some(0.06), None),
+            ])),
+        ],
+        "main's figures on the row and one line per pin of each agent the companion has not released, by agent then \
+         model, its own prefix on its own account and model"
+    );
+    assert_eq!(
+        context_of(&session_row(&sessions, "s2")),
+        [
+            Some(json!(200_000)),
+            Some(json!(0.1)),
+            Some(json!(15_000)),
+            Some(json!([]))
+        ],
+        "a companion session whose every other agent is released lists no line"
+    );
+}
+
+#[tokio::test]
+async fn a_session_whose_newest_request_named_the_long_context_twin_reads_a_window_of_a_million() {
+    use common::{login, wait_json, NOW};
+    use serde_json::json;
+    let parts = sessions_harness_with(|generation| {
+        let pin = |session, agent, model, account, prompt| {
+            context_pin(session, agent, model, account, generation, prompt, NOW - 5)
+        };
+        vec![
+            pin("s-long", "main", "claude-opus-5", "business", 300_000),
+            pin("s-long", "worker-1", "claude-opus-5", "direct", 100_000),
+            pin("s-long", "worker-2", "claude-sonnet-5", "direct", 40_000),
+            pin("s-short", "main", "claude-opus-5", "business", 150_000),
+            pin("s-root", "main", "claude-opus-5", "business", 300_000),
+        ]
+    })
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    let cookie = login(&parts.app, "admin-secret").await;
+    register_companion(&parts, "s-long", &["worker-1", "worker-2"], &[]);
+    for (id, session, agent, model, at) in [
+        ("r1", "s-long", "main", "claude-opus-5", NOW - 60_000),
+        ("r2", "s-long", "worker-1", "claude-opus-5", NOW - 40_000),
+        ("r3", "s-long", "main", "claude-opus-5[1m]", NOW - 30_000),
+        ("r4", "s-short", "main", "claude-opus-5[1m]", NOW - 60_000),
+        ("r5", "s-short", "main", "claude-opus-5", NOW - 30_000),
+    ] {
+        parts
+            .ledger
+            .record(spelled_request(id, session, agent, model, at, generation));
+    }
+    // The only request of `s-root`, the pinned session, named the twin.
+    parts.ledger.record(spelled_request(
+        "r6",
+        "s-root",
+        "main",
+        "claude-opus-5[1m]",
+        NOW - 30_000,
+        generation,
+    ));
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        [("s-long", 3), ("s-short", 2), ("s-root", 1)]
+            .iter()
+            .all(|(session, requests)| {
+                v["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["session_id"] == *session && r["requests"] == *requests)
+            })
+    })
+    .await;
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-long")),
+        [
+            Some(json!(1_000_000)),
+            Some(json!(0.3)),
+            Some(serde_json::Value::Null),
+            Some(json!([
+                agent_line("worker-1", "claude-opus-5", 100_000, Some(200_000), Some(0.5), None),
+                agent_line("worker-2", "claude-sonnet-5", 40_000, Some(1_000_000), Some(0.04), None),
+            ])),
+        ],
+        "main's newest request named the twin, the first agent's newest the plain model, and the second agent, which \
+         sent none, reads the session's newest"
+    );
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-short"))[..2],
+        [Some(json!(200_000)), Some(json!(0.75))],
+        "an older request that named the twin gives way to the newest"
+    );
+    assert_eq!(
+        context_of(&session_row(&sessions, "s-root"))[..2],
+        [Some(json!(1_000_000)), Some(json!(0.3))],
+        "a request names the twin for its own session"
+    );
+}
+
 #[tokio::test]
 async fn a_request_row_answers_its_fork_fields() {
     use common::{generation, get, json, login, post, wait_json};
@@ -4764,6 +5761,165 @@ async fn a_request_row_answers_its_fork_fields() {
         (Some("s1"), Some(3)),
         "the detail route answers the same fields"
     );
+}
+
+/// A finished request of `session` on the `desktop` key, from `received_at` to `finished_at`.
+fn session_request(
+    id: &str,
+    session: &str,
+    received_at: i64,
+    finished_at: i64,
+) -> phoebis_ledger::Record {
+    phoebis_ledger::Record::Request {
+        request: phoebis_ledger::RequestRecord {
+            id: id.into(),
+            received_at,
+            finished_at: Some(finished_at),
+            key_id: Some("desktop".into()),
+            session_id: Some(session.into()),
+            agent_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "incomplete".into(),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    }
+}
+
+/// The `stream_interrupted` row the ledger writes for `request_id`'s cut on `attempt`.
+fn stream_interrupted(
+    request_id: &str,
+    session: &str,
+    at: i64,
+    code: &str,
+    text: &str,
+    attempt: u32,
+) -> phoebis_ledger::Record {
+    phoebis_ledger::Record::Event(phoebis_ledger::EventRecord {
+        at,
+        kind: "stream_interrupted".into(),
+        account_id: Some("business".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some(session.into()),
+        model: Some("claude-sonnet-5".into()),
+        detail: Some(
+            serde_json::json!({
+                "code": code,
+                "text": text,
+                "bytes_relayed": 42,
+                "upstream_request_id": format!("req_up_{attempt}"),
+                "attempt": attempt,
+            })
+            .to_string(),
+        ),
+        request_id: Some(request_id.into()),
+        ..Default::default()
+    })
+}
+
+#[tokio::test]
+async fn a_request_detail_answers_its_newest_stream_interrupted_row_as_stream_cut() {
+    use common::{login, wait_json, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .ledger
+        .record(session_request("r-cut", "s1", NOW - 2_000, NOW - 1_000));
+    parts.ledger.record(stream_interrupted(
+        "r-cut",
+        "s1",
+        NOW - 1_500,
+        "stream_stalled",
+        "no chunk for 20 s",
+        1,
+    ));
+    parts.ledger.record(stream_interrupted(
+        "r-cut",
+        "s1",
+        NOW - 1_000,
+        "stream_cut",
+        "malformed response: connection closed inside chunked body",
+        2,
+    ));
+    let detail = wait_json(&parts.app, "/admin/requests/r-cut", &cookie, |v| {
+        v["events"].as_array().is_some_and(|e| e.len() == 2)
+    })
+    .await;
+    assert_eq!(
+        detail["stream_cut"],
+        serde_json::json!({
+            "at": NOW - 1_000,
+            "code": "stream_cut",
+            "text": "malformed response: connection closed inside chunked body",
+            "bytes_relayed": 42,
+            "upstream_request_id": "req_up_2",
+            "attempt": 2,
+        }),
+        "the newest of the request's two rows, its six members"
+    );
+}
+
+#[tokio::test]
+async fn a_request_detail_without_a_stream_interrupted_row_answers_stream_cut_null() {
+    use common::{login, wait_json, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .ledger
+        .record(session_request("r-plain", "s1", NOW - 2_000, NOW - 1_000));
+    let detail = wait_json(&parts.app, "/admin/requests/r-plain", &cookie, |v| {
+        v["request"]["id"] == "r-plain"
+    })
+    .await;
+    assert_eq!(
+        detail.get("stream_cut"),
+        Some(&serde_json::Value::Null),
+        "the member is answered, as null: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn a_cut_of_another_request_of_the_session_inside_the_window_is_not_the_requests_stream_cut()
+{
+    use common::{login, wait_json, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // A long main turn, and a subagent's call of the same session that was cut inside the turn's window.
+    parts
+        .ledger
+        .record(session_request("r-main", "s1", NOW - 10_000, NOW - 1_000));
+    parts
+        .ledger
+        .record(session_request("r-sub", "s1", NOW - 6_000, NOW - 5_000));
+    parts.ledger.record(stream_interrupted(
+        "r-sub",
+        "s1",
+        NOW - 5_000,
+        "stream_cut",
+        "malformed response: connection closed inside chunked body",
+        1,
+    ));
+    let main = wait_json(&parts.app, "/admin/requests/r-main", &cookie, |v| {
+        v["events"]
+            .as_array()
+            .is_some_and(|e| e.iter().any(|e| e["kind"] == "stream_interrupted"))
+    })
+    .await;
+    assert_eq!(
+        main["stream_cut"],
+        serde_json::Value::Null,
+        "the session's row lists among the turn's events, and the cut is the subagent's: {main}"
+    );
+    let sub = wait_json(&parts.app, "/admin/requests/r-sub", &cookie, |v| {
+        v["request"]["id"] == "r-sub"
+    })
+    .await;
+    assert_eq!(sub["stream_cut"]["code"], "stream_cut");
 }
 
 #[tokio::test]
@@ -4870,4 +6026,60 @@ async fn the_tls_reload_route_answers_401_without_a_session_and_an_empty_list_wh
     let reloaded = post(&app, "/admin/tls/reload", "", Some(&cookie)).await;
     assert_eq!(reloaded.status(), 200);
     assert_eq!(json(reloaded).await, serde_json::json!({"listeners": []}));
+}
+
+#[tokio::test]
+async fn an_array_body_is_refused_as_no_object_on_the_pool_and_key_routes() {
+    use common::{get, json, login, patch, post, put};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (route, body) in [
+        (
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","members":[{"account_id":"business","priority":0}]}"#,
+        ),
+        (
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        ),
+    ] {
+        assert_eq!(
+            post(&app, route, body, Some(&cookie)).await.status(),
+            201,
+            "{route}"
+        );
+    }
+    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let keys = json(get(&app, "/admin/keys", Some(&cookie)).await).await;
+    // Serde's sequence form reads `[[]]` as a members list with no entry, so a parse that took it would empty the pool.
+    for (method, route, body) in [
+        ("POST", "/admin/pools", "[]"),
+        ("PATCH", "/admin/pools/main", "[]"),
+        ("PUT", "/admin/pools/main/members", "[]"),
+        ("PUT", "/admin/pools/main/members", "[[]]"),
+        ("POST", "/admin/keys", "[]"),
+        ("PATCH", "/admin/keys/desktop", "[]"),
+    ] {
+        let response = match method {
+            "POST" => post(&app, route, body, Some(&cookie)).await,
+            "PATCH" => patch(&app, route, body, Some(&cookie)).await,
+            _ => put(&app, route, body, Some(&cookie)).await,
+        };
+        let status = response.status().as_u16();
+        assert_eq!(
+            (status, json(response).await["error"].clone()),
+            (400, serde_json::json!("body must be a JSON object")),
+            "{method} {route} {body}"
+        );
+    }
+    assert_eq!(
+        json(get(&app, "/admin/pools", Some(&cookie)).await).await,
+        pools,
+        "no refused pool write landed"
+    );
+    assert_eq!(
+        json(get(&app, "/admin/keys", Some(&cookie)).await).await,
+        keys,
+        "no refused key write landed"
+    );
 }
