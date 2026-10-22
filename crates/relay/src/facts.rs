@@ -456,6 +456,34 @@ mod tests {
     }
 
     #[test]
+    fn a_first_user_message_whose_string_content_is_the_resume_placeholder_reads_resumed() {
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": RESUME_PLACEHOLDER}]
+        })
+        .to_string();
+        assert!(BodyFacts::read(body.as_bytes()).resumed);
+    }
+
+    #[test]
+    fn the_resume_placeholder_in_a_later_text_block_of_the_first_user_message_is_no_resume() {
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "carry on"},
+                {"type": "text", "text": RESUME_PLACEHOLDER}
+            ]}]
+        })
+        .to_string();
+        assert!(!BodyFacts::read(body.as_bytes()).resumed);
+    }
+
+    #[test]
+    fn a_body_no_reader_parses_is_no_resume_even_where_it_carries_the_placeholder() {
+        let body = format!(r#"{{"messages":[{{"role":"user","content":"{RESUME_PLACEHOLDER}""#);
+        assert!(phoebis_guardrails::parse_body(body.as_bytes()).is_none());
+        assert!(!BodyFacts::read(body.as_bytes()).resumed);
+    }
+
+    #[test]
     fn cc_turn_origin_is_read_off_the_line_in_the_clients_own_spelling() {
         let line = |origin: &str| {
             format!(
