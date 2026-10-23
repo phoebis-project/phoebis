@@ -19338,6 +19338,40 @@ m.unmount();
     });
   }
   {
+    // A tick's read still in flight as the session leaves settles under the session's key, and an answer kept there
+    // would stand as the walk the session's return on the same span reads its first page over.
+    const name = "/analytics a session view's tick read that lands after the session left keeps nothing, so the session's return on the same span walks its pages again";
+    const FROM = isoAt(CLOCK_ORIGIN - 2 * 3_600_000);
+    const TO = isoAt(CLOCK_ORIGIN);
+    const sessionId = requests.find((r) => r.status === 502 && r.errorCode === 'stream_undecodable')?.sessionId ?? null;
+    const sessionRows = requests.filter((r) => sessionId !== null && r.sessionId === sessionId && r.kind !== 'probe' && Date.parse(r.at) >= Date.parse(FROM) && Date.parse(r.at) <= Date.parse(TO));
+    const listRequests = api.listRequests;
+    api.listRequests = (q) => listRequests.call(api, { ...q, limit: 1 });
+    const page = await mount(`/analytics?session=${encodeURIComponent(sessionId ?? '')}&from=${FROM}&to=${TO}`, { now: CLOCK_ORIGIN });
+    await page.settle();
+    await chooseInterval(page, '5 s');
+    const held = deferNextCall('listRequests');
+    tick(5_000);
+    await page.settle();
+    const tickReads = held.calls.length;
+    await removeChip(page, 'session');
+    held.release();
+    await page.settle();
+    held.restore();
+    const spy = countCalls('listRequests');
+    await applyText(page, 'Session', sessionId ?? '');
+    await page.settle();
+    const back = spy.calls.map(([q]) => q);
+    spy.restore();
+    api.listRequests = listRequests;
+    page.unmount();
+    results.push({
+      name,
+      ok: sessionRows.length > 1 && tickReads === 1 && back.length === sessionRows.length && back.every((q, i) => q?.session === sessionId && (q?.cursor === undefined) === (i === 0)),
+      missing: [`${sessionRows.length} rows of the session ${sessionId ?? 'none'} in the span`, `${tickReads} reads held at the tick`, `back ${JSON.stringify(back)}`],
+    });
+  }
+  {
     // The Cache warming tab's billed and by-pool reads and the Cache tab's funded by-model read belong to the span's
     // window as the page's breakdown does, so a custom span under auto reload reads them again at every tick beside it.
     const name = "/analytics a custom range under auto reload reads the Cache warming tab's billed and by-pool reads and the Cache tab's funded by-model read again at every tick, beside the page's breakdown";

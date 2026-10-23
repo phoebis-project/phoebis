@@ -347,14 +347,15 @@ export function AnalyticsPage() {
   const byModel = useAsync(() => (tab === 'cache' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
   const byPool = useAsync(() => (tab === 'cache-warming' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab, generation], reload);
   // The log's last answer with the deps it answers, so an auto reload of the same deps reads the first page alone and
-  // the later pages stand as the walk loaded them. Other deps walk the pages again.
-  const heldLog = useRef<{ answer: SessionRequests; deps: string } | null>(null);
+  // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
+  // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
+  const heldLog = useRef<{ answer: SessionRequests | null; deps: string } | null>(null);
   const logDeps = JSON.stringify([classPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation]);
   const log = useAsync(
     () => {
-      if (heldLog.current?.deps !== logDeps) heldLog.current = null;
+      if (heldLog.current?.deps !== logDeps) heldLog.current = { answer: null, deps: logDeps };
       if (sessionId === null) return Promise.resolve({ partial: false, requests: [] as RequestLog[] });
-      const held = heldLog.current?.deps === logDeps ? heldLog.current.answer : undefined;
+      const held = heldLog.current.answer ?? undefined;
       return loadSessionRequests(
         (cursor) =>
           api
@@ -364,7 +365,7 @@ export function AnalyticsPage() {
         SESSION_PAGE_LIMIT,
         held,
       ).then((answer) => {
-        heldLog.current = { answer, deps: logDeps };
+        if (heldLog.current?.deps === logDeps) heldLog.current = { answer, deps: logDeps };
         return answer;
       });
     },
