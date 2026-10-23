@@ -44,6 +44,13 @@ function fastLane(input: number, output: number, resetsInMs: number): Account['f
 /** How long before now spare's last poll read its windows, an instant its row, its snapshot and its samples share. */
 const SPARE_READ_AGO = 4 * DAY + 2 * HOUR;
 
+/** How long before now legacy's last clean poll read its windows. */
+const LEGACY_CLEAN_AGO = 2 * DAY + 3 * HOUR;
+/** When legacy's refresh was refused, at the poll slot whose acquisition ran it, which lapsed the credential. */
+export const LEGACY_LAPSED_AT = NOW - (2 * DAY + 2 * HOUR);
+/** The poll that read legacy's 5-hour window at its limit, an hour and twenty minutes before its last clean poll. */
+export const LEGACY_FIVE_HOUR_SPENT_AT = NOW - LEGACY_CLEAN_AGO - HOUR - 20 * MINUTE;
+
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
 // `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold. The
@@ -310,15 +317,17 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
   // The polls stop with the credential, so the snapshot keeps the reading from before the disconnect and no poll.
   if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(SPARE_READ_AGO), heldUntil: null, poll: null, status: 'success' };
   if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account, so pair it to load quota', fetchedAt: null, heldUntil: null, poll: null, status: 'error' };
-  // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
+  // The polls after the last clean read failed on the endpoint's 503 until the slot whose acquisition ran the refresh
+  // the provider refused, and the poll asks a lapsed account nothing, so that attempt stands as the last, under the
+  // words the usage service records for a failed acquisition, while the windows of the last clean read still answer.
   if (a.id === 'legacy') {
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,
       error: null,
-      fetchedAt: ago(2 * DAY + 3 * HOUR),
+      fetchedAt: ago(LEGACY_CLEAN_AGO),
       heldUntil: null,
-      poll: { backoffSince: null, lastAttemptAt: ago(3 * MINUTE), lastCleanAt: ago(2 * DAY + 3 * HOUR), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+      poll: { backoffSince: null, lastAttemptAt: iso(LEGACY_LAPSED_AT), lastCleanAt: ago(LEGACY_CLEAN_AGO), lastError: 'acquire: account has to be paired again', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
       status: 'success',
     };
   }
@@ -387,10 +396,23 @@ const samplesEndOf = (account: (typeof ACCOUNTS)[number]): number => {
   return last ? Date.parse(last) : NOW;
 };
 
+/**
+ * Legacy's 5-hour samples carry the readings its spent and cleared rows name: the poll at the limit, the polls after it
+ * at the limit too, and the last clean poll back under it at the reading its account answers.
+ */
+function carryLegacyEdges(account: (typeof ACCOUNTS)[number], w: RateLimitWindow, samples: QuotaSample[]): QuotaSample[] {
+  if (account.id !== 'legacy' || w.id !== '5h') return samples;
+  const clean = samplesEndOf(account);
+  return samples.map((x) => {
+    const at = Date.parse(x.at);
+    return at === clean ? { ...x, utilization: w.utilization } : at >= LEGACY_FIVE_HOUR_SPENT_AT && at < clean ? { ...x, utilization: 1 } : x;
+  });
+}
+
 export const QUOTA_HISTORY: QuotaHistory[] = ACCOUNTS.flatMap((account, i) =>
   [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => ({
     accountId: account.id,
     windowId: w.id,
-    samples: sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(account)),
+    samples: carryLegacyEdges(account, w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(account))),
   })),
 );

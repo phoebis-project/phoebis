@@ -3,10 +3,11 @@ import type {
   RecordPin, RecordRequest, RecordSettings, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { endOf } from '@/lib/quota';
-import { ACCOUNTS } from './accounts';
+import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT } from './accounts';
 import { leadOf } from './lead';
+import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
@@ -500,10 +501,10 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const budget = budgetsAt(pool, a.id, at);
     const sub = a.subscription;
     const endsAt = sub?.endsAt ? Date.parse(sub.endsAt) : null;
-    // Drawn for every member, so a count the story sets moves no later draw. The account a placement took had a slot
-    // free, since the cap passes a full one over. A token count takes no slot, so it lands on a full account too.
+    // Drawn for every member, so a count the story sets moves no later draw. A drawn count stands under the cap, so a
+    // member reads full only where the story's own pins hold it there.
     const drawn = inFlightRng.int(0, 5);
-    const drawnInFlight = spec.kind === 'placed' && r.kind !== 'count_tokens' && a.id === spec.accountId ? Math.min(drawn, pool.inFlightCap - 1) : drawn;
+    const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
     // Pace reads one window as the engine does, chosen by the model alone: the Fable week for a Fable request, else the
     // 7-day window, one the account has not read counting as untouched. An API key scores by its worst live bucket.
@@ -1244,7 +1245,13 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
       const ties = pool.strategy === 'pace' ? ranks.filter((c) => c.score === Math.max(...ranks.map((x) => x.score ?? 0))) : ranks;
       const gateFits = walk.some((w) => w.step === 'fit' && w.verdict === 'fits');
       const byRunway = pool.strategy === 'round_robin' ? [] : runwayTiesOf(ties, (c) => (movedAmong ? gateFits : spec.failover !== undefined && c.fit === 'fits'));
-      walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.join('/')), ...scores, ...(byRunway.length > 0 ? [fact('by_runway', byRunway.map((c) => c.accountId))] : [])]));
+      // The draw is left to the runway's ties where they narrowed the strategy's, else to the strategy's own. Round
+      // robin's cursor names the chosen member's turn among the ranked tier, so it leaves no draw.
+      const draw =
+        pool.strategy === 'round_robin'
+          ? [fact('turn', `${member(spec.accountId)?.rank ?? 1} of ${ranks.length}`), fact('drawn', false)]
+          : [fact('ties', ties.map((c) => c.accountId)), ...(byRunway.length > 0 ? [fact('by_runway', byRunway.map((c) => c.accountId))] : []), fact('drawn', (byRunway.length > 0 ? byRunway : ties).length > 1)];
+      walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.join('/')), ...scores, ...draw]));
     }
   }
   if (spec.kind === 'held' && spec.hold && !resetHold && !slowHold && !rewriteHold) {
@@ -1646,14 +1653,19 @@ const ROUND_PINS: RoundPin[] = [
   { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('76ddb35b'), skip: null },
 ];
 
+/** The parked desktop session's Opus pin on primary, whose stored lane is fast since fast mode serves that key's Opus turns. */
+const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyId === 'desktop');
+
 /**
- * The afternoon round's two pins on primary, cold first: no sibling has runway for either, since nightly projects
- * past the ceiling, secondary is spent and cooling, and the Overflow workspace needs funding. Their burns sum to
- * primary's.
+ * The afternoon round's pins on primary, cold first: no sibling has runway for either walked pin, since nightly
+ * projects past the ceiling, secondary is spent and cooling, and the Overflow workspace needs funding. Their burns sum
+ * to primary's. The parked Opus pin rides the fast lane, so it holds no share of a plan window and leaves the round
+ * before the order.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.052, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('bcc805b6'), skip: 'no_runway' },
   { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
+  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
 ];
 
 /**
@@ -1670,14 +1682,17 @@ const STRETCH_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.025, cold: false, keyId: 'notebook', lastInputTokens: 72_000, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: SLOWED_SESSION_ID, skip: null },
 ];
 
+/** The Fable week's burn on nightly at the round, all of it the Fable session's, since no other pin draws the week. */
+const FABLE_WEEK_BURN = 0.03;
+
 /**
- * Nightly's Fable-week round, its two pins as the round lists them: the Fable session's pin, which runs on the fast
- * lane and so holds no share of the plan's week, then an Opus pin, whose model draws no Fable week. Both leave the
- * round before the walk with no burn, the fast-lane pin first, so no pin enters the walk and the round reads off the
- * window as its reason.
+ * Nightly's Fable-week round, its two pins as the round lists them: the Fable session's pin, the current one, whose
+ * renewal runs standard, so it walks the order on the Fable week with the week's whole burn, and as the one pin walked
+ * it is the last pin, which the engine never marks. Then an Opus pin, whose model draws no Fable week, so it leaves the
+ * round before the order with no burn. The round marks nothing for the last pin.
  */
 const FABLE_WEEK_PINS: RoundPin[] = [
-  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 81_000, marked: false, model: 'claude-fable-5-1', note: 'current', sessionId: sessionId('89cd1c92'), skip: 'fast_lane' },
+  { agentId: 'main', burn: FABLE_WEEK_BURN, cold: false, keyId: 'desktop', lastInputTokens: 81_000, marked: false, model: 'claude-fable-5-1', note: 'current', sessionId: sessionId('89cd1c92'), skip: 'last_pin' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 61_000, marked: false, model: 'claude-opus-5', note: null, sessionId: 'e3b8d1f6-4a29-4c71-9d05-6b2a8f3c7e14', skip: 'off_window' },
 ];
 
@@ -1718,6 +1733,19 @@ function storySpecs(): Spec[] {
   // Studio's morning pin holds one gap at 10:12:36, from its turn of 10:11:36 to 10:12: the placement before it and
   // the renewal that carries the hold fold nothing.
   const morningPace = { cycleMs: 24_000, gaps: 1 };
+  // The tie's failover picks before nightly's overage, where primary and nightly share the plan tier. Each account's
+  // sessions burn its 7-day window at what leaves both one spare rate, and the 5-hour burns leave both fitting a fresh
+  // session, primary to the longer runway.
+  const tieAt = t(8, 16, 21);
+  const spareOf = (id: string): number => {
+    const week = oauthWindows(id, tieAt, () => OLDER_FACTOR).find((w) => w.id === '7d');
+    const end = endOf(accountOf.get(id)!, tieAt);
+    const deadline = Math.min(...[week?.resetsAt ? Date.parse(week.resetsAt) : null, end].filter((x): x is number => x !== null));
+    return Math.max(0, 1 - (week?.utilization ?? 0)) / Math.max(1, (deadline - tieAt) / HOUR);
+  };
+  const TIE_SCORE = 0.006;
+  const tieBurns = { nightly: { five_hour: 0.02, seven_day: spareOf('nightly') - TIE_SCORE }, primary: { five_hour: 0.03, seven_day: spareOf('primary') - TIE_SCORE } };
+  const overflowStatic = (when: number) => entry(staticBoundary('main', 2), { at: when, depth: 2, prefixTokens: 31_200, ttlMs: FIVE_MINUTES, writtenAt: when - 2 * MINUTE });
   return [
     // Two of the round's sessions placed on secondary just before it. Every pin a beat renews or moves is a request's.
     at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
@@ -1857,11 +1885,15 @@ function storySpecs(): Spec[] {
     // the 5-hour burn stands beside the Fable week's.
     at('req_3e2b9d47-c18', 1, 1, t(8, 21, 40), 'placed', 'nightly'),
     at('req_3e7a5c19-f84', 1, 1, t(8, 30), 'renewed', 'nightly', {
-      burns: { nightly: { five_hour: 0.03, seven_day_fable: 0.03 } },
+      burns: { nightly: { five_hour: 0.03, seven_day_fable: FABLE_WEEK_BURN } },
       pin: live('continues_pin', 500_000),
       readings: nightlyAt(t(8, 30), 0.65),
       round: roundOfPins(FABLE_WEEK_PINS),
     }),
+    // A fresh session the Overflow workspace's static prefix places there answers 429, and its failover ties primary
+    // and nightly on Pace with both fitting: the runway keeps primary, so the pick leaves no draw.
+    at(TIE_STORY_ID, 1, 1, t(8, 16, 20), 'placed', 'overflow', { burns: tieBurns, prefix: { overflow: { static: overflowStatic(t(8, 16, 20)), staticMatch: overflowStatic(t(8, 16, 20)) } }, rung: { depth: 2, prefixTokens: 31_200, rung: 'static' } }),
+    at(TIE_STORY_ID, 2, 2, tieAt, 'placed', 'primary', { attempted: ['overflow'], burns: tieBurns, failover: 'cooldown', from: 'overflow', pin: live() }),
     // A fresh session placed by the spare rate: secondary falls short of the ceiling, so the no-fit partition passes it
     // over, and its sessions' burn outruns its pace, so its spare rate reads negative.
     at('req_2c7d9f15-b63', 1, 1, t(13, 45), 'placed', 'primary', { burns: { secondary: { five_hour: 0.032, seven_day: 0.004 } } }),
@@ -2258,6 +2290,41 @@ function expiredReservations(): EventSeed[] {
  */
 const LATE_EVENT_AT = NOW + 6_000;
 
+/** The detail a usage poll writes for the endpoint's 503, a fault it passes over. */
+const USAGE_503 = { endpoint: 'usage', error: 'usage request rejected with status 503', status: 503, transport: false };
+
+/** How often the router's usage poll asks every polled account, its `POLL_INTERVAL`. */
+const POLL_INTERVAL_MS = 5 * MINUTE;
+
+/**
+ * Legacy's polls after its last clean read: the endpoint answered 503 at every slot until the one whose acquisition ran
+ * the refresh the provider refused, and the poll asks an account it has to pair again nothing, so none follows.
+ */
+function legacyPolls(): EventSeed[] {
+  const clean = accountOf.get('legacy')?.usage?.poll?.lastCleanAt;
+  if (!clean) return [];
+  const slots: number[] = [];
+  for (let at = Date.parse(clean) + POLL_INTERVAL_MS; at < LEGACY_LAPSED_AT; at += POLL_INTERVAL_MS) slots.push(at);
+  return slots.map((at) => ({ accountId: 'legacy', at: iso(at), detail: { ...USAGE_503 }, kind: 'poll_failed' }));
+}
+
+/**
+ * Primary's plan read as ended by the profile read a usage 403 made due, and found again by the next profile read a
+ * minute later. While the flag stands the routing reads the account as past its end, so the two sit in a minute of
+ * the morning no decision places on it.
+ */
+function planRows(account: Account): EventSeed[] {
+  const sub = account.subscription;
+  if (!sub) return [];
+  const busy = (at: number) => SUMMARIES.some((s) => (s.accountId === account.id || s.fromAccountId === account.id) && Date.parse(s.at) >= at && Date.parse(s.at) <= at + MINUTE);
+  let at = clock(6, 40);
+  while (busy(at)) at -= MINUTE;
+  return [
+    { accountId: account.id, at: iso(at), detail: { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'usage_403', subscription_status: 'canceled' }, kind: 'plan_ended' },
+    { accountId: account.id, at: iso(at + MINUTE), detail: { organization_type: sub.organizationType, rate_limit_tier: sub.rateLimitTier, source: 'profile', subscription_status: 'active' }, kind: 'plan_restored' },
+  ];
+}
+
 /**
  * The events beside the decisions: every pin event and model answer the requests' windows hold, the pins the
  * placements created, the cooldowns the attempts' answers set, and the story's own rows, at least one of every kind.
@@ -2276,30 +2343,63 @@ function buildEvents(): RoutingEvent[] {
     if (!record?.outcome.pinEvents.some((e) => e.kind === 'pin_created')) continue;
     seeds.push({ accountId: s.accountId, agentId: s.agentId, at: s.at, detail: { agent_id: s.agentId, epoch: record.outcome.pinWritten?.epoch ?? null }, keyId: s.keyId, kind: 'pin_created', model: s.model, sessionId: s.sessionId });
   }
+  const heads = REQUESTS.flatMap((r) => r.attempts.map((a) => ({ a, at: Date.parse(a.startedAt) + (a.durationMs ?? 0), r }))).sort((x, y) => x.at - y.at);
   // The story's own spent edge, which the poll read before any answer's head: nightly's 5-hour window at its limit
-  // within the hour of the least-bad move onto it.
+  // within the hour of the least-bad move onto it. Its first reading under the limit after that, an answer's head or
+  // the reading a decision met, clears it, so the 429's head that reads the limit again before the reset is a crossing
+  // of its own.
   const nightlyReset = clock(13, 11);
-  seeds.push({ accountId: 'nightly', at: iso(clock(12, 1, 5)), detail: { reset: nightlyReset, source: 'poll', source_request_id: null, utilization: 1, window: 'five_hour' }, kind: 'window_spent' });
+  const nightlySpentAt = clock(12, 1, 5);
+  seeds.push({ accountId: 'nightly', at: iso(nightlySpentAt), detail: { reset: nightlyReset, source: 'poll', source_request_id: null, utilization: 1, window: 'five_hour' }, kind: 'window_spent' });
+  const under = (at: number, reset: string | null, utilization: number | null) => at > nightlySpentAt && reset === iso(nightlyReset) && utilization !== null && utilization < 1;
+  const nightlyReads = [
+    ...heads.flatMap(({ a, at, r }) => {
+      const w = a.accountId === 'nightly' ? a.windows.find((x) => x.id === '5h') : undefined;
+      return w && under(at, w.resetsAt, w.utilization) ? [{ at, requestId: r.id, source: 'head', utilization: w.utilization as number }] : [];
+    }),
+    ...[...DECISIONS.values()].flatMap((record) => {
+      const w = record.candidates.find((c) => c.accountId === 'nightly')?.windows.five_hour;
+      const at = w ? Date.parse(w.observedAt) : Number.NaN;
+      return w && under(at, w.reset, w.utilization) ? [{ at, requestId: w.source === 'head' ? record.requestId : null, source: w.source, utilization: w.utilization }] : [];
+    }),
+  ].sort((x, y) => x.at - y.at);
+  const nightlyClear = nightlyReads[0];
+  if (nightlyClear) {
+    const detail = { reset: nightlyReset, source: nightlyClear.source, source_request_id: nightlyClear.requestId, utilization: nightlyClear.utilization, utilization_before: 1, window: 'five_hour' };
+    seeds.push({ accountId: 'nightly', at: iso(nightlyClear.at), detail, kind: 'window_cleared', requestId: nightlyClear.requestId });
+  }
   // Legacy's 5-hour window, spent at a poll and read back under its limit under the same reset by its last clean poll,
-  // the reading its account still answers, so no reading at the limit follows the clear.
+  // the reading its account still answers, so no reading at the limit follows the clear. Its history carries both
+  // readings, and the clock announced the reset that passed after the last clean poll, as no poll read it again.
   const legacy = accountOf.get('legacy')?.windows.find((w) => w.id === '5h');
   if (legacy?.resetsAt && legacy.utilization !== null && legacy.utilization < 1) {
     const reset = Date.parse(legacy.resetsAt);
     const read = { reset, source: 'poll', source_request_id: null, window: 'five_hour' };
     seeds.push(
-      { accountId: 'legacy', at: iso(reset - 5 * HOUR + 40 * MINUTE), detail: { ...read, utilization: 1 }, kind: 'window_spent' },
+      { accountId: 'legacy', at: iso(LEGACY_FIVE_HOUR_SPENT_AT), detail: { ...read, utilization: 1 }, kind: 'window_spent' },
       { accountId: 'legacy', at: legacy.observedAt, detail: { ...read, utilization: legacy.utilization, utilization_before: 1 }, kind: 'window_cleared' },
+      { accountId: 'legacy', at: iso(reset), detail: { next_reset: null, observed: 'clock', reset_at: reset, utilization_before: legacy.utilization, window: 'five_hour' }, kind: 'window_reset' },
     );
   }
-  // A window's spent edge is the first head of any answer that reads it at its limit, once per account and window.
-  const heads = REQUESTS.flatMap((r) => r.attempts.map((a) => ({ a, at: Date.parse(a.startedAt) + (a.durationMs ?? 0), r }))).sort((x, y) => x.at - y.at);
-  const spent = new Set<string>([`nightly|five_hour|${iso(nightlyReset)}`]);
+  // Studio's wall after the round its stretch fired at 14:05: a poll read the 5-hour window at its limit, and the
+  // reading the account answers now reads it under again before the reset.
+  const studio = accountOf.get('studio')?.windows.find((w) => w.id === '5h');
+  if (studio?.resetsAt && studio.utilization !== null && studio.utilization < 1) {
+    const read = { reset: Date.parse(studio.resetsAt), source: 'poll', source_request_id: null, window: 'five_hour' };
+    seeds.push(
+      { accountId: 'studio', at: iso(clock(14, 20)), detail: { ...read, utilization: 1 }, kind: 'window_spent' },
+      { accountId: 'studio', at: studio.observedAt, detail: { ...read, utilization: studio.utilization, utilization_before: 1 }, kind: 'window_cleared' },
+    );
+  }
+  // A window's spent edge is the first head of any answer that reads it at its limit, once per account, window and
+  // reset until a reading under the limit clears it.
+  const announced = new Map<string, number>([[`nightly|five_hour|${iso(nightlyReset)}`, nightlyClear?.at ?? Number.POSITIVE_INFINITY]]);
   for (const { a, at, r } of heads) {
     for (const w of a.windows) {
       const window = WINDOW_OF[w.id];
       const edge = `${a.accountId}|${window}|${w.resetsAt}`;
-      if ((window !== 'five_hour' && window !== 'seven_day') || (w.utilization ?? 0) < 1 || spent.has(edge)) continue;
-      spent.add(edge);
+      if ((window !== 'five_hour' && window !== 'seven_day') || (w.utilization ?? 0) < 1 || at < (announced.get(edge) ?? Number.NEGATIVE_INFINITY)) continue;
+      announced.set(edge, Number.POSITIVE_INFINITY);
       seeds.push({ accountId: a.accountId, at: iso(at), detail: { reset: w.resetsAt === null ? null : Date.parse(w.resetsAt), source: 'head', source_request_id: r.id, utilization: 1, window }, kind: 'window_spent', requestId: r.id });
     }
   }
@@ -2382,7 +2482,8 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'nightly', at: iso(t(12, 20)), detail: { cause: 'refresh_response_lost', error: 'refresh response lost: connection reset by peer' }, kind: 'refresh_uncertain' },
     // A usage poll the endpoint answered 503: neither its 200, its 429 nor its 401, so it passes as a fault and the
     // next poll reads clean.
-    { accountId: 'nightly', at: iso(t(12, 26, 40)), detail: { endpoint: 'usage', error: 'usage request rejected with status 503', status: 503, transport: false }, kind: 'poll_failed' },
+    { accountId: 'nightly', at: iso(t(12, 26, 40)), detail: USAGE_503, kind: 'poll_failed' },
+    ...legacyPolls(),
     { accountId: 'research', at: iso(t(12, 41, 7)), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(t(12, 41, 7)) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     { accountId: 'overflow', at: iso(t(11, 30, 12)), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
@@ -2419,7 +2520,7 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'primary', agentId: 'main', at: iso(t(13, 13, 40)), detail: { agent_id: 'main', reasons: ['expired'] }, keyId: 'laptop', kind: 'pin_expired', model: HAIKU, sessionId: sessionId('5eeed6ce') },
     { accountId: 'nightly', actor: 'admin', agentId: 'e90b', at: iso(t(12, 40, 5)), detail: { agent_id: 'e90b' }, keyId: 'desktop', kind: 'pin_released', model: 'claude-sonnet-5-5', sessionId: sessionId('407dd39b') },
     { accountId: 'primary', at: iso(Date.parse('2026-09-12T20:10:00Z') - Date.parse('2026-09-16T14:30:00Z') + NOW), detail: { since: Date.parse('2026-09-11T16:10:00Z') - Date.parse('2026-09-16T14:30:00Z') + NOW }, kind: 'overage_ended' },
-    { accountId: 'legacy', at: iso(NOW - 2 * DAY - 2 * HOUR), detail: { cause: 'refresh_failed', detail: 'refresh_token rejected: invalid_grant', from: 'ready', to: 'reauth_required' }, kind: 'account_state_changed' },
+    { accountId: 'legacy', at: iso(LEGACY_LAPSED_AT), detail: { cause: 'refresh_failed', detail: 'refresh_token rejected: invalid_grant', from: 'ready', to: 'reauth_required' }, kind: 'account_state_changed' },
     // The Overflow workspace's balance ran out once before, three days back, and the router's own retry past its
     // five minutes found it funded again.
     { accountId: 'overflow', at: iso(NOW - 3 * DAY - 5 * HOUR), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
@@ -2428,6 +2529,7 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'research', at: iso(startOfDay(t(14, 30))), detail: { period: 'day', period_start: startOfDay(t(14, 30)) - DAY, previous_spent_usd: 18.2 }, kind: 'budget_period_ended', poolId: 'jobs' },
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.
     { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'canceled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
+    ...planRows(primary),
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
@@ -2448,9 +2550,9 @@ const DECISION_KINDS: readonly string[] = ['exhausted', 'held', 'moved', 'placed
 /** Every event kind the ledger writes, as the route validates `kinds` against them. */
 const EVENT_KINDS: readonly string[] = [
   'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
-  'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed', 'refresh_failed',
-  'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'stream_interrupted', 'warm_prefix_expired',
-  'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
+  'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
+  'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
+  'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
 ];
 
 /** The route's merged order: newest first, a decision before an event at one instant. */

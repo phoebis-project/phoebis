@@ -59,7 +59,10 @@ export const inFlight = (): number => pending;
 
 /** How long a confirm's first usage poll takes to land, on the mock's clock: the few seconds its answer names. */
 const FIRST_POLL_MS = 2_000;
-/** The windows a paired account's first poll reads: the shape the story gives primary's plan windows. */
+/**
+ * The windows a paired account's first poll reads: the shape the story gives primary's plan windows, each stamped at
+ * the read that lands it, as the router stamps a reading when it reads it, so none predates the confirm.
+ */
 const FIRST_READING = ACCOUNTS.find((a) => a.id === 'primary')?.windows ?? [];
 
 // The routes' own wording, so a page draws the text the router would have sent.
@@ -613,7 +616,7 @@ export class MockApi implements Api {
       if (at - confirmedAt < FIRST_POLL_MS) continue;
       this.firstPolls.delete(id);
       const a = this.accounts.find((x) => x.id === id);
-      if (a && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w })) });
+      if (a && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w, observedAt: iso(at) })) });
     }
   }
 

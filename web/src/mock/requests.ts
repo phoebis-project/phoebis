@@ -912,7 +912,7 @@ export const STORY_IDS = new Set([
   'req_5e3c8a41-d27',
   'req_63a8d2f5-b17',
   'req_69e30548-32e', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
-  'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
+  'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8c41f2d7-a93', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
   'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
   'req_b72e9d05-c14', 'req_b8c3e9d4-e61', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c90d3f61-a28', 'req_d2a8f6c1-d50',
   'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e2c7a4f9-d13', 'req_e5a1c093-4d7',
@@ -922,6 +922,10 @@ export const STORY_IDS = new Set([
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
+/** The failover whose pick ties two tier mates on Pace, which the runway breaks. */
+export const TIE_STORY_ID = 'req_8c41f2d7-a93';
+/** The fresh desktop session of that failover. */
+const TIED_SESSION_ID = 'a9d3f6b2-4e17-4c58-8b20-6f1e3c9d7a45';
 /** The least-bad move onto nightly. */
 export const FORCED_MOVE_ID = 'req_5b2e8d47-c19';
 /** The conversation the least-bad move takes from the Overflow workspace to nightly. */
@@ -1356,6 +1360,22 @@ function storyRequests(): RequestLog[] {
     // ids every seed above draws stay where they were.
     { agentId: 'main', at: t(6, 11, 55), attempts: [{ accountId: 'primary', at: t(6, 11, 55), ms: 2_900, status: 200 }], errorCode: 'router_shutdown', id: 'req_7a2c4e91-d03', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 18_200, input: 900, output: 140 } },
     { agentId: 'main', at: t(6, 11, 57), attempts: [{ accountId: 'primary', at: t(6, 11, 57), ms: 400, status: 200 }], capturedBodies: false, errorCode: 'router_shutdown', headless: true, id: 'req_c58d1f3a-e67', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1' },
+    // A fresh desktop session the Overflow workspace's static prefix places there, whose 429 fails it over to primary
+    // on a tie with nightly the runway breaks. Last, so every seed above keeps the upstream ids it draws.
+    {
+      agentId: 'main',
+      at: t(8, 16, 20),
+      attempts: [
+        { accountId: 'overflow', at: t(8, 16, 20), cooldown: retryAfter(t(8, 16, 20) + 600), ms: 600, status: 429 },
+        { accountId: 'primary', at: t(8, 16, 21), ms: 6_900, status: 200 },
+      ],
+      id: TIE_STORY_ID,
+      keyId: 'desktop',
+      model: 'claude-sonnet-5-5',
+      requestClass: 'main',
+      session: TIED_SESSION_ID,
+      usage: { cacheWrite1h: 36_200, input: 2_300, output: 980 },
+    },
   ];
   return seeds.map(storyRow);
 }
@@ -1643,6 +1663,7 @@ function storyEvents(): Map<string, RequestEvent[]> {
   moved('req_c41d0311-200', clock(14, 6, 30), 'secondary', 'primary', 'spent');
   moved('req_b8c3e9d4-e61', clock(14, 7, 51), 'secondary', 'primary', 'cooldown');
   moved('req_1d9c3e55-0b2', clock(14, 2, 11), 'secondary', 'primary', 'cooldown');
+  moved(TIE_STORY_ID, clock(8, 16, 21), 'overflow', 'primary', 'cooldown');
   moved('req_868264bc-611', clock(11, 8, 30), 'secondary', 'primary', 'shed');
   moved(FORCED_MOVE_ID, clock(11, 1, 50), 'overflow', 'nightly', 'return_to_plan');
   const rejected = requestById.get('req_2e7c90a1-6d4');

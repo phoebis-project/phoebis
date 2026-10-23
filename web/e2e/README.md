@@ -15,7 +15,7 @@ expert field's wrapper (a half cell beside the plain one, a lone field the grid'
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row in every state, each badge and the "+N more" badge
 the pool card's strip badge on the row's one top edge, in the content box and clear of the tiles, with the story's
-sixteen items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in the
+seventeen items folded behind the dashed "+N more" in the mock pass, the seeded exhaustion or the quiet line in the
 router pass), the list the "+N more" badge opens (every item, one badge per row inside the box, 8 px under the badge and
 8 px inside the window, closed by Escape with the focus back on the badge), the attention line at the phone widths from
 360 to 414 px (the first row one 22 px row of the lead, the badges that fit and the fold badge, the Replay button on a
@@ -130,7 +130,7 @@ against Add filter, and on the routing log and Analytics the width of the row's 
 bound, and at 950 by 800 on Analytics and Requests the bar's scroll width at most its client width with the count inside
 the window, the trailing slots wrapped, and at 400 by 800 on every view with a bar, at rest, the bar and the row no
 wider than their boxes with the count where the view draws one and the Refresh button inside the window), the Kinds list
-through Add filter on the routing log (Select all, the eight presets and the 42 kinds, its popover 8 px inside the
+through Add filter on the routing log (Select all, the eight presets and the 44 kinds, its popover 8 px inside the
 window at 1280 by 800), the split Refresh button on the request log (one width at Off, at 5 s and paused under the
 drawer, so the count beside it never moves), a late row on the request log (in the mock pass, after the view's shot, the
 story's late request landing below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell
@@ -179,7 +179,10 @@ ending account its end), and the Fit and Pick tables' rows striped as the candid
 out's word at the card's muted contrast or better on the open row's tint in both themes with an idle way out among them,
 the strip's station count the record's steps and placeholders at both viewports, and in the mock pass the fresh
 placement's Pick station opened by Enter and by Space with the focus inside its popover and closed by Escape with the
-focus back on the station), the subscription end editor, the hint a confirmed pairing draws in the Usage card while the
+focus back on the station), the tie's pick line (in the mock pass, on a load of its own once the log's shot is taken:
+the story's failover that tied primary and nightly on Pace before nightly's overage, its Pick station's rows reading
+"tied primary", "tied nightly", "by runway primary" and "drawn no", each in the type, line height and left edge of the
+strategy row above it), the subscription end editor, the hint a confirmed pairing draws in the Usage card while the
 first reading is in flight (in the mock pass, after the view's shot, against the note of the story's API-key account
 annex in type, ink, line height, margin and place), the catalog popup and its columns (Model and Name the fills), the
 Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its cell

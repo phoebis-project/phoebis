@@ -650,15 +650,26 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     // opens Analytics on the account.
     ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/analytics', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows.map((w) => ({ ...w, window_end: fmtAbsolute(new Date(w.window_end).toISOString()) })))}`]],
     // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log.
-    // Nightly's wall has no 5-hour round before it, so it names no projection.
-    ['nightly: 1 wall reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]']],
+    // Nightly's walls, its poll's edge and the 429's head after the clear, have no 5-hour round before them, so they
+    // name no projection.
+    ['nightly: 2 walls reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 2', 'windows: ["five_hour"]']],
     [
       'secondary: 1 wall reached on the 5h window, the last round projected 109 %, shed_cap and window_ceiling, since 14:02',
       'badge--warning',
       '/routing-log',
       ['projection_error: -0.087', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
     ],
-    ['nightly: 1 move landed and the 5h window was spent within the hour, window_ceiling, since 11:01', 'badge--warning', '/routing-log', ['fits: {"least_bad":1}', 'moves: 1', 'setting: ["window_ceiling"]', 'windows: ["five_hour"]']],
+    // Studio's wall at a poll of 14:20 follows the round its stretch fired at 14:05, so it reads how long before the
+    // 15:29 reset it came, read off the mock's studio wall seed.
+    [
+      'studio: 1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap and window_ceiling, since 14:20',
+      'badge--warning',
+      '/routing-log',
+      ['early_ms: 4140000', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
+    ],
+    // The least-bad move at 11:01:50 and the failover onto nightly within the hour of its second wall, which names no
+    // fit.
+    ['nightly: 2 moves landed and the 5h window was spent within the hour, window_ceiling, since 11:01', 'badge--warning', '/routing-log', ['fits: {"least_bad":1,"unknown":1}', 'moves: 2', 'setting: ["window_ceiling"]', 'windows: ["five_hour"]']],
     [
       'all: 1 round marked nothing, no destination had runway, window_ceiling 75 %, since 14:12',
       'badge--warning',
@@ -676,9 +687,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all sixteen while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all seventeen while no layout folds it",
     ok:
-      lead() === '16 need attention' &&
+      lead() === '17 need attention' &&
       unweighted !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
@@ -766,7 +777,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its sixteen items again', ok: lead() === '16 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its seventeen items again', ok: lead() === '17 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 
   {
@@ -851,10 +862,10 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its sixteen items shows the four that fit and folds the other twelve behind \"+12 more\" titled with their words one per line, whose list holds all sixteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its seventeen items shows the four that fit and folds the other thirteen behind \"+13 more\" titled with their words one per line, whose list holds all seventeen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+12 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+13 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
         JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
@@ -866,7 +877,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
       ok:
         JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
-        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+15 more', ['Replay parked records']]),
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+16 more', ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
     results.push({
@@ -1526,8 +1537,8 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
   // subscription block, a failed poll or none, or reads funding_required, so one mount reads them all under one
   // override: nightly reads funding_required, its 5-hour window is legacy's, read two days ago before its reset and
   // never since, and its poll is null, while studio carries legacy's extra usage block, off with the provider's reason,
-  // legacy's poll, which failed three minutes before the story's anchor, and no subscription block, with the plan the
-  // decoder derives from it.
+  // legacy's poll, whose last attempt ran the refresh that lapsed it two days and two hours before the story's anchor,
+  // and no subscription block, with the plan the decoder derives from it.
   const { listAccounts } = api;
   const legacy = (await listAccounts.call(api)).find((a) => a.id === 'legacy');
   const stale = legacy.windows.find((w) => w.id === '5h');
@@ -1622,7 +1633,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
         /^polled 1[12]m ago: rate limited$/.test(drawn.secondary[0] ?? '') &&
         /^backing off, next attempt in [34]m$/.test(drawn.secondary[1] ?? '') &&
         drawn.studio.length === 1 &&
-        /^polled [34]m ago: failed: usage request rejected with status 503$/.test(drawn.studio[0] ?? '') &&
+        /^polled 2d 2h ago: failed: acquire: account has to be paired again$/.test(drawn.studio[0] ?? '') &&
         JSON.stringify(drawn.nightly) === JSON.stringify(['not yet polled']),
       missing: [JSON.stringify(drawn)],
     });
@@ -1634,10 +1645,10 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     results.push({
       name: "/quota a failed poll's line names its reason in a span of its own, the whole message in the title between the attempt's time and the snapshot's",
       ok:
-        failedLine?.querySelector('.qcard__reason')?.textContent === 'usage request rejected with status 503' &&
+        failedLine?.querySelector('.qcard__reason')?.textContent === 'acquire: account has to be paired again' &&
         failedTitle.length === 3 &&
         year.test(failedTitle[0]) &&
-        failedTitle[1] === 'usage request rejected with status 503' &&
+        failedTitle[1] === 'acquire: account has to be paired again' &&
         failedTitle[2].startsWith('checked ') &&
         year.test(failedTitle[2]) &&
         cardOf('secondary')?.querySelector('.qcard__reason') === null,
@@ -4463,15 +4474,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
   // Overflow workspace out of funding, secondary's poll backoff, nightly's meter drift and the three routing conditions
   // (the walls on nightly and secondary, nightly spent within the hour of a move, and all's round without a
-  // destination). work draws studio slowed past twice the stretch, and the routing state writer belongs to no pool's
-  // card.
+  // destination). work draws studio's wall after the round its stretch fired, in the wall's second wording, and studio
+  // slowed past twice the stretch, and the routing state writer belongs to no pool's card.
   const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
     ok:
       rowAges('jobs').length === 2 &&
       rowAges('all').length === 8 &&
-      rowAges('work').length === 1 &&
+      rowAges('work').length === 2 &&
       [...rowAges('jobs'), ...rowAges('all'), ...rowAges('work')].every(aged) &&
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) ===
@@ -4485,8 +4496,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Destination spent within the hour', 'nightly', '/routing-log'],
           ['Rounds without a destination', 'all', '/routing-log'],
         ]) &&
-      JSON.stringify(attentionRows('work')) === JSON.stringify([['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
-      JSON.stringify(workDetail) === JSON.stringify(['slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
+      JSON.stringify(attentionRows('work')) === JSON.stringify([['Wall reached under the ceiling', 'studio', '/routing-log'], ['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
+      JSON.stringify(workDetail) ===
+        JSON.stringify(['1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap and window_ceiling, since 14:20', 'slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
     missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))} ${JSON.stringify(rowAges(name))}`), ...workDetail],
   });
   {
@@ -12991,7 +13003,7 @@ m.unmount();
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 35 && ['+ Mark cleared', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        events.length === 37 && ['+ Mark cleared', '+ Plan ended', '+ Plan restored', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -13019,7 +13031,7 @@ m.unmount();
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 42 && back.checked === 42,
+        back.address === null && back.chip === 'no kinds chip' && back.options === 44 && back.checked === 44,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -13677,8 +13689,10 @@ m.unmount();
       if (!all(cell(tr, 'link'), ['request'])) say(`details ${hrefs(cell(tr, 'link'))}`);
     }
     const links = [...m.container.querySelectorAll('.routing-log__table tbody a')].map((a) => a.getAttribute('href') ?? '');
-    // The hour's first page names the revoked key in a refusal's Fact.
-    const factLinks = [...m.container.querySelectorAll('.routing-log__fact .fact__value a')].map((a) => a.getAttribute('href'));
+    // Studio's wall and its clear of 14:20 and 14:29:20 take the hour's first page past the key refusal of 14:18:05, so
+    // the hour's refusals are read on a page of their own, which names the revoked key in a refusal's Fact.
+    const refusals = await mount('/routing-log?kinds=refused', { now: CLOCK_ORIGIN });
+    const factLinks = [...refusals.container.querySelectorAll('.routing-log__fact .fact__value a')].map((a) => a.getAttribute('href'));
     results.push({
       name: '/routing-log every entity in a row is a link with the route of its kind',
       ok: wrong.length === 0 && links.length > 50 && links.every((h) => Object.values(ROUTE).some((r) => r.test(h))) && factLinks.length > 0,
@@ -13686,12 +13700,13 @@ m.unmount();
     });
     // The router records an empty model for the request it refused before it resolved one, `req_6c3a9e27-5b1` in
     // `web/src/mock/requests.ts`.
-    const refused = trs(m).find((tr) => tr.getAttribute('data-row') === 'req_6c3a9e27-5b1/1');
+    const refused = trs(refusals).find((tr) => tr.getAttribute('data-row') === 'req_6c3a9e27-5b1/1');
     const refusedRead = {
       dash: cell(refused, 'model')?.querySelector('.muted')?.textContent ?? null,
       modelLinks: [...(refused?.querySelectorAll('a') ?? [])].filter((a) => (a.getAttribute('href') ?? '').startsWith('/routing-log?models=')).length,
       under: refused?.querySelector('.routing-log__model-under') ? 1 : 0,
     };
+    refusals.unmount();
     results.push({
       name: '/routing-log a request refused before it resolved a model reads a dash in its Model cell and draws no model link',
       ok: refused !== undefined && JSON.stringify(refusedRead) === JSON.stringify({ dash: '-', modelLinks: 0, under: 0 }),
@@ -14200,9 +14215,9 @@ m.unmount();
   {
     // The Fable-week round on nightly at 08:30: the 5-hour window opened 19 minutes before, under all's hold of an
     // hour, so the shed rule's Round group reads the window's age and hold, and the Fable week fires in its place. The
-    // round lists the Fable pin on the fast lane and the Opus pin off the window, both left out before the walk, so it
-    // marks nothing off the window.
-    const name = "/routing-log the Fable-week round's card lists the Fable pin on the fast lane and the Opus pin off the window and marks nothing off the window";
+    // round walks the Fable pin with its burn on the Fable week, the one pin walked and so the last pin, and lists the
+    // Opus pin off the window, left out before the walk, so it marks nothing for the last pin.
+    const name = "/routing-log the Fable-week round's card walks the Fable pin as the last pin, lists the Opus pin off the window and marks nothing for the last pin";
     const id = 'req_3e7a5c19-f84';
     if ((await api.getDecision(id, 1)) === null) results.push({ name, ok: false, missing: ['no decision of the story at 08:30 on nightly'] });
     else {
@@ -14225,12 +14240,45 @@ m.unmount();
           JSON.stringify(labels) === JSON.stringify(['trigger', 'excess', 'fired by', 'age 5h', 'age hold 5h', 'target', 'round', 'marked', 'marks', 'skipped']) &&
           (popoverRowOf(round, 'age 5h') ?? []).includes('age 5h 19 min') && (popoverRowOf(round, 'age hold 5h') ?? []).includes('age hold 5h 1 h') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
           JSON.stringify(facts) === JSON.stringify(['pins 0 of 2']) &&
-          JSON.stringify(pins.map((cells) => [cells[3] === '-', cells[5], cells[7]])) === JSON.stringify([[true, '-', 'fast lane'], [true, '-', 'off window']]) &&
-          JSON.stringify(pairs.Outcome) === JSON.stringify(['nothing to mark: off window']),
+          JSON.stringify(pins.map((cells) => [cells[3], cells[5], cells[7]])) === JSON.stringify([['3.0 %/h', '-', 'last pin'], ['-', '-', 'off window']]) &&
+          JSON.stringify(pairs.Outcome) === JSON.stringify(['nothing to mark: last pin']),
         missing: [labels.join(' / '), rowsRead(round), facts.join(' / '), JSON.stringify(pins), JSON.stringify(pairs.Outcome ?? null)],
       });
       page.unmount();
     }
+  }
+  {
+    // The story's tie: the failover at 08:16:21 that tied primary and nightly on Pace, both fitting a fresh session,
+    // the runway keeping primary, so the Pick station names both, the one the runway kept and that no draw was left.
+    const name = "/routing-log the tie's Pick station names the tied accounts, the one the runway kept and that no draw was left";
+    const id = 'req_8c41f2d7-a93';
+    if ((await api.getDecision(id, 2)) === null) results.push({ name, ok: false, missing: ['no failover of the story at 08:16 tied on Pace'] });
+    else {
+      const { card, page } = await story(id, 2);
+      scan('tie', card);
+      const popover = await popoverOf(page, stationButton(card, 'pick'));
+      const read = ['tied', 'by runway', 'drawn'].map((label) => popoverRowOf(popover, label));
+      results.push({ name, ok: JSON.stringify(read) === JSON.stringify([['tied primary', 'tied nightly'], ['by runway primary'], ['drawn no']]), missing: [rowsRead(popover)] });
+      page.unmount();
+    }
+  }
+  {
+    // The router's usage poll asks every five minutes and asks no account it has to pair again, so legacy writes one
+    // failed poll per slot from its last clean poll until the refresh that lapsed it, read off the mock's legacy seed.
+    const legacy = (await api.listAccounts()).find((a) => a.id === 'legacy');
+    const range = { from: iso(CLOCK_ORIGIN - 7 * DAY), limit: 200, to: iso(CLOCK_ORIGIN) };
+    const lapsed = (await api.listRoutingLog({ ...range, accountIds: ['legacy'], kinds: ['account_state_changed'] })).rows.find((e) => e.detail.to === 'reauth_required');
+    const polls = (await api.listRoutingLog({ ...range, accountIds: ['legacy'], kinds: ['poll_failed'] })).rows;
+    const clean = Date.parse(legacy?.usage?.poll?.lastCleanAt ?? '');
+    const slots = lapsed === undefined ? 0 : Math.ceil((Date.parse(lapsed.at) - clean) / (5 * MINUTE)) - 1;
+    const page = await mount(`/routing-log?accounts=legacy&kinds=poll_failed&from=${iso(clean)}&to=${iso(Date.parse(lapsed?.at ?? '') + MINUTE)}`, { now: CLOCK_ORIGIN });
+    const listed = trs(page).length;
+    page.unmount();
+    results.push({
+      name: "/routing-log lists legacy's failed polls at the poll's five-minute cadence from its last clean poll until its refresh lapsed",
+      ok: slots > 0 && polls.length === slots && listed === slots && polls.every((e) => e.detail.status === 503 && e.detail.endpoint === 'usage' && Date.parse(e.at) < Date.parse(lapsed.at)),
+      missing: [`${polls.length} rows, ${listed} drawn, ${slots} slots`, ...polls.map((e) => e.at)],
+    });
   }
   {
     const { card, page, record } = await story('req_69e30548-32e', 1);
@@ -14543,11 +14591,12 @@ m.unmount();
         id: 'req_6e1f3b98-a24',
         seq: 1,
         terminus: ['chosen', 'Chosen', 'renewed'],
-        // The round found no destination with runway, so its Round group names each pin it passed over and why.
+        // The round found no destination with runway, so its Round group names each pin it passed over and why, the
+        // parked Opus pin on the fast lane last, left out before the walk.
         own: async (card, record, page) => {
           const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
           const skipped = popoverRowOf(round, 'skipped') ?? [];
-          return skipped.length === 2 && skipped.every((c) => /^skipped [0-9a-f]{8}: no runway$/.test(c));
+          return skipped.length === 3 && skipped.slice(0, 2).every((c) => /^skipped [0-9a-f]{8}: no runway$/.test(c)) && /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]);
         },
         what: 'round that marked nothing',
       },
@@ -15070,6 +15119,8 @@ m.unmount();
       pin_expired: ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by'],
       pin_migrated: ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Key', 'Session', 'Agent', 'Model'],
       pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
+      plan_ended: ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status'],
+      plan_restored: ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status'],
       poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
       poll_failed: ['Endpoint', 'Status', 'Error'],
@@ -15094,13 +15145,14 @@ m.unmount();
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_cleared: ['Window', 'Before', 'After', 'Reset', 'Read from'],
       window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
-      window_spent: ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request'],
+      // A spent edge a poll read names no request.
+      window_spent: (e) => ['Window', 'Reading', 'Read from', 'Resets', 'Effect', ...(e.requestId === null ? [] : ['Request'])],
     };
     const EVENT_KINDS = [
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
-      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed', 'refresh_failed',
-      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'stream_interrupted',
-      'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
+      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
+      'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
+      'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
     ];
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
     // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect, the
@@ -15112,6 +15164,10 @@ m.unmount();
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
       poll_failed: (e) => ({ Endpoint: [e.detail.endpoint], Error: [e.detail.error], Status: [String(e.detail.status)] }),
       mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
+      // Primary's ended plan and its return a minute later: the read's source in the console's words and the profile's
+      // three members as text, read off the mock's two seeds.
+      plan_ended: () => ({ 'Organization type': ['claude free'], 'Rate-limit tier': ['default claude ai'], Source: ['usage 403'], 'Subscription status': ['canceled'] }),
+      plan_restored: () => ({ 'Organization type': ['claude max'], 'Rate-limit tier': ['default claude max 20x'], Source: ['profile read'], 'Subscription status': ['active'] }),
       registry_changed: (e) => (e.detail.diff?.secret_replaced === true ? { Secret: ['replaced'] } : {}),
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
       shedding_round: (e) => ({ 'Fired by': ['the projection'], Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
@@ -15790,7 +15846,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // The story's refusals by key: the runner's send after its key's revocation on ci, the three guardrail blocks
   // on desktop, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the
   // Traffic line does. Laptop's Failed and the line's errors count the two rows the router's own stop cut,
-  // `req_7a2c4e91-d03` and `req_c58d1f3a-e67`.
+  // `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover `req_8c41f2d7-a93`, which
+  // answered on its second attempt.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -15803,7 +15860,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '213 requests, 17.4% errors',
+      line === '214 requests, 17.3% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -19568,9 +19625,9 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   });
   retries[0]?.click();
   await page.settle();
-  // At the story's instant the default filters hide eight of its 28 rows (the two finished sessions, the earlier holder
-  // 20 hours back, the ci key's three rows, the row idle for two hours and the refusal-only row), so the Sessions and
-  // Agents tiles carry the hidden count on their hover.
+  // At the story's instant the default filters hide eight of its 28 rows (the three finished sessions, the earlier
+  // holder 20 hours back, the ci key's two rows, the row idle for two hours and the refusal-only row), so the
+  // Sessions and Agents tiles carry the hidden count on their hover.
   const away = '8 sessions hidden by the filters';
   results.push({
     name: '/sessions Try again under the tiles reads the overview again, the Sessions and Agents tiles titled with the rows the filters hide',
@@ -20576,7 +20633,7 @@ const CARD_VIEWS = [
     page.unmount();
     return got;
   };
-  // The story's 28 rows at its instant: the two finished sessions (the one the mod released whole and the one it
+  // The story's 28 rows at its instant: the three finished sessions (the two the mod released whole and the one it
   // ended), twelve rows a companion reports or went silent on, the registration-only row among them, and fourteen no
   // companion reports: the laptop row the ledger never saw, with no last use, and by their last use the pinless fork 16
   // minutes back, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook rows 25 to 42, the
@@ -21054,13 +21111,26 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   // every row shown.
   await m.navigate('/sessions?age=none&finished=1');
   {
-    // The session the mod released whole keeps its row and reads main's released state.
+    // The two sessions the mod released whole keep their rows and read main's released state.
     const whole = new Map();
-    for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
+    const recipes = await api.listKeepaliveRecipes();
+    for (const r of recipes) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
     const released = [...whole].filter(([, all]) => all).map(([id]) => id);
-    const row = rows().find((r) => released.includes(cell(r, 'Session')?.getAttribute('title') ?? ''));
-    const badge = row ? cell(row, 'Cache warming')?.querySelector('.badge')?.textContent?.trim() : undefined;
-    results.push({ name: '/sessions lists the session the mod released whole with its released badge', ok: released.length === 1 && badge === 'released', missing: [released.join(',') || 'no such session', String(badge)] });
+    const rowOf = (id) => rows().find((r) => cell(r, 'Session')?.getAttribute('title') === id);
+    const badges = released.map((id) => (rowOf(id) ? cell(rowOf(id), 'Cache warming')?.querySelector('.badge')?.textContent?.trim() : undefined));
+    results.push({ name: '/sessions lists the sessions the mod released whole with their released badge', ok: released.length === 2 && badges.every((b) => b === 'released'), missing: [released.join(',') || 'no such session', JSON.stringify(badges)] });
+    // One of them was last used, by its turn and its probe before it, 25 minutes before the mock's anchor, past all's
+    // ten-minute affinity window, so its pin is gone and its row reads that last use, read off the mock's released row
+    // past the window. The page's clock has run on since the anchor, so the row's relative time reads 25 min or more.
+    const past = recipes.find((r) => r.agentState === 'released' && released.includes(r.sessionId) && CLOCK_ORIGIN - Math.max(Date.parse(r.lastRequestAt), Date.parse(r.lastProbeAt)) > 600_000);
+    const session = past && (await api.listSessions()).find((x) => !x.historical && x.sessionId === past.sessionId);
+    const lastUsed = past && rowOf(past.sessionId) ? cell(rowOf(past.sessionId), 'Last used')?.firstChild?.textContent?.trim() : undefined;
+    const minutes = Number(/^(\d+)m ago/.exec(lastUsed ?? '')?.[1] ?? Number.NaN);
+    results.push({
+      name: "/sessions lists the session released whole past its pool's affinity window with its last use there",
+      ok: past !== undefined && Date.parse(past.lastProbeAt) <= Date.parse(past.lastRequestAt) && session?.lastUsedAt === past.lastRequestAt && minutes >= 25,
+      missing: [past ? `${past.sessionId} ${past.lastRequestAt} ${past.lastProbeAt}` : 'no released line past its window', String(session?.lastUsedAt), String(lastUsed)],
+    });
   }
   await showColumn(m, 'Next probe');
   const ci = rows().filter((r) => cell(r, 'Key')?.textContent === 'ci');
@@ -21895,7 +21965,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 26, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 27, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',

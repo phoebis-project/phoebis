@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 // Every clock time below is read in UTC whatever the host's zone; `node --test` gives each file a process of its own.
@@ -275,12 +275,12 @@ test('every label of the table is used at least once and no fact key lacks a lab
 test('every event kind has its words and its tone', () => {
   const kinds = [
     'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
-    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed', 'refresh_failed',
-    'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'stream_interrupted', 'warm_prefix_expired',
-    'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
+    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
+    'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
+    'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
-  assert.equal(kinds.length, 35);
+  assert.equal(kinds.length, 37);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
@@ -335,6 +335,37 @@ test('the walk words name every key the slow-down, the return rule, the pick, th
   assert.equal(d.WALK_KEY.demand_seven_day, undefined, 'no line writes a weekly demand');
   // A window's word follows the noun as the horizon's does.
   assert.deepEqual(['horizon', 'over_since', 'wait'].map((k) => d.keyWord(`${k}_seven_day_fable`)), ['horizon Fable', 'over since Fable', 'wait Fable']);
+});
+
+/** Every key the routing crate writes on a walk line under a name of its own, with the fixtures' walk keys. */
+const ROUTER_WALK_KEYS = [
+  'account_id', 'age_five_hour', 'at_cap', 'attempt', 'binding', 'bound_ms', 'burn', 'by_runway', 'cause', 'ceiling', 'cold', 'cooldown', 'deadline', 'demand_five_hour', 'depth', 'destinations',
+  'drawn', 'dwell_age_ms', 'dwell_ms', 'end', 'ending', 'epoch', 'excess', 'expires_at', 'factor', 'fast', 'fired_by', 'found', 'grace_ms', 'hash', 'hashes_stamped', 'hold_five_hour',
+  'holds_allowance', 'idle_ms', 'in_flight', 'in_overage', 'kind', 'ladder', 'lane', 'marked', 'marks', 'migrate_when_spent', 'mode', 'no_destination', 'no_fit', 'obstacle', 'obstacles',
+  'over_ms', 'over_since', 'overage_policy', 'place', 'prefix_tokens', 'ramp', 'reason', 'refresh_age_ms', 'refresh_stamped', 'reset', 'reset_in_grace', 'round', 'runway_ms', 'score',
+  'skipped', 'slow_down', 'speed', 'spent', 'standing', 'strategy', 'stretch_ms', 'target', 'threshold_ms', 'tier', 'ties', 'tried', 'trigger', 'turn', 'verdict', 'wait_ms', 'warmth',
+  'winding_down', 'window', 'window_share_fast',
+];
+
+test("every walk key the router writes reads words of its own, the pick's ties as tied and its draw as drawn", () => {
+  assert.deepEqual([d.keyWord('ties'), d.keyWord('drawn')], ['tied', 'drawn']);
+  // The list is read again off the crate's source and the fixtures, so a key the router gains fails here rather than
+  // reading through the underscore fallback. A key written over two lines counts, and so does a partition's name.
+  const src = new URL('../../crates/routing/src/', import.meta.url);
+  const written = new Set();
+  for (const file of readdirSync(src).filter((f) => f.endsWith('.rs'))) {
+    const text = readFileSync(new URL(file, src), 'utf8');
+    for (const m of text.matchAll(/Fact::[a-z_]+\(\s*"([a-z_0-9]+)"/g)) written.add(m[1]);
+    for (const m of text.matchAll(/narrow\(\s*[^)]*?"([a-z_0-9]+)"/g)) written.add(m[1]);
+  }
+  const fixtures = new URL('./fixtures/', import.meta.url);
+  const walked = (o) => (Array.isArray(o) ? o.flatMap(walked) : o !== null && typeof o === 'object' ? [...(Array.isArray(o.walk) ? o.walk.flatMap((s) => (s.facts ?? []).map((f) => f.key)) : []), ...Object.values(o).flatMap(walked)] : []);
+  for (const file of readdirSync(fixtures).filter((f) => f.endsWith('.json'))) for (const key of walked(JSON.parse(readFileSync(new URL(file, fixtures), 'utf8')))) written.add(key);
+  assert.deepEqual([...written].sort(), ROUTER_WALK_KEYS);
+  // The account a fact names is its chip, a rung's hash is drawn from the candidate table, and a score or a standing
+  // names itself.
+  const drawnOtherwise = new Set(['account_id', 'hash', 'score', 'standing']);
+  assert.deepEqual(ROUTER_WALK_KEYS.filter((key) => !drawnOtherwise.has(key) && !d.own(d.WALK_KEY, key)), []);
 });
 
 test('a fact value is drawn by its unit', () => {
@@ -636,6 +667,35 @@ test("a refusal's walk is two lines, the admission's reason and the rest of the 
   ]);
   assert.equal(d.verdictWord('not_run'), 'not run');
   assert.equal(d.verdictWord('dropped'), 'all at cap');
+});
+
+test('the pick line and the Pick station name the tied accounts, the one the runway kept and whether a draw was left', () => {
+  const tied = { pace: { burn: 0, deadline: null, end: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076, window: 'seven_day' }, rank: 1, score: 0.0076 };
+  const r = record({
+    candidates: [candidate({ ...tied, runwayMs: 3_600_000 }), candidate({ ...tied, accountId: 'secondary', rank: 2, runwayMs: 1_800_000 })],
+    walk: [
+      wstep('pin', 'none', [wfact('found', 'none')]),
+      wstep('eligible', 'match', [wfact('standing', 'eligible', null, 'primary'), wfact('standing', 'eligible', null, 'secondary')]),
+      wstep('partitions', 'match', [wfact('spent', 'off'), wfact('at_cap', 0), wfact('no_fit', 0), wfact('winding_down', 0)]),
+      wstep('rung:content', 'none', [wfact('reason', 'no_entry')]),
+      wstep('rung:with_main', 'none', [wfact('reason', 'class')]),
+      wstep('rung:static', 'none', [wfact('reason', 'no_entry')]),
+      wstep('pick', 'chosen', [
+        wfact('strategy', 'pace'), wfact('tier', '0/0/0'),
+        wfact('score', 0.0076, 'percent_per_hour', 'primary'), wfact('burn', 0, 'percent_per_hour', 'primary'),
+        wfact('score', 0.0076, 'percent_per_hour', 'secondary'), wfact('burn', 0, 'percent_per_hour', 'secondary'),
+        wfact('ties', ['primary', 'secondary']), wfact('by_runway', ['primary']), wfact('drawn', false),
+      ]),
+      wstep('reserve', 'none', [wfact('account_id', 'primary', null, 'primary')]),
+    ],
+  });
+  const line = d.walkLines(r).find((l) => l.step === 'Pick');
+  // Each tied id is a chip of its own under the label, an account entity as every account a line names.
+  assert.deepEqual(texts(line.chips).slice(-4), ['tied primary', 'tied secondary', 'by runway primary', 'drawn no']);
+  assert.deepEqual(line.chips.slice(-4, -1).map((c) => c.entity), [{ id: 'primary', kind: 'account' }, { id: 'secondary', kind: 'account' }, { id: 'primary', kind: 'account' }]);
+  const plan = d.anchorPlan({ id: 'pick', kind: 'station' }, d.stationModel(r, NOW), r, undefined, NOW);
+  const rows = Object.fromEntries(plan.block.table.loose.map((row) => [row.label, row.chips.map(chipText)]));
+  assert.deepEqual([rows.tied, rows['by runway'], rows.drawn], [['tied primary', 'tied secondary'], ['by runway primary'], ['drawn no']]);
 });
 
 test('the candidate cells word every verdict and its chip', () => {
@@ -958,6 +1018,8 @@ const DETAIL_EVENTS = {
     ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Destination fit', 'Runway', 'Key', 'Session', 'Agent', 'Model'],
   ],
   pin_released: [{ agent_id: 'main' }, ['Actor', 'Key', 'Session', 'Agent', 'Model']],
+  plan_ended: [{ organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'usage_403', subscription_status: 'canceled' }, ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status']],
+  plan_restored: [{ organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_5x', source: 'profile', subscription_status: 'active' }, ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status']],
   poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
   poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
   poll_failed: [{ endpoint: 'usage', error: 'usage request rejected with status 503', status: 503, transport: false }, ['Endpoint', 'Status', 'Error']],
@@ -1132,7 +1194,7 @@ test('a failed usage poll and a stream cut after its head read their words, thei
   assert.deepEqual([d.EVENT_KIND_LABEL.poll_failed, d.EVENT_KIND_LABEL.stream_interrupted], ['poll failed', 'stream interrupted']);
   const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
   assert.deepEqual([presetOf('poll_failed'), presetOf('stream_interrupted')], ['account state and windows', 'exhaustion and refusals']);
-  assert.equal(d.ALL_KINDS.length, 42, 'the six decision kinds, probe and the 35 event kinds');
+  assert.equal(d.ALL_KINDS.length, 44, 'the six decision kinds, probe and the 37 event kinds');
   const pairs = (kind, detail, o) => d.detailPairs(event(kind, detail, o), NOW, []).map((p) => [p.label, texts(p.chips)]);
   // A transport failure answered no status, so the pair says what failed in its place.
   assert.deepEqual(pairs('poll_failed', { endpoint: 'profile', error: 'transport: connection refused (os error 111)', status: null, transport: true }).slice(1), [
@@ -1160,6 +1222,41 @@ test('a failed usage poll and a stream cut after its head read their words, thei
   const request = d.detailPairs(event('stream_interrupted', cut, own), NOW, []).find((p) => p.label === 'Request').chips[0];
   assert.equal(request.href, '/requests/req_5e2f7a19-b03');
   assert.deepEqual(pairs('stream_interrupted', { ...cut, upstream_request_id: null }, own).map(([label]) => label).slice(2), ['Request', 'Code', 'Text', 'Bytes relayed', 'Attempt'], 'a head with no request id draws no Upstream request');
+});
+
+test("a stream cut's code prints in the mono face, as the request drawer's Error row prints it", () => {
+  const cut = { attempt: 2, bytes_relayed: 18_432, code: 'stream_stalled', text: 'no chunk for 30 s', upstream_request_id: 'req_011CUcut_7a' };
+  const code = d.detailPairs(event('stream_interrupted', cut, { requestId: 'req_5e2f7a19-b03' }), NOW, []).find((p) => p.label === 'Code').chips;
+  assert.deepEqual(code.map((c) => [c.value, c.mono === true]), [['stream_stalled', true]]);
+});
+
+test("an ended plan and its return read their words, their preset and the read's source with the profile's three members", () => {
+  assert.deepEqual([d.EVENT_KIND_LABEL.plan_ended, d.EVENT_KIND_LABEL.plan_restored], ['plan ended', 'plan restored']);
+  const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
+  assert.deepEqual([presetOf('plan_ended'), presetOf('plan_restored')], ['account state and windows', 'account state and windows']);
+  // Neither reports trouble the tones name, so both read neutral.
+  assert.deepEqual([d.eventTone('plan_ended'), d.eventTone('plan_restored')], ['neutral', 'neutral']);
+  // The router's two rows on the fixture's account, as the routing log route answers them.
+  const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
+  const rowOf = (kind) => fixture.rows.find((r) => r.type === 'event' && r.kind === kind);
+  const pairs = (row) => d.detailPairs(row, NOW, []).map((p) => [p.label, texts(p.chips)]);
+  assert.deepEqual(pairs(rowOf('plan_ended')).slice(1), [
+    ['Account', ['business']],
+    ['Source', ['usage 403']],
+    ['Organization type', ['claude free']],
+    ['Rate-limit tier', ['default claude ai']],
+    ['Subscription status', ['canceled']],
+  ]);
+  assert.deepEqual(pairs(rowOf('plan_restored')).slice(2), [
+    ['Source', ['profile read']],
+    ['Organization type', ['claude max']],
+    ['Rate-limit tier', ['default claude max 5x']],
+    ['Subscription status', ['active']],
+  ]);
+  // A pairing's confirm restores the plan too, and a row lacking a member draws no pair for it.
+  const restored = rowOf('plan_restored');
+  const { rate_limit_tier: _, ...partial } = restored.detail;
+  assert.deepEqual(pairs({ ...restored, detail: { ...partial, source: 'pairing' } }).slice(2).map(([label, chips]) => `${label}: ${chips.join(' ')}`), ['Source: pairing confirm', 'Organization type: claude max', 'Subscription status: active']);
 });
 
 test("a round that walked no pin and left one out off the window that fired reads off window as its reason", () => {

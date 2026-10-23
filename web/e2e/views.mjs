@@ -562,13 +562,13 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
  * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
- * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's sixteen
- * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to sixteen, the fold
- * badge draws its dashed border, and its list opens under it inside the window with all sixteen, closing on Escape with
- * the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool serves
- * later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first, requires
- * that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line, never
- * the unavailable one.
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's seventeen
+ * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to seventeen, the fold
+ * badge draws its dashed border, and its list opens under it inside the window with all seventeen, closing on Escape
+ * with the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool
+ * serves later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first,
+ * requires that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line,
+ * never the unavailable one.
  */
 async function attentionLine(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line ${what}`);
@@ -610,7 +610,7 @@ async function attentionLine(theme) {
   const texts = read.badges.map((b) => b.text);
   const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '16 need attention' || texts.length + folded !== 16 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's sixteen items folded behind a dashed "+N more" at 1280 by 800`);
+    if (read.lead !== '17 need attention' || texts.length + folded !== 17 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's seventeen items folded behind a dashed "+N more" at 1280 by 800`);
     else {
       await attentionList(theme);
       await attentionLineNarrow(theme);
@@ -659,7 +659,7 @@ async function attentionList(theme) {
   measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
   if (!read) say('did not open');
   else {
-    if (read.badges !== 16 || read.rows !== 16 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's sixteen items one per row`);
+    if (read.badges !== 17 || read.rows !== 17 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's seventeen items one per row`);
     if (!read.inside) say('draws a badge past its box');
     if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
     if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
@@ -5437,7 +5437,7 @@ async function barRow(theme, view) {
 }
 
 /**
- * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 42 kinds:
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 44 kinds:
  * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
  */
 async function kindsPopoverInside(theme) {
@@ -5456,7 +5456,7 @@ async function kindsPopoverInside(theme) {
   measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
   if (read === null) say('did not open');
   else {
-    if (read.rows !== 51) say(`lists ${read.rows} rows, not Select all, the eight presets and the 42 kinds`);
+    if (read.rows !== 53) say(`lists ${read.rows} rows, not Select all, the eight presets and the 44 kinds`);
     if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
   }
   await page.keyboard.press('Escape');
@@ -7764,6 +7764,69 @@ const compare = (mine, neighbour, keys, what) => {
 };
 
 /**
+ * The story's tie, the failover that tied primary and nightly on Pace at 08:16:21: its Pick station's rows name the
+ * tied accounts, the one the runway kept and that no draw was left, each in the type of the strategy row above them
+ * and from the same left edge. The measure loads the tie's request on its own range and leaves the bare log.
+ */
+async function routingLogPickLine(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const id = 'req_8c41f2d7-a93';
+  const at = clockOrigin - (6 * 3_600 + 13 * 60 + 39) * 1_000;
+  const quarter = 15 * 60_000;
+  const rowAt = `.routing-log__table tbody tr[data-row="${id}/2"]`;
+  try {
+    await loadAtOrigin(`/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`, rowAt);
+    const row = page.locator(rowAt);
+    if ((await row.count()) === 0 || !(await openDecision(row))) {
+      say(`the tie's failover ${id}/2 opened to no card on its request's page`);
+      return;
+    }
+    await page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]').click();
+    await advance(CLOCK_STEP_MS);
+    const read = await page.evaluate(() => {
+      const popover = document.querySelector('.strip-popover');
+      const rows = [...(popover?.querySelectorAll('.kv__row') ?? [])].map((r) => {
+        const dt = r.querySelector('dt');
+        const chips = [...r.querySelectorAll('dd .chip')];
+        const style = getComputedStyle(dt);
+        // A chip's label and its value read as the card's chip text, `label value`.
+        const text = (c) => {
+          const label = c.querySelector('.chip__label')?.textContent ?? '';
+          return label ? `${label} ${(c.textContent ?? '').slice(label.length)}` : c.textContent;
+        };
+        return {
+          chips: chips.map(text),
+          chipFont: chips[0] ? getComputedStyle(chips[0]).font : null,
+          font: style.font,
+          label: dt.textContent,
+          left: Math.round(dt.getBoundingClientRect().left),
+          lineHeight: style.lineHeight,
+        };
+      });
+      return { open: document.querySelectorAll('.strip-popover').length, rows };
+    });
+    const byLabel = (label) => read.rows.find((r) => r.label === label) ?? null;
+    const strategy = byLabel('strategy');
+    measurements.push(`${theme} /routing-log the tie's pick line ${JSON.stringify({ byRunway: byLabel('by runway'), drawn: byLabel('drawn'), strategy, tied: byLabel('tied') })}`);
+    if (read.open !== 1) say(`the tie's Pick station opened ${read.open} popovers`);
+    for (const [label, chips] of [
+      ['tied', ['tied primary', 'tied nightly']],
+      ['by runway', ['by runway primary']],
+      ['drawn', ['drawn no']],
+    ]) {
+      const line = byLabel(label);
+      if (JSON.stringify(line?.chips ?? null) !== JSON.stringify(chips)) say(`the tie's pick line ${label} reads ${JSON.stringify(line?.chips ?? null)}, not ${JSON.stringify(chips)}`);
+      for (const what of compare(line, strategy, ['font', 'left', 'lineHeight'], `the tie's ${label} row against the strategy row above it`)) say(what);
+    }
+    await page.keyboard.press('Escape');
+    await advance(CLOCK_STEP_MS);
+  } finally {
+    await atRest();
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
  * The identity card's subscription end editor on an OAuth account: its date field is the box of the Sort select in
  * the bar (the page's other plain control, where the label editor's field takes the heading's type), its checkbox
  * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
@@ -9767,6 +9830,7 @@ try {
       if (view.path === '/routing-log') await barRow(theme, view.path);
       if (view.path === '/routing-log') await kindsPopoverInside(theme);
       if (view.path === '/routing-log') await freshRowTint(theme, view.path);
+      if (view.path === '/routing-log' && mock) await routingLogPickLine(theme);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.

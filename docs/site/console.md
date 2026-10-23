@@ -1164,18 +1164,19 @@ candidate's slow-down factor. The Pace score stands under a header naming the wi
 `Spare rate, 7-day per hour` or `Spare rate, Fable week per hour` (`Pace` where no subscription candidate names one, and
 `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
 `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or
-`to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` Verdict carries the
-one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of $5.00`), whose hover says why the member was passed
-over, and beside it a badge for a destination the gate read that did not fit, `rewrite only` or `least bad` in the
-warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads why:
-not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and
-`Settings in force since {time}`, stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the
-account it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant.
-The settings fold lists the pool's twenty-four settings in the card's order with Load shedding and
-Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or
-`at once` at 0, or "The key and its pool had left the registry". A record written
-before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and the
-five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
+`to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` The pick line names
+the accounts whose scores tied, the runway that narrowed them where it did, and whether the draw chose among more than
+one. Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of $5.00`), whose hover says
+why the member was passed over, and beside it a badge for a destination the gate read that did not fit, `rewrite only`
+or `least bad` in the warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that
+pins nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed
+until) and `Settings in force since {time}`, stay closed until opened. In Pin and warmth, a stamped pin's Shed mark
+names the account it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with
+the instant. The settings fold lists the pool's twenty-four settings in the card's order with Load
+shedding and Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as
+a span or `at once` at 0, or "The key and its pool had left the registry". A record
+written before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and
+the five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
 twenty-four, each marked `(then)`, the three settings it carried that a version 2 record does not. "Outcome" lists the
 pin written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
 (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading

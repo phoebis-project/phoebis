@@ -154,6 +154,8 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   pin_expired: 'pin expired',
   pin_migrated: 'pin moved',
   pin_released: 'pin released',
+  plan_ended: 'plan ended',
+  plan_restored: 'plan restored',
   poll_backoff_ended: 'poll backoff ended',
   poll_backoff_started: 'poll backoff started',
   poll_failed: 'poll failed',
@@ -185,14 +187,14 @@ export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired', 'reservation_expired'] },
   { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started', 'slow_down_started', 'slow_down_ended'] },
   { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached', 'stream_interrupted'] },
-  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'poll_failed', 'refresh_succeeded', 'refresh_uncertain'] },
+  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'poll_failed', 'plan_ended', 'plan_restored', 'refresh_succeeded', 'refresh_uncertain'] },
   { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
   { label: 'keepalive', members: ['probe', 'warm_prefix_expired'] },
   { label: 'registry changes', members: ['registry_changed', 'catalog_changed', 'model_permitted', 'model_rejected'] },
   { label: 'router life cycle', members: ['router_started', 'ledger_gap'] },
 ];
 
-/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 35 event kinds. */
+/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 37 event kinds. */
 export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
 
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
@@ -851,70 +853,119 @@ export interface WalkLine {
   verdict: string;
 }
 
-/** The fact keys of the walk in the console's words. Any other key reads with its underscores as spaces. */
+/**
+ * The walk's fact keys in the console's words, one for every key the router writes. A key it gains later reads with
+ * its underscores as spaces until it has one here.
+ */
 export const WALK_KEY: Record<string, string> = {
   above_ceiling: 'above ceiling',
   age_five_hour: 'age 5h',
   ahead_five_hour: '5h ahead',
   ahead_seven_day: '7d ahead',
   at_cap: 'at cap',
+  attempt: 'attempt',
   binding: 'binding',
   bound_ms: 'bound',
+  burn: 'burn',
   burn_five_hour: 'burn 5h',
   burn_seven_day: 'burn 7d',
   burn_seven_day_fable: 'burn Fable',
   by_runway: 'by runway',
+  cause: 'cause',
+  ceiling: 'ceiling',
+  cold: 'cold',
+  cooldown: 'cooldown',
   cycle_ms: 'cycle',
+  deadline: 'deadline',
   deadline_five_hour: "5h to its subscription's end at",
   deadline_seven_day: "7d to its subscription's end at",
   demand_five_hour: 'demand',
+  depth: 'depth',
+  destinations: 'destinations',
+  drawn: 'drawn',
   dwell_age_ms: 'dwell age',
   dwell_ms: 'dwell',
   elapsed_five_hour: '5h elapsed',
   elapsed_seven_day: '7d elapsed',
+  end: 'end',
+  ending: 'ending',
+  epoch: 'epoch',
   excess: 'excess',
   expires_at: 'expires at',
   factor: 'speed',
+  fast: 'fast',
   fired_by: 'fired by',
+  found: 'found',
   grace_ms: 'grace',
+  hashes_stamped: 'hashes stamped',
   hold_five_hour: 'age hold 5h',
+  holds_allowance: 'holds allowance',
   horizon_five_hour: 'horizon 5h',
   horizon_seven_day: 'horizon 7d',
   horizon_seven_day_fable: 'horizon Fable',
   idle_ms: 'idle',
+  in_flight: 'in flight',
+  in_overage: 'in overage',
+  kind: 'kind',
   ladder: 'ladder',
+  lane: 'lane',
   last_shed_age_ms: 'last round',
+  marked: 'marked',
+  marks: 'marks',
   migrate_when_spent: 'move when spent',
   mode: 'mode',
+  no_destination: 'no destination',
+  no_fit: 'no fit',
+  obstacle: 'obstacle',
+  obstacles: 'obstacles',
   over_ms: 'over for',
   over_since: 'over since',
   over_since_five_hour: 'over since 5h',
   over_since_seven_day: 'over since 7d',
   over_since_seven_day_fable: 'over since Fable',
+  overage_policy: 'overage policy',
+  place: 'place',
   prefix_tokens: 'prefix',
   projection_five_hour: 'projection 5h',
   projection_seven_day: 'projection 7d',
   projection_seven_day_fable: 'projection Fable',
   ramp: 'ramp',
+  reason: 'reason',
   refresh_age_ms: 'refresh age',
+  refresh_stamped: 'refresh stamped',
   reserved_five_hour: 'reserved 5h',
   reserved_seven_day: 'reserved 7d',
   reserved_seven_day_fable: 'reserved Fable',
+  reset: 'reset',
   reset_in_grace: 'reset in',
   rewrite_five_hour: 'rewrite 5h',
   rewrite_seven_day: 'rewrite 7d',
   rewrite_seven_day_fable: 'rewrite Fable',
+  round: 'round',
   runway_ms: 'runway',
+  skipped: 'skipped',
   slow_down: 'slow-down',
   slow_down_until: 'slowed until',
   speed: 'realized',
+  spent: 'spent',
+  strategy: 'strategy',
   stretch_ms: 'stretch',
+  target: 'target',
   threshold_ms: 'threshold',
+  tier: 'tier',
+  ties: 'tied',
+  tried: 'tried',
   trigger: 'trigger',
+  turn: 'turn',
+  verdict: 'verdict',
   wait_five_hour: 'wait 5h',
   wait_ms: 'wait',
   wait_seven_day: 'wait 7d',
   wait_seven_day_fable: 'wait Fable',
+  warmth: 'warmth',
+  winding_down: 'winding down',
+  window: 'window',
+  window_share_fast: 'window share fast',
   worst_bucket: 'worst bucket',
 };
 export const keyWord = (key: string) => wordOf(WALK_KEY, key);
@@ -1645,6 +1696,7 @@ const GAP_MEANING: Record<string, string> = {
   in_flight_cap: 'the requests in flight reached their cap and the oldest entry was evicted',
   poison: "a record failed alone after its batch's retries",
 };
+const PLAN_SOURCE_WORD: Record<string, string> = { pairing: 'pairing confirm', profile: 'profile read', usage_403: 'usage 403' };
 const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: 'the poll', predicted: 'the prediction' };
 /**
  * A share of a window per hour as an event's detail reads one. A shedding round's rates read so on every account,
@@ -1832,6 +1884,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Next attempt', time(d.next_attempt_at));
       add('Last clean poll', time(d.last_clean_poll_at));
       add('Effect', plain("decisions read this account's windows from response heads alone"));
+      break;
+    case 'plan_ended':
+    case 'plan_restored':
+      add('Source', text(d.source, PLAN_SOURCE_WORD));
+      add('Organization type', text(d.organization_type));
+      add('Rate-limit tier', text(d.rate_limit_tier));
+      add('Subscription status', text(d.subscription_status));
       break;
     case 'poll_failed': {
       const status = num(d.status);
@@ -2051,7 +2110,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const code = str(d.code);
       const upstream = str(d.upstream_request_id);
       add('Request', request);
-      add('Code', code === null ? null : plain(code));
+      add('Code', code === null ? null : { mono: true, value: code });
       add('Text', text(d.text));
       add('Bytes relayed', count(d.bytes_relayed));
       // The upstream's id keeps its underscores, which `text` would read as spaces, and prints as the request drawer's.

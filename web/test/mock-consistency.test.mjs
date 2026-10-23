@@ -725,8 +725,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const bySession = new Map();
     for (const r of recipes) bySession.set(`${r.keyId}|${r.sessionId}`, [...(bySession.get(`${r.keyId}|${r.sessionId}`) ?? []), r]);
     const whole = [...bySession.values()].filter((rows) => rows.every((r) => r.agentState === 'released'));
-    assert.equal(whole.length, 1, 'one session the mod released whole');
-    const [rows] = whole;
+    // The other session the mod released whole is the line past its window, which holds no request of the ledger.
+    const kept = whole.filter((rows) => rows.some((r) => s.now - lastUseOf(r) <= affinityOf(s, r)));
+    assert.deepEqual([whole.length, kept.length], [2, 1], 'two sessions the mod released whole, one inside its window');
+    const [rows] = kept;
     const main = rows.find((r) => r.agentId === 'main');
     assert.ok(main !== undefined, 'main among them');
     for (const r of rows) assert.deepEqual([r.cause, r.state, r.nextProbeAt, r.deadline, r.wakeAt], ['agent_released', 'ended', null, null, null], `${r.agentId} reads as a released agent`);
@@ -855,6 +857,38 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`one released line's last request and last probe lie past its pool's affinity window, so the router expired its pin, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    const past = recipes.filter((r) => r.agentState === 'released' && s.now - lastUseOf(r) > affinityOf(s, r));
+    assert.equal(past.length, 1, past.map((r) => `${r.sessionId} ${r.agentId}`).join(', '));
+    const [line] = past;
+    assert.ok(affinityOf(s, line) > 0, 'on a pool whose pins outlive their last use');
+    assert.ok(line.lastProbeAt !== null && Date.parse(line.lastProbeAt) <= Date.parse(line.lastRequestAt), `probed at ${line.lastProbeAt}, before its last request at ${line.lastRequestAt}`);
+    const poolId = s.keys.find((k) => k.id === line.keyId).poolId;
+    const own = recipes.filter((r) => s.keys.find((k) => k.id === r.keyId)?.poolId === poolId && r.accountId === line.accountId);
+    const unwarmed = sum(s.sessions.filter((x) => x.pinned && x.keepalive.state === null && s.keys.find((k) => k.id === x.keyId)?.poolId === poolId && x.accountId === line.accountId), (x) => x.agents);
+    const member = s.pools.find((p) => p.id === poolId).members.find((m) => m.accountId === line.accountId);
+    assert.equal(member.activePins, new Set(pinnedRecipesOf(s, own).map(pinOf)).size + unwarmed, `${line.accountId}'s figure`);
+    assert.ok(!pinnedRecipesOf(s, own).some((r) => pinOf(r) === pinOf(line)), 'the pin left with the window');
+    const row = s.sessions.find((x) => !x.historical && x.keyId === line.keyId && x.sessionId === line.sessionId);
+    assert.ok(row !== undefined && s.now - Date.parse(row.lastUsedAt) > affinityOf(s, line), "the session row reads its last use past the window too");
+  });
+
+  test(`session 0's row reads its last use off its own newest request, as its main's line does, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    // Session 0 is the busy desktop session whose main still awaits its cache evidence.
+    const mains = recipes.filter((r) => r.agentId === 'main' && r.cause === 'awaiting_cache_evidence');
+    assert.equal(mains.length, 1);
+    const [main] = mains;
+    const row = s.sessions.find((x) => !x.historical && x.keyId === main.keyId && x.sessionId === main.sessionId);
+    const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId);
+    assert.ok(own.length > 0, 'the ledger holds its requests');
+    const newest = own.reduce((a, b) => (Date.parse(b.at) > Date.parse(a.at) ? b : a));
+    assert.deepEqual([row.lastUsedAt, row.lastRequestAt, main.lastRequestAt], [newest.at, newest.at, newest.at]);
+  });
+
   test(`no sample of legacy is newer than its last clean poll, at ${at}`, async () => {
     const s = await story;
     const clean = Date.parse(s.accounts.find((a) => a.id === 'legacy').usage.poll.lastCleanAt);
@@ -863,6 +897,27 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const late = samples.filter((x) => Date.parse(x.at) > clean);
     assert.deepEqual(late.map((x) => x.at), [], `samples past the last clean poll of ${iso(clean)}`);
   });
+
+  test(`legacy's history carries the readings its spent and cleared rows name, and the clock announced the reset that passed after its last clean poll, at ${at}`, async () => {
+    const s = await story;
+    const log = (await logOf(s)).filter((row) => row.type === 'event' && row.accountId === 'legacy');
+    const legacy = s.accounts.find((a) => a.id === 'legacy');
+    const five = legacy.windows.find((w) => w.id === '5h');
+    const samples = (await s.api.getQuotaHistory('legacy')).find((h) => h.windowId === '5h').samples;
+    const sampleAt = (at) => samples.find((x) => x.at === at);
+    const [spent, cleared] = ['window_spent', 'window_cleared'].map((kind) => log.find((e) => e.kind === kind && e.detail.window === 'five_hour'));
+    // Each row reads a poll, so the history holds a sample at its instant with the reading it names, and the samples
+    // between read the window at its limit.
+    assert.deepEqual([sampleAt(spent.at)?.utilization, sampleAt(cleared.at)?.utilization], [spent.detail.utilization, cleared.detail.utilization]);
+    const between = samples.filter((x) => Date.parse(x.at) > Date.parse(spent.at) && Date.parse(x.at) < Date.parse(cleared.at));
+    assert.ok(between.length > 0 && between.every((x) => x.utilization === cleared.detail.utilization_before), between.map((x) => `${x.at} ${x.utilization}`).join(', '));
+    assert.equal(samples.at(-1).at, cleared.at, 'the samples end at the last clean poll');
+    // No poll read the window after its reset, so the clock announced it, from the reading the last clean poll stored.
+    const resets = log.filter((e) => e.kind === 'window_reset' && e.detail.window === 'five_hour');
+    assert.deepEqual(resets.map((e) => [e.at, e.detail]), [[five.resetsAt, { next_reset: null, observed: 'clock', reset_at: Date.parse(five.resetsAt), utilization_before: five.utilization, window: 'five_hour' }]]);
+    assert.ok(Date.parse(five.resetsAt) > Date.parse(cleared.at) && cleared.detail.reset === Date.parse(five.resetsAt));
+  });
+
 
   test(`spare's samples end at the reading its snapshot keeps from before the disconnect, with no poll, at ${at}`, async () => {
     const s = await story;
@@ -1163,12 +1218,56 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const spent = new Map();
     for (const e of events.filter((x) => x.kind === 'window_spent')) add(spent, `${e.accountId} ${e.detail.window}`, e.detail.reset);
     assert.ok(crossings.size > 0, 'a record reads a window at its limit');
-    // The comparison runs where a record reads the account, since a record reads the members of its pool alone.
+    // The comparison runs where a record reads the account, since a record reads the members of its pool alone. A
+    // spent row no decision met before its clear stands with no record reading it.
     const read = new Set(records.flatMap((r) => r.candidates.map((c) => c.accountId)));
+    const edges = (key, reset) => events.filter((x) => (x.kind === 'window_spent' || x.kind === 'window_cleared') && `${x.accountId} ${x.detail.window}` === key && x.detail.reset === reset).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    const met = (key, reset) => {
+      const [account, window] = key.split(' ');
+      const [from, until] = [Date.parse(edges(key, reset)[0].at), Date.parse(edges(key, reset).find((x) => x.kind === 'window_cleared')?.at ?? new Date(reset).toISOString())];
+      return records.some((r) => Date.parse(r.request.at) >= from && Date.parse(r.request.at) < until && r.candidates.some((c) => c.accountId === account && c.windows[window] !== undefined));
+    };
     for (const key of new Set([...crossings.keys(), ...spent.keys()].filter((key) => read.has(key.split(' ')[0])))) {
-      assert.deepEqual([...(spent.get(key) ?? [])].sort(), [...(crossings.get(key) ?? [])].sort(), `${key}'s crossings`);
+      const unread = [...(spent.get(key) ?? [])].filter((reset) => !(crossings.get(key)?.has(reset) ?? false) && !met(key, reset));
+      assert.deepEqual([...(spent.get(key) ?? [])].filter((reset) => !unread.includes(reset)).sort(), [...(crossings.get(key) ?? [])].sort(), `${key}'s crossings`);
     }
-    assert.equal(events.filter((x) => x.kind === 'window_spent').length, [...spent.values()].reduce((n, x) => n + x.size, 0), 'one spent row per crossing');
+    // A window spent again after a clear under one reset is a crossing of its own, so each reset's rows alternate.
+    for (const [key, resets] of spent) {
+      for (const reset of resets) {
+        const kinds = edges(key, reset).map((x) => x.kind);
+        assert.ok(kinds.every((kind, i) => kind === (i % 2 === 0 ? 'window_spent' : 'window_cleared')), `${key} under ${new Date(reset).toISOString()}: ${kinds.join(', ')}`);
+      }
+    }
+  });
+
+  test(`nightly's 5-hour window reads spent, cleared on its first reading under the limit and spent again under one reset, as the engine's edges announce them, at ${at}`, async () => {
+    const s = await story;
+    const events = (await logOf(s)).filter((x) => x.type === 'event' && x.accountId === 'nightly' && x.detail.window === 'five_hour' && (x.kind === 'window_spent' || x.kind === 'window_cleared')).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    const [spent] = events;
+    const reset = spent.detail.reset;
+    const under = events.filter((e) => e.detail.reset === reset);
+    // Nightly's readings of the window under that reset after the spent edge: each answer's head on it, and the reading
+    // each decision met there.
+    const heads = s.requests.flatMap((r) => r.attempts.filter((a) => a.accountId === 'nightly').map((a) => ({ at: Date.parse(a.startedAt) + (a.durationMs ?? 0), requestId: r.id, source: 'head', w: a.windows.find((x) => x.id === '5h') })));
+    const met = (await decisionsOf(s)).flatMap((r) => {
+      const w = r.candidates.find((c) => c.accountId === 'nightly')?.windows.five_hour;
+      return w ? [{ at: Date.parse(w.observedAt), requestId: w.source === 'head' ? r.requestId : null, source: w.source, w: { resetsAt: w.reset, utilization: w.utilization } }] : [];
+    });
+    const reads = [...heads, ...met].filter((x) => x.w !== undefined && Date.parse(x.w.resetsAt) === reset && x.at > Date.parse(spent.at)).sort((x, y) => x.at - y.at);
+    const first = reads.find((x) => x.w.utilization < 1);
+    const limit = first && reads.find((x) => heads.includes(x) && x.at > first.at && x.w.utilization >= 1);
+    // The first reading under the limit clears the window, and the 429's head that reads the limit again before the
+    // reset is spent again. With no reading under it in between, the poll's edge stands alone.
+    assert.deepEqual(
+      under.map((e) => [e.kind, e.at, e.detail.source, e.requestId]),
+      [
+        ['window_spent', spent.at, 'poll', null],
+        ...(first ? [['window_cleared', iso(first.at), first.source, first.requestId]] : []),
+        ...(limit ? [['window_spent', iso(limit.at), 'head', limit.requestId]] : []),
+      ],
+    );
+    if (first) assert.deepEqual([under[1].detail.utilization, under[1].detail.utilization_before], [first.w.utilization, 1]);
+    assert.ok(under.every((e) => Date.parse(e.at) < reset));
   });
 
   test(`a cleared window follows its spent row under the same reset, before the reset, with no reading at the limit after it, at ${at}`, async () => {
@@ -1186,16 +1285,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(d.utilization_before >= 1 && d.utilization < 1 && Date.parse(e.at) < d.reset, `${id} reads ${d.utilization_before} then ${d.utilization} before its reset`);
       assert.equal(e.requestId, d.source_request_id, `${id} names its head's request where a head read it`);
       const spent = events.filter((x) => x.kind === 'window_spent' && x.accountId === e.accountId && x.detail.window === d.window && x.detail.reset === d.reset);
-      assert.equal(spent.length, 1, `${id} follows one spent row under its reset`);
-      assert.ok(Date.parse(spent[0].at) < Date.parse(e.at), `${id} follows its spent row at ${spent[0].at}`);
-      // A reading back at the limit under the same reset would be spent again, which the story writes no row for, and
-      // the account's standing reading is its newest, so under that reset it reads under the limit too.
+      assert.ok(spent.some((x) => Date.parse(x.at) < Date.parse(e.at)), `${id} follows a spent row under its reset`);
+      // A reading back at the limit under the same reset is spent again, so up to the next spent row the readings of
+      // the window under that reset stand under the limit, the account's standing reading among them.
+      const next = spent.find((x) => Date.parse(x.at) > Date.parse(e.at));
+      const before = (ms) => next === undefined || ms < Date.parse(next.at);
       const limits = [
-        ...records.filter((r) => after(Date.parse(r.request.at))).flatMap((r) => r.candidates.filter((c) => c.accountId === e.accountId).map((c) => c.windows[d.window])),
-        ...s.requests.flatMap((r) => r.attempts.filter((a) => a.accountId === e.accountId && after(Date.parse(a.startedAt))).flatMap((a) => a.windows.filter((w) => WINDOW[w.id] === d.window))).map((w) => ({ reset: w.resetsAt, utilization: w.utilization })),
-        ...s.accounts.filter((a) => a.id === e.accountId).flatMap((a) => a.windows.filter((w) => WINDOW[w.id] === d.window)).map((w) => ({ reset: w.resetsAt, utilization: w.utilization })),
+        ...records.filter((r) => after(Date.parse(r.request.at)) && before(Date.parse(r.request.at))).flatMap((r) => r.candidates.filter((c) => c.accountId === e.accountId).map((c) => c.windows[d.window])),
+        ...s.requests.flatMap((r) => r.attempts.filter((a) => a.accountId === e.accountId && after(Date.parse(a.startedAt) + (a.durationMs ?? 0)) && before(Date.parse(a.startedAt) + (a.durationMs ?? 0))).flatMap((a) => a.windows.filter((w) => WINDOW[w.id] === d.window))).map((w) => ({ reset: w.resetsAt, utilization: w.utilization })),
+        ...(next === undefined ? s.accounts.filter((a) => a.id === e.accountId).flatMap((a) => a.windows.filter((w) => WINDOW[w.id] === d.window)).map((w) => ({ reset: w.resetsAt, utilization: w.utilization })) : []),
       ].filter((w) => w !== undefined && w.reset !== null && Date.parse(w.reset) === d.reset && (w.utilization ?? 0) >= 1);
-      assert.deepEqual(limits, [], `${id} has no reading at the limit after it under its reset`);
+      assert.deepEqual(limits, [], `${id} has no reading at the limit after it under its reset before the next spent row`);
     }
   });
 
@@ -1550,8 +1650,51 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.deepEqual(pick.facts.find((f) => f.key === 'by_runway')?.value, want, `${r.requestId}/${r.seq}`);
       if (reads.length > 0) read += 1;
     }
-    // The story's moves and failovers rank one member each in their tier, so their runway narrows nothing.
     assert.ok(read > 0, 'a pick reads a runway');
+  });
+
+  test(`every pick line writes the draw the engine writes: the strategy's ties under Pace and Priority, the ones the runway kept where it narrowed them and whether a draw was left, and under round robin the turn with no draw, at ${at}`, async () => {
+    const records = await decisionsOf(await story);
+    const seen = new Set();
+    for (const r of records) {
+      const pick = r.walk.find((w) => w.step === 'pick' && w.verdict === 'chosen');
+      if (!pick) continue;
+      const id = `${r.requestId}/${r.seq}`;
+      const value = (key) => pick.facts.find((f) => f.key === key)?.value;
+      const ranked = r.candidates.filter((c) => c.rank !== null);
+      const strategy = r.settings.strategy;
+      seen.add(strategy);
+      if (strategy === 'round_robin') {
+        // The cursor names the chosen member's turn among the tier's ranked members, so no draw is left to make.
+        const chosen = ranked.find((c) => c.accountId === r.outcome.accountId);
+        assert.deepEqual([value('ties'), value('by_runway'), value('drawn'), value('turn')], [undefined, undefined, false, `${chosen.rank} of ${ranked.length}`], id);
+        continue;
+      }
+      // The ties are the ranked tier's best scores under Pace and the whole tier under Priority, and the draw is left
+      // to the runway's ties where it narrowed them.
+      const ties = strategy === 'pace' ? ranked.filter((c) => c.score === Math.max(...ranked.map((x) => x.score))) : ranked;
+      assert.deepEqual(value('ties'), ties.map((c) => c.accountId), `${id}: the ties`);
+      const kept = value('by_runway');
+      if (kept !== undefined) assert.ok(kept.length > 0 && kept.length < ties.length && kept.every((x) => value('ties').includes(x)), `${id}: by runway ${kept.join(', ')}`);
+      assert.deepEqual([value('drawn'), value('turn')], [(kept ?? value('ties')).length > 1, undefined], `${id}: the draw`);
+    }
+    assert.deepEqual([...seen].sort(), ['pace', 'priority', 'round_robin']);
+  });
+
+  test(`one story placement ties two tier mates on Pace and the runway keeps one, so no draw was left, at ${at}`, async () => {
+    const s = await story;
+    const narrowed = (await decisionsOf(s)).filter((r) => s.lib.STORY_IDS.has(r.requestId) && r.walk.some((w) => w.step === 'pick' && w.facts.some((f) => f.key === 'by_runway')));
+    assert.equal(narrowed.length, 1, narrowed.map((r) => `${r.requestId}/${r.seq}`).join(', '));
+    const [r] = narrowed;
+    const value = (key) => r.walk.find((w) => w.step === 'pick').facts.find((f) => f.key === key)?.value;
+    const tied = (value('ties') ?? []).map((id) => r.candidates.find((c) => c.accountId === id));
+    assert.deepEqual([r.outcome.kind, failedOver(r), r.settings.strategy, tied.length, value('by_runway'), value('drawn')], ['placed', true, 'pace', 2, [r.outcome.accountId], false]);
+    // The two share the tier and the score, and both fit, the kept one to the longer runway.
+    assert.ok(sameTier(tied[0], tied[1]) && tied[0].pace.score === tied[1].pace.score, tied.map((c) => `${c.accountId} ${c.tier.join('/')} ${c.pace.score}`).join(', '));
+    const kept = tied.find((c) => c.accountId === r.outcome.accountId);
+    const other = tied.find((c) => c !== kept);
+    assert.deepEqual([kept.fit, other.fit], ['fits', 'fits']);
+    assert.ok((kept.runwayMs ?? Number.POSITIVE_INFINITY) > (other.runwayMs ?? Number.POSITIVE_INFINITY), `${kept.runwayMs} over ${other.runwayMs}`);
   });
 
   test(`the story lists three forks, one on its base's account, one on another and one without a pin, at ${at}`, async () => {
@@ -1765,7 +1908,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(read.api_key > 0 && read.oauth > 0, `the pins the pick read by destination kind: ${JSON.stringify(read)}`);
   });
 
-  test(`the Fable-week round lists its Fable pin on the fast lane and its Opus pin off the window and marks nothing off the window, at ${at}`, async () => {
+  test(`the Fable-week round walks its Fable pin alone, where it is the last pin, leaves its Opus pin off the window and marks nothing for the last pin, at ${at}`, async () => {
     const s = await story;
     const records = await decisionsOf(s);
     const r = records.find((x) => x.requestId === 'req_3e7a5c19-f84' && x.seq === 1);
@@ -1783,12 +1926,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const e = (await logOf(s)).find((row) => row.type === 'event' && row.kind === 'shedding_round' && row.requestId === r.requestId);
     assert.ok(e, "the round's event");
     const [fable, opus] = e.detail.pins;
-    // Both pins leave before the walk, so neither carries a figure and the round removes nothing.
+    // The round runs in a standard request, so the current pin walks the order on the Fable week, the one pin there and
+    // so the last one, which the engine never marks. The Opus pin draws no Fable week and leaves before the order with
+    // no figure.
     const figures = (p) => [p.burn, p.per_rewrite, p.rewrite, p.planned];
     assert.deepEqual(
-      [e.accountId, e.detail.window, e.detail.pins.map((p) => p.model), fable.skip, opus.skip, figures(fable), figures(opus), e.detail.burn_sum, e.detail.marks, e.detail.outcome, e.detail.reason],
-      ['nightly', 'seven_day_fable', ['claude-fable-5-1', 'claude-opus-5'], 'fast_lane', 'off_window', [null, null, null, null], [null, null, null, null], 0, [], 'nothing_to_mark', 'off_window'],
+      [e.accountId, e.detail.window, e.detail.pins.map((p) => p.model), fable.skip, opus.skip, figures(opus), e.detail.burn_sum, e.detail.marks, e.detail.outcome, e.detail.reason],
+      ['nightly', 'seven_day_fable', ['claude-fable-5-1', 'claude-opus-5'], 'last_pin', 'off_window', [null, null, null, null], fable.burn, [], 'nothing_to_mark', 'last_pin'],
     );
+    assert.deepEqual([r.request.lane.speed, fable.note, fable.burn, fable.rewrite, fable.planned], ['standard', 'current', r.candidates.find((c) => c.accountId === 'nightly').burn.seven_day_fable, null, null]);
     // The 5-hour window opened 19 minutes before, under the hold of twice all's half-hour average.
     assert.deepEqual([value('age_five_hour'), value('hold_five_hour')].map((f) => [f?.value, f?.unit]), [[1_140_000, 'ms'], [3_600_000, 'ms']]);
   });
@@ -1803,18 +1949,67 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const offWindow = walked.length === 0 && e.detail.pins.some((p) => p.skip === 'off_window');
       assert.equal(e.detail.reason === 'off_window', offWindow, `${e.requestId}: ${e.detail.reason}`);
     }
-    assert.deepEqual(rounds.filter((e) => e.detail.reason === 'off_window').map((e) => [e.requestId, e.accountId, e.detail.outcome]), [['req_3e7a5c19-f84', 'nightly', 'nothing_to_mark']]);
+    assert.deepEqual(rounds.filter((e) => e.detail.reason === 'off_window').map((e) => [e.requestId, e.accountId, e.detail.outcome]), [], 'no round of the story walks no pin');
   });
 
-  test(`the story writes one failed usage poll and one stream cut after its head with their detail members, at ${at}`, async () => {
+  test(`one round of the story marks nothing for the last pin, every pin it walked the last one left, at ${at}`, async () => {
+    const s = await story;
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
+    const LEFT_OUT = ['fast_lane', 'off_window'];
+    const last = rounds.filter((e) => e.detail.reason === 'last_pin');
+    assert.deepEqual(last.map((e) => [e.requestId, e.detail.outcome]), [['req_3e7a5c19-f84', 'nothing_to_mark']]);
+    for (const e of last) {
+      const walked = e.detail.pins.filter((p) => !LEFT_OUT.includes(p.skip));
+      assert.ok(walked.length > 0 && walked.every((p) => p.skip === 'last_pin'), `${e.requestId}: ${walked.map((p) => p.skip).join(', ')}`);
+    }
+  });
+
+  test(`a round leaves a pin out on the fast lane only under window share, where the pin's stored lane is fast, and never the current pin of a standard request, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
+    const fast = rounds.flatMap((e) => e.detail.pins.filter((p) => p.skip === 'fast_lane').map((p) => [e, p]));
+    assert.ok(fast.length > 0, 'the story leaves a fast-lane pin out of a round');
+    for (const [e, p] of fast) {
+      // Fast mode serves the desktop key's Opus turns alone, so a stored lane reads fast there and nowhere else, and the
+      // pin left out carries no burn.
+      assert.deepEqual([e.detail.unit, e.detail.window, p.key_id, p.model.includes('opus'), p.burn, p.note], ['window_share', 'five_hour', 'desktop', true, null, null], `${e.requestId}: ${p.session_id}`);
+    }
+    // The current pin's lane is the request's own.
+    for (const e of rounds) {
+      const r = records.find((x) => x.requestId === e.requestId && x.walk.some((w) => w.step === 'move:shed' && w.facts.some((f) => f.key === 'round' && f.value === 'ran')));
+      const current = e.detail.pins.find((p) => p.note === 'current');
+      if (r && current) assert.ok(current.skip !== 'fast_lane' || r.request.lane.speed === 'fast', `${e.requestId}'s current pin on a ${r.request.lane.speed} request`);
+    }
+  });
+
+  test(`the story writes nightly's failed usage poll, legacy's at the poll's cadence until its refresh failed, and one stream cut after its head with their detail members, at ${at}`, async () => {
     const s = await story;
     const log = await logOf(s);
     const polls = log.filter((row) => row.type === 'event' && row.kind === 'poll_failed');
-    assert.equal(polls.length, 1);
-    const [poll] = polls;
+    const nightly = polls.filter((p) => p.accountId === 'nightly');
+    assert.equal(nightly.length, 1);
+    const [poll] = nightly;
     // A 503 is neither the poll's 200, its 429 nor the usage endpoint's 401, so the poll records it as a passing fault.
     assert.deepEqual([poll.accountId, Object.keys(poll.detail).sort(), poll.detail.endpoint, poll.detail.status, poll.detail.transport], ['nightly', ['endpoint', 'error', 'status', 'transport'], 'usage', 503, false]);
     assert.ok(typeof poll.detail.error === 'string' && poll.detail.error.length > 0, 'the error the poll recorded');
+    // The router's usage poll asks every five minutes and asks no account whose credential has to be paired again, so
+    // legacy failed once per slot from its last clean poll until the refresh that lapsed it, and never since.
+    const CADENCE = 5 * 60_000;
+    const legacy = s.accounts.find((a) => a.id === 'legacy');
+    const clean = Date.parse(legacy.usage.poll.lastCleanAt);
+    const lapsed = log.find((row) => row.type === 'event' && row.kind === 'account_state_changed' && row.accountId === 'legacy' && row.detail.to === 'reauth_required');
+    const slots = [];
+    for (let t = clean + CADENCE; t < Date.parse(lapsed.at); t += CADENCE) slots.push(iso(t));
+    const own = polls.filter((p) => p.accountId === 'legacy').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    assert.ok(slots.length > 0);
+    assert.deepEqual(own.map((p) => p.at), slots, "legacy's failed polls");
+    for (const p of own) assert.deepEqual(p.detail, poll.detail, `${p.at} reads the 503 nightly's poll read`);
+    assert.equal(polls.length, 1 + slots.length, 'no other account failed a poll');
+    // The poll's last attempt is the slot whose acquisition ran the refresh that failed, after the last 503.
+    const last = Date.parse(legacy.usage.poll.lastAttemptAt);
+    assert.ok(last <= Date.parse(lapsed.at) && last > Date.parse(own.at(-1).at), `the last attempt at ${legacy.usage.poll.lastAttemptAt}`);
+    assert.deepEqual([legacy.usage.poll.lastOutcome, legacy.usage.poll.nextAttemptAt], ['failed', null]);
     const cuts = log.filter((row) => row.type === 'event' && row.kind === 'stream_interrupted');
     assert.equal(cuts.length, 1);
     const [cut] = cuts;
@@ -1833,6 +2028,28 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(typeof cut.detail.text === 'string' && cut.detail.text.length > 0, "the error's own words");
     // A joined value would read as two in the panel, so neither seed's words carries a comma or a semicolon.
     for (const words of [poll.detail.error, cut.detail.text]) assert.ok(!/[,;]/.test(words), words);
+  });
+
+  test(`the story ends a subscribed account's plan and restores it a minute later with the profile's members, in a minute that places nothing on it and polls nothing there, at ${at}`, async () => {
+    const s = await story;
+    const log = await logOf(s);
+    const rows = log.filter((row) => row.type === 'event' && (row.kind === 'plan_ended' || row.kind === 'plan_restored')).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    assert.deepEqual(rows.map((e) => [e.kind, e.accountId]), [['plan_ended', 'primary'], ['plan_restored', 'primary']]);
+    const [ended, restored] = rows;
+    assert.equal(Date.parse(restored.at) - Date.parse(ended.at), 60_000);
+    const account = s.accounts.find((a) => a.id === ended.accountId);
+    assert.ok(account.kind === 'oauth' && account.subscription !== null, 'an OAuth account with a running subscription');
+    // The ledger's two members: a usage 403 made the read due that found no plan, and the next profile read found the
+    // account's own plan again.
+    assert.deepEqual([ended.detail, restored.detail], [
+      { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'usage_403', subscription_status: 'canceled' },
+      { organization_type: account.subscription.organizationType, rate_limit_tier: account.subscription.rateLimitTier, source: 'profile', subscription_status: 'active' },
+    ]);
+    assert.ok(Date.parse(ended.at) >= s.now - DAY && Date.parse(restored.at) < s.now - HOUR, `the day's rows at ${ended.at} and ${restored.at}, before the story hour`);
+    // While the flag stood the routing read the account as past its end and its poll sent it no usage request.
+    const within = (row) => Date.parse(row.at) >= Date.parse(ended.at) && Date.parse(row.at) <= Date.parse(restored.at);
+    const there = log.filter((row) => within(row) && (row.type === 'decision' ? row.accountId === account.id || row.fromAccountId === account.id : row.accountId === account.id && row.kind.startsWith('poll_')));
+    assert.deepEqual(there.map((row) => `${row.type} ${row.kind} ${row.at}`), []);
   });
 
   test(`a booking a request ended without usage expires once at the request's end, with the cause its end carries, at ${at}`, async () => {
@@ -1889,8 +2106,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const error = round && !slowed ? Math.round((1 - round.detail.projection) * 1_000) / 1_000 : null;
       assert.deepEqual([item.detail.early_ms, item.detail.projection_error], [early, error], item.subject.id);
     }
-    // Nightly's wall follows no 5-hour round and secondary's the projection round at 11:00, so neither reads early.
-    assert.deepEqual(walls.map((i) => [i.subject.id, i.detail.early_ms, i.detail.projection_error]), [['nightly', null, null], ['secondary', null, -0.087]]);
+    // Nightly's wall follows no 5-hour round and secondary's the projection round at 11:00, so neither reads early, and
+    // studio's follows the round its stretch fired at 14:05, so it reads how long before its reset it came.
+    assert.deepEqual(walls.map((i) => [i.subject.id, i.detail.early_ms === null ? null : i.detail.early_ms > 0, i.detail.projection_error]), [['nightly', null, null], ['secondary', null, -0.087], ['studio', true, null]]);
   });
 
   test(`the four routing conditions are the trailing day's fold of the routing log, one item per subject in the route's order, at ${at}`, async () => {
@@ -1937,7 +2155,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     );
     const read = s.attention.filter((i) => kinds.includes(i.kind)).map((i) => [i.kind, i.subject.id, Date.parse(i.since)]);
     assert.deepEqual(read, want);
-    assert.deepEqual(read.map((x) => `${x[0]} ${x[1]}`), ['wall_reached nightly', 'wall_reached secondary', 'destination_spent nightly', 'shed_no_runway all', 'slowed_long studio']);
+    assert.deepEqual(read.map((x) => `${x[0]} ${x[1]}`), ['wall_reached nightly', 'wall_reached secondary', 'wall_reached studio', 'destination_spent nightly', 'shed_no_runway all', 'slowed_long studio']);
     const item = s.attention.find((i) => i.kind === 'slowed_long');
     assert.deepEqual(
       [item.detail.spans, item.detail.open, item.detail.slowed_ms, item.detail.bar_ms, item.detail.factor_min, item.detail.setting, item.detail.setting_values],
@@ -2774,4 +2992,28 @@ test("the hour a full day back counts toward the accounts' and pools' day totals
     assert.equal(p.traffic24h[0].requests, s.asked(early).filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
   }
   assert.equal(s.overview.requests24h, s.asked(s.counted).length, "the dashboard's day keeps its own first hour");
+});
+
+test("a paired row's first reading is stamped at the list read that lands it, after the confirm", async () => {
+  // Every story load pins the clock its bundle reads while it loads, so this case waits for them and reads the wall
+  // clock alone.
+  await loading;
+  const d = await import('./dist/api.js');
+  const api = new d.MockApi();
+  await api.login('admin');
+  const started = await api.startPairing({ id: 'stamped', label: 'Stamped' });
+  await api.completePairing(started.id, { code: 'code', state: started.state });
+  const before = Date.now();
+  await api.confirmPairing(started.id);
+  // The confirm's first poll lands a few seconds on, on the mock's clock.
+  await new Promise((resolve) => setTimeout(resolve, 2_200));
+  const from = Date.now();
+  const listing = api.listAccounts();
+  const to = Date.now();
+  const row = (await listing).find((a) => a.id === 'stamped');
+  assert.ok(row.windows.length > 0, 'the first reading landed');
+  for (const w of row.windows) {
+    const at = Date.parse(w.observedAt);
+    assert.ok(at >= from && at <= to && at > before, `${w.id} read at ${w.observedAt}, the list read at ${iso(from)}, the confirm after ${iso(before)}`);
+  }
 });

@@ -13,8 +13,11 @@ const rng = createRng(2_024);
 
 /** What a fixed row writes out in place of the rolls, each time in minutes before the mock's now. */
 interface WrittenFigures {
-  /** Main first, then its subagents: the id, the last request and the next probe in seconds ahead, null for none. */
-  agents: { agentId: string; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
+  /**
+   * Main first, then its subagents: the id, the last request and the next probe in seconds ahead, null for none, and
+   * the last probe where the row writes it.
+   */
+  agents: { agentId: string; lastProbeMinutes?: number; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
   burn: number;
   burnAtMinutes: number;
   /** The deepest cache-map entry's prefix of the main pin. */
@@ -36,7 +39,9 @@ interface WrittenFigures {
 // would ever drop a row. `lastUseFromRows` reads the last use off the session's
 // own requests instead, for the runner's sessions on `ci`: no pin keeps them in
 // use, and their account has been at its daily budget since its last served
-// request.
+// request. Session 0 reads it so too, since its main still awaits the evidence of
+// its last request, so no probe has renewed the pin since and the row and the line
+// agree.
 // `released` marks a session whose every
 // agent, main included, the mod released. `sessionId` writes out the id of a
 // session past the story's ids whose story row names it.
@@ -67,7 +72,7 @@ const sessionSpec: ({
       sessionId: string;
     }
 ))[] = [
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 2, companion: 'silent' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
@@ -156,6 +161,29 @@ const sessionSpec: ({
       createdMinutes: 95,
       lastInputTokens: 10_800,
       lastRefreshMinutes: 21,
+    },
+  },
+  // A session the mod released whole after a probe and one more turn, both past all's ten-minute affinity window, so
+  // the router expired its pin and only the released line stays listed.
+  {
+    keyId: 'desktop',
+    accountId: 'primary',
+    model: 'claude-sonnet-5',
+    state: 'idle',
+    agents: 1,
+    companion: 'reporting',
+    released: true,
+    fixed: true,
+    idleMinutes: 25,
+    sessionId: '1f7c3a9e-5b24-4d86-9e10-7a3c6b8d2f59',
+    figures: {
+      agents: [{ agentId: 'main', lastProbeMinutes: 31, lastRequestMinutes: 25, nextProbeSeconds: null }],
+      burn: 0.05,
+      burnAtMinutes: 26,
+      cachedPrefixTokens: 8_000,
+      createdMinutes: 90,
+      lastInputTokens: 9_400,
+      lastRefreshMinutes: 26,
     },
   },
 ];
@@ -354,11 +382,13 @@ const RECIPE_CAUSES: (RecipeCause | null)[] = [
   null,
   // One row for each session past the story's ids, so the modulo wraps none of them onto the first causes. The
   // finished row's main is written over its own, the row idle for two hours ran past the `all` pool's one-hour max
-  // idle as the 95-minute `laptop` row did, and the pin on the work pool's former member waits for its next probe.
+  // idle as the 95-minute `laptop` row did, the pin on the work pool's former member waits for its next probe, and the
+  // released row's main is written over its own.
   null,
   null,
   null,
   'idle_limit',
+  null,
   null,
 ];
 
@@ -463,7 +493,8 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const wakeAt = parkKind === 'scheduled' ? ahead(3 * 24 * 60 * MINUTE + 30_000) : null;
     // An agent whose request still awaits its evidence has not been probed since, a probe in flight was dispatched at
     // its due time, which the engine records as the last probe, and the rest were probed minutes ago.
-    const lastProbeAt = cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
+    const writtenProbe = fixedAgents?.[j].lastProbeMinutes;
+    const lastProbeAt = writtenProbe !== undefined ? ago(writtenProbe * MINUTE) : cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     // The written session's rows past its drawn pair are written, so a reader meets every lifecycle word. A session the
     // mod released whole keeps its draws, so the rows after it keep theirs.
