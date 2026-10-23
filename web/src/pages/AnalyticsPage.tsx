@@ -1190,10 +1190,11 @@ function shareTilesOf(groupBy: GroupBy, namedAccount: string | null, group: Anal
 
 /**
  * A probe figure's two sides under native: the plan probes' 20x 7-day equivalent off the whole read and the billed
- * probes' dollars off the billed read, told apart by the counts of their probes that reached the upstream, since a
- * held or skipped probe costs nothing. `undefined` leaves out a side with no such probe, null reads a dash where the
- * plan probes priced nothing on the window, and a group with no such probe on either side reads its zero in each unit,
- * as an empty range does, with no mark, since no figure of it is an estimate. The plan side's mark is `probeMarked`'s.
+ * probes' dollars off the billed read, told apart by the counts of their answered and failed probes (`upstreamProbes`),
+ * since a held or skipped probe costs nothing. `undefined` leaves out a side with no such probe, null reads a dash
+ * where the plan probes priced nothing on the window, and a group with no such probe on either side reads its zero in
+ * each unit, as an empty range does, with no mark, since no figure of it is an estimate. The plan side's mark is
+ * `probeMarked`'s.
  */
 function probeSidesOf(whole: AnalyticsGroup, billed: AnalyticsGroup | null | undefined, read: 'cost' | 'wasted'): { billed: number | undefined; equivalent: number | null | undefined; estimated: boolean } {
   const billedProbes = billed ? upstreamProbes(billed) : 0;
@@ -1211,8 +1212,8 @@ const probeFiguresOf = (sides: ReturnType<typeof probeSidesOf>): CostFigure[] =>
 /**
  * The saving's two sides under native, told apart by their kept-warm credits, the plan side's the whole read's less the
  * billed read's: the plan credits' 20x 7-day saving off the whole read and the billed credits' dollars off `billed`.
- * `net` reads each side's saving less its probes' cost, so a side stands there on a credit or a probe that reached the
- * upstream, and a side whose probes kept nothing warm nets their cost under zero. A held or skipped probe costs
+ * `net` reads each side's saving less its probes' cost, so a side stands there on a credit or on an answered or failed
+ * probe, and a side whose probes kept nothing warm nets their cost under zero. A held or skipped probe costs
  * nothing, so it leaves its side's saving whole. `undefined` leaves a side out, null reads a dash where the plan rows
  * priced nothing on the window, and a group with nothing on either side reads its zero in each unit.
  */
@@ -1820,7 +1821,7 @@ function Histogram({ h, format, p99 }: { format: (v: number) => string; h: numbe
  * where the route answers it, which it does while `namedAccount`, the Accounts filter's one entry, is set.
  */
 function CacheByModel({ error, funded, groups, loading, namedAccount, unit }: { error: string | null; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; namedAccount: string | null; unit: UnitPosition }) {
-  // A request the router rejected before routing reads no cache, so the group without a model has no row here.
+  // A request refused before it resolved a model reads no cache, so the group without a model has no row here.
   const rows = useMemo(() => groups.filter((g) => g.key !== '').sort((a, b) => b.tokens.cacheRead - a.tokens.cacheRead), [groups]);
   const subtitle =
     unit === 'native'

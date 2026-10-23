@@ -1909,8 +1909,8 @@ function storySpecs(): Spec[] {
     // threshold at 0.73, and the sessions placed after it are the round's other four pins.
     at('req_b1e7c4a9-a69', 1, 1, t(13, 47, 24), 'placed', 'studio'),
     at('req_4f2a8d6e-b7a', 1, 1, t(13, 48), 'renewed', 'studio', { pin: live('continues_pin', 36_000) }),
-    // The annex stands at its cap for the nine minutes from 13:50:30 to 13:59:05, so the slowed studio, which a fresh
-    // session no longer fits, stays the engine's pick for the four sessions the stretch's round reads at 14:05.
+    // The annex stands at its cap from 13:50:30 to 13:59:05, so the slowed studio, which a fresh session no longer
+    // fits, stays the engine's pick for the four sessions the stretch's round reads at 14:05.
     at('req_6b3e8d1a-c73', 1, 1, t(13, 50, 30), 'placed', 'studio', { inFlight: { annex: 16 } }),
     at('req_2f9a6c4e-d84', 1, 1, t(13, 53, 10), 'placed', 'studio', { inFlight: { annex: 16 } }),
     at('req_c5d8e2b7-e95', 1, 1, t(13, 58, 40), 'placed', 'studio', { inFlight: { annex: 16 } }),

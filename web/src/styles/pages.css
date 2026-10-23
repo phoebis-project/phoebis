@@ -4566,9 +4566,6 @@
   padding-left: 8px;
 }
 
-/* Two rings share one card, so the card takes its grid's whole row, which the Billed by card would otherwise leave half
-   empty beside it. Each ring sets its list under it, since half a narrow card leaves the list no room beside the ring,
-   and below 700 px the rings stack and each list returns beside its ring. */
 /* The Burn grid draws three plan cards beside the spend card, or two without a model week, the Cache warming grid five
    and the Traffic grid seven, so an odd last card spans the row rather than leaving a half empty. */
 .burn-grid > .card:last-child:nth-child(odd),
@@ -4577,6 +4574,9 @@
   grid-column: 1 / -1;
 }
 
+/* Two rings share one card, so the card takes its grid's whole row, which the Billed by card would otherwise leave half
+   empty beside it. Each ring sets its list under it, since half a narrow card leaves the list no room beside the ring,
+   and below 700 px the rings stack and each list returns beside its ring. */
 .grid-2 > .card:has(.split-pair) {
   grid-column: 1 / -1;
 }

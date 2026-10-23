@@ -338,14 +338,14 @@ answers its figure answers `estimated` true beside it, which the console draws a
 model has served a
 plan-funded request since the start, the ledger raises the `model_unweighted` attention item for the `phoebis_attention`
 gauge, `GET /admin/attention` answers it, and the console lists it on the dashboard's attention line as a plain badge
-([Conditions and gauges](#conditions-and-gauges)). A model of no model tier, or of a
-model tier with no weighed model, prices no share: the prediction adds no charge, the projection adds no burn, the
-shedding round ranks the pin after every priced one and never marks it, the analytics list the share under model
-unlisted and the cost reference shows a dash. An account tier without a capacity on a window prices no share there
-either, and the prediction adds no charge and the projection no burn on that window. While the account runs on its plan,
-a shedding round on that window reads that tier's pins as unpriced, after every priced pin, and marks none of them, and
-in the analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves `null` on a
-listed tier reads model unlisted. A dated model id reads the weight of its undated name.
+([Conditions and gauges](#conditions-and-gauges)). A model of no model tier, or of a model tier with no weighed model,
+prices no share: the prediction adds no charge, the projection adds no burn, the shedding round ranks the pin after
+every priced one and never marks it, the analytics list the share under model unlisted and the cost reference shows a
+dash. An account tier without a capacity on a window prices no share there either, and the prediction adds no charge and
+the projection no burn on that window. While the account runs on its plan, a shedding round on that window reads that
+tier's pins as unpriced, after every priced pin, and marks none of them, and in the analytics an account on a tier the
+file lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. A dated
+model id reads the weight of its undated name.
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
@@ -545,8 +545,8 @@ The decisions and events of the log, the decision card and the query the view ke
 
 The Traffic, Burn, Latency, Cache, Cost, Cache warming and Accounts sections, their ranges and groupings, are on
 [Analytics](console.md#analytics), the held time per bucket under Traffic's moves chart among them, which reads the
-slow-down's two rollup counts above. Under the model grouping the requests the router rejected before routing keep the
-empty key and read "no model".
+slow-down's two rollup counts above. Under the model grouping a request refused before it resolved a model keeps the
+empty key and reads "no model".
 
 ## Conditions and gauges
 

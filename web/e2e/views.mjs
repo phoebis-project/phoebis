@@ -1043,7 +1043,7 @@ async function routingLogColumns(theme) {
         }
         if (width >= 1920) for (const [, need, column, text] of got.cut.filter(([name]) => name === 'time')) say(`${where} the request link "${text}" under the time takes ${need}px of the ${column}px column and is cut`);
         for (const [name, need, column, text] of got.longest) {
-          // Strict: a line past its column by any fraction of a pixel wraps, the time at its last space.
+          // Strict: a line past its column by any fraction of a pixel wraps or overflows, the time at its last space.
           if (name !== 'account' && need !== null && need > column) say(`${where} the ${named[name]} column is ${column}px, narrower than its longest cell "${text}" at ${need}px`);
         }
         if (got.floor !== null && got.account !== null && got.floor[0] > got.account + 0.5) say(`${where} the Account column is ${got.account}px, under the longest account id "${got.floor[1]}" at ${got.floor[0]}px`);

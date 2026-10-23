@@ -423,7 +423,10 @@ const holderKeyOf = (key: string): { generation: number | null; id: string } => 
   return { generation: generation === undefined ? null : Number(generation), id };
 };
 
-/** The key dimension alone carries a generation in its group key; the reserved id reads out in every dimension. */
+/**
+ * The key dimension alone carries a generation in its group key. The reserved id reads out in every dimension. The
+ * model grouping's empty key reads `no model`, as the route labels it.
+ */
 const labelOf = (key: string, groupBy: AnalyticsGroupBy) => {
   if (key === '-') return 'unattributed';
   if (groupBy === 'model' && key === '') return 'no model';

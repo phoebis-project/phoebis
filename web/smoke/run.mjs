@@ -1307,8 +1307,7 @@ const quotaSection = async (page, label) => {
  */
 const quotaListed = (a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired';
 m = await mount('/quota');
-// secondary's backoff is the one listed row needing attention: legacy's failing poll and spare's snapshot leave with
-// their cards.
+// secondary's backoff is the one listed row needing attention: legacy's failing poll leaves with its card.
 expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).length} accounts`, '1 needs attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'polled', 'rate limited', 'backing off']);
 /**
  * The story's count on the bar, `{n} accounts, {n} need attention`, as its two figures. A funding_required account
@@ -1490,6 +1489,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     const chip = [...m.container.querySelectorAll('.qcard__windows .qchip')].find((c) => c.textContent?.trim() === label);
     return [...(chip?.classList ?? [])].find((n) => n.startsWith('qchip--')) ?? 'missing';
   };
+  // `7d19% left` is secondary's 7-day seed, 0.808 used (`web/src/mock/accounts.ts`), 0.8 points under the 20% break.
   results.push({ name: '/quota tone breaks at 50% and 20% remaining', ok: toneOf('7d59% left') === 'qchip--good' && toneOf('5h38% left') === 'qchip--warn' && toneOf('7d19% left') === 'qchip--low', missing: [toneOf('7d59% left'), toneOf('5h38% left'), toneOf('7d19% left')] });
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
@@ -2046,7 +2046,7 @@ m.unmount();
   window.HTMLElement.prototype.getBoundingClientRect = measure;
   const dated = (i, per) => (i % per === 0 ? `Sep ${15 + i / per} ` : '');
   results.push({
-    name: '/quota#quota-windows under the 12-hour setting a 5-hour cell too narrow for its full time prints the hour without its leading zero and its period, the full time on its title',
+    name: '/quota#quota-windows under the 12-hour setting a 5-hour cell too narrow for its full time prints the hour with its period and without a leading zero, the full time on its title',
     ok:
       shortHours.length === 12 &&
       shortHours.every(([sub, title], i) => sub === ['12 AM', '6 AM', '12 PM', '6 PM'][i % 4] && new RegExp(`^${dated(i, 4)}${['12', '06', '12', '06'][i % 4]}:00\\s${i % 4 < 2 ? 'AM' : 'PM'}$`).test(title ?? '')),
@@ -2409,8 +2409,9 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   results.push({ name: '/accounts Disconnect and Delete account are danger, and Delete account is last', ok: dangers.join('|') === 'Disconnect|Delete account' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete account', missing: dangers });
   {
     // The Status step of Add filter lists the statuses the router reports after the choice that clears it, and a pick
-    // writes the status to the address, narrows the rows and stands as a chip until its x clears it. The labels are the
-    // docs' six in their order, written out so a dropped status or an unknown label fails the read.
+    // writes the status to the address, narrows the rows and stands as a chip until its x clears it. After "All
+    // statuses" the labels are the docs' six in their order, written out so a dropped status or an unknown label fails
+    // the read.
     const STATUS_STEP = ['All statuses', 'Cooling down', 'Needs funding', 'Paused', 'Needs re-auth', 'Ready', 'Not paired'];
     const box = await addFilter(m, 'Status');
     const statuses = boxOptions().map((o) => o.textContent?.trim() ?? '');
@@ -9568,8 +9569,8 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   }
 }
 {
-  // The mock's one request with an empty model, `req_6c3a9e27-5b1` in `web/src/mock/requests.ts`, was refused for an
-  // unknown key before the router resolved a model, and it sits on the first page. Its row is found by its id and the
+  // The mock's one request with an empty model, `req_6c3a9e27-5b1` in `web/src/mock/requests.ts`, was refused for its
+  // revoked key before the router resolved a model, and it sits on the first page. Its row is found by its id and the
   // column by its header, since the story's newer rows and the shown columns both move.
   const REFUSED = 'req_6c3a9e27-5b1';
   results.push({ name: 'fixture: the request refused before the router resolved a model carries an empty model', ok: requests.find((r) => r.id === REFUSED)?.model === '', missing: [REFUSED] });
@@ -15768,7 +15769,7 @@ expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Ti
 await tab(m, 'Cache');
 expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
 {
-  // A request the router rejected before routing read no cache, so Cache by model lists its group under neither its
+  // A request refused before it resolved a model read no cache, so Cache by model lists its group under neither its
   // key nor its "no model" label, the route's word for it.
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cache by model');
   const labels = [...(table?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length > 1).map((tr) => tr.children[0]?.textContent?.trim() ?? '');
@@ -18335,12 +18336,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Model');
     {
-      // The story's revoked key sends one request the router refuses before routing, so it carries no model. Its row
+      // The story's revoked key sends one request refused before it resolved a model, so it carries no model. Its row
       // counts the request under Refused alone, as no request and no error.
       const row = trafficRows('model').find((cells) => cells[0] === 'no model') ?? [];
       const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
       results.push({
-        name: '/analytics grouped by model the Traffic table names the request the router refused before routing "no model", under Refused alone',
+        name: '/analytics grouped by model the Traffic table names the request refused before it resolved a model "no model", under Refused alone',
         ok: row.length === 13 && figure(1) === 0 && figure(2) === 0 && row[8] === '1' && row[9] === '0.0%',
         missing: row.length ? row : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
       });

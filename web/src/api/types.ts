@@ -865,7 +865,7 @@ export interface StreamCut {
   at: string;
   attempt: number;
   bytesRelayed: number;
-  /** `stream_cut`, `stream_stalled`, `stream_undecodable` or `account_cancelled`, the request's error code word. */
+  /** `account_canceled`, `stream_cut`, `stream_stalled` or `stream_undecodable`, the request's error code word. */
   code: string;
   text: string;
   upstreamRequestId: string | null;

@@ -229,11 +229,11 @@ of it behind, the upcoming window dashed and the elapsed ones muted. The current
 its reset, `59% left · Sep 19 20:10`, or with the share alone where the bar is too narrow for both, and a bar too
 narrow for its label keeps it on hover. On a narrow screen each lane stacks its account and its chips above its bars,
 the now marker and the day grid cross the bars alone, the marker's pill under the day labels, and the day axis prints
-short labels. A 5-hour cell too narrow for its time prints the hour alone, `06` under the 24-hour time format and `6 AM`
-under the 12-hour one. Under the 12-hour format the 5-hour mode draws fewer, wider cells where twelve would be too
-narrow for `12 AM`. An account marked canceled with a saved end shows the end on its lane: no window opens after it, and
-the window that spans it stops there. The legend reads current window, upcoming, used, past window, now and plan ends,
-and the note "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the
+short labels. A 5-hour cell too narrow for its full labels prints the hour alone, `06` under the 24-hour time format and
+`6 AM` under the 12-hour one. Under the 12-hour format the 5-hour mode draws fewer, wider cells where twelve would be
+too narrow for `12 AM`. An account marked canceled with a saved end shows the end on its lane: no window opens after it,
+and the window that spans it stops there. The legend reads current window, upcoming, used, past window, now and plan
+ends, and the note "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the
 instant it resets. Lanes ending together compete for the same days."
 
 ## Accounts
@@ -519,8 +519,8 @@ The view opens on its bar: "Search keys", Add filter with the Pool and Status fi
 edge the split Refresh button and the count of the keys the table lists, `{n} keys`. Status offers All statuses, Active,
 Disabled, Expired or Revoked. Pool takes any number of pools, each as a chip of its own, such as "pool: jobs" and "pool:
 all", and a pool the address names that the router does not list keeps its chip until the pools load. The search and the
-filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts
-at 5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost
+filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts at
+5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost
 follow, and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's
 figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the
 subscription traffic's 20x 7-day equivalent over the billed traffic's dollars, and a bar's figure and a cost line read a
@@ -787,7 +787,8 @@ disabled, while a link whose range ends at the moment it was made reads on.
 Filtered to one session the view sums the request log instead of the hourly rollups and says so, over the first 10,000
 requests of the range, and a session with more reads "Partial: the first 10,000 requests of the range" on a line under
 the bar. On a custom range the view walks the session's pages once, and each auto reload re-reads the first page alone,
-with the later pages standing as loaded. Under that filter the Cost split reads "Cost split is not available for a
+with the later pages standing as loaded. Grouped by key, a deleted key's group reads `<id> (deleted, created <time>)`,
+its creation instant in the viewer's zone. Under that filter the Cost split reads "Cost split is not available for a
 session view.", the Write cost vs read cost legend reads a dash for each cost, and Cache warming reads "Cache warming
 figures are not available for a session view." with "not in the request log" under its probe tiles, since a request row
 carries one cost total and no probe or kept-warm fact. The range, the grouping, every filter, the client groups and the
@@ -809,8 +810,8 @@ range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alo
 registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range." where none did
 ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited, Failed,
 Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the Requests and Error rate headers
-reading "The refused requests are left out, see the Refused column" on hover. Under the model grouping the requests the
-router rejected before routing group under "no model", which the Cache by model table leaves out. A request the router
+reading "The refused requests are left out, see the Refused column" on hover. Under the model grouping a request refused
+before it resolved a model groups under "no model", which the Cache by model table leaves out. A request the router
 refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card, a
 guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
 outcome columns, the error rate, the cache figures or the latency.
@@ -1047,13 +1048,14 @@ entry under the Revision select.
 system preference."), the Time format, 12h or 24h ("Applies to every timestamp and axis tick."), and the Unit, which
 mirrors the top bar's switch with a legend button of its own ("The unit every view prices a request in. Native reads a
 subscription request as 20x window equivalents and a billed request in dollars."), the three browser preferences the
-shell reads. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and Subscription costs path
-(each as the path or "not configured", then its table's entry in force, its revision count and the next date while one
-is pending, as `effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the
-cost model reports a problem), Storage path, "Requests, samples and the routing log" and "Rollups" (each as
-`kept for {n} days`, or "kept forever" where its key is 0), and Admin secret as "configured" or "not configured", each
-path's and each retention line's hover naming the bootstrap key that sets it, and closes on "The values the
-configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
+shell reads, and at a phone's width each row's control takes a line of its own under its label. "About" lists Version,
+Profile, Metrics listener, Ledger path, API prices path and Subscription costs path (each as the path or "not
+configured", then its table's entry in force, its revision count and the next date while one is pending, as
+`effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the cost model reports
+a problem), Storage path, "Requests, samples and the routing log" and "Rollups" (each as `kept for {n} days`, or "kept
+forever" where its key is 0), and Admin secret as "configured" or "not configured", each path's and each retention
+line's hover naming the bootstrap key that sets it, and closes on "The values the configuration file sets are on the
+installation page, and `phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point
@@ -1183,7 +1185,7 @@ pin written, the reservation (the account, the share per window and the expiry),
 Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown,
 `re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the spend against
 a budget. With four entries or more, the cache-map row draws one chip per tier with its count and depth range, such as
-`message ×11 depth 1 to 11`, then the latest three entries' depths, and its control "All {n} entries" lists every entry
+`message ×11 depth 1 to 11`, then its three deepest message depths, and its control "All {n} entries" lists every entry
 until "Latest 3" folds them again. The foot offers the three widenings after "Widen to", this minute, this session and
 this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A
 record the retention purged reads "The record left with the retention", and one still loading "Loading the record".

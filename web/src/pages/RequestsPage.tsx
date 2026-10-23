@@ -141,7 +141,7 @@ function CostCell({ request, unit }: { request: RequestLog; unit: UnitPosition }
   );
 }
 
-/** A held row's badge in the Attempts cell, its text and its hover from one read of the hold's words. */
+/** A component of its own, so the expression-bodied row map reads the hold's words once. */
 function HeldBadge({ held }: { held: CohortHold }) {
   const words = heldWords(held);
   return (

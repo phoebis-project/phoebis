@@ -458,7 +458,7 @@ test('an account patch is refused where the account route refuses it, and a canc
   const restored = await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
   assert.deepEqual([restored.canceled, restored.subscription.endsAt], [false, null], 'the end leaves with the flag');
   const unpaired = await api.updateAccount('spare', { cancelled: true, subscriptionEndsAt: end });
-  assert.equal(unpaired.subscription?.endsAt, end, 'a disconnected OAuth account still reports the end it was cancelled with');
+  assert.equal(unpaired.subscription?.endsAt, end, 'a disconnected OAuth account still reports the end it was canceled with');
 });
 
 const ACCOUNT_STALE = 'the account changed while the edit was being saved';
