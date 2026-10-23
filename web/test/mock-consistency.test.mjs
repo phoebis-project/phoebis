@@ -946,7 +946,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(records.length > 0 && unread.length > 0, 'the story runs a Fable request under Pace past a member that reports no model week');
     for (const [r, c] of unread) {
       assert.deepEqual([c.pace.remaining, c.pace.reset, c.pace.window], [1, null, 'seven_day_fable'], `${r.requestId}: ${c.accountId}`);
-      assert.ok(s.lib.candidateCells(c, r, s.now).paceTitle.startsWith('100% of the Fable week left'), `${r.requestId}: ${c.accountId}`);
+      assert.ok(s.lib.candidateCells(c, r, s.now).paceTitle.startsWith('100% of the 7-day Fable window left'), `${r.requestId}: ${c.accountId}`);
     }
     for (const r of records) for (const c of r.candidates) if (c.kind === 'oauth' && c.pace !== null) assert.equal(c.pace.window, 'seven_day_fable', r.requestId);
   });
@@ -1926,9 +1926,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const e = (await logOf(s)).find((row) => row.type === 'event' && row.kind === 'shedding_round' && row.requestId === r.requestId);
     assert.ok(e, "the round's event");
     const [fable, opus] = e.detail.pins;
-    // The round runs in a standard request, so the current pin walks the order on the Fable week, the one pin there and
-    // so the last one, which the engine never marks. The Opus pin draws no Fable week and leaves before the order with
-    // no figure.
+    // The round runs in a standard request, so the current pin walks the order on the 7-day Fable window, the one pin
+    // there and so the last one, which the engine never marks. The Opus pin draws no 7-day Fable window and leaves
+    // before the order with no figure.
     const figures = (p) => [p.burn, p.per_rewrite, p.rewrite, p.planned];
     assert.deepEqual(
       [e.accountId, e.detail.window, e.detail.pins.map((p) => p.model), fable.skip, opus.skip, figures(opus), e.detail.burn_sum, e.detail.marks, e.detail.outcome, e.detail.reason],
@@ -2917,8 +2917,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(sum(s.overview.hourly, (h) => h.refused), refused.length, 'the hourly refused too');
     const refusals = codesOf(refused);
     assert.equal(refusals.get(s.overview.topRefusalCode ?? '') ?? 0, Math.max(...refusals.values()), 'the top refusal code is their most frequent');
-    const failed = asked.filter((r) => r.status !== 200);
-    assert.equal(s.overview.errorRate24h, failed.length / asked.length, 'the rate is the failures over the asked requests');
+    // The ledger's rate: the asked requests less the succeeded ones, so a canceled row answered with a 200 counts.
+    const failed = asked.filter((r) => r.outcome !== 'succeeded');
+    assert.ok(failed.some((r) => r.status === 200), 'the day holds a request that did not succeed behind a 200');
+    assert.equal(s.overview.errorRate24h, failed.length / asked.length, 'the rate is the asked requests that did not succeed over the asked requests');
     assert.equal(sum(s.overview.hourly, (h) => h.errors), failed.length, 'the hourly errors leave the refused rows out');
     const codes = codesOf(asked);
     assert.equal(codes.get(s.overview.topErrorCode ?? '') ?? 0, Math.max(0, ...codes.values()), "the top code is the asked requests' most frequent");

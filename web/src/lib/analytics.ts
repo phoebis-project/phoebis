@@ -214,10 +214,11 @@ export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>, _group
 const EARLIER_HOLDER = /^(.+)@(\d+)$/;
 /**
  * A burn group's label. A burn point carries no label of its own, so the words are the breakdown's: an earlier key
- * holder's, `no model` for the model grouping's empty key and `unattributed` for what the router never attributed.
+ * holder's, `no model` for the model grouping's empty key, and for the reserved id `none` under the classifier grouping,
+ * as the Requests facet names it, and `unattributed` under every other.
  */
 function burnLabelOf(groupBy: BurnGroup, key: string): string {
-  if (key === '-') return 'unattributed';
+  if (key === '-') return groupBy === 'classifier' ? 'none' : 'unattributed';
   if (groupBy === 'model' && key === '') return 'no model';
   const holder = groupBy === 'key' ? EARLIER_HOLDER.exec(key) : null;
   return holder === null ? key : earlierHolderLabel(holder[1], Number(holder[2]));
@@ -285,9 +286,11 @@ export function oneAccountShares<T>(groups: AnalyticsGroup[], read: (g: Analytic
  */
 export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests === null ? Object.keys(g.costEquivalent).length > 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
 export const addReadWrite = (a: { read: number; write: number }, b: { read: number; write: number }) => ({ read: a.read + b.read, write: a.write + b.write });
-/** The requests that did not succeed over the requests. The refused requests are in neither, since the fold never
- *  counted them. Zero where nothing was rated. */
-export const errorRateOf = (g: Pick<AnalyticsGroup, 'requests' | 'succeeded'>): number => (g.requests > 0 ? (g.requests - g.succeeded) / g.requests : 0);
+/**
+ * The failed share of a group's requests, null for a group with no request, which the cells draw as a dash. The refused
+ * requests are in neither count, since the fold never counted them.
+ */
+export const errorRateOf = (g: Pick<AnalyticsGroup, 'requests' | 'succeeded'>): number | null => (g.requests > 0 ? (g.requests - g.succeeded) / g.requests : null);
 /**
  * Whether a group's probes oblige it to carry both shared probe windows on its shares: answered probes a plan account
  * served, since a held or skipped probe never ran. A group whose answered probes are all billed carries no plan window
@@ -331,7 +334,7 @@ export function keptWarmNote(k: { requests: number; tokens1h: number; tokens5m: 
 export const weekKeyOf = (shares: Record<string, unknown>): string | undefined => Object.keys(shares).find((k) => !SHARED_WINDOWS.includes(k));
 /**
  * The model week's label for a share map's key: the window label of the key, so a second model week reads under its
- * own name, and the Fable week's where no map names one.
+ * own name, and the 7-day Fable window's where no map names one.
  */
 export const weekLabelOf = (key: string | undefined): string => (key === undefined ? WINDOW_LABEL['7d_fable'] : (WINDOW_LABEL[windowKeyId(key) ?? ''] ?? key));
 /** The share table's model week column, named by the week keys its groups carry, each distinct week once. */
@@ -447,12 +450,14 @@ export function nativeFiguresOf(window: string, sides: { billed: number | undefi
   };
 }
 /**
- * The Cost by card's note: `{n} groups unpriced in {m} buckets, drawn as gaps`, singular `1 group unpriced in 1 bucket,
- * drawn as a gap`, each count read on its own, and null where no drawn group read unpriced in the range.
+ * The Cost by chart's note on the groups it draws as gaps: one label ("research unpriced in 3 buckets, drawn as gaps",
+ * "1 bucket, drawn as a gap"), up to three joined by commas, a count past three ("5 groups unpriced in 12 buckets,
+ * drawn as gaps"), null where no bucket is a gap. `labels` are the unpriced groups' labels in the chart's order.
  */
-export function unpricedNote(groups: number, buckets: number): string | null {
-  if (groups === 0 || buckets === 0) return null;
-  return `${fmtInt(groups)} ${groups === 1 ? 'group' : 'groups'} unpriced in ${fmtInt(buckets)} ${buckets === 1 ? 'bucket, drawn as a gap' : 'buckets, drawn as gaps'}`;
+export function unpricedNote(labels: readonly string[], buckets: number): string | null {
+  if (labels.length === 0 || buckets === 0) return null;
+  const named = labels.length > 3 ? `${fmtInt(labels.length)} groups` : labels.join(', ');
+  return `${named} unpriced in ${fmtInt(buckets)} ${buckets === 1 ? 'bucket, drawn as a gap' : 'buckets, drawn as gaps'}`;
 }
 /**
  * Whether a probe figure's plan side carries the estimate's mark: a plan probe row priced through the model tier's
@@ -783,5 +788,5 @@ export const MIN_RISE = 0.05;
 /** The band a completed window's ratio agrees with the table inside, symmetric in log terms, as the ledger reads it. */
 export const RATIO_HIGH = 1.25;
 export const RATIO_LOW = 0.8;
-/** A ratio the condition marks: outside the band after a rise the readings' whole-percent steps can carry. */
-export const ratioOff = (row: Pick<Reconciliation, 'observedRise' | 'ratio'>): boolean => row.observedRise >= MIN_RISE && (row.ratio < RATIO_LOW || row.ratio > RATIO_HIGH);
+/** Off once the rise and the priced share each reach MIN_RISE and the ratio leaves the band, as the engine badges it. */
+export const ratioOff = (row: Pick<Reconciliation, 'observedRise' | 'predictedShare' | 'ratio'>): boolean => row.observedRise >= MIN_RISE && row.predictedShare >= MIN_RISE && (row.ratio < RATIO_LOW || row.ratio > RATIO_HIGH);

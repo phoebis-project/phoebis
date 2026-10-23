@@ -427,11 +427,12 @@ const holderKeyOf = (key: string): { generation: number | null; id: string } => 
 };
 
 /**
- * The key dimension alone carries a generation in its group key. The reserved id reads out in every dimension. The
- * model grouping's empty key reads `no model`, as the route labels it.
+ * The key dimension alone carries a generation in its group key. The reserved id reads `none` under the classifier
+ * grouping, as the Requests facet names it, and `unattributed` under every other. The model grouping's empty key reads
+ * `no model`, as the route labels it.
  */
 const labelOf = (key: string, groupBy: AnalyticsGroupBy) => {
-  if (key === '-') return 'unattributed';
+  if (key === '-') return groupBy === 'classifier' ? 'none' : 'unattributed';
   if (groupBy === 'model' && key === '') return 'no model';
   const holder = holderKeyOf(key);
   if (groupBy !== 'key' || holder.generation === null) return key;

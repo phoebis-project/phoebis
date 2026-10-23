@@ -1056,7 +1056,8 @@ export class MockApi implements Api {
         bucket.requests += 1;
         bucket.tokens += total;
         bucket.cost += r.costUsd;
-        if (r.status !== 200) bucket.errors += 1;
+        // The ledger's rate: a request that did not succeed is an error, a canceled one answered with a 200 among them.
+        if (r.outcome !== 'succeeded') bucket.errors += 1;
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -1068,7 +1069,7 @@ export class MockApi implements Api {
       billed24h: day.billedUsd,
       cost24h: cost,
       equivalent24h: day.equivalent,
-      errorRate24h: rated.length ? rated.filter((r) => r.status !== 200).length / rated.length : null,
+      errorRate24h: rated.length ? rated.filter((r) => r.outcome !== 'succeeded').length / rated.length : null,
       estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
       refused24h: last24h.length - rated.length,

@@ -62,7 +62,7 @@ const DECISIONS = [
   ['renewed, cold', decision({ kind: 'renewed', fact: [fact('cause', 'compacted', 'text')], warmth: { cause: 'compacted', verdict: 'cold' } }), 'no rule fired', ['cause compacted']],
   ['renewed on a hot account', decision({ kind: 'renewed', fact: [fact('five_hour', 0.98, 'percent')] }), 'no rule fired', ['5h 98%']],
   ['renewed on a hot 7-day window', decision({ kind: 'renewed', fact: [fact('seven_day', 0.91, 'percent')] }), 'no rule fired', ['7d 91%']],
-  ['renewed on a hot Fable week', decision({ kind: 'renewed', fact: [fact('seven_day_fable', 0.9, 'percent')] }), 'no rule fired', ['Fable 90%']],
+  ['renewed on a hot 7-day Fable window', decision({ kind: 'renewed', fact: [fact('seven_day_fable', 0.9, 'percent')] }), 'no rule fired', ['Fable 90%']],
   ['placed by the strategy', decision({ by: strategy('pace', [0, 0, 0]), fact: [fact('gap', 0.0134, 'percent_per_hour'), fact('over', 'secondary', null, { id: 'secondary', kind: 'account' })], tier: [0, 0, 0] }), 'Pace P0', ['gap 1.34 %/h', 'over secondary']],
   ['placed by round robin', decision({ by: strategy('round_robin', [0, 0, 0]), fact: [fact('turn', '2 of 4', 'text')], strategy: 'round_robin' }), 'round robin P0', ['turn 2 of 4']],
   ['placed by priority', decision({ by: strategy('priority', [0, 0, 0]), fact: [fact('rank', '1 of 2', 'text')], strategy: 'priority' }), 'priority P0', ['rank 1 of 2']],
@@ -1076,7 +1076,7 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Pins');
   assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark']);
   assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [
-    ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x Fable week', 'secondary', 'marked'],
+    ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x 7-day Fable', 'secondary', 'marked'],
     ['s2', 'd93b', 'warm', '-', '48K', '-', '-', 'off window'],
   ]);
   const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Survive a restart');
@@ -1089,8 +1089,8 @@ test("a round's off-window pin reads its word and the rewrite cell names its uni
     const pairs = d.detailPairs(event('shedding_round', body), NOW, []);
     return { rows: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => [chipText(r[5]), chipText(r[7])]), skipped: texts(pairs.find((p) => p.label === 'Skipped')?.chips ?? []) };
   };
-  // The Fable pin's rewrite is the 20x equivalent of its week, and the Opus pin, which draws no Fable week, sat out.
-  assert.deepEqual(drawn(detail), { rows: [['0.5% of 20x Fable week', 'marked'], ['-', 'off window']], skipped: ['s2: off window'] });
+  // The Fable pin's rewrite is its week's 20x equivalent, and the Opus pin, which draws no 7-day Fable window, sat out.
+  assert.deepEqual(drawn(detail), { rows: [['0.5% of 20x 7-day Fable', 'marked'], ['-', 'off window']], skipped: ['s2: off window'] });
   assert.deepEqual(read(event('shedding_round', detail)).facts, ['pins 1 of 2'], 'the count reads every listed pin, the one left out included');
   // On a 5-hour round every pin is on the window, and a model with no week of its own prices its rewrite on the 7-day.
   const fiveHour = (pin) => drawn({ ...detail, pins: [pin], window: 'five_hour' }).rows[0][0];
@@ -1543,7 +1543,7 @@ test("the Pace cell's title names the share, the hours, the deadline, the burn a
   const tail = '. Inside its tier, the highest spare rate wins.';
   assert.equal(title(read), `66% of the 7-day window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   const end = ms(16, 44);
-  assert.equal(title({ burn: 0.05, deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23 - 0.05, window: 'seven_day_fable' }), `45% of the Fable week left over 2 h to its subscription's end at 16:44, less 5.00 %/h of burn: 15.18 %/h${tail}`);
+  assert.equal(title({ burn: 0.05, deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23 - 0.05, window: 'seven_day_fable' }), `45% of the 7-day Fable window left over 2 h to its subscription's end at 16:44, less 5.00 %/h of burn: 15.18 %/h${tail}`);
   assert.equal(title({ burn: 0, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }), `100% of the 7-day window left over 168 h with no reset read, less 0.00 %/h of burn: 0.60 %/h${tail}`);
   assert.equal(title({ ...read, window: null }), `66% of its window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   // Under an hour the span reads in minutes, and from an hour on in whole hours.
@@ -1559,7 +1559,7 @@ test("the Pace cell's title names the share, the hours, the deadline, the burn a
   assert.equal(title(null), null);
 
   const header = (window, pace = read) => d.paceHeader(record({ candidates: [key, candidate({ pace: { ...pace, window } })] }));
-  assert.equal(header('seven_day_fable'), 'Spare rate, Fable week per hour', 'the first subscription member names it, past a key');
+  assert.equal(header('seven_day_fable'), 'Spare rate, 7-day Fable per hour', 'the first subscription member names it, past a key');
   assert.equal(header('seven_day'), 'Spare rate, 7-day per hour');
   assert.equal(header('seven_day_opus'), 'Spare rate, seven day opus per hour');
   assert.equal(header(null), 'Pace');

@@ -1359,8 +1359,8 @@ function placementChipOf(c: RecordCandidate): Chip | null {
 }
 
 /** A Pace window's word in the column header and its phrase in a cell's hover. Any other window reads its id. */
-const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day_fable: 'Fable week' };
-const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the Fable week' };
+const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day_fable: '7-day Fable' };
+const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the 7-day Fable window' };
 
 /**
  * The Pace column's header: the window the first subscription candidate's score read. It reads "Pace" when that

@@ -506,8 +506,9 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const drawn = inFlightRng.int(0, 5);
     const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
-    // Pace reads one window as the engine does, chosen by the model alone: the Fable week for a Fable request, else the
-    // 7-day window, one the account has not read counting as untouched. An API key scores by its worst live bucket.
+    // Pace reads one window as the engine does, chosen by the model alone: the 7-day Fable window for a Fable request,
+    // else the 7-day window, one the account has not read counting as untouched. An API key scores by its worst live
+    // bucket.
     const windowName = r.canonicalModel.includes('fable') ? 'seven_day_fable' : 'seven_day';
     const reading = a.kind === 'api_key' ? windows.worst_bucket : windows[windowName];
     const remaining = reading === undefined ? 1 : Math.max(0, 1 - reading.utilization);
@@ -557,7 +558,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
 const NO_RUNWAY_ROUND = { accountId: 'primary', at: clock(14, 12, 30) };
 /** Studio's round fired by the stretch, at the renewal its slowed request's hold led to. */
 const STRETCH_ROUND = { accountId: 'studio', at: clock(14, 5) };
-/** Nightly's morning round on its Fable week, fired while the 5-hour window is under the hold. */
+/** Nightly's morning round on its 7-day Fable window, fired while the 5-hour window is under the hold. */
 const FABLE_WEEK_ROUND = { accountId: 'nightly', at: clock(8, 30) };
 /** The story's four rounds, which a later decision on the account reads as within the dwell. */
 const ROUNDS = [SHED_ROUND, NO_RUNWAY_ROUND, STRETCH_ROUND, FABLE_WEEK_ROUND];
@@ -1682,14 +1683,14 @@ const STRETCH_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.025, cold: false, keyId: 'notebook', lastInputTokens: 72_000, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: SLOWED_SESSION_ID, skip: null },
 ];
 
-/** The Fable week's burn on nightly at the round, all of it the Fable session's, since no other pin draws the week. */
+/** The 7-day Fable window's burn on nightly at the round, all the Fable session's, since no other pin draws it. */
 const FABLE_WEEK_BURN = 0.03;
 
 /**
  * Nightly's Fable-week round, its two pins as the round lists them: the Fable session's pin, the current one, whose
- * renewal runs standard, so it walks the order on the Fable week with the week's whole burn, and as the one pin walked
- * it is the last pin, which the engine never marks. Then an Opus pin, whose model draws no Fable week, so it leaves the
- * round before the order with no burn. The round marks nothing for the last pin.
+ * renewal runs standard, so it walks the order on the 7-day Fable window with the window's whole burn, and as the one
+ * pin walked it is the last pin, which the engine never marks. Then an Opus pin, whose model draws no 7-day Fable
+ * window, so it leaves the round before the order with no burn. The round marks nothing for the last pin.
  */
 const FABLE_WEEK_PINS: RoundPin[] = [
   { agentId: 'main', burn: FABLE_WEEK_BURN, cold: false, keyId: 'desktop', lastInputTokens: 81_000, marked: false, model: 'claude-fable-5-1', note: 'current', sessionId: sessionId('89cd1c92'), skip: 'last_pin' },
@@ -1719,7 +1720,7 @@ function storySpecs(): Spec[] {
   const spentNightly = (when: number) => oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w));
   // Studio's 5-hour reading where a hold reads it before any answer's head: the utilization the slow-down read.
   const studioAt = (when: number, utilization: number) => ({ studio: oauthWindows('studio', when, () => OLDER_FACTOR).map((w) => (w.id === '5h' ? { ...w, utilization } : w)) });
-  // Nightly's Fable week where the morning's Fable session runs it ahead of the walk back's even climb.
+  // Nightly's 7-day Fable window where the morning's Fable session runs it ahead of the walk back's even climb.
   const nightlyAt = (when: number, utilization: number) => ({ nightly: oauthWindows('nightly', when, () => OLDER_FACTOR).map((w) => (w.id === '7d_fable' ? { ...w, utilization } : w)) });
   // A pin's pace after one more gap. A gap at or over the work pool's burn average is a pause that folds nothing, and
   // any other moves the cycle toward the gap by one over the number of gaps folded with it, capped at eight, so the
@@ -1880,9 +1881,9 @@ function storySpecs(): Spec[] {
     // before the overage begins at the first head after 11:30:12: from then on the pool's overage rule fires on the
     // account's pins ahead of the shed rule. The 5-hour window the story spends at 13:10:21 opened at 08:11, so it is
     // 19 minutes old at the round, under all's hold of an hour, and its projection past the ceiling rides a burn that
-    // still carries the previous window's: the hold keeps it from firing, and the Fable week fires in its place. The
-    // Opus pin draws no Fable week, so the round lists it and counts nothing of it. The burns replace the account's, so
-    // the 5-hour burn stands beside the Fable week's.
+    // still carries the previous window's: the hold keeps it from firing, and the 7-day Fable window fires in its
+    // place. The Opus pin draws no 7-day Fable window, so the round lists it and counts nothing of it. The burns
+    // replace the account's, so the 5-hour burn stands beside the 7-day Fable window's.
     at('req_3e2b9d47-c18', 1, 1, t(8, 21, 40), 'placed', 'nightly'),
     at('req_3e7a5c19-f84', 1, 1, t(8, 30), 'renewed', 'nightly', {
       burns: { nightly: { five_hour: 0.03, seven_day_fable: FABLE_WEEK_BURN } },

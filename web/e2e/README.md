@@ -21,7 +21,12 @@ router pass), the list the "+N more" badge opens (every item, one badge per row 
 360 to 414 px (the first row one 22 px row of the lead, the badges that fit and the fold badge, the Replay button on a
 second row where they need more than the line, every part inside the line's box, the same draw on a second read), the
 dashboard's stat grid at the pass's viewport and at 400 by 900 (all five tiles drawn, wrapping as the grid's columns let
-them and none past its right edge, the tiles and their rows recorded at both widths), the top bar's controls (Log out
+them and none past its right edge, no tile's figure past its content box, the tiles, their rows and any figure past its
+tile recorded at both widths), the Dashboard's tiles at 1280 by 800 and 1440 by 900 (four to a row, the fourth a quarter
+of the row on the first tile's top edge and the fifth across the row's width at the first tile's left edge, both
+recorded), the Dashboard's tile words (the Estimated cost, 24h tile's subscription line a share of the 20x 7-day window
+and its note a figure per hour, and the Refused, 24h tile's hover naming the router's own refusals beside the Requests,
+24h tile's hover, the two labels in one type), the top bar's controls (Log out
 and the theme control 32 px at one top), the sidebar's Expert view row above the version line, the routing log's columns
 at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800 (the chevron 24 px, Kind 166, Session 70, By 152, Fact 189 and
 Link 64 px at every width, Account 178 px under 1420 px and 146 px from it, Model at 192 px from 1420 px alone with the
@@ -91,7 +96,8 @@ cells and their table's fit, the recent requests' Cost cell under All in dollars
 subscription row's equivalent line in the size, line height and ink of the Tokens cell's second line, and its dash under
 the nothing billed title), the Estimated cost, 24h tile under the mock's unpriced switch (mock pass, on loads of its
 own: the subscription line's dash under the unpriced title, in the size, weight and ink of the billed figure beside it
-and in the weight and ink of the Tokens, 24h tile's lone figure), the recent requests' columns (Key the fill), the
+and in the weight and ink of the Tokens, 24h tile's lone figure), the recent requests' columns at 1280 by 800 and 1440
+by 900 (Time the fill, its scroll past the card recorded in the mock pass), the
 cost-cap rows, the wasted-probe rows, the Cache warming tab's saving tiles under each unit position (Probe cost, Saved
 by probes, Net saving and Kept warm on one row at one top, the two saving tiles in the Probe cost tile's box and value
 type, and the Saved by probes chart in the box and title type of the card beside it), the Cost tab under the mock's
@@ -114,7 +120,12 @@ page as wide as the window), its columns (Time the fill, the Status, Attempts an
 1920 by 1080 in the mock pass (no client class or agent type cut, each read
 on its own span, and every id whole), the table with Time turned off (`table--no-fill` at its content width at 1280 by
 800 and 1920 by 1080), the Cache warming grid (an odd last card spanning its row, its title in the type of the card
-before it), the request pages' widths, walked on a load of their own once every view's shot is taken, the
+before it), the Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost
+and Cache warming tiles rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on
+its row spanning the grid and a last card that shares its row on its neighbor's top edge, each figure and card
+recorded), the Traffic table grouped by model (the no model row's Error rate a dash in the muted ink and in the type of
+the rate cell beside it, which reads a percent), the request pages' widths, walked on a load of their own once every
+view's shot is taken, the
 pagers of both logs (three buttons 32 px square on each, the request log's page-size
 select 32 px, each footer one control tall with its padding and its border), the request log's range control (the group
 32 px with its six pills 28 px at one top, the group against the split Refresh button and the search field on height and
@@ -150,7 +161,7 @@ fast lane, the request drawer, which opens once the request list's shot is taken
 as wide as its card at 1280 by 800 and 1440 by 900 with every id whole in the mock pass, and at 375 by 800 under the
 list scrolling inside its card, its chips in the status badge's type, and the Estimated cost row's 20x equivalent chips
 and muted equivalent on one line each inside the cell at 1280 by 800 and 1440 by 900, the story's Fable request reading
-a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order), a reasons panel link landing on a list whose
+a 20x 5-hour, a 20x 7-day and a 20x 7-day Fable equivalent in that order), a reasons panel link landing on a list whose
 first row's drawer reads the reason (mock pass, on a load of its own once every view's shot is taken), the find field of
 a captured body (after the wide dialog's Escape, the trimmed text of a line the copied body first holds past a third of
 the box typed into the Request block's field, the find row at the 400 px drawer inside its width with the field at least

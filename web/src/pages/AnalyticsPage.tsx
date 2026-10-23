@@ -33,6 +33,7 @@ import { linkedKeyIds, requestsLink, type RequestsLinkInput, type RequestsLinkTa
 import { WINDOW_WORD, words } from '@/lib/routingLog';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL } from '@/lib/windows';
+import { REFUSED_TITLE } from '@/pages/DashboardPage';
 
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
 type GroupBy = Exclude<AnalyticsGroupBy, 'all'>;
@@ -83,6 +84,10 @@ const PER_REQUEST_SHARE_NOTE = 'of the 7-day window per plan-funded request';
 const PER_THOUSAND_SHARE_NOTE = 'of the 7-day window per 1k plan-funded output tokens';
 /** A share drawn bare, where the header or the legend already names the window. */
 const shareOrDash = (share: number | null | undefined) => (share === null || share === undefined ? '-' : fmtShare(share));
+/** An error rate in the Traffic head's line, a dash where the range rated no request. */
+const pctOrDash = (rate: number | null) => (rate === null ? '-' : fmtPct(rate, 1));
+/** An error rate in a Traffic cell, a muted dash for a group with no request to rate. */
+const rateCell = (rate: number | null): ReactNode => (rate === null ? <span className="muted">-</span> : fmtPct(rate, 1));
 
 const inputOf = (g: AnalyticsGroup) => g.tokens.uncachedInput + g.tokens.cacheRead + g.tokens.cacheWrite5m + g.tokens.cacheWrite1h;
 const hitRatioOf = (g: AnalyticsGroup) => (g.cacheHits + g.cacheMisses + g.uncached ? g.cacheHits / (g.cacheHits + g.cacheMisses + g.uncached) : null);
@@ -643,7 +648,7 @@ export function AnalyticsPage() {
       {empty && <div className="empty">No traffic in this range.</div>}
 
       {tab === 'traffic' && (
-        <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${fmtPct(errorRateOf(totals), 1)} errors`}>
+        <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${pctOrDash(errorRateOf(totals))} errors`}>
           <div className="grid-2 traffic-grid">
             <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
               <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
@@ -697,12 +702,12 @@ export function AnalyticsPage() {
             title={`Traffic by ${groupLabel.toLowerCase()}`}
             loading={loading}
             groupLabel={groupLabel}
-            columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', 'Refused', <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
+            columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', <span key="refused" title={REFUSED_TITLE}>Refused</span>, <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
             rows={groups.map((g) => ({
               key: g.key,
               label: modelGroupLabel(g, groupBy),
               // Search and Fetch count the server-tool calls the group's answers made, not tokens.
-              cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
+              cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
             }))}
           />
         </Section>
@@ -1973,14 +1978,15 @@ function NativeSplit({ totals }: { totals: AnalyticsGroup }) {
 
 const MAX_STACKED_GROUPS = 7;
 
-type Stack = { data: Record<string, number | null>[]; estimated: Map<number, Set<string>>; keys: string[]; labels: Map<string, string>; unpriced: { buckets: number; groups: number } };
+type Stack = { data: Record<string, number | null>[]; estimated: Map<number, Set<string>>; keys: string[]; labels: Map<string, string>; unpriced: { buckets: number; labels: string[] } };
 /**
  * The groups stacked by one figure per bucket: the seven with the largest total in range and the rest as Other, and
  * per bucket the stacks an estimated group's figure fed. A null figure is one the route priced nothing on: it leaves
  * its stack's bucket a gap, a dash in the tooltip, since a partial sum would read as the whole. `drawn` keeps only the
  * groups whose figure is above zero somewhere in range or unpriced somewhere, for a side that holds some of the page's
- * groups, so a group priced nothing throughout stays listed with its gaps. `unpriced` counts the drawn groups that
- * `flagged` reads unpriced in a bucket, a group folded into Other among them, and the buckets holding one.
+ * groups, so a group priced nothing throughout stays listed with its gaps. `unpriced` names the drawn groups that
+ * `flagged` reads unpriced in a bucket, a group folded into Other among them, by their labels in the chart's order, and
+ * counts the buckets holding one.
  */
 function stackOf(points: AnalyticsPoint[], groupBy: GroupBy, value: (g: AnalyticsGroup) => number | null, drawn = false, flagged: (g: AnalyticsGroup) => boolean = () => false): Stack {
   const totals = new Map<string, number>();
@@ -2025,7 +2031,7 @@ function stackOf(points: AnalyticsPoint[], groupBy: GroupBy, value: (g: Analytic
     estimated.set(at, marked);
     return row;
   });
-  return { data, estimated, keys, labels, unpriced: { buckets: unpricedBuckets, groups: unpricedGroups.size } };
+  return { data, estimated, keys, labels, unpriced: { buckets: unpricedBuckets, labels: ranked.filter((k) => unpricedGroups.has(k)).map((k) => labels.get(k) ?? k) } };
 }
 /** A plan bucket the route priced nothing on reads null, and one without chargeable plan usage zero. */
 const sevenDayEquivalentOf = (g: AnalyticsGroup) => (own(g.costEquivalent, 'seven_day') ? g.costEquivalent.seven_day : planRowsRequired(g) ? null : 0);
@@ -2063,7 +2069,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
     // side with no rows. With neither side the card stays, so an empty range still reads as one.
     const planDrawn = loading || error !== null || keys.length > 0 || !billedDrawn;
     const subtitle = '20x 7-day equivalent per bucket, stacked, the subscription requests';
-    const note = unpricedNote(stack.unpriced.groups, stack.unpriced.buckets);
+    const note = unpricedNote(stack.unpriced.labels, stack.unpriced.buckets);
     return (
       <>
         {planDrawn && (
@@ -2112,7 +2118,7 @@ function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared,
     return (
       <ChartCard
         title={title}
-        subtitle={groupBy === 'account' ? "Each account's share of its own 7-day window per bucket, solid, and of its model week, dashed" : `Each ${GROUP_LABEL[groupBy].toLowerCase()}'s share of the named account's 7-day window per bucket, solid, and of its model week, dashed`}
+        subtitle={groupBy === 'account' ? "Each account's share of its own 7-day window per bucket, solid, and of its model week, dashed" : "Each group's share of the named account's 7-day window per bucket, solid, and of its model week, dashed"}
         loading={loading}
         error={error}
         empty={shared ? undefined : GROUPED_SHARE_NOTE}
@@ -2381,7 +2387,7 @@ const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its wid
 /**
  * One plan card's window: the rows' figure it reads, the line's per-hour mean, whether a line left traffic unpriced on
  * it, and its subtitle under each figure. Only the 5-hour card shades the peak band, the one window it weighs. The
- * route names no model week, so its card reads the one the cost model ships, the Fable week.
+ * route names no model week, so its card reads the one the cost model ships, the 7-day Fable window.
  */
 interface PlanWindow {
   band: boolean;

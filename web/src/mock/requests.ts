@@ -1255,7 +1255,7 @@ function storyRequests(): RequestLog[] {
       usage: { cacheWrite1h: 41_200, input: 1_800, output: 1_350 },
     },
     // Two turns of nightly's Fable session in the morning, before its overage: the first places the session, and the
-    // second's renewal runs the round its Fable week fires while the 5-hour window is under the hold.
+    // second's renewal runs the round its 7-day Fable window fires while the 5-hour window is under the hold.
     { agentId: 'main', at: t(8, 21, 40), attempts: [{ accountId: 'nightly', at: t(8, 21, 40), ms: 11_200, status: 200 }], id: 'req_3e2b9d47-c18', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheWrite1h: 78_400, input: 2_600, output: 1_720, thinking: 610 } },
     { agentId: 'main', at: t(8, 30), attempts: [{ accountId: 'nightly', at: t(8, 30), ms: 9_400, status: 200 }], id: 'req_3e7a5c19-f84', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheRead: 81_000, cacheWrite1h: 2_600, input: 2_400, output: 1_480, thinking: 520 } },
     // A fresh session placed by the spare rate: secondary falls short of the ceiling and its burn outruns its pace.

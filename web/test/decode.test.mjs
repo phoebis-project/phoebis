@@ -99,7 +99,7 @@ test("an account's windows read the router's lead over pace, null while the util
   const wire = (id) => body.windows.find((w) => w.id === id);
   assert.ok(typeof wire('five_hour').lead === 'number', 'the capture answers a lead on a sampled window');
   assert.equal(a.windows[0].lead, wire('five_hour').lead, 'the 5-hour window reads the lead the route answered');
-  assert.equal(a.fableWindow.lead, wire('seven_day_fable').lead, 'and so does the Fable week');
+  assert.equal(a.fableWindow.lead, wire('seven_day_fable').lead, 'and so does the 7-day Fable window');
   assert.ok(body.windows.every((w) => typeof w.lead === 'number'), 'every captured window carries one');
   const unread = d.decodeAccount({ ...body, windows: [{ ...wire('five_hour'), lead: null, utilization: null }] });
   assert.equal(unread.windows[0].lead, null, 'a window without a utilization reads no lead');
@@ -301,7 +301,7 @@ test('an unknown weekly window decodes under its key after the known ones, in th
   });
   assert.deepEqual(history.map((h) => h.windowId), ['5h', 'seven_day_opus']);
   const captured = d.decodeAccount(base);
-  assert.deepEqual(captured.windows.map((w) => w.id), ['5h', '7d', 'seven_day_opus'], 'the captured account carries the opus week after the two shared ones; the Fable week sits apart');
+  assert.deepEqual(captured.windows.map((w) => w.id), ['5h', '7d', 'seven_day_opus'], 'the captured account carries the opus week after the two shared ones, the 7-day Fable window apart');
   const captive = captured.windows.find((w) => w.id === 'seven_day_opus');
   assert.deepEqual([captive.label, captive.periodHours], ['seven_day_opus', 168]);
 });
@@ -2012,7 +2012,7 @@ test('a session fold groups on the classifier standing, a request the marker doe
   const captured = rows.find((r) => r.id === 'r-captured');
   const groups = d.foldGroups([call, captured, { ...captured, id: 'r-captured-2' }], 'classifier');
   assert.deepEqual(groups.map((g) => [g.key, g.requests]).sort(), [['-', 2], ['client', 1]], 'the keys the Classifier facet filters on');
-  assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'the label every route answers for the reserved value');
+  assert.equal(groups.find((g) => g.key === '-').label, 'none', 'the label the breakdown route answers for the reserved value under the classifier grouping, as the facet names it');
 });
 
 test('a folded bucket carries one group per key the page groups on', () => {

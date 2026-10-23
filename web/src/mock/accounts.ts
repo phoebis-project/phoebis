@@ -7,7 +7,7 @@ import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
-/** The windows the router projects, the 5-hour, the 7-day and the Fable week, as the route serves them. */
+/** The windows the router projects, the 5-hour, the 7-day and the 7-day Fable window, as the route serves them. */
 const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
 
 /**
@@ -156,7 +156,7 @@ export const ACCOUNTS: Account[] = ([
     routingEnabled: true,
     // Past every pool's ceiling at its reset, 104%.
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE, 40_000, 0.019), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
-    // The Fable week reads under all's ceiling, near enough for the morning's Fable session to project it past.
+    // The 7-day Fable window reads under all's ceiling, near enough for the morning's Fable session to project it past.
     fableWindow: win('7d_fable', 0.66, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,

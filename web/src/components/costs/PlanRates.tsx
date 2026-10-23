@@ -26,7 +26,7 @@ const ZERO: Usage = { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, 
 
 const dash = <span className="muted">-</span>;
 
-const weekLabel = (key: string) => `${upperFirst(key.slice('seven_day_'.length))} week`;
+const weekLabel = (key: string) => `7-day ${upperFirst(key.slice('seven_day_'.length))}`;
 const windowLabel = (window: string) => WINDOWS.find((w) => w.key === window)?.label ?? weekLabel(window);
 
 /** The row at a model table's foot that folds its older models: their count, and the disclosure that shows them. */
@@ -92,7 +92,7 @@ export function PlanRates({ costs, now, olderOpen, onToggleOlder, prices }: { co
   const tierName = planLabel(tier);
   const cols = 2 + WINDOWS.length * TOKEN_TYPES.length;
 
-  /** `what` names the window in the cell's title: "5-hour window", "Fable week". */
+  /** `what` names the window in the cell's title: "5-hour window", "7-day Fable". */
   const cell = (model: string, window: string, what: string, type: (typeof TOKEN_TYPES)[number], i: number) => {
     const share = shareIn(priced, window, tier, model, { ...ZERO, [type.key]: tokens * 1_000_000 }, chosen);
     const estimated = weightOrFallback(priced, model, window)?.estimated === true;

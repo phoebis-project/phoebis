@@ -122,18 +122,21 @@ with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Er
 `Most common: {code}` or "No errors", and "Refused, 24h" with `Most common: {code}` or "None", which counts the
 requests the router refused before any account was asked. "Requests, 24h" and the error rate leave those out and say
 so on hover, "Requests the router asked an account for. The refused requests are in the Refused tile." on the first and
-"Errors among the requests the router asked an account for, the refused requests left out" on the second.
-Under Native the cost tile reads the subscription traffic's 20x 5-hour
-equivalent over the billed dollars, a side with no traffic left out, with `{usd} billed per hour` under them, or the
-equivalent per hour while no request was billed. Where a subscription request of the day priced nothing on the 5-hour
-window, its model in no tier the cost model weighs, the subscription side reads a dash with the hover "No subscription
-request priced on this window: its model has no tier the cost model weighs", and the note under it reads the dash per
-hour while no request was billed. Under All in dollars and Billed dollars it reads those dollars with `{usd} per hour`,
-under Dollar equivalent the subscription traffic's dollars at the API price list, and under Window shares a dash with
-the note "shares do not add across accounts", since the tile sums every account. An estimated figure carries the `~` and
-the estimate's hover. Under the tiles a line says when the figures were read, `As of {ago}`, by the oldest of the page's
-reads, or names the read whose last refresh failed and why: `Last refresh of the {read} failed: {error}. Showing data as
-of {ago}`, the read being the 24-hour figures, the accounts, the recent requests, the sessions or the settings.
+"Errors among the requests the router asked an account for, the refused requests left out" on the second. The Refused
+tile's hover names the refusals it counts apart from the router's own, "Requests refused for the client's or a policy's
+cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable,
+body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead." Under Native
+the cost tile reads the subscription traffic's 20x 7-day equivalent over the billed dollars, a side with no traffic left
+out, with `{usd} billed per hour` under them, or the equivalent per hour while no request was billed. Where a
+subscription request of the day priced nothing on the 7-day window, its model in no tier the cost model weighs, the
+subscription side reads a dash with the hover "No subscription request priced on this window: its model has no tier the
+cost model weighs", and the note under it reads the dash per hour while no request was billed. Under All in dollars and
+Billed dollars it reads those dollars with `{usd} per hour`, under Dollar equivalent the subscription traffic's dollars
+at the API price list, and under Window shares a dash with the note "shares do not add across accounts", since the tile
+sums every account. An estimated figure carries the `~` and the estimate's hover. Under the tiles a line says when the
+figures were read, `As of {ago}`, by the oldest of the page's reads, or names the read whose last refresh failed and
+why: `Last refresh of the {read} failed: {error}. Showing data as of {ago}`, the read being the 24-hour figures, the
+accounts, the recent requests, the sessions or the settings.
 
 Two rings, "5h remaining" and "7d remaining", show how much of the pooled 5-hour and 7-day capacity is left, under the
 subtitle "Subscription accounts, 5-hour window, weighed by tier" (and its 7-day twin), the first with a "Cost
@@ -152,15 +155,17 @@ not list draws muted.
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, "Overage active" while requests bill as extra
 usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last 10 across every pool", with
 "All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB, Tokens and Cost, the status
-badge reading `×{n}` for a request of several attempts. Cost reads as the Requests view's column does: under All in
-dollars and Dollar equivalent a subscription request's dollar equivalent over `equivalent`, under Billed dollars a dash
-and under Window shares its account's shares, and a billed request's dollars under each of the four but Dollar
-equivalent, where it reads a dash. Under Native a subscription request reads its 20x 5-hour equivalent alone, with the
-other windows, the dollar equivalent and the price list and cost model in force on hover, and a billed request its
-dollars. The column header's hover names what each kind of request reads under the position. Where the table runs wider
-than its card it scrolls inside it. "Sessions" ("Sticky pins and cache-warming agents", with "Open") reads the active
-pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle and Parked. What each figure means is on
-[Statistics](statistics.md).
+badge reading `×{n}` for a request of several attempts. Time is the column that gives way: the time reads whole, and
+the request id under it is cut by the room past its first twelve characters, whole on hover, while Key and the other
+columns read whole. Cost reads as the Requests view's column does: under All in dollars and Dollar equivalent a
+subscription request's dollar equivalent over `equivalent`, under Billed dollars a dash and under Window shares its
+account's shares, and a billed request's dollars under each of the four but Dollar equivalent, where it reads a dash.
+Under Native a subscription request reads its 20x 5-hour equivalent alone, with the other windows, the dollar equivalent
+and the price list and cost model in force on hover, a client classifier call's hover leading with "Free on the plan: a
+client classifier call takes no window share", and a billed request its dollars. The column header's hover names what
+each kind of request reads under the position. Where the table runs wider than its card it scrolls inside it. "Sessions"
+("Sticky pins and cache-warming agents", with "Open") reads the active pins as `active pins across {n} accounts` and the
+agents as Agents, Busy, Idle and Parked. What each figure means is on [Statistics](statistics.md).
 
 ## Quota
 
@@ -386,10 +391,11 @@ warm" switch starts off. The groups by rail parent, with what the expert view ad
 | Visibility | Body capture, Cache diagnostics | Cache diagnostics |
 
 Selection's Strategy field explains the chosen strategy under it. Under Pace it reads "Pace scores each member by its
-spare rate: the allowance left in the window it reads, the model's own Fable week where the model has one, else the
-7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an
-hour, within the first priority tier that has an eligible account. An API-key member scores the room left in its worst
-bucket. An unsampled account counts as untouched, and ties are random. Each account's windows are on the Accounts page."
+spare rate: the allowance left in the window it reads, the model's own 7-day Fable window where the model has one, else
+the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window
+an hour, within the first priority tier that has an eligible account. An API-key member scores the room left in its
+worst bucket. An unsampled account counts as untouched, and ties are random. Each account's windows are on the Accounts
+page."
 
 Windows opens on "The windows the router works from: the share of each it keeps every account under, and the span each
 session's burn is averaged over." and holds `Window ceiling (%)`, from 50 to 100, with the hint "A move or a new session
@@ -433,7 +439,7 @@ the hold is read on its next window in the order, and where its 5-hour projectio
 the round the hold took away:
 `{label}'s 5-hour window is {age} old, under the hold of {hold}, so its round reads the next window.` `{p}` is a whole
 percent with a space before the sign (`99 %`), `{horizon}` `at` a clock time on the 5-hour window and `in` a span on a
-weekly one (`in 5h`), `{window}` the window's label (`5h`, `7d` or `Fable week`), `{excess}` a percent an hour with one
+weekly one (`in 5h`), `{window}` the window's label (`5h`, `7d` or `7-day Fable`), `{excess}` a percent an hour with one
 decimal (`9.5 %/h`), `{list}` the members in the Members group's order, and `{age}` and `{hold}` spans to the minute
 (`45 min`, `1 h`).
 
@@ -678,7 +684,7 @@ for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from befo
 each kind of request reads under the position. Under Native a request a subscription window paid reads its 20x 5-hour
 equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the model week among them,
 and the dollar equivalent on hover. Under Window shares it reads its account's own window shares, each with its window's
-short word (`0.12% Fable week` over `0.42% 5h`, the full labels on hover), under All in dollars and Dollar equivalent
+short word (`0.12% 7-day Fable` over `0.42% 5h`, the full labels on hover), under All in dollars and Dollar equivalent
 its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under Billed dollars a dash with the
 hover "Nothing billed: a subscription request". An overage, fast mode or API-key request reads dollars under every
 position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no subscription equivalent". A
@@ -810,17 +816,20 @@ range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alo
 registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range." where none did
 ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited, Failed,
 Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the Requests and Error rate headers
-reading "The refused requests are left out, see the Refused column" on hover. Under the model grouping a request refused
-before it resolved a model groups under "no model", which the Cache by model table leaves out. A request the router
-refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card, a
-guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
-outcome columns, the error rate, the cache figures or the latency.
+reading "The refused requests are left out, see the Refused column" on hover and the Refused header the Dashboard's
+Refused tile hover. Under the model grouping a request refused before it resolved a model groups under "no model", which
+the Cache by model table leaves out, and a group with no request, as that one, reads a muted dash in its Error rate
+cell, as the head's `{pct}` reads a dash where the range rated no request. A request the router refused before any
+account was asked is counted in its group's Refused column and in the "Refusals by code" card, a guardrail's block on
+the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the outcome columns, the
+error rate, the cache figures or the latency.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply
 to it, which its head says while another filter is set. Plan per hour draws three cards, "5-hour per hour", "7-day per
 hour" and "Model week per hour", the last while a group's traffic ran on a model with a week of its own, each with one
-line per group. Under Window shares a line is the share of a subscription account's own window, which reads under the
+line per group, named as the breakdown names it, the requests with no classifier call under `none` under the classifier
+grouping. Under Window shares a line is the share of a subscription account's own window, which reads under the
 account grouping or with one account named in the Accounts filter, and under every other position it is the group's
 subscription traffic per hour in 20x equivalents of the window, the legend's figure naming the window in full on hover.
 Under those positions a bucket whose traffic ran on no model with a week of its own reads zero on the Model week card,
@@ -836,10 +845,10 @@ alone, a subscription account's among them for its fast-mode and overage answers
 between the charts and Member budgets, one row per completed 5-hour, 7-day or Fable window of an account, newest first:
 Upstream, Window, Ended, Rise (the rise the upstream's readings showed), Predicted (the share the router priced for its
 own requests in it, with the charts' `~` and its estimate hover where an attempt in it was priced at a model tier's
-estimate), Ratio, with a warning badge on a ratio under 0.8 or over 1.25 after a rise of at least 5%, and Requests. It
-reads the trailing 30 days under the Accounts filter whatever the range. The section closes on Member budgets, Pool,
-Account, Spent, Budget and Period ends, one row per budget a member carries, a member at its budget marked and one the
-ledger has not reported on reading "not reported".
+estimate), Ratio, with a warning badge on a ratio under 0.8 or over 1.25 once the rise and the predicted share each
+reach 5%, and Requests. It reads the trailing 30 days under the Accounts filter whatever the range. The section closes
+on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a member carries, a member at its
+budget marked and one the ledger has not reported on reading "not reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)
@@ -873,17 +882,18 @@ table reads Requests, Cost, 20x 5-hour, the model week's 20x column, Per request
 7-day equivalent, and Cost, Per request and Per 1k output each with the billed dollars on a line under the equivalent. A
 subscription side the route could not price on the 7-day window, as when a request ran on a model of no known tier,
 reads a dash, its bucket on the Cost by chart a gap, and the Cost split draws no ring for it. The Cost tile's dash
-carries the Dashboard's hover, and the Cost by chart notes the groups it draws that read unpriced on the 7-day window on
-a line under its subtitle, `{n} groups unpriced in {m} buckets, drawn as gaps` (`1 group unpriced in 1 bucket, drawn as
-a gap`). Under All in dollars, Billed dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars
-or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a
-table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one
-ring in dollars (Input, Cache read, Cache write, Output). Under Window shares, which reads under the account grouping or
-with one account named in the Accounts filter, the tiles read Window share, Per request and Per 1k output, the chart one
-line per group, the table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k output, and the Cost
-split the whole in dollars. Every position draws Fast mode spend, and an estimated figure carries the `~` and the
-estimate's hover. The prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost model behind the
-shares and the equivalents on [Plan meter](statistics.md#plan-meter).
+carries the Dashboard's hover, and the Cost by chart names the groups it draws that read unpriced on the 7-day window on
+a line under its subtitle, `{group} unpriced in {m} buckets, drawn as gaps` for one group (`research unpriced in 1
+bucket, drawn as a gap`), the groups' labels joined by commas for up to three, and `{n} groups unpriced in {m} buckets,
+drawn as gaps` past three. Under All in dollars, Billed dollars and Dollar equivalent Cost draws the tiles Estimated
+cost, Billed dollars or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the chosen group
+as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output) and the Cost
+split as one ring in dollars (Input, Cache read, Cache write, Output). Under Window shares, which reads under the
+account grouping or with one account named in the Accounts filter, the tiles read Window share, Per request and Per 1k
+output, the chart one line per group, the table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k
+output, and the Cost split the whole in dollars. Every position draws Fast mode spend, and an estimated figure carries
+the `~` and the estimate's hover. The prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost
+model behind the shares and the equivalents on [Plan meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
@@ -1161,8 +1171,8 @@ their obstacle. Projection reads one line per window the candidate reports, the 
 (`2 h 10 min`), `none` or `unbounded`, each a dash for a candidate the gate did not read. The Projection cell's hover
 names the demand where it differs from the burn the window sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the
 candidate's slow-down factor. The Pace score stands under a header naming the window it read,
-`Spare rate, 7-day per hour` or `Spare rate, Fable week per hour` (`Pace` where no subscription candidate names one, and
-`Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
+`Spare rate, 7-day per hour` or `Spare rate, 7-day Fable per hour` (`Pace` where no subscription candidate names one,
+and `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
 `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or
 `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` The pick line names
 the accounts whose scores tied, the runway that narrowed them where it did, and whether the draw chose among more than
@@ -1204,7 +1214,7 @@ panel reads Started by, Trigger (`5h projection 99% at 18:20 over the ceiling 95
 stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the projection` or `the slow-down`),
 Excess (`9.5 %/h`), Cap with the target and the burn removed, Unit, Burn average, Warm sessions, the Pins table
 (Session, Agent, Warmth, Burn, Last prompt, Rewrite as the Max 20x equivalent of the pin's weekly window, labeled
-`of 20x 7-day` or `of 20x Fable week`, Destination, Mark), Skipped (one chip per pin, its session and its reason,
+`of 20x 7-day` or `of 20x 7-day Fable`, Destination, Mark), Skipped (one chip per pin, its session and its reason,
 `off window` for a pin whose model does not draw the window that fired), Planned destinations, Outcome (`marked 2`,
 `nothing to mark: no runway`, or `nothing to mark: off window` for a round that walked no pin and left one out off the
 window that fired), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin, Reason

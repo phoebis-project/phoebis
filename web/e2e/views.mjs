@@ -737,8 +737,9 @@ async function attentionLineNarrow(theme) {
 
 /**
  * The dashboard's stat grid at the pass's viewport and at 400 by 900: all five tiles drawn, wrapping as the grid's
- * columns let them, and none past the grid's right edge. The tiles and the rows they fill go to the measurements at
- * both widths, and the viewport is the pass's again after.
+ * columns let them, none past the grid's right edge, and no tile's figure wider than the tile's content box, since the
+ * cost tile's figure keeps its window's name on one line. The tiles, the rows they fill and any figure past its tile go
+ * to the measurements at both widths, and the viewport is the pass's again after.
  */
 async function statGrid(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -747,8 +748,21 @@ async function statGrid(theme) {
       const grid = document.querySelector('.stat-grid');
       if (!grid) return null;
       const right = grid.getBoundingClientRect().right;
-      const tiles = [...grid.querySelectorAll(':scope > .stat')].map((t) => t.getBoundingClientRect());
-      return { past: tiles.filter((t) => t.right > right + 0.5).length, rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length };
+      const cells = [...grid.querySelectorAll(':scope > .stat')];
+      const tiles = cells.map((t) => t.getBoundingClientRect());
+      // A figure's runs are read off a range over the value, since a nowrap figure wider than its tile spills past the
+      // value's own box rather than widening it.
+      const wide = cells.flatMap((t) => {
+        const value = t.querySelector('.stat__value');
+        if (!value) return [];
+        const s = getComputedStyle(t);
+        const inner = t.getBoundingClientRect().right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth);
+        const range = document.createRange();
+        range.selectNodeContents(value);
+        const figure = range.getBoundingClientRect().right;
+        return figure > inner + 0.5 ? [{ figure: Math.round(figure * 10) / 10, inner: Math.round(inner * 10) / 10, label: t.querySelector('.stat__label')?.textContent ?? '' }] : [];
+      });
+      return { past: tiles.filter((t) => t.right > right + 0.5).length, rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length, wide };
     });
   try {
     for (const width of [viewport.width, 400]) {
@@ -757,18 +771,104 @@ async function statGrid(theme) {
         await settle();
       }
       const grid = await read();
-      measurements.push(`${theme} / stat grid at ${width} px: ${grid?.tiles ?? 0} tiles over ${grid?.rows ?? 0} rows`);
+      measurements.push(`${theme} / stat grid at ${width} px: ${grid?.tiles ?? 0} tiles over ${grid?.rows ?? 0} rows, figures past their tile ${JSON.stringify(grid?.wide ?? [])}`);
       const say = (what) => failures.push(`${theme} /: at ${width} px the stat grid ${what}`);
       if (!grid) say('is not drawn');
       else {
         if (grid.tiles < 5) say(`draws ${grid.tiles} tiles, not five`);
         if (grid.past > 0) say(`draws ${grid.past} tiles past its right edge`);
+        for (const w of grid.wide) say(`draws the ${w.label} tile's figure to ${w.figure} px, past its content's right edge at ${w.inner} px`);
       }
     }
   } finally {
     await page.setViewportSize(viewport);
     await settle();
   }
+}
+
+/**
+ * The Dashboard's five tiles at 1280 by 800 and 1440 by 900: four to a row, the fourth a quarter of the row (the row's
+ * width less its three gaps, over four, within 1 px) on the first tile's top edge, and the fifth opening a row of its
+ * own at the first tile's left edge across the row's whole width, so no tile sits alone at a quarter width. Both widths
+ * go to the measurements, and the viewport is the pass's again after.
+ */
+async function dashboardTiles(theme) {
+  const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
+  const read = () =>
+    page.evaluate(() => {
+      const grid = document.querySelector('.stat-grid');
+      if (!grid) return null;
+      const s = getComputedStyle(grid);
+      const row = grid.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+      const box = (t) => (t ? { left: Math.round(t.getBoundingClientRect().left * 10) / 10, top: Math.round(t.getBoundingClientRect().top), width: Math.round(t.getBoundingClientRect().width * 10) / 10 } : null);
+      const tiles = [...grid.querySelectorAll(':scope > .stat')];
+      return { first: box(tiles[0]), fifth: box(tiles[4]), fourth: box(tiles[3]), gap: parseFloat(s.columnGap) || 0, modifier: grid.classList.contains('stat-grid--day'), row: Math.round(row * 10) / 10, tiles: tiles.length };
+    });
+  try {
+    for (const size of [
+      { height: 800, width: 1280 },
+      { height: 900, width: 1440 },
+    ]) {
+      await page.setViewportSize(size);
+      await settle();
+      const grid = await read();
+      measurements.push(`${theme} / Dashboard tiles at ${size.width} by ${size.height} ${JSON.stringify(grid)}`);
+      const say = (what) => failures.push(`${theme} /: at ${size.width} by ${size.height} the Dashboard tiles ${what}`);
+      if (!grid || grid.tiles !== 5 || !grid.fourth || !grid.fifth) {
+        say(`draw ${JSON.stringify(grid)}, not five tiles`);
+        continue;
+      }
+      const quarter = (grid.row - 3 * grid.gap) / 4;
+      if (Math.abs(grid.fourth.width - quarter) > 1) say(`draw the fourth tile ${grid.fourth.width} px wide, not a quarter of the ${grid.row} px row (${Math.round(quarter * 10) / 10} px)`);
+      if (Math.abs(grid.fifth.width - grid.row) > 1) say(`draw the fifth tile ${grid.fifth.width} px wide, not the ${grid.row} px row`);
+      for (const what of compare(grid.fourth, grid.first, ['top'], 'the fourth tile against the first')) say(what);
+      for (const what of compare(grid.fifth, grid.first, ['left'], 'the fifth tile against the first')) say(what);
+    }
+  } finally {
+    await page.setViewportSize(viewport);
+    await settle();
+  }
+}
+
+/** The Refused tile's hover. The pass reads no module of the console, so it spells the page's sentence here. */
+const REFUSED_TITLE =
+  "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
+/** The Requests tile's hover, the neighbor the Refused tile's is read beside. */
+const REQUESTS_TITLE = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
+
+/**
+ * The Dashboard's tile words beside their neighbors: the Estimated cost, 24h tile's figure and note under native, its
+ * subscription line reading the 7-day window (`{share} of 20x 7-day`) over its word and its note a figure per hour,
+ * and the Refused, 24h tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two
+ * labels in one type.
+ */
+async function dashboardTileWords(theme) {
+  const say = (what) => failures.push(`${theme} /: ${what}`);
+  const read = await page.evaluate(() => {
+    const tiles = [...document.querySelectorAll('.stat-grid > .stat')];
+    const tile = (label) => tiles.find((t) => t.querySelector('.stat__label')?.textContent === label) ?? null;
+    const label = (t) => {
+      const el = t?.querySelector('.stat__label');
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { color: s.color, family: s.fontFamily, size: s.fontSize, weight: s.fontWeight };
+    };
+    const cost = tile('Estimated cost, 24h');
+    const refused = tile('Refused, 24h');
+    const requests = tile('Requests, 24h');
+    return {
+      cost: { lines: [...(cost?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), note: cost?.querySelector('.stat__note')?.textContent ?? null },
+      refused: { label: label(refused), title: refused?.getAttribute('title') ?? null },
+      requests: { label: label(requests), title: requests?.getAttribute('title') ?? null },
+    };
+  });
+  measurements.push(`${theme} / Dashboard tile words ${JSON.stringify(read)}`);
+  const subscription = read.cost.lines.find(([, word]) => word === 'subscription');
+  if (!/^~?\d[\d.]*% of 20x 7-day$/.test(subscription?.[0] ?? '')) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription ?? null)}, not a share of the 20x 7-day window`);
+  if (!/^(~?\d[\d.]*% of 20x 7-day|\$[\d,.]+ billed) per hour$/.test(read.cost.note ?? '')) say(`the Estimated cost, 24h tile's note reads ${JSON.stringify(read.cost.note)}`);
+  if (read.refused.title !== REFUSED_TITLE) say(`the Refused, 24h tile's hover reads ${JSON.stringify(read.refused.title)}`);
+  if (read.requests.title !== REQUESTS_TITLE) say(`the Requests, 24h tile's hover reads ${JSON.stringify(read.requests.title)}`);
+  for (const what of compare(read.refused.label, read.requests.label, ['color', 'family', 'size', 'weight'], "the Refused, 24h tile's label against the Requests, 24h tile's")) say(what);
 }
 
 /** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
@@ -4012,7 +4112,7 @@ async function recentUnderShares(theme) {
   const read = await page.evaluate(() => {
     const wrap = document.querySelector('.dash-bottom .table-wrap');
     const costs = [...document.querySelectorAll('.dash__recent tbody tr')].map((tr) => tr.lastElementChild?.textContent?.trim() ?? '');
-    return wrap === null ? null : { client: wrap.clientWidth, scroll: wrap.scrollWidth, shares: costs.filter((text) => /\d% (5h|7d|Fable week)/.test(text)).length };
+    return wrap === null ? null : { client: wrap.clientWidth, scroll: wrap.scrollWidth, shares: costs.filter((text) => /\d% (5h|7d|7-day Fable)/.test(text)).length };
   });
   await unit.selectOption('native');
   await settle();
@@ -4365,7 +4465,7 @@ async function costUnpricedNote(theme) {
       say('under the unpriced switch no Cost by card draws the unpriced note');
       return;
     }
-    if (!/^\d+ groups? unpriced in \d+ buckets?, drawn as (a gap|gaps)$/.test(read.note.text)) say(`the ${read.card} card's note reads ${JSON.stringify(read.note.text)}`);
+    if (!/^(\d+ groups|[^,]+(, [^,]+){0,2}) unpriced in \d+ buckets?, drawn as (a gap|gaps)$/.test(read.note.text)) say(`the ${read.card} card's note reads ${JSON.stringify(read.note.text)}`);
     if (read.note.below !== true) say(`the ${read.card} card's note does not sit on a line under its subtitle's text`);
     for (const what of compare(read.note, read.subtitle, ['color', 'family', 'left', 'size', 'weight'], `the ${read.card} card's note against its subtitle`)) say(what);
   } finally {
@@ -4762,7 +4862,7 @@ async function readRequestsTable() {
     const held = [...table.querySelectorAll('tbody .requests__attempts > .badge')].map((b) => ({ lines: lines(b), text: b.textContent?.trim() ?? '' }));
     // The main line or the `.sub` line, whichever the row's figures fill, each in its window's short word: a share
     // under the share position, a 20x equivalent under native, the default.
-    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (20x )?(5h|7d|Fable week)/.test(td.textContent ?? '')).length;
+    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (20x )?(5h|7d|7-day Fable)/.test(td.textContent ?? '')).length;
     return {
       classes: { cut: cutOf(classes), ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length },
       client: wrap.clientWidth,
@@ -5090,6 +5190,112 @@ async function warmingLoneCard(theme) {
     for (const what of compare(read.last, read.before, ['type'], `the ${read.last.title} title against the ${read.before?.title} title`)) say(what);
   } finally {
     await tabTo(theme, 'Traffic');
+    await atRest();
+  }
+}
+
+/**
+ * The Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900: on the Cost tab's tiles row and
+ * the Cache warming tab's, the Wasted probes card's row among them, no tile's figure (each `.cost-figure`, the nowrap
+ * run that keeps a window's name whole) is wider than its tile's content box, and in the Cache warming grid a card alone on its row spans the grid's width,
+ * while a last card that shares its row stands on its neighbor's top edge. Every figure's width against its tile's and
+ * every card's box go to the measurements, and the viewport and the Traffic tab are the pass's again after.
+ */
+async function analyticsTiles(theme) {
+  const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
+  const figures = (section) =>
+    page.evaluate((id) => {
+      // The section's own row and the Wasted probes card's panel row, whose Wasted cost tile is the narrowest.
+      const tiles = [...document.querySelectorAll(`#${id} .tiles-row > .stat`)];
+      return tiles.flatMap((t) => {
+        const s = getComputedStyle(t);
+        const inner = t.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight) - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth);
+        const label = t.querySelector('.stat__label')?.textContent?.trim() ?? '';
+        return [...t.querySelectorAll('.cost-figure')].map((f) => ({ figure: Math.round(f.getBoundingClientRect().width * 10) / 10, label, text: f.textContent ?? '', tile: Math.round(inner * 10) / 10 }));
+      });
+    }, section);
+  try {
+    for (const size of [
+      { height: 800, width: 1280 },
+      { height: 900, width: 1440 },
+    ]) {
+      await page.setViewportSize(size);
+      await settle();
+      const say = (what) => failures.push(`${theme} /analytics: at ${size.width} by ${size.height} ${what}`);
+      if (!(await tabTo(theme, 'Cost'))) return;
+      const cost = await figures('cost');
+      if (!(await tabTo(theme, 'Cache warming'))) return;
+      const warming = await figures('cache-warming');
+      const grid = await page.evaluate(() => {
+        const el = document.querySelector('#cache-warming > .warming-grid');
+        if (!el) return null;
+        const box = (c) => ({ left: Math.round(c.getBoundingClientRect().left), title: c.querySelector('.card__title')?.textContent?.trim() ?? '', top: Math.round(c.getBoundingClientRect().top), width: Math.round(c.getBoundingClientRect().width) });
+        return { cards: [...el.children].map(box), width: Math.round(el.getBoundingClientRect().width) };
+      });
+      measurements.push(`${theme} /analytics tiles at ${size.width} by ${size.height} ${JSON.stringify({ cost, grid, warming })}`);
+      for (const f of [...cost, ...warming]) if (f.figure > f.tile + 0.5) say(`the ${f.label} tile's figure ${JSON.stringify(f.text)} is ${f.figure} px wide in a ${f.tile} px tile`);
+      if (cost.length === 0) say('the Cost tiles row draws no figure to measure');
+      if (warming.length === 0) say('the Cache warming tiles row draws no figure to measure');
+      if (grid === null || grid.cards.length < 2) {
+        say(`the Cache warming grid draws ${JSON.stringify(grid)}`);
+        continue;
+      }
+      const rows = Object.values(Object.groupBy(grid.cards, (c) => c.top));
+      for (const row of rows) if (row.length === 1 && Math.abs(row[0].width - grid.width) > 1) say(`the Cache warming grid leaves ${row[0].title} alone on its row, ${row[0].width} px of ${grid.width} px`);
+      const last = grid.cards.at(-1);
+      const before = grid.cards.at(-2);
+      if (rows.at(-1).length > 1) for (const what of compare(last, before, ['top'], `the Cache warming grid's ${last.title} card against ${before.title} beside it`)) say(what);
+    }
+  } finally {
+    await page.setViewportSize(viewport);
+    await settle();
+    await tabTo(theme, 'Traffic');
+    await atRest();
+  }
+}
+
+/**
+ * The Traffic table grouped by model: the group the story's refusal before a model resolved files under, `no model`,
+ * holds no request, so its Error rate cell reads a dash in the muted ink, in the type of the rate cell of the row beside
+ * it, which reads a percent. The page's grouping returns to the key one, its default, afterwards.
+ */
+async function analyticsEmptyRate(theme) {
+  const say = (what) => failures.push(`${theme} /analytics Traffic by model: ${what}`);
+  const group = page.locator('.filter-bar select[aria-label="Group by"]').filter({ has: page.locator('option[value="session"]') });
+  try {
+    await group.selectOption('model');
+    await advance(LOAD_MS);
+    const read = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by model');
+      const heads = [...(card?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const at = heads.indexOf('Error rate');
+      const rows = [...(card?.querySelectorAll('tbody tr') ?? [])];
+      const empty = rows.findIndex((tr) => tr.children[0]?.textContent?.trim() === 'no model');
+      if (at < 0 || empty < 0) return null;
+      const ink = (td) => {
+        const inner = td.querySelector('.muted') ?? td;
+        const s = getComputedStyle(inner);
+        return { color: s.color, family: s.fontFamily, size: s.fontSize, text: td.textContent?.trim() ?? '' };
+      };
+      // A computed color holds the value, never the token's name, so the muted ink is read off a probe of its own.
+      const probe = document.body.appendChild(document.createElement('span'));
+      probe.className = 'muted';
+      const muted = getComputedStyle(probe).color;
+      probe.remove();
+      return { empty: ink(rows[empty].children[at]), muted, neighbour: ink(rows[empty === 0 ? 1 : empty - 1].children[at]) };
+    });
+    measurements.push(`${theme} /analytics Traffic by model empty rate ${JSON.stringify(read)}`);
+    if (read === null) {
+      say('draws no no model row or no Error rate column');
+      return;
+    }
+    if (read.empty.text !== '-') say(`the no model row's Error rate reads ${JSON.stringify(read.empty.text)}, not a dash`);
+    if (read.empty.color !== read.muted) say(`the no model row's dash is in ${read.empty.color}, not the muted ${read.muted}`);
+    if (!/^\d[\d.]*%$/.test(read.neighbour.text)) say(`the row beside it reads ${JSON.stringify(read.neighbour.text)}, not a percent`);
+    for (const what of compare(read.empty, read.neighbour, ['family', 'size'], "the no model row's Error rate against the row beside it")) say(what);
+  } finally {
+    await group.selectOption('key');
+    await advance(LOAD_MS);
     await atRest();
   }
 }
@@ -6331,7 +6537,7 @@ async function requestDrawerCompact(theme) {
       measurements.push(`${theme} /requests ${where} cost row ${JSON.stringify(got.cost)}`);
       costRow(where, got);
       const windows = (got.cost?.chips ?? []).map((c) => c.text.replace(/^\S+ of /, ''));
-      if (JSON.stringify(windows) !== JSON.stringify(['20x 5-hour', '20x 7-day', '20x Fable week'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order`);
+      if (JSON.stringify(windows) !== JSON.stringify(['20x 5-hour', '20x 7-day', '20x 7-day Fable'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 20x 5-hour, a 20x 7-day and a 20x 7-day Fable equivalent in that order`);
     }
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
@@ -9659,6 +9865,8 @@ try {
         await sidebarBrand(theme);
         await attentionLine(theme);
         await statGrid(theme);
+        await dashboardTiles(theme);
+        await dashboardTileWords(theme);
         await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {
@@ -9666,7 +9874,18 @@ try {
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
-        await tableColumns(theme, '', '.dash__recent', ['Key'], 0, { overflowRecorded: mock });
+        // Time is the fill at both sizes, and the mock story's values still run past the card at 1280 by 800, which the
+        // read records.
+        for (const size of [
+          { height: 800, width: 1280 },
+          { height: 900, width: 1440 },
+        ]) {
+          await page.setViewportSize(size);
+          await settle();
+          await tableColumns(theme, size.width === 1280 ? '' : ' at 1440 by 900', '.dash__recent', ['Time'], 0, { overflowRecorded: mock });
+        }
+        await page.setViewportSize({ height: 800, width: 1280 });
+        await settle();
         if (mock) await recentUnderShares(theme);
         if (mock) await recentDollarCosts(theme);
         await remainingCards(theme);
@@ -9808,6 +10027,8 @@ try {
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
       if (view.path === '/analytics') await warmingLoneCard(theme);
+      if (view.path === '/analytics') await analyticsTiles(theme);
+      if (view.path === '/analytics') await analyticsEmptyRate(theme);
       // The chip line's dock and the bar's measure load their addresses themselves and leave the bare page.
       if (view.path === '/analytics') await stickyStrip(theme, true);
       if (view.path === '/analytics') await barRow(theme, view.path);

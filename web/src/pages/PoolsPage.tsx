@@ -203,7 +203,7 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
     <>
-      Pace scores each member by its spare rate: the allowance left in the window it reads, the model&apos;s own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an hour, within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
+      Pace scores each member by its spare rate: the allowance left in the window it reads, the model&apos;s own 7-day Fable window where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an hour, within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
     </>
   ),
   priority: (

@@ -1510,6 +1510,31 @@
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
+/* The day's five tiles take four columns past a phone's width and two on one, where the auto-fit grid would hold
+   five at 1440 px and four at 1280 px. The fifth tile then opens a row at every width and spans it, since a tile
+   alone at a quarter width reads as a gap. The cost tile's figure keeps its window's name on one line, and the widest
+   share it draws, `~0.0597% of 20x 7-day` at 15 px, runs to 186 px, which a two-column tile's content box holds from
+   a 495 px viewport, so under it the tiles stack. */
+.stat-grid--day {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.stat-grid--day > .stat:last-child:nth-child(4n + 1) {
+  grid-column: 1 / -1;
+}
+@media (max-width: 760px) {
+  .stat-grid--day {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stat-grid--day > .stat:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 494.98px) {
+  .stat-grid--day {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .pool-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
@@ -2162,6 +2187,15 @@
 
 .requests__table--12h td.requests__time {
   min-width: 151px;
+}
+
+/* The Dashboard's recent requests take Time as their fill, with the request id under the time cut by the room. Its
+   floor holds the larger of the widest time `fmtTime` draws, "10:10:10 AM" under the 12-hour setting (82.6 px, the
+   24-hour "23:59:59" 58.4 px), and twelve characters of the id with the ellipsis after them in the mono face
+   (89.7 px), with the cell's 24 px of padding. The table carries no 12-hour class, so the floor holds under either
+   setting. */
+.dash__recent td.col-fill {
+  min-width: 114px;
 }
 
 /* A sub that wrapped would set the height of its whole row, and a log a third taller costs more
@@ -4528,16 +4562,21 @@
   border-bottom: 1px dotted var(--ink-3);
 }
 
+/* A tile is never narrower than its figure, so "~0.05% of 20x 7-day" reads whole and the funding's word moves
+   under it: the row's tiles grow from the 170 px floor and never shrink under their widest unbreakable run. */
 .tiles-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
-
-/* Inside a half-width panel three tiles do not clear the page-wide 170px floor, and auto-fit leaves the third one
-   stranded on its own row. */
-.tiles-row--panel {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.tiles-row > .stat {
+  flex: 1 1 170px;
+  min-width: min-content;
+}
+/* Inside a half-width panel the three tiles share the row in thirds, under the page-wide 170 px floor, where their
+   figures fit, and wrap where they do not. */
+.tiles-row--panel > .stat {
+  flex-basis: calc((100% - 24px) / 3);
 }
 
 .split-row {
@@ -4566,12 +4605,29 @@
   padding-left: 8px;
 }
 
-/* The Burn grid draws three plan cards beside the spend card, or two without a model week, the Cache warming grid five
-   and the Traffic grid seven, so an odd last card spans the row rather than leaving a half empty. */
+/* The Burn grid draws three plan cards beside the spend card, or two without a model week, and the Traffic grid seven,
+   so an odd last card spans the row rather than leaving a half empty. */
 .burn-grid > .card:last-child:nth-child(odd),
-.traffic-grid > .card:last-child:nth-child(odd),
-.warming-grid > .card:last-child:nth-child(odd) {
+.traffic-grid > .card:last-child:nth-child(odd) {
   grid-column: 1 / -1;
+}
+
+/* The Cache warming grid's five cards sit two to a row in `.grid-2`, which fits three 340 px columns and their two
+   18 px gaps, 1056 px, from a 1344 px viewport (the shell takes 288 px at 1280 and 1440). From there the grid fixes
+   three columns, where auto-fit would hold four at 1920 px, and below it auto-fit draws two at most. In either band
+   the last card spans the row where it would sit alone: an odd one in two columns, one past a full row in three. */
+@media (max-width: 1343.98px) {
+  .warming-grid > .card:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+@media (min-width: 1344px) {
+  .warming-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .warming-grid > .card:last-child:nth-child(3n + 1) {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Two rings share one card, so the card takes its grid's whole row, which the Billed by card would otherwise leave half

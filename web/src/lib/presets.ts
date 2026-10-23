@@ -95,10 +95,13 @@ const windowStart = (w: RateLimitWindow, now: number): number | null => {
 /** A plan window the trigger reads, in the order the router's round walks them: the shared windows, then the week. */
 export type ShedWindow = '5h' | '7d' | '7d_fable';
 const TRIGGER_ORDER: ShedWindow[] = ['5h', '7d', '7d_fable'];
-const PREVIEW_WINDOW: Record<ShedWindow, string> = { '5h': '5h', '7d': '7d', '7d_fable': 'Fable week' };
+const PREVIEW_WINDOW: Record<ShedWindow, string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
 
 const readingOf = (account: Account, id: ShedWindow): RateLimitWindow | null => (id === '7d_fable' ? account.fableWindow : windowOf(account, id));
-/** The router's `MODEL_WINDOWS`: a model whose id names the Fable family draws the Fable week beside the shared two. */
+/**
+ * The router's `MODEL_WINDOWS`: a model whose id names the Fable family draws the 7-day Fable window beside the two
+ * shared windows.
+ */
 const drawsFable = (model: string | null) => (model ?? '').toLowerCase().includes('fable');
 const windowsOf = (model: string | null): ShedWindow[] => (drawsFable(model) ? TRIGGER_ORDER : TRIGGER_ORDER.slice(0, 2));
 
