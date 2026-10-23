@@ -42,6 +42,9 @@ export function useFollow<R>(input: {
   }
   // A cursor page draws the list's own rows, and the followed ones return with the first page.
   const following = followed !== null && followed.for === address && cursor === undefined ? followed : null;
+  // A stand-in only holds the place of a list read that failed, so the list's answer under this query takes over with
+  // its rows, its stamp and its cursor.
+  if (following !== null && following.standIn !== null && error === null && list !== null && !stale) setFollowed(null);
   // The rows the poll merges into: those followed under this address, else the list's once it answers this query. While
   // the list still answers an earlier filter, its rows belong to that filter, so there is nothing to merge into yet.
   const shown = following?.rows ?? (stale ? null : (list?.rows ?? null));
@@ -105,8 +108,8 @@ export function useFollow<R>(input: {
           if (current.address !== polled) return;
           if (current.shown === null) {
             // A list read in flight after a failure keeps `failed` until it answers, so a poll that lands meanwhile
-            // stands in for it untinted and clears its error, and the stand-in's rows stay drawn over the list's answer
-            // until a Refresh or another address.
+            // stands in for it untinted and clears its error, and the stand-in's rows stay drawn until the list answers
+            // under the same address, a Refresh or another address.
             if (current.failed && polledPages.cursor !== undefined) setFollowed({ for: polled, fresh: new Set(), landedThrough: polledPages.landedThrough, overrun: null, rows: polledPages.rows, standIn: { cursor: polledPages.cursor, to } });
             return;
           }

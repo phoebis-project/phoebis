@@ -12271,7 +12271,8 @@ m.unmount();
   }
   {
     // The list's own read fails and leaves the page on its error, so the first poll that answers stands in for it: its
-    // rows drawn untinted, the error gone, and Next walking on from the poll's page under the end the poll read to.
+    // rows drawn untinted, the error gone, and Next walking on from the poll's page to the router's clock, as a cursor
+    // page under a preset reads.
     failNextCall('listRequests', '/admin/requests', 'ledger locked');
     const page = await mount('/requests?rows=10', { now: CLOCK_ORIGIN });
     const errorOf = () => page.container.querySelector('.requests__table .empty--error .empty__title')?.textContent ?? null;
@@ -12299,10 +12300,60 @@ m.unmount();
       ok:
         failed.error === 'Could not load the request log' && failed.rows === 0 &&
         stood.calls === 1 && stood.error === null && stood.tinted === 0 && answer.requests.length === 10 && JSON.stringify(drawn) === JSON.stringify(answer.requests.map((r) => r.id)) &&
-        answer.nextCursor !== null && read.length === 1 && read[0].cursor === answer.nextCursor && read[0].to === end,
+        answer.nextCursor !== null && read.length === 1 && read[0].cursor === answer.nextCursor && read[0].to === undefined,
       missing: [JSON.stringify(failed), JSON.stringify(stood), `${drawn.length} drawn of ${answer.requests.length}`, `cursor ${answer.nextCursor}`, JSON.stringify(read.map((q) => [q.cursor, q.to]))],
     });
     page.unmount();
+  }
+  {
+    // The list's read fails and its Try again is held while the first poll stands in for it. The story's late request
+    // lands before the held read answers, so the list's answer holds it where the stand-in does not, and that answer
+    // replaces the stand-in: the list's rows drawn untinted, and the next poll reading at the stamp it carried.
+    const LATE = 'req_7a3f0c26-d81';
+    failNextCall('listRequests', '/admin/requests', 'ledger locked');
+    const page = await mount('/requests?rows=50', { now: CLOCK_ORIGIN });
+    const failed = page.container.querySelector('.requests__table .empty--error .empty__title')?.textContent ?? null;
+    await chooseInterval(page, '5 s');
+    const held = deferNextCall('listRequests');
+    [...page.container.querySelectorAll('.requests__table .empty--error button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
+    await page.settle();
+    // The list has no answer yet while the held read runs, so the table draws its loading rows and the bar's count
+    // names the rows the stand-in holds.
+    const drawnNow = () => ({ count: page.container.querySelector('.filter-bar__count')?.textContent ?? null, error: page.container.querySelector('.requests__table .empty--error') !== null, ids: requestRows(page).map(idOf).filter((id) => id !== null), tinted: [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf) });
+    let at = CLOCK_ORIGIN + 5_000;
+    tick(5_000);
+    await page.settle();
+    const stood = drawnNow();
+    // The late request lands a few seconds after the mock loaded, so the clock steps short of the next poll until the
+    // mock lists it, each step past the mock's latency so the answer lands with no real wait.
+    const lands = async () => {
+      const answer = api.listRequests({ request: LATE });
+      tick(200);
+      at += 200;
+      return (await answer).requests.length === 1;
+    };
+    let landed = false;
+    while (!landed && at < CLOCK_ORIGIN + 9_000) landed = await lands();
+    held.release();
+    await page.settle();
+    held.restore();
+    const replaced = drawnNow();
+    // The held query at the same instant, so it answers what the released read answered.
+    const answer = await api.listRequests(held.calls[0]?.[0]);
+    const next = countCalls('listRequests');
+    tick(CLOCK_ORIGIN + 10_000 - at);
+    await page.settle();
+    next.restore();
+    const sent = next.calls.map(([q]) => q);
+    page.unmount();
+    results.push({
+      name: "/requests the list's late answer replaces the page an auto reload poll stood in for it, and the next poll reads at the list's stamp",
+      ok:
+        failed === 'Could not load the request log' && !stood.error && stood.count === '50 shown, more available' && stood.tinted.length === 0 && !stood.ids.includes(LATE) && landed &&
+        !replaced.error && JSON.stringify(replaced.ids) === JSON.stringify(answer.requests.map((r) => r.id)) && replaced.ids.filter((id) => id === LATE).length === 1 && replaced.tinted.length === 0 &&
+        sent.length === 1 && sent[0].cursor === undefined && sent[0].landedAfter === answer.landedThrough,
+      missing: [String(failed), `stood ${stood.ids.length} rows, count ${stood.count}, error ${stood.error}, tinted ${stood.tinted.join(' | ')}, late ${stood.ids.includes(LATE)}`, `landed ${landed} by ${isoAt(at)}`, `replaced ${replaced.ids.length} rows of ${answer.requests.length}, error ${replaced.error}, late ${replaced.ids.filter((id) => id === LATE).length}, tinted ${replaced.tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.landedAfter])), `list ${answer.landedThrough}`],
+    });
   }
   {
     // The drawer pauses the poll and its close resumes it on the same address and interval, so a streak that toasted
@@ -12341,7 +12392,7 @@ m.unmount();
     // Ninety requests arrive after the page loaded: the list reads up to the instant of the ninety-first newest, the
     // interval menu left open holds the poll while the clock moves past the ninety to the pinned origin, and the first
     // poll after the menu closes finds more than its eight pages of ten read, every page from the list's stamp and to
-    // the router's clock. Next reads on from the last row the poll read, up to the poll's end. The rows the poll reads
+    // the router's clock. Next reads on from the last row the poll read, to the router's clock. The rows the poll reads
     // are those the ledger holds at its end, so the late request, still running there, is not among them.
     const end = isoAt(CLOCK_ORIGIN + 5_000);
     // Every row under the bounds, newest first.
@@ -12384,16 +12435,42 @@ m.unmount();
     const read = next.calls.map((c) => c[0]);
     const after = requestRows(page).map(idOf);
     results.push({
-      name: '/requests Next past an auto reload overrun reads the rows the poll left up to its end',
+      name: "/requests Next past an auto reload overrun reads the rows the poll left to the router's clock",
       ok:
         all.length >= 100 && atOf(near[89]) > loaded && loaded < CLOCK_ORIGIN && held.calls.length === 0 && JSON.stringify(listed) === JSON.stringify(atLoad.requests.map((r) => r.id)) &&
         listed.every((id) => all.indexOf(id) >= 89) &&
         sent.length === 8 && sent.every((q) => q.to === undefined && q.limit === 10 && q.landedAfter === atLoad.landedThrough) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
         drawn.length === 80 + listed.length && JSON.stringify(drawn.slice(0, 80)) === JSON.stringify(all.slice(0, 80)) &&
-        overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === end && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
+        overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === undefined && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
       missing: [`${all.length} rows, loaded ${isoAt(loaded)}, ${held.calls.length} reads while held`, `listed ${listed.slice(0, 2).join(' | ')}`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],
     });
     page.unmount();
+  }
+  {
+    // Under a preset a cursor page reads to the router's clock, as the poll under the watermark does, so Next from the
+    // first page sends its cursor and no end. A custom range keeps its own end on every page.
+    const from = isoAt(CLOCK_ORIGIN - 24 * HOUR);
+    const end = isoAt(CLOCK_ORIGIN - HOUR);
+    const nextFrom = async (path) => {
+      const page = await mount(path, { now: CLOCK_ORIGIN });
+      const spy = countCalls('listRequests');
+      nextPage(page)?.click();
+      await page.settle();
+      spy.restore();
+      page.unmount();
+      return spy.calls.map(([q]) => q);
+    };
+    const preset = await nextFrom('/requests?rows=10');
+    const custom = await nextFrom(`/requests?rows=10&from=${from}&to=${end}`);
+    const presetFirst = await api.listRequests({ from, limit: 10, to: isoAt(CLOCK_ORIGIN) });
+    const customFirst = await api.listRequests({ from, limit: 10, to: end });
+    results.push({
+      name: "/requests Next from the first page reads to the router's clock under a preset and to the range's own end under a custom range",
+      ok:
+        presetFirst.nextCursor !== null && preset.length === 1 && preset[0].cursor === presetFirst.nextCursor && preset[0].to === undefined &&
+        customFirst.nextCursor !== null && custom.length === 1 && custom[0].cursor === customFirst.nextCursor && custom[0].to === end,
+      missing: [`cursors ${presetFirst.nextCursor} and ${customFirst.nextCursor}`, JSON.stringify(preset.map((q) => [q.cursor, q.to ?? null])), JSON.stringify(custom.map((q) => [q.cursor, q.to ?? null]))],
+    });
   }
   {
     // The interval is page state: a range and a filter change write their keys alone, and the part keeps its word.
@@ -12538,6 +12615,43 @@ m.unmount();
       name: '/requests a custom span that ends at the clock reads at the chosen interval up to its own end',
       ok: enabled && word === '5 s' && sent.length > 0 && sent.every((to) => to === isoAt(CLOCK_ORIGIN)) && short,
       missing: [`enabled ${enabled}`, String(word), JSON.stringify(sent), `a span 30 s short enabled ${short}`],
+    });
+  }
+  {
+    // A custom range's poll sends its own end, and the stamp the route answers stops at that end, so each poll reads at
+    // the stamp the answer before it carried, up to the range's end. The story's late request arrived inside the range
+    // and lands after its end: the poll after its landing brings it under the fresh tint, and the poll after that
+    // brings it again, merged by its id into the one row with no second tint. The range starts two hours back, since
+    // the late request is the oldest row of the last hour, and a poll leaves a row below the list's last row to Next.
+    const LATE = 'req_7a3f0c26-d81';
+    const from = isoAt(CLOCK_ORIGIN - 2 * HOUR);
+    const end = isoAt(CLOCK_ORIGIN);
+    const page = await mount(`/requests?rows=50&from=${from}&to=${end}`, { now: CLOCK_ORIGIN });
+    const list = await api.listRequests({ from, limit: 50, to: end });
+    const lateAt = Date.parse(requests.find((r) => r.id === LATE)?.at ?? '');
+    await chooseInterval(page, '5 s');
+    const polls = [];
+    for (let n = 0; n < 3; n += 1) {
+      const spy = countCalls('listRequests');
+      tick(5_000);
+      await page.settle();
+      spy.restore();
+      const sent = spy.calls.map(([q]) => q);
+      // The poll's query at the same instant, so it answers what the poll's read answered.
+      const answer = sent.length === 1 ? await api.listRequests(sent[0]) : null;
+      const drawn = requestRows(page).map(idOf);
+      const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
+      polls.push({ after: sent[0]?.landedAfter, brought: answer?.requests.some((r) => r.id === LATE) ?? false, calls: sent.length, drawn: drawn.filter((id) => id === LATE).length, through: answer?.landedThrough, tinted: tinted.includes(LATE), to: sent[0]?.to ?? null });
+    }
+    page.unmount();
+    const [first, second, third] = polls;
+    results.push({
+      name: "/requests a custom range's polls each read at the stamp the answer before carried, capped at the range's end, and draw a late row inside it once",
+      ok:
+        !list.requests.some((r) => r.id === LATE) && lateAt > Date.parse(list.requests.at(-1)?.at ?? '') && polls.every((p) => p.calls === 1 && p.to === end) &&
+        first.after === list.landedThrough && second.after === first.through && third.after === second.through && third.after === Date.parse(end) &&
+        !first.brought && first.drawn === 0 && second.brought && second.drawn === 1 && second.tinted && third.brought && third.drawn === 1 && !third.tinted,
+      missing: [`list ${list.landedThrough}, late listed ${list.requests.some((r) => r.id === LATE)}, late at ${requests.find((r) => r.id === LATE)?.at}, last row at ${list.requests.at(-1)?.at}`, ...polls.map((p) => JSON.stringify(p))],
     });
   }
   {

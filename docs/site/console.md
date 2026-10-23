@@ -706,13 +706,14 @@ ending at the router's clock and a custom range keeping its own end, takes every
 up to eight pages, and lands a new row at the top in the accent tint until the next read. A long request can finish
 below rows already shown: it lands between rows already shown, in the same tint, on the next auto reload. Past eight
 pages a line reads "More rows arrived than auto reload could fetch. Reload to read them.", and Next reads on from the
-last row the poll fetched. A filter change keeps the interval. The poll waits while the tab is hidden, while the drawer
-is open, on an older page until you go back to the first, and while a menu or popover under the bar is open, with the
-interval kept and the cause named in the dropdown's title. When the wait ends a full interval or more after its last
-answer, it reads at once. When the tab comes back to a read at once, the rows that read brought keep the tint through
-the read after it. A custom range whose end lay more than a minute in the past when the page took it has nothing new to
-read, so the dropdown reads Off and stays disabled, while a link whose range ends at the moment it was made reads on,
-each read refreshing the rows inside it.
+last row the poll fetched, under a preset to the router's clock. A poll whose newest page stood in for a list read that
+failed gives way to the list once it answers. A filter change keeps the interval. The poll waits while the tab is
+hidden, while the drawer is open, on an older page until you go back to the first, and while a menu or popover under the
+bar is open, with the interval kept and the cause named in the dropdown's title. When the wait ends a full interval or
+more after its last answer, it reads at once. When the tab comes back to a read at once, the rows that read brought keep
+the tint through the read after it. A custom range whose end lay more than a minute in the past when the page took it
+has nothing new to read, so the dropdown reads Off and stays disabled, while a link whose range ends at the moment it
+was made reads on, each read refreshing the rows inside it.
 
 Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
