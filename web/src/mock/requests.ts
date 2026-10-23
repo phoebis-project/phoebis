@@ -1138,7 +1138,7 @@ function storyRequests(): RequestLog[] {
       model: 'claude-sonnet-4-6',
       requestClass: 'main',
       session: 'bcc805b6',
-      usage: { cacheWrite1h: 38_900, input: 4_100, output: 1_310 },
+      usage: { cacheWrite1h: 58_900, input: 4_100, output: 1_310 },
     },
     // The turns that place the hour's sessions on secondary before its spent edge: the pins the beats after them read.
     { agentId: 'main', at: t(14, 1, 40), attempts: [{ accountId: 'secondary', at: t(14, 1, 40), ms: 6_000, status: 200 }], id: 'req_d4e8a7b2-916', keyId: 'desktop', model: 'claude-sonnet-4-6', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, input: 1_200, output: 520 } },

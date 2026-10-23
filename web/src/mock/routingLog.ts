@@ -1764,7 +1764,7 @@ function storySpecs(): Spec[] {
     at('req_da52d141-a5a', 1, 1, t(14, 5, 12), 'moved', 'primary', {
       from: 'secondary',
       pin: live('continues_pin', 217_000),
-      prefix: { primary: { static: mainStatic(t(14, 5, 12), t(13, 58, 2)), staticMatch: mainStatic(t(14, 5, 12), t(13, 58, 2)) }, secondary: { content: message('0d588de5', 5, 44_600, t(14, 5, 12), t(14, 1, 47), ONE_HOUR), contentMatch: null } },
+      prefix: { primary: { static: mainStatic(t(14, 5, 12), t(14, 2, 11)), staticMatch: mainStatic(t(14, 5, 12), t(14, 2, 11)) }, secondary: { content: message('0d588de5', 5, 44_600, t(14, 5, 12), t(14, 1, 47), ONE_HOUR), contentMatch: null } },
       rule: 'spent',
       rung: placedStatic,
     }),
@@ -1776,7 +1776,7 @@ function storySpecs(): Spec[] {
     at('req_b2bed817-a58', 1, 1, t(14, 11, 44), 'placed', 'primary', {
       prefix: {
         nightly: { static: mainStatic(t(14, 11, 44), t(13, 30), 'band'), staticMatch: null },
-        primary: { static: entry(staticBoundary('main', 3), { at: t(14, 11, 44), depth: 3, prefixTokens: 33_900, refusedBy: 'expired', ttlMs: ONE_HOUR, writtenAt: t(13, 5, 10) }), staticMatch: mainStatic(t(14, 11, 44), t(13, 58, 2)) },
+        primary: { static: entry(staticBoundary('main', 3), { at: t(14, 11, 44), depth: 3, prefixTokens: 33_900, refusedBy: 'expired', ttlMs: ONE_HOUR, writtenAt: t(13, 5, 10) }), staticMatch: mainStatic(t(14, 11, 44), t(14, 2, 11)) },
       },
       rung: placedStatic,
     }),
@@ -2427,7 +2427,7 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'primary', at: iso(t(8, 15, 3)), detail: { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: t(8, 15, 3) }, kind: 'poll_backoff_ended' },
     { accountId: 'research', at: iso(startOfDay(t(14, 30))), detail: { period: 'day', period_start: startOfDay(t(14, 30)) - DAY, previous_spent_usd: 18.2 }, kind: 'budget_period_ended', poolId: 'jobs' },
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.
-    { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'cancelled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
+    { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'canceled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });

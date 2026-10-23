@@ -14925,14 +14925,14 @@ m.unmount();
   }
   {
     // The story's long session (`req_1d9c3e55-0b2/2` in the mock's routing log) writes thirteen rows on primary:
-    // `message` at depths 1 to 11, each at the answer's 38.9K prefix, then `static` at depths 1 and 2. The compact row
+    // `message` at depths 1 to 11, each at the answer's 58.9K prefix, then `static` at depths 1 and 2. The compact row
     // keeps the three deepest message depths. The control is no chip, so its word finds it in the row.
     const { card, page, record } = await story('req_1d9c3e55-0b2', 2);
     const entries = record.outcome.completion?.cacheMapWritten ?? [];
     const mapRow = () => kvRows(card?.querySelector('.decision-card__outcome')).find((r) => r.label === 'Cache-map entries')?.dd ?? null;
     const control = (word) => [...(mapRow()?.querySelectorAll('button') ?? [])].find((b) => b.textContent === word) ?? null;
-    const compact = ['on primary', 'message ×11 depth 1 to 11', 'static ×2 depth 1 to 2', 'message depth 9', 'message depth 10', 'message depth 11', 'prefix 38.9K'];
-    const full = ['on primary', ...Array.from({ length: 11 }, (_, i) => `message depth ${i + 1}`), 'static depth 1', 'static depth 2', 'prefix 38.9K'];
+    const compact = ['on primary', 'message ×11 depth 1 to 11', 'static ×2 depth 1 to 2', 'message depth 9', 'message depth 10', 'message depth 11', 'prefix 58.9K'];
+    const full = ['on primary', ...Array.from({ length: 11 }, (_, i) => `message depth ${i + 1}`), 'static depth 1', 'static depth 2', 'prefix 58.9K'];
     const folded = ddWords(mapRow());
     scan('long cache-map row', card);
     control('All 13 entries')?.click();

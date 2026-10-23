@@ -6,7 +6,7 @@ import { decodeStreamCut } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
-  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestEvent, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
@@ -284,6 +284,9 @@ const streamCutOf = (requestId: string) => {
   const newest = cuts[cuts.length - 1];
   return newest ? decodeStreamCut({ ...newest.detail, at: Date.parse(newest.at) }) : null;
 };
+/** The request's `stream_interrupted` rows as its detail's events, since the route lists the rows it lifts cuts off. */
+const cutEventsOf = (requestId: string): RequestEvent[] =>
+  ROUTING_EVENTS.filter((e) => e.kind === 'stream_interrupted' && e.requestId === requestId).map((e) => ({ accountId: e.accountId, at: e.at, detail: e.detail, keyId: e.keyId, kind: e.kind, model: e.model, sessionId: e.sessionId }));
 
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
@@ -1074,7 +1077,9 @@ export class MockApi implements Api {
 
   getRequest(id: string): Promise<RequestDetail | null> {
     const request = emptyStore() ? undefined : requestById.get(id);
-    return latency(request ? { events: REQUEST_EVENTS.get(id) ?? [], request, streamCut: streamCutOf(id) } : null);
+    const events = REQUEST_EVENTS.get(id) ?? [];
+    const cuts = cutEventsOf(id);
+    return latency(request ? { events: cuts.length === 0 ? events : [...events, ...cuts].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)), request, streamCut: streamCutOf(id) } : null);
   }
 
   getSession(): Promise<SessionInfo | null> {
