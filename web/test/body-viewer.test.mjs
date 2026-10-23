@@ -219,3 +219,58 @@ test("a hit whose column lies past the box scrolls sideways to a third of the bo
   rerender(h(BodyViewer, { find: { active: 70, term: 'hit70' }, highlight: false, lines }));
   assert.deepEqual(lefts, [12 + 60 * 10 - 300 / 3], 'a hit inside the box leaves it where it stands');
 });
+
+/** Stubs `ResizeObserver` for one case and answers the callbacks the viewer registers, each with the element it watches. */
+const observeBoxes = (t) => {
+  const observed = [];
+  globalThis.ResizeObserver = class {
+    constructor(callback) {
+      this.callback = callback;
+    }
+    observe(el) {
+      observed.push({ callback: this.callback, el });
+    }
+    unobserve() {}
+    disconnect() {}
+  };
+  t.after(() => delete globalThis.ResizeObserver);
+  return observed;
+};
+
+test('a term typed letter by letter on one long line scrolls sideways to the match each letter finds', (t) => {
+  const observed = observeBoxes(t);
+  // One line of 100 columns: its first `r` at column 3 and its first `re` at column 60, inside `request`.
+  const lines = [`---r${'-'.repeat(56)}request`.padEnd(100, '-')];
+  const container = render(h(BodyViewer, { highlight: false, lines }));
+  const pre = container.querySelector('pre.body-block__pre');
+  const probe = container.querySelector('.body-rows > [aria-hidden="true"]');
+  pre.style.paddingLeft = '12px';
+  stubBox(pre, 180);
+  const lefts = [];
+  let left = 0;
+  Object.defineProperty(pre, 'clientWidth', { configurable: true, get: () => 300 });
+  Object.defineProperty(pre, 'scrollLeft', { configurable: true, get: () => left, set: (to) => { lefts.push(to); left = to; } });
+  Object.defineProperty(probe, 'scrollWidth', { configurable: true, get: () => 1000 });
+  act(() => observed.find((o) => o.el === probe)?.callback([]));
+  // Each letter keeps the one line as the active hit, so only the term and the match's offset move.
+  for (const term of ['r', 're', 'req', 'requ', 'reque', 'reques', 'request']) rerender(h(BodyViewer, { find: { active: 0, step: 0, term }, highlight: false, lines }));
+  assert.deepEqual(lefts, [12 + 60 * 10 - 300 / 3], 'the box follows the match from column 3 to column 60 once and holds it there');
+});
+
+test('a step over a single hit scrolls it back into view after the reader scrolled away', (t) => {
+  observeBoxes(t);
+  const container = render(h(BodyViewer, { highlight: false, lines: THOUSAND }));
+  const pre = container.querySelector('pre.body-block__pre');
+  const box = stubBox(pre, 180);
+  const at = (step) => h(BodyViewer, { find: { active: 500, step, term: 'line 500' }, highlight: false, lines: THOUSAND });
+  rerender(at(0));
+  assert.equal(box.top, 500 * 18 - 180 / 3, 'the hit opens in the upper third');
+  // Next and then Previous each advance the step count, and both land on the one hit again.
+  for (const step of [1, 2]) {
+    box.top = 0;
+    act(() => pre.dispatchEvent(new window.Event('scroll')));
+    act(runFrames);
+    rerender(at(step));
+    assert.equal(box.top, 500 * 18 - 180 / 3, `step ${step} brings the hit back to the upper third`);
+  }
+});

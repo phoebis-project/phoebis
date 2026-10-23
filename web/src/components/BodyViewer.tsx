@@ -48,6 +48,8 @@ function columnsOf(line: string): number {
 export interface BodyFind {
   /** The active hit's line index, null while the term has no hit. */
   active: number | null;
+  /** Advanced on each step through the hits, so a step over a single hit, which leaves `active` as it was, scrolls. */
+  step: number;
   term: string;
 }
 
@@ -200,23 +202,24 @@ export function BodyViewer({ find, highlight, lines }: { find?: BodyFind; highli
   }, [widest]);
   const widestColumns = useMemo(() => columnsOf(widest), [widest]);
   const active = find?.active ?? null;
+  const step = find?.step ?? 0;
   const term = find?.term ?? '';
-  // The scroll follows a change of the active hit alone, so the term and the lines are read as they stand.
-  const latest = useRef({ lines, term });
+  // The scroll follows the active hit's line, the term and each step, so a letter that moves the match along the same
+  // line, or a step that lands on the same hit, scrolls again. The lines are read as they stand.
+  const latest = useRef(lines);
   useLayoutEffect(() => {
-    latest.current = { lines, term };
+    latest.current = lines;
   });
   useLayoutEffect(() => {
     if (active === null) {
       toward.current = null;
       return;
     }
-    const now = latest.current;
-    const line = now.lines[active] ?? '';
-    const start = findOffsets(line, now.term)[0] ?? 0;
-    toward.current = { columns: [columnsOf(line.slice(0, start)), columnsOf(line.slice(0, start + now.term.length))], row: active, side: true, top: true };
+    const line = latest.current[active] ?? '';
+    const start = findOffsets(line, term)[0] ?? 0;
+    toward.current = { columns: [columnsOf(line.slice(0, start)), columnsOf(line.slice(0, start + term.length))], row: active, side: true, top: true };
     settle();
-  }, [active, settle]);
+  }, [active, settle, step, term]);
   // Sideways once the vertical part is applied and a commit draws the row on the block's floor: inside the observer's
   // read the block is still the mount's width, and a scrollLeft set there would clamp short of the column.
   useLayoutEffect(() => {

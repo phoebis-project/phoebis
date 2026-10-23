@@ -857,7 +857,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
   const textOf = useMemo(() => once(() => bodyText(value)), [value]);
   const linesOf = useMemo(() => once(() => bodyLines(textOf())), [textOf]);
   // One state for the drawer's group and the dialog's. An empty term asks for no lines, so only a typed term indents.
-  const [find, setFind] = useState({ index: 0, term: '' });
+  const [find, setFind] = useState({ index: 0, step: 0, term: '' });
   const hits = useMemo(() => (find.term === '' ? [] : findHits(linesOf(), find.term)), [find.term, linesOf]);
   const index = Math.min(find.index, hits.length - 1);
   const active = hits.length === 0 ? null : hits[index];
@@ -887,7 +887,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
       setWide(true);
       return;
     }
-    setFind((f) => ({ ...f, index: (Math.min(f.index, hits.length - 1) + by + hits.length) % hits.length }));
+    setFind((f) => ({ ...f, index: (Math.min(f.index, hits.length - 1) + by + hits.length) % hits.length, step: f.step + 1 }));
   };
   const findGroup = (at: typeof drawerFind, inDialog: boolean) => (
     <div ref={at} className="body-block__find">
@@ -895,7 +895,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
         placeholder="Find"
         aria-label={`Find in the ${label} body`}
         value={find.term}
-        onChange={(e) => setFind({ index: 0, term: e.target.value })}
+        onChange={(e) => setFind({ index: 0, step: 0, term: e.target.value })}
         onKeyDown={(e) => {
           if (e.key === 'Enter') step(e.shiftKey ? -1 : 1, inDialog);
           else if (e.key === 'Escape' && find.term !== '') {
@@ -903,7 +903,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
             // that clears a term goes no further.
             e.preventDefault();
             e.stopPropagation();
-            setFind({ index: 0, term: '' });
+            setFind({ index: 0, step: 0, term: '' });
           }
         }}
       />
@@ -918,7 +918,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
             icon={<IconX size={14} />}
             aria-label="Clear find"
             onClick={() => {
-              setFind({ index: 0, term: '' });
+              setFind({ index: 0, step: 0, term: '' });
               at.current?.querySelector('input')?.focus();
             }}
           />
@@ -958,7 +958,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
           footer={<CopyButton text={textOf} label="Copy all" />}
         >
           {findGroup(dialogFind, true)}
-          <BodyViewer find={{ active, term: find.term }} highlight lines={linesOf()} />
+          <BodyViewer find={{ active, step: find.step, term: find.term }} highlight lines={linesOf()} />
         </Dialog>
       )}
     </div>
