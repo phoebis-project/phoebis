@@ -66,7 +66,9 @@ export function walkRows(e: KeyboardEvent<HTMLElement>, list: HTMLElement): void
   const choices = [...list.querySelectorAll<HTMLElement>(ROWS)];
   const stops: HTMLElement[] = search ? [search, ...choices] : choices;
   const onChoice = choices.includes(e.target as HTMLElement);
-  const walked = e.key === 'Home' || e.key === 'End' ? (onChoice ? choices : []) : stops;
+  // Home and End move the caret in the field, so off a row they are the field's.
+  if ((e.key === 'Home' || e.key === 'End') && !onChoice) return;
+  const walked = e.key === 'Home' || e.key === 'End' ? choices : stops;
   const i = walkIndex(e.key, walked.length, walked.indexOf(e.target as HTMLElement));
   const to = i === null ? undefined : walked[i];
   if (!to) return;

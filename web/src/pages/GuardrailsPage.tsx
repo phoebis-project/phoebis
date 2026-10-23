@@ -5,7 +5,7 @@ import type { ApiKey, Condition, Guardrail, GuardrailAttachment, GuardrailMode, 
 import { useSession } from '@/app/session';
 import { blankCondition, ConditionsEditor } from '@/components/ConditionsEditor';
 import { FilterBar } from '@/components/FilterBar';
-import { OptionList, type Option } from '@/components/ui/OptionList';
+import { OptionList, type Option, walkIndex } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
@@ -68,11 +68,11 @@ function CreateMenu({ onBlank, onPreset, presets }: { onBlank: () => void; onPre
     setOpen(false);
     act();
   };
-  // The arrows wrap and Home and End jump to either end, as the Menu primitive walks its items.
+  // The menus' one key map, so the arrows wrap and Home and End jump to either end as the Menu primitive's items do.
   const walk = (e: KeyboardEvent<HTMLDivElement>) => {
     const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
-    const at = items.indexOf(e.target as HTMLElement);
-    const to = e.key === 'ArrowDown' ? items[(at + 1) % items.length] : e.key === 'ArrowUp' ? items[(at <= 0 ? items.length : at) - 1] : e.key === 'Home' ? items[0] : e.key === 'End' ? items[items.length - 1] : undefined;
+    const i = walkIndex(e.key, items.length, items.indexOf(e.target as HTMLElement));
+    const to = i === null ? undefined : items[i];
     if (!to) return;
     e.preventDefault();
     to.focus();

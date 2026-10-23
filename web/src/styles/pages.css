@@ -878,7 +878,7 @@
   grid-template-columns: var(--tl-left) 1fr;
   gap: var(--tl-gap);
   align-items: end;
-  padding: 8px 12px 0 12px;
+  padding: 8px var(--tl-pad) 0;
   background: var(--surface-2);
   border-bottom: 1px solid var(--hairline);
 }
