@@ -39,7 +39,10 @@ export function slowedOf(account: Account, now: number): AccountSlowDown | null 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
 
-/** The end the router's pace reads (`term::end_of`): the saved end while the account is cancelled, else a trial end still ahead. */
+/**
+ * The end the router's pace reads (`term::end_of`): the saved end while the account is canceled, else a trial end
+ * still ahead.
+ */
 export function endOf(account: Pick<Account, 'canceled' | 'subscription'>, now: number): number | null {
   const term = account.subscription;
   if (!term) return null;

@@ -33,7 +33,7 @@ export const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
   messages_changed: 'History',
   model_changed: 'Model',
   none: 'None',
-  not_requested: 'Not asked',
+  not_requested: 'Not requested',
   pending: 'Pending',
   previous_message_not_found: 'No previous',
   system_changed: 'System',

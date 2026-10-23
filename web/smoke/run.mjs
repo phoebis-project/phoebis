@@ -1496,12 +1496,12 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn), JSON.stringify(wanted)],
   });
-  // secondary is cancelled with its end five days after the anchor: inside a week, so the chip reads serious.
+  // secondary is canceled with its end five days after the anchor: inside a week, so the chip reads serious.
   const endChips = (label) => [...(cardOf(label)?.querySelectorAll('.qcard__chips .chip') ?? [])].filter((c) => /^End(s in|ed) /.test(c.textContent?.trim() ?? ''));
   const secondaryEnd = endChips('secondary')[0];
   const secondaryAccount = (await api.listAccounts()).find((a) => a.id === 'secondary');
   results.push({
-    name: '/quota a cancelled account says when it ends, serious inside a week, and one not cancelled says nothing',
+    name: '/quota a canceled account says when it ends, serious inside a week, and one not canceled says nothing',
     ok:
       secondaryEnd?.textContent?.trim() === 'Ends in 4 days' &&
       secondaryEnd.classList.contains('chip--serious') &&
@@ -2058,7 +2058,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   results.push({ name: "/quota the fill of primary's 5-hour bar carries no meter tone and takes its lane's color variable, the one its lane's dot reads", ok: session.color, missing: [String(session.classes)] });
 }
 {
-  // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so
+  // secondary is canceled with its saved end five days after the anchor, inside the weekly zoom's current period, so
   // its lane marks the end and the window that spans it stops there.
   const endsAt = (await api.listAccounts()).find((a) => a.id === 'secondary').subscription.endsAt;
   const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
@@ -2068,7 +2068,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   const past = bars.filter(([left, right]) => left > at || right > at + 1e-9);
   const day = new Date(endsAt).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
   results.push({
-    name: "/quota on the weekly zoom a cancelled account's lane marks its saved end with no window past it, and a lane not cancelled marks none",
+    name: "/quota on the weekly zoom a canceled account's lane marks its saved end with no window past it, and a lane not canceled marks none",
     ok: ends.length === 1 && (ends[0].getAttribute('title') ?? '').startsWith(`secondary ends ${day}`) && bars.length > 0 && past.length === 0 && laneOf('primary')?.querySelectorAll('.lane__end').length === 0,
     missing: [`${ends.length} end markers`, ends[0]?.getAttribute('title') ?? 'no title', JSON.stringify(bars), `at ${at}`, `primary ${laneOf('primary')?.querySelectorAll('.lane__end').length}`],
   });
@@ -2134,7 +2134,7 @@ m.unmount();
   });
 }
 {
-  // A period paged past a cancelled account's end draws none of its windows, the one that opened before the end and
+  // A period paged past a canceled account's end draws none of its windows, the one that opened before the end and
   // spans the period's start among them. The story's end falls inside the current period, so the check moves it into
   // the week that straddles the next period's start.
   const { listAccounts } = api;
@@ -2147,7 +2147,7 @@ m.unmount();
   const bars = (label) => laneOf(label)?.querySelectorAll('.lane__bar').length ?? -1;
   const subtitle = paged.container.querySelector('.timeline .card__subtitle')?.textContent ?? 'no subtitle';
   results.push({
-    name: "/quota a period paged past a cancelled account's end draws no window on its lane",
+    name: "/quota a period paged past a canceled account's end draws no window on its lane",
     ok: !subtitle.includes('current') && bars('secondary') === 0 && laneOf('secondary')?.querySelector('.lane__end') === null && bars('primary') > 0,
     missing: [subtitle, `secondary ${bars('secondary')} bars`, `primary ${bars('primary')} bars`],
   });
@@ -2537,11 +2537,11 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     button('Edit end')?.click();
     await m.settle(100);
     expect('/accounts/primary the subscription end editor', identity()?.textContent ?? '', [
-      'Cancelled',
+      'Canceled',
       'Ends',
       "The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.",
     ]);
-    // The smoke runs in UTC, so the label names UTC. The `.field` scope skips the checkbox's Cancelled field label.
+    // The smoke runs in UTC, so the label names UTC. The `.field` scope skips the checkbox's Canceled field label.
     const endsLabel = identity()?.querySelector('.field .field__label')?.textContent?.trim() ?? '';
     results.push({ name: "/accounts/primary the Ends field names the browser's zone beside its label", ok: endsLabel === 'Ends (UTC)', missing: [endsLabel || 'no Ends label'] });
     const before = field()?.value;
@@ -2549,8 +2549,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     await m.settle(100);
     const asked = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
     results.push({
-      name: '/accounts/primary ticking Cancelled leaves the Ends field empty and the refusal names the date',
-      ok: before === '' && box()?.checked === true && field()?.value === '' && asked.includes('A cancelled plan needs the date it ends.'),
+      name: '/accounts/primary ticking Canceled leaves the Ends field empty and the refusal names the date',
+      ok: before === '' && box()?.checked === true && field()?.value === '' && asked.includes('A canceled plan needs the date it ends.'),
       missing: [String(before), String(box()?.checked), field()?.value ?? 'no field', asked || 'no callout'],
     });
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -2560,7 +2560,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     const refusal = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
     results.push({
       name: '/accounts/primary a ticked box whose date was cleared is refused before the save',
-      ok: refusal.includes('A cancelled plan needs the date it ends.') && button('Save')?.disabled === true,
+      ok: refusal.includes('A canceled plan needs the date it ends.') && button('Save')?.disabled === true,
       missing: [refusal || 'no callout', String(button('Save')?.disabled)],
     });
     setter.call(field(), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16));
@@ -3119,7 +3119,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   // The discard question: a dialog that only shows the link closes on an outside click, a pasted text asks first.
   const unchanged = await openRepair();
   await discardCounted(m, '/accounts the pairing dialog closes on an outside click before anything is pasted', () => outsideOf(m, unchanged), { before: 1, after: 0 });
-  // Armed after that close, which cancelled its own session, so the count below reads the Discard alone.
+  // Armed after that close, which canceled its own session, so the count below reads the Discard alone.
   const cancels = countCalls('cancelPairing');
   const pasted = await openRepair();
   const pastedInput = pasted?.querySelector('input[placeholder^="http://localhost"]');
@@ -3345,6 +3345,43 @@ expect('/accounts/secondary', m.text(), [
     ok: value('Ends')?.textContent?.trim() === 'ends in 4 days' && value('Trial ends')?.textContent?.trim() === 'ends in 7 days' && Boolean(value('Ends')?.getAttribute('title')) && Boolean(value('Trial ends')?.getAttribute('title')),
     missing: [value('Ends')?.textContent ?? 'no Ends row', value('Trial ends')?.textContent ?? 'no Trial ends row'],
   });
+}
+// The Identity list draws a Plan ended row only while a profile read's instant stands on the account, and no story
+// account's plan has ended. An answer that carries the instant draws the row after Ends, the relative instant with the
+// absolute on hover as the Ends row prints its own, and the row leaves once a read answers the flag cleared.
+{
+  const identityRows = (page) => {
+    const identity = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+    return [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => ({ label: r.querySelector('dt')?.textContent?.trim() ?? '', title: r.querySelector('dd')?.getAttribute('title') ?? null, value: r.querySelector('dd')?.textContent?.trim() ?? '' }));
+  };
+  const story = await api.listAccounts();
+  const walk = await mount('/accounts');
+  const drawn = [];
+  for (const account of story) {
+    await walk.navigate(`/accounts/${account.id}`);
+    if (identityRows(walk).some((r) => r.label === 'Plan ended')) drawn.push(account.id);
+  }
+  walk.unmount();
+  const flagged = story.filter((a) => a.planEndedAt !== null).map((a) => `${a.id} ended ${a.planEndedAt}`);
+  results.push({ name: '/accounts no story account carries an ended plan, so no Identity list draws a Plan ended row', ok: story.length > 0 && flagged.length === 0 && drawn.length === 0, missing: [...flagged, ...drawn] });
+  // Three hours before the anchor, which the smoke's UTC zone prints as 11:30 on the hover.
+  const endedAt = new Date(CLOCK_ORIGIN - 3 * 3_600_000).toISOString();
+  const { listAccounts } = api;
+  api.listAccounts = async (...args) => (await listAccounts.apply(api, args)).map((a) => (a.id === 'secondary' ? { ...a, planEndedAt: endedAt } : a));
+  const ended = await mount('/accounts/secondary', { now: CLOCK_ORIGIN });
+  const rows = identityRows(ended);
+  const row = rows.find((r) => r.label === 'Plan ended');
+  results.push({
+    name: '/accounts/secondary an ended plan reads Plan ended after Ends, the relative instant with the absolute on hover',
+    ok: rows.map((r) => r.label).join('|') === 'Type|Plan|Rate-limit tier|Ends|Plan ended|Trial ends|Organization|Billing type' && row?.value === '3h ago' && row?.title === fmtAbsolute(endedAt) && row?.title === 'Sep 16, 2026, 11:30:00',
+    missing: [rows.map((r) => r.label).join('|'), JSON.stringify(row ?? null)],
+  });
+  api.listAccounts = listAccounts;
+  tick(5_000);
+  await ended.settle(400);
+  const cleared = identityRows(ended).map((r) => r.label);
+  results.push({ name: '/accounts/secondary the Plan ended row leaves once a read answers the flag cleared', ok: cleared.length > 0 && !cleared.includes('Plan ended'), missing: cleared });
+  ended.unmount();
 }
 {
   // Each row clears its own scope by name, so the account's other scope stays through the clear.
@@ -3632,7 +3669,7 @@ m.unmount();
   let opened = (await primary())?.revision ?? null;
   await editLabel();
   await typeInto(labelInput(), 'primary 2');
-  await api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: '2027-03-01T10:00:00.000Z' });
+  await api.updateAccount('primary', { canceled: true, subscriptionEndsAt: '2027-03-01T10:00:00.000Z' });
   let written = (await primary())?.revision ?? null;
   titleButton('Save')?.click();
   await page.settle(600);
@@ -3661,7 +3698,7 @@ m.unmount();
     missing: [`input ${renameSaved.input}`, `header ${renameSaved.header}`, `toast ${renameSaved.toast}`, `revision ${renameSaved.revision}, opened ${opened}`],
   });
   await api.renameAccount('primary', 'primary');
-  await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+  await api.updateAccount('primary', { canceled: false, subscriptionEndsAt: null });
   // The list's own read at its 5 s auto reload takes the put-back row in, and the confirmation down, so the end editor
   // opens on the stored row with no toast left over.
   tick(5_000);
@@ -3683,7 +3720,7 @@ m.unmount();
   results.push({
     name: '/accounts a save over an account written since the end editor opened is refused as stale with a Reload in the callout',
     ok: written === opened + 1 && endRefused.field && endRefused.callout === `${sentence} Reload` && !!endReload && endRefused.toast === '' && endRefused.stored === false,
-    missing: [`written ${written}, opened ${opened}`, `field ${endRefused.field}`, endRefused.callout || 'no callout', `reload ${!!endReload}`, `toast ${endRefused.toast}`, `stored cancelled ${endRefused.stored}`],
+    missing: [`written ${written}, opened ${opened}`, `field ${endRefused.field}`, endRefused.callout || 'no callout', `reload ${!!endReload}`, `toast ${endRefused.toast}`, `stored canceled ${endRefused.stored}`],
   });
   const endReads = await accountReads(() => endReload?.click());
   results.push({
@@ -3736,7 +3773,7 @@ m.unmount();
   // its save lands without a Reload: the label first, then the subscription end.
   const putBack = async () => {
     await api.renameAccount('primary', 'primary');
-    await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+    await api.updateAccount('primary', { canceled: false, subscriptionEndsAt: null });
     tick(30_000);
     await page.settle(400);
   };
@@ -3794,7 +3831,7 @@ m.unmount();
   identityButton('Cancel')?.click();
   await page.settle(400);
   await api.renameAccount('primary', 'primary');
-  await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+  await api.updateAccount('primary', { canceled: false, subscriptionEndsAt: null });
   page.unmount();
 }
 {
@@ -3840,7 +3877,7 @@ m.unmount();
     identityButton('Edit end')?.click();
     await page.settle(100);
   };
-  const markCancelled = async () => {
+  const markCanceled = async () => {
     if (box()?.checked === false) box()?.click();
     await page.settle(100);
     await typeInto(field(), '2027-03-01T10:00');
@@ -3857,7 +3894,7 @@ m.unmount();
     await page.settle(400);
     for (const id of [first, second]) {
       await api.renameAccount(id, id);
-      await api.updateAccount(id, { cancelled: false, subscriptionEndsAt: null });
+      await api.updateAccount(id, { canceled: false, subscriptionEndsAt: null });
     }
     const token = await level();
     tick(5_000);
@@ -3876,7 +3913,7 @@ m.unmount();
   held.release();
   await page.settle(600);
   held.restore();
-  await markCancelled();
+  await markCanceled();
   const endSends = countCalls('updateAccount');
   identityButton('Save')?.click();
   await page.settle(600);
@@ -3896,7 +3933,7 @@ m.unmount();
   held.release();
   await page.settle(600);
   held.restore();
-  await markCancelled();
+  await markCanceled();
   identityButton('Save')?.click();
   await page.settle(600);
   const fenced = { callout: endCallout() ?? '', second: await stored(second) };
@@ -3920,7 +3957,7 @@ m.unmount();
   const endOpened = await reset();
   await goTo(first);
   await editEnd();
-  await markCancelled();
+  await markCanceled();
   held = deferNextCall('updateAccount');
   identityButton('Save')?.click();
   await page.settle(100);
@@ -3981,7 +4018,7 @@ m.unmount();
   results.push({
     name: '/accounts a save refused after the operator left the account raises the toast',
     ok: read.path === '/accounts/secondary' && read.toast === 'Save on primary refused: the account changed while the edit was being saved' && read.stored === false,
-    missing: [`path ${read.path}`, read.toast || 'no toast', `stored cancelled ${read.stored}`],
+    missing: [`path ${read.path}`, read.toast || 'no toast', `stored canceled ${read.stored}`],
   });
   page.unmount();
 }
@@ -5619,7 +5656,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [
       'Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.',
-      'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the Accounts page',
+      'This long before a canceled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the Accounts page',
     ]);
     {
       // The return dwell is the one Always reads, so the other two modes draw it disabled.
@@ -6435,12 +6472,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
   // Cancel after a stale refusal reads the lists again, as after any refusal; the write through the API moves the
   // pool's stamp alone.
-  const cancelled = await openAll();
+  const canceled = await openAll();
   await api.updatePool('all', written);
-  footButton(cancelled, 'Save pool')?.click();
+  footButton(canceled, 'Save pool')?.click();
   await m.settle(600);
-  const refusedThen = cancelled?.querySelector('.dialog__body--grouped [role="alert"]')?.textContent ?? '';
-  const cancelReads = await readsOnCancel(cancelled);
+  const refusedThen = canceled?.querySelector('.dialog__body--grouped [role="alert"]')?.textContent ?? '';
+  const cancelReads = await readsOnCancel(canceled);
   results.push({
     name: '/pools Cancel after a save refused as stale reads the pools and keys again',
     ok: refusedThen === `${sentence} Reload` && JSON.stringify(cancelReads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
@@ -18618,14 +18655,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   await tab(m, 'Cache');
   // The table heads each reason with a short word and the panel's full label on the word's title.
-  const shortWords = ['History', 'Model', 'None', 'Not asked', 'Pending', 'No previous', 'System', 'Tools', 'Unavailable'];
+  const shortWords = ['History', 'Model', 'None', 'Not requested', 'Pending', 'No previous', 'System', 'Tools', 'Unavailable'];
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
   results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: shortWords.every((w) => reasonTable.includes(w)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
   {
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'));
     const body = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
     const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested', 'Pending'];
-    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not asked', 'Pending'];
+    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not requested', 'Pending'];
     const ths = [...(table?.querySelectorAll('thead th') ?? [])];
     const heads = ths.map((th) => th.textContent?.trim());
     const titles = ths.slice(1, -1).map((th) => th.querySelector('span[title]')?.getAttribute('title') ?? null);
@@ -20576,7 +20613,7 @@ const CARD_VIEWS = [
   });
 }
 {
-  const name = '/pools an open Delete pool confirm pauses auto reload, and the reads resume once it is cancelled';
+  const name = '/pools an open Delete pool confirm pauses auto reload, and the reads resume once it is canceled';
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   const spy = countCalls('listPools');
   const title = () => intervalPart(page)?.getAttribute('title') ?? null;
@@ -23250,7 +23287,7 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
     missing: [...rows, (failed.container.querySelector('pre.snippet')?.textContent ?? 'no block').split('\n')[0]],
   });
   failed.unmount();
@@ -23356,17 +23393,17 @@ m.unmount();
 }
 
 // A zero on a retention key keeps its rows forever, so About reads "kept forever" on that line, and one day reads in
-// the singular.
+// the singular. The body capture line reads the limit the answer carries, here one the seed does not hold.
 {
   const { getSettings } = api;
   api.getSettings = async (...args) => {
     const settings = await getSettings.apply(api, args);
-    return { ...settings, retention: { ...settings.retention, retentionDays: 0, rollupRetentionDays: 1 } };
+    return { ...settings, retention: { ...settings.retention, bodyCaptureMaxHours: 6, retentionDays: 0, rollupRetentionDays: 1 } };
   };
   const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
-  const kept = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).filter((row) => row.startsWith('Requests, samples and the routing log=') || row.startsWith('Rollups='));
-  results.push({ name: '/settings a zero retention reads kept forever and a one-day retention kept for 1 day', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day']), missing: kept });
+  const kept = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).filter((row) => row.startsWith('Requests, samples and the routing log=') || row.startsWith('Rollups=') || row.startsWith('Body capture='));
+  results.push({ name: '/settings a zero retention reads kept forever, a one-day retention kept for 1 day, and the body capture limit its own hours', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day', 'Body capture=at most 6 hours']), missing: kept });
   api.getSettings = getSettings;
   page.unmount();
 }
@@ -23389,11 +23426,11 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
   const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the two retention lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
     name: '/settings each path and retention line names its key in the configuration file and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Body capture=Set by stats.body_capture_max_hours in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));

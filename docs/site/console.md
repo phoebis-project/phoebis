@@ -279,19 +279,19 @@ it." The actions, with the dialog each opens:
 | "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.` |
 
 "Identity" lists, for a subscription account, Type ("OAuth login"), Plan by its tier with its start
-(`Max 20x since {date}`), Rate-limit tier, Ends and Trial ends where known, Organization and Billing type, and "Edit
-end" opens the end editor: the checkbox "Cancelled", the field `Ends ({zone})`, whose label names the browser's time
-zone, with the hint "The date the plan's billing settings show as its end. An annual plan is marked canceled in its
-final month only. The time is in this browser's zone.", Save and Cancel, and "Reload" where the row changed under the
-editor. Beside the saved end the row answers `plan_ended_at`, the instant a profile read found the account's
-organization holding no plan, which the router reads as an end that has passed until a profile read or a pairing finds a
-plan again ([Account states](pairing.md#account-states)). The card closes on "Renewal date is not reported by the
-provider." For an API-key account it lists Type ("API key") and Windows ("None reported, billed per token"). "Usage"
-("Remaining share of each window") draws the three windows as the Quota view does, the speed chip beside the 5-hour
-bar's label on a slowed account, "Extra usage this month" with its spend meter and an "in use" badge, the reason the
-provider gave for disabling extra usage, and a "Fast mode" line with the share of the fast lane's input and output
-buckets used and a chip while the fast lane cools, or reads "This account does not report quota windows.", or "The first
-quota reading is in flight" from a pairing's confirm until the account's first reading lands. "7-day trend"
+(`Max 20x since {date}`), Rate-limit tier, Ends where known, Plan ended where set, Trial ends where known, Organization
+and Billing type, and "Edit end" opens the end editor: the checkbox "Canceled", the field `Ends ({zone})`, whose label
+names the browser's time zone, with the hint "The date the plan's billing settings show as its end. An annual plan is
+marked canceled in its final month only. The time is in this browser's zone.", Save and Cancel, and "Reload" where the
+row changed under the editor. Beside the saved end the row answers `plan_ended_at`, the instant a profile read found the
+account's organization holding no plan, which the router reads as an end that has passed until a profile read or a
+pairing finds a plan again ([Account states](pairing.md#account-states)). The card closes on "Renewal date is not
+reported by the provider." For an API-key account it lists Type ("API key") and Windows ("None reported, billed per
+token"). "Usage" ("Remaining share of each window") draws the three windows as the Quota view does, the speed chip
+beside the 5-hour bar's label on a slowed account, "Extra usage this month" with its spend meter and an "in use" badge,
+the reason the provider gave for disabling extra usage, and a "Fast mode" line with the share of the fast lane's input
+and output buckets used and a chip while the fast lane cools, or reads "This account does not report quota windows.", or
+"The first quota reading is in flight." from a pairing's confirm until the account's first reading lands. "7-day trend"
 ("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a
 subscription account, or "No samples yet" with "Quota samples appear after the first successful quota fetch." "Cooling
 down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the model), Reason and Until with a Clear button
@@ -471,7 +471,7 @@ subscription member. Under Never it leaves the metered member on expiry, a coold
 before it returns. 0 returns it at once.", is enabled under Always. Under When cold or Never it stays editable while its
 value is one the dialog refuses (not a whole number from 0 to 86400, which holds the save as typed) and while it holds
 the focus, so the keystroke that brings a refused value back in bounds leaves it editable until the focus leaves.
-`Wind down (min)` carries the hint "This long before a cancelled subscription ends, its account takes new sessions only
+`Wind down (min)` carries the hint "This long before a canceled subscription ends, its account takes new sessions only
 as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the
 Accounts page." The rules are on [Moves](routing.md#moves).
 
@@ -1063,9 +1063,10 @@ Profile, Metrics listener, Ledger path, API prices path and Subscription costs p
 configured", then its table's entry in force, its revision count and the next date while one is pending, as
 `effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the cost model reports
 a problem), Storage path, "Requests, samples and the routing log" and "Rollups" (each as `kept for {n} days`, or "kept
-forever" where its key is 0), and Admin secret as "configured" or "not configured", each path's and each retention
-line's hover naming the bootstrap key that sets it, and closes on "The values the configuration file sets are on the
-installation page, and `phoebis check-config` prints this router's."
+forever" where its key is 0), "Body capture" (as `at most {n} hours`, the longest a pool or a key keeps captured
+bodies), and Admin secret as "configured" or "not configured", each path's and each retention line's hover naming the
+bootstrap key that sets it, and closes on "The values the configuration file sets are on the installation page, and
+`phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point
@@ -1180,13 +1181,14 @@ one. Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `bud
 why the member was passed over, and beside it a badge for a destination the gate read that did not fit, `rewrite only`
 or `least bad` in the warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that
 pins nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed
-until) and `Settings in force since {time}`, stay closed until opened. In Pin and warmth, a stamped pin's Shed mark
-names the account it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with
-the instant. The settings fold lists the pool's twenty-four settings in the card's order with Load
-shedding and Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as
-a span or `at once` at 0, or "The key and its pool had left the registry". A record
-written before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and
-the five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
+until) and `Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the
+fence re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the
+account it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant.
+The settings fold lists the pool's twenty-four settings in the card's order with Load shedding and
+Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or
+`at once` at 0, or "The key and its pool had left the registry". A record written
+before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and the
+five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
 twenty-four, each marked `(then)`, the three settings it carried that a version 2 record does not. "Outcome" lists the
 pin written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
 (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading

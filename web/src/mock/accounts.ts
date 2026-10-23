@@ -110,7 +110,7 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+second@example.com',
     status: 'cooldown',
     routingEnabled: true,
-    // Cancelled, with the end the operator saved before the trial's own, so the pace reads the saved one.
+    // Canceled, with the end the operator saved before the trial's own, so the pace reads the saved one.
     canceled: true,
     // The 7-day reading crosses 80% between the story's 14:01:45 and 14:03 placements, so Pace takes secondary over
     // primary for the hour's sessions before the crossing and primary over it after.

@@ -46,7 +46,10 @@ instant beside it in box, type, ink and top, its label against that chip's label
 the Diagnostics group (neither its heading nor the Routing log link on the dashboard with the expert view off, both with
 the log open and the link active), pool chips, the caching controls, the Load shedding switch against Migrate when
 spent, the Burn average field's hint in the expert view (ending on the preset that unlocks the field, against the Window
-ceiling field's hint beside it in type, ink, line height, margin, left edge and top, and as wide as its field), the load
+ceiling field's hint beside it in type, ink, line height, margin, left edge and top, and as wide as its field), the Wind
+down and Retention hints of the pool dialog (the Wind down hint naming the canceled subscription against the Return
+dwell hint beside it, and the Retention hint naming the limit and the Settings page's About card against the capture
+switch's hint beside it, each in type, ink and left edge), the load
 groups (the overage grace field against the window ceiling field, the utilization bar's ceiling handle and the shedding
 preview line), the pool dialog's ceiling handle in the plain view (on the track at the field's value, centered on the
 track and taller than it), the Active pins tile's line under its figure (in the mock pass on the work card alone, "1 on
@@ -59,7 +62,7 @@ column's 96, 140 or 150 px less the cell's padding) and keys table (Key the fill
 in the mock pass's expert view its model rules table (Model the fill, each select holding its widest option's text
 inside its padding), which the router's seed draws no override for, the Create key dialog's Key group (the Name input,
 the Pool select and the footer's buttons 32 px, the Notes field 72 px, each label above its control), the settings
-cards' order, the listener hint's gaps and size and About's lines (their order, one type and one gap), About's two
+cards' order, the listener hint's gaps and size and About's lines (their order, one type and one gap), About's three
 retention lines (the label's type and ink, the value's ink and the row's height of the Storage path line above them, the
 label's and the value's type and ink of the Admin secret line below them, and in the 720 px strip and at 400 px those
 types and inks again with the label column at most half the list's width), the Settings page's Unit row at 1280 and 400
@@ -193,9 +196,10 @@ placement's Pick station opened by Enter and by Space with the focus inside its 
 focus back on the station), the tie's pick line (in the mock pass, on a load of its own once the log's shot is taken:
 the story's failover that tied primary and nightly on Pace before nightly's overage, its Pick station's rows reading
 "tied primary", "tied nightly", "by runway primary" and "drawn no", each in the type, line height and left edge of the
-strategy row above it), the subscription end editor, the hint a confirmed pairing draws in the Usage card while the
-first reading is in flight (in the mock pass, after the view's shot, against the note of the story's API-key account
-annex in type, ink, line height, margin and place), the catalog popup and its columns (Model and Name the fills), the
+strategy row above it), the subscription end editor (its checkbox label reading Canceled in the type of the Ends label
+beside it), the hint a confirmed pairing draws in the Usage card while the first reading is in flight (in the mock pass,
+after the view's shot, read whole with its closing period against the note of the story's API-key account annex in type,
+ink, line height, margin and place), the catalog popup and its columns (Model and Name the fills), the
 Keys table's columns (Name, Models and Status the fills) and the badges of its fill cells (each ending inside its cell
 and cutting its own label with the ellipsis), the key dialog's Access selects, the Keys bar's pool chip against its
 status chip (26 px, on an address that holds both), the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900

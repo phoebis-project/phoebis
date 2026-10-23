@@ -1140,7 +1140,7 @@
   border-radius: var(--radius-pill);
 }
 
-/* A cancelled account's saved end: a 2px rule across the track, centered in a wider box so its title can be hovered. */
+/* A canceled account's saved end: a 2px rule across the track, centered in a wider box so its title can be hovered. */
 .lane__end {
   position: absolute;
   top: -4px;

@@ -158,6 +158,7 @@ export function decodeAccount(v: unknown): Account {
     label: str(a.label),
     overage: overage ? { inUse: bool(overage.in_use), observedAt: isoOr(overage.observed_at, epoch), reset: isoOrNull(overage.reset), since: isoOrNull(overage.since) } : null,
     plan: planName(subscription),
+    planEndedAt: isoOrNull(a.plan_ended_at),
     pool: pool ? { poolId: str(pool.pool_id), priority: num(pool.priority) } : null,
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
@@ -1111,7 +1112,7 @@ export function decodeSettings(v: unknown): Settings {
 const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));
 const encodeTtlRules = (r: TtlRules) => ({ main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
 
-export const encodeAccountPatch = (p: AccountPatch) => ({ canceled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
+export const encodeAccountPatch = (p: AccountPatch) => ({ canceled: p.canceled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
   auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),

@@ -48,7 +48,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['canceled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pool', 'requests', 'revision', 'routingEnabled', 'slowDown', 'status', 'subscription', 'usage', 'windows'],
+    ['canceled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'planEndedAt', 'pool', 'requests', 'revision', 'routingEnabled', 'slowDown', 'status', 'subscription', 'usage', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
@@ -77,12 +77,20 @@ test("an account decodes its slow-down and each window's demand, and an api_key 
   assert.deepEqual([older.slowDown, older.windows[0].demand], [null, null], 'a row without the members reads null');
 });
 
-test('an account decodes its cancelled flag and its saved end', () => {
+test('an account decodes its canceled flag and its saved end', () => {
   const body = fixture('account');
   const canceled = d.decodeAccount({ ...body, canceled: true, subscription: { ...body.subscription, ends_at: 5_000 } });
   assert.deepEqual([canceled.canceled, canceled.subscription.endsAt], [true, d.iso(5_000)]);
   const { canceled: _c, ...unflagged } = body;
   assert.equal(d.decodeAccount(unflagged).canceled, false, 'a row the wire answers no flag for reads uncanceled');
+});
+
+test('an account decodes the instant its plan ended, and null while a plan stands', () => {
+  const body = fixture('account');
+  assert.equal(d.decodeAccount({ ...body, plan_ended_at: 1_700_000_000_000 }).planEndedAt, d.iso(1_700_000_000_000));
+  assert.equal(d.decodeAccount({ ...body, plan_ended_at: null }).planEndedAt, null, 'a plan that stands reads null');
+  const { plan_ended_at: _p, ...older } = body;
+  assert.equal(d.decodeAccount(older).planEndedAt, null, 'a row from a router without the member reads null');
 });
 
 test("a routing log candidate's term decodes its canceled flag", () => {
@@ -2537,10 +2545,10 @@ test("a table's effective date reads as the calendar date the file names in ever
   }
 });
 
-test('an account patch encodes the cancelled flag and its end', () => {
+test('an account patch encodes the canceled flag and its end', () => {
   const end = '2026-10-19T09:15:00.000Z';
-  assert.deepEqual(d.encodeAccountPatch({ cancelled: true, subscriptionEndsAt: end }), { canceled: true, subscription_ends_at: Date.parse(end) }, 'the route takes milliseconds');
-  assert.deepEqual(d.encodeAccountPatch({ cancelled: false, subscriptionEndsAt: null }), { canceled: false, subscription_ends_at: null }, 'a cleared end is sent as null, not left out');
+  assert.deepEqual(d.encodeAccountPatch({ canceled: true, subscriptionEndsAt: end }), { canceled: true, subscription_ends_at: Date.parse(end) }, 'the route takes milliseconds');
+  assert.deepEqual(d.encodeAccountPatch({ canceled: false, subscriptionEndsAt: null }), { canceled: false, subscription_ends_at: null }, 'a cleared end is sent as null, not left out');
 });
 
 test('settings, pricing, pairing, quota, and usage decode', () => {

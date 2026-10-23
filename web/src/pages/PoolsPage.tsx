@@ -2194,7 +2194,7 @@ export function PoolDialog({
             label={ENGINE_FIELD_LABELS.windDownMinutes}
             hint={
               <>
-                This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
+                This long before a canceled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
               </>
             }
           >
@@ -2383,7 +2383,7 @@ export function PoolDialog({
           label="Retention (hours)"
           hint={
             <>
-              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${captureMaxHours} hours here, `}shown on the <PageLink to="/settings">Settings page</PageLink>.
+              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${captureMaxHours} hours here, `}shown on the <PageLink to="/settings">Settings page</PageLink>&apos;s About card.
             </>
           }
         >

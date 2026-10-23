@@ -122,7 +122,7 @@ test("the pace words run to the account's end when it comes before the window's 
   assert.equal(d.remainingTimeShare(week), null, 'a window the answer carries no lead for draws no mark');
 });
 
-test('the end a pace reads is the saved end while cancelled, else a trial end still ahead, as the router reads it', () => {
+test('the end a pace reads is the saved end while canceled, else a trial end still ahead, as the router reads it', () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const iso = (ms) => new Date(ms).toISOString();
   const saved = now + 5 * 86_400_000;

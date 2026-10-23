@@ -206,7 +206,7 @@ test('pace places a winding-down member last and knows no floor', () => {
     // Nearly spent, with the lowest served score of the tier: it ranks last among the ranked members and is no last
     // resort of its own.
     account('spent', { windows: window7d(hoursFromNow(0.5), 0.96) }),
-    // Cancelled and ten minutes from its end, inside the default half-hour wind-down, with the best score of all.
+    // Canceled and ten minutes from its end, inside the default half-hour wind-down, with the best score of all.
     account('ending', { canceled: true, subscription: subscription({ endsAt: new Date(NOW + 10 * MINUTE).toISOString() }), windows: window7d(hoursFromNow(24), 0.1) }),
     account('other', { windows: window7d(hoursFromNow(24), 0.5) }),
     account('key', { kind: 'api_key' }),

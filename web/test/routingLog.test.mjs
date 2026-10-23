@@ -1446,8 +1446,8 @@ test("an account edit's drawer reads each pair and the replaced secret beside th
   // A decision record carries the pool's settings it was decided under, so a pool's edit alone reads one.
   const key = pairs({ enabled: { from: true, to: false }, expires_at: { from: null, to: MIDNIGHT + 9 * 24 * HOUR } }, 'key_updated', 'ci');
   assert.deepEqual(key.slice(1), [['Change', ['key edited', 'ci']], ['enabled', ['from on', 'to off']], ['expires at', ['from none', 'to Sep 26 00:00']], ['Actor', ['admin']]]);
-  const end = pairs({ cancelled: { from: false, to: true }, subscription_ends_at: { from: null, to: ms(18, 0) } }, 'account_updated', 'secondary');
-  assert.deepEqual(end.slice(2), [['cancelled', ['from off', 'to on']], ['subscription ends at', ['from none', 'to 18:00']], ['Actor', ['admin']]]);
+  const end = pairs({ canceled: { from: false, to: true }, subscription_ends_at: { from: null, to: ms(18, 0) } }, 'account_updated', 'secondary');
+  assert.deepEqual(end.slice(2), [['canceled', ['from off', 'to on']], ['subscription ends at', ['from none', 'to 18:00']], ['Actor', ['admin']]]);
   const pool = pairs({ window_ceiling: { from: 0.95, to: 0.75 } }, 'pool_updated', 'all');
   assert.deepEqual(pool.slice(-1), [['Reading it', ['decisions before 09:08 carry window ceiling 95%']]], 'a pool edit keeps its reading');
   const listed = pairs({ guardrails: { from: [], to: ['no-secrets', 'size-cap'] } }, 'pool_updated', 'all');

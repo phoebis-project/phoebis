@@ -133,13 +133,13 @@ export function DecisionStrip({ now, record, row }: { now: number; record: Decis
   const enter = (anchor: StripAnchor) => () => setOpen((o) => (o?.pinned ? o : { anchor, focus: false, pinned: false }));
   const leave = (anchor: StripAnchor) => () => setOpen((o) => (o !== null && !o.pinned && keyOf(o.anchor) === keyOf(anchor) ? null : o));
   const pin = (anchor: StripAnchor, focus: boolean) => setOpen((o) => (o?.pinned && keyOf(o.anchor) === keyOf(anchor) ? null : { anchor, focus, pinned: true }));
-  // The key's own click is cancelled, or it would pin a second time and close the popover again.
+  // The key's own click is canceled, or it would pin a second time and close the popover again.
   const keyDown = (anchor: StripAnchor) => (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     e.preventDefault();
     pin(anchor, true);
   };
-  // Engines differ on which of Space's two events fires a button's click, so its release is cancelled too.
+  // Engines differ on which of Space's two events fires a button's click, so its release is canceled too.
   const keyUp = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key === ' ') e.preventDefault();
   };

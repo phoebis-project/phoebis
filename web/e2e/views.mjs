@@ -1699,6 +1699,61 @@ async function poolBurnAverageHint(theme) {
 }
 
 /**
+ * Two hints of the pool dialog that name a value set elsewhere: the Wind down hint in the expert view's Overage and
+ * plan end group reads the canceled subscription it acts before, and the Retention hint in the Body capture group names
+ * the limit with the Settings page's About card that shows it. Each holds the type, the ink and the left edge of the
+ * field hint beside it in its group, the Return dwell hint and the capture switch's hint.
+ */
+async function poolEngineHints(theme) {
+  const say = (what) => failures.push(`${theme} /pools: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const read = (group, labels) =>
+    dialog.evaluate(
+      (el, [name, wanted]) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === name);
+        const hintOf = (text) => {
+          const field = [...(section?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
+          const hint = field?.querySelector(':scope > .field__hint');
+          if (!field || !hint || section.hidden) return null;
+          const s = getComputedStyle(hint);
+          // The words a sighted reader sees, without a page link's note to a screen reader that it opens a new tab.
+          const shown = hint.cloneNode(true);
+          for (const note of shown.querySelectorAll('.sr-only')) note.remove();
+          return { color: s.color, font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, left: Math.round(hint.getBoundingClientRect().left - field.getBoundingClientRect().left), text: shown.textContent ?? '' };
+        };
+        return Object.fromEntries(Object.entries(wanted).map(([key, text]) => [key, hintOf(text)]));
+      },
+      [group, labels],
+    );
+  try {
+    await expertView(true);
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await railEntry(dialog, 'Overage and plan end').click();
+  } catch (error) {
+    say(`the pool dialog never reached its Overage and plan end group (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
+    return;
+  }
+  await settle();
+  const windDown = await read('Overage and plan end', { dwell: 'Return dwell (s)', windDown: 'Wind down (min)' });
+  await railEntry(dialog, 'Body capture').click();
+  await settle();
+  const retention = await read('Body capture', { capture: 'Capture request and response bodies', retention: 'Retention (hours)' });
+  measurements.push(`${theme} /pools engine hints ${JSON.stringify({ ...windDown, ...retention })}`);
+  if (!windDown.windDown?.text.startsWith('This long before a canceled subscription ends, ')) say(`the Wind down hint reads ${JSON.stringify(windDown.windDown?.text ?? null)}, not naming the canceled subscription`);
+  if (!/^At most the bootstrap's body capture limit, \d+ hours here, shown on the Settings page's About card\.$/.test(retention.retention?.text ?? '')) say(`the Retention hint reads ${JSON.stringify(retention.retention?.text ?? null)}, not naming the limit and the About card`);
+  for (const finding of [
+    ...compare(windDown.windDown, windDown.dwell, ['color', 'font', 'left'], 'the Wind down hint against the Return dwell hint beside it'),
+    ...compare(retention.retention, retention.capture, ['color', 'font', 'left'], "the Retention hint against the capture switch's hint beside it"),
+  ]) say(finding);
+  await closeByEscape(dialog, `${theme} /pools engine hints dialog`, say);
+  await expertView(false).catch(() => {});
+  await atRest();
+}
+
+/**
  * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
  * pill against a session-affinity pill, the overage grace field against the window ceiling field, and a warm-sessions
  * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding and slow-down preview
@@ -2927,7 +2982,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
-  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Admin secret'];
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Admin secret'];
   if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
   const storage = about.types[about.labels.indexOf('Storage path')];
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
@@ -2940,7 +2995,7 @@ async function settingsOrder(theme) {
 }
 
 /**
- * About's two retention lines drawn in the style of the lines around them: the label's type and ink, the value's ink
+ * About's three retention lines drawn in the style of the lines around them: the label's type and ink, the value's ink
  * and the row's height of the Storage path line above, and the label's and the value's type and ink of the Admin secret
  * line below. A path line draws its value in the mono face, so the value's type is compared with the Admin secret
  * line's, whose value is not a path. In the 720 px strip and at 400 px the types and inks are read again, with the
@@ -2969,6 +3024,7 @@ async function settingsRetentionLines(theme) {
     const round = (px) => Math.round(px * 10) / 10;
     return {
       admin: at('Admin secret'),
+      bodyCapture: at('Body capture'),
       labelColumn: round(Math.max(0, ...[...(list?.querySelectorAll('dt') ?? [])].map((dt) => dt.getBoundingClientRect().width))),
       list: list ? round(list.getBoundingClientRect().width) : null,
       requests: at('Requests, samples and the routing log'),
@@ -2978,7 +3034,7 @@ async function settingsRetentionLines(theme) {
   });
   const read = await reading();
   measurements.push(`${theme} /settings retention lines ${JSON.stringify(read)}`);
-  for (const [name, row] of [['requests', read.requests], ['rollups', read.rollups]]) {
+  for (const [name, row] of [['requests', read.requests], ['rollups', read.rollups], ['body capture', read.bodyCapture]]) {
     failures.push(...compare(row, read.storage, ['height', 'labelInk', 'labelType', 'valueInk'], `${theme} /settings: About's ${name} retention line against Storage path`));
     failures.push(...compare(row, read.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings: About's ${name} retention line against Admin secret`));
   }
@@ -2989,7 +3045,7 @@ async function settingsRetentionLines(theme) {
     await settle();
     const narrow = await reading();
     measurements.push(`${theme} /settings retention lines at ${width} px ${JSON.stringify(narrow)}`);
-    for (const [name, row] of [['requests', narrow.requests], ['rollups', narrow.rollups]]) {
+    for (const [name, row] of [['requests', narrow.requests], ['rollups', narrow.rollups], ['body capture', narrow.bodyCapture]]) {
       failures.push(...compare(row, narrow.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings at ${width} px: About's ${name} retention line against Admin secret`));
     }
     if (narrow.list === null || narrow.labelColumn > narrow.list / 2 + 0.5) {
@@ -4702,7 +4758,7 @@ async function analyticsColumns(theme) {
       ['History', 'History edited'],
       ['No previous', 'Previous message not found'],
       ['Unavailable', 'Unavailable'],
-      ['Not asked', 'Not requested'],
+      ['Not requested', 'Not requested'],
       ['Pending', 'Pending'],
     ];
     if (JSON.stringify(heads.slice(1, 10)) !== JSON.stringify(known)) failures.push(`${theme} /analytics: the misses headers read ${JSON.stringify(heads.slice(1, 10))}, not the short words over their full labels`);
@@ -8035,10 +8091,11 @@ async function routingLogPickLine(theme) {
 /**
  * The identity card's subscription end editor on an OAuth account: its date field is the box of the Sort select in
  * the bar (the page's other plain control, where the label editor's field takes the heading's type), its checkbox
- * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
- * of the card. Ticking the box leaves the date field empty for the operator to type, the refusal callout names the
- * date and holds the Save, and the hint reads the billing page's words. The router's seed has only an API-key account,
- * which has no editor, so there the check stands down, and the mock's first account is an OAuth one.
+ * label reads Canceled in the type of the Ends label beside it, its Save the size of the Edit end button it opened
+ * from, and opening it moves no row of the card. Ticking the box leaves the date field empty for the operator to type,
+ * the refusal callout names the date and holds the Save, and the hint reads the billing page's words. The router's seed
+ * has only an API-key account, which has no editor, so there the check stands down, and the mock's first account is an
+ * OAuth one.
  */
 async function subscriptionEndForm(theme) {
   const say = (what) => failures.push(`${theme} /accounts: ${what}`);
@@ -8078,9 +8135,11 @@ async function subscriptionEndForm(theme) {
       end: ends?.value ?? null,
       ends: box(ends),
       fieldLabel: type(card?.querySelector('.field .field__label')),
+      fieldText: card?.querySelector('.field .field__label')?.textContent?.trim() ?? null,
       hint: card?.querySelector('.field .field__hint')?.textContent?.trim() ?? null,
       sort: box(document.querySelector('.filter-bar select[aria-label="Sort"]')),
       tickLabel: type(card?.querySelector('label.row .field__label')),
+      tickText: card?.querySelector('label.row .field__label')?.textContent?.trim() ?? null,
     };
   });
   const saveButton = identity.getByRole('button', { name: 'Save', exact: true });
@@ -8088,15 +8147,16 @@ async function subscriptionEndForm(theme) {
   const held = await saveButton.isDisabled();
   const rowAfter = await firstRow();
   measurements.push(`${theme} /accounts subscription end ${JSON.stringify({ ...read, held, save })}`);
-  if (read.end !== '') say(`ticking Cancelled filled the end with ${JSON.stringify(read.end)}, where the operator types it`);
-  if (!(read.callout ?? '').includes('A cancelled plan needs the date it ends.') || !held) say(`ticking Cancelled with no end drew ${JSON.stringify(read.callout)} with Save ${held ? 'held' : 'open'}, not the refusal that names the date`);
+  if (read.end !== '') say(`ticking Canceled filled the end with ${JSON.stringify(read.end)}, where the operator types it`);
+  if (!(read.callout ?? '').includes('A canceled plan needs the date it ends.') || !held) say(`ticking Canceled with no end drew ${JSON.stringify(read.callout)} with Save ${held ? 'held' : 'open'}, not the refusal that names the date`);
   if (read.hint !== "The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.") say(`the Ends hint reads ${JSON.stringify(read.hint)}`);
   for (const finding of [
     // A select keeps room for its chevron, so the padding is left out.
     ...compare(read.ends, read.sort, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the Sort select'),
     ...compare(save, editButton, ['font', 'height', 'padding', 'radius'], "the editor's Save against the Edit end button"),
   ]) say(finding);
-  if (read.tickLabel !== read.fieldLabel) say(`the Cancelled label reads ${read.tickLabel} against the Ends label's ${read.fieldLabel}`);
+  if (read.tickLabel !== read.fieldLabel) say(`the Canceled label reads ${read.tickLabel} against the Ends label's ${read.fieldLabel}`);
+  if (read.tickText !== 'Canceled' || !(read.fieldText ?? '').startsWith('Ends (')) say(`the checkbox label reads ${JSON.stringify(read.tickText)} beside the Ends label's ${JSON.stringify(read.fieldText)}, not Canceled`);
   if (rowAfter !== rowBefore) say(`opening the editor moved the card's first row from ${rowBefore}px to ${rowAfter}px`);
   // Closed again, so the view's shot is the card as it loaded.
   await identity.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -8146,10 +8206,11 @@ async function addAccountDialog(theme) {
 
 /**
  * The line a confirmed pairing draws in the Usage card while the account's first reading is in flight fills the slot
- * of the note an account without windows reads, so it takes that note's type, ink and place: the mock pass pairs a new
- * account through Add account and reads the hint against the note on the story's API-key account annex. The mock lands
- * the reading on a list read 2 s after the confirm on the page's clock, which the reads here stay short of. The pairing
- * adds a row, so this runs after the view's shot.
+ * of the note an account without windows reads, so it takes that note's type, ink and place and ends on a period as the
+ * note does: the mock pass pairs a new account through Add account and reads the hint, found by its whole sentence,
+ * against the note on the story's API-key account annex. The mock lands the reading on a list read 2 s after the
+ * confirm on the page's clock, which the reads here stay short of. The pairing adds a row, so this runs after the
+ * view's shot.
  */
 async function firstReadingHint(theme) {
   const say = (what) => failures.push(`${theme} /accounts first reading: ${what}`);
@@ -8162,7 +8223,7 @@ async function firstReadingHint(theme) {
       const s = getComputedStyle(p);
       const box = p.getBoundingClientRect();
       const frame = card.getBoundingClientRect();
-      return { color: s.color, font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, left: Math.round(box.left - frame.left), lineHeight: s.lineHeight, margin: s.margin, top: Math.round(box.top - frame.top) };
+      return { color: s.color, font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, left: Math.round(box.left - frame.left), lineHeight: s.lineHeight, margin: s.margin, text: p.textContent.trim(), top: Math.round(box.top - frame.top) };
     }, text);
   await page.clock.setSystemTime(clockOrigin);
   await page.goto(`${base}/accounts/annex`);
@@ -8188,7 +8249,7 @@ async function firstReadingHint(theme) {
     say(`the pairing never confirmed (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
-  const hint = await line('The first quota reading is in flight');
+  const hint = await line('The first quota reading is in flight.');
   measurements.push(`${theme} /accounts first reading ${JSON.stringify({ hint, note })}`);
   for (const finding of compare(hint, note, ['color', 'font', 'left', 'lineHeight', 'margin', 'top'], 'the first reading hint against the note of an account without windows')) say(finding);
   await atRest();
@@ -9917,6 +9978,7 @@ try {
         await poolCachingControls(theme);
         await poolSheddingSwitch(theme);
         await poolBurnAverageHint(theme);
+        await poolEngineHints(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
         await poolMemberPins(theme);

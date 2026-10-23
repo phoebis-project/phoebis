@@ -18,7 +18,7 @@ import { ACCOUNTS_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
-import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
+import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -589,6 +589,7 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
                     },
                     { label: 'Rate-limit tier', value: account.subscription?.rateLimitTier ?? '-', mono: account.subscription !== null },
                     ...(endsAt ? [{ label: 'Ends', title: fmtAbsolute(endsAt), value: fmtEndsIn(endsAt, now) }] : []),
+                    ...(account.planEndedAt ? [{ label: 'Plan ended', title: fmtAbsolute(account.planEndedAt), value: fmtRelative(account.planEndedAt, now) }] : []),
                     ...(trialEndsAt ? [{ label: 'Trial ends', title: fmtAbsolute(trialEndsAt), value: fmtEndsIn(trialEndsAt, now) }] : []),
                     { label: 'Organization', value: account.subscription?.organizationType ?? '-' },
                     { label: 'Billing type', value: account.subscription?.billingType ?? '-' },
@@ -602,8 +603,8 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
           {endForm && (
             <div className="capture" style={{ marginTop: 12 }}>
               <label className="row">
-                <input type="checkbox" checked={endForm.cancelled} disabled={busy} onChange={(e) => setEndForm(tickCancelled(endForm, e.target.checked))} />
-                <span className="field__label">Cancelled</span>
+                <input type="checkbox" checked={endForm.canceled} disabled={busy} onChange={(e) => setEndForm(tickCanceled(endForm, e.target.checked))} />
+                <span className="field__label">Canceled</span>
               </label>
               <Field label={endsLabel} hint={END_HINT}>
                 <Input type="datetime-local" value={endForm.endsAt} disabled={busy} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label={endsLabel} />
@@ -649,7 +650,7 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
 
         <Card title="Usage" subtitle="Remaining share of each window" className="card--fill">
           {account.windows.length === 0 && !account.fableWindow ? (
-            awaitingReading ? <p className="muted">The first quota reading is in flight</p> : <p className="muted">This account does not report quota windows.</p>
+            awaitingReading ? <p className="muted">The first quota reading is in flight.</p> : <p className="muted">This account does not report quota windows.</p>
           ) : (
             <WindowTriple account={account} now={now} others />
           )}

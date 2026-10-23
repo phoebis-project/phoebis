@@ -572,7 +572,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
             const share = isExpired(w, now) ? null : `${fmtPct(remainingOf(w))} left`;
             const period = w.periodHours * HOUR;
             const resetAt = Date.parse(w.resetsAt ?? '');
-            // A cancelled account's saved end: no window opens after it, and the one that spans it stops there.
+            // A canceled account's saved end: no window opens after it, and the one that spans it stops there.
             const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
             const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
             const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / width) * 100 : null;
