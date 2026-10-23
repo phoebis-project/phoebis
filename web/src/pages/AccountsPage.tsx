@@ -987,6 +987,9 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   }
   // The start effect's run while the dialog stays open, which the Disconnect's fresh start reads as its close guard.
   const live = useRef({ alive: false });
+  // The pairing whose confirm the router refused. A refusal past its claim fails the session, which answers a cancel
+  // 409, so the close gives back only a session no confirm was refused for, such as the fresh one a Disconnect starts.
+  const refused = useRef<string | null>(null);
   useEffect(() => {
     if (!open) return;
     // Read back from the key the effect runs on, so the start it pairs is the one that key names.
@@ -1011,7 +1014,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
 
   const dismiss = () => {
     // The router keeps the account busy until the pairing expires, so leaving unconfirmed gives the session back.
-    if (session) void api.cancelPairing(session.id).catch(() => undefined);
+    if (session && session.id !== refused.current) void api.cancelPairing(session.id).catch(() => undefined);
     onClose();
   };
 
@@ -1043,6 +1046,8 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
       const confirmed = await api.confirmPairing(session.id);
       onPaired(preview, confirmed);
     } catch (e) {
+      // A confirm the transport never delivered leaves the session where it may still stand.
+      if (e instanceof ApiError && e.status !== 0) refused.current = session.id;
       setError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.code === 'sealed_under_another_key') setSealed(true);
     } finally {

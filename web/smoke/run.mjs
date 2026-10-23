@@ -3154,9 +3154,22 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
     ok: sealedSubmitted && sealedRead && shown(dlg) && refusal(dlg) === SEALED && JSON.stringify(footer(dlg)) === JSON.stringify(['Cancel', 'Disconnect']) && buttonIn(dlg, 'Disconnect')?.classList.contains('btn--danger') === true,
     missing: [`Confirm enabled ${sealedSubmitted}`, `open ${shown(dlg)}`, refusal(dlg) || 'no refusal', footer(dlg).join(', '), buttonIn(dlg, 'Disconnect')?.className ?? 'no Disconnect'],
   });
+  // The router failed the pairing on the sealed answer and answers a cancel of it 409 with these words, which the
+  // transport toasts. The lever answers so in the mock's place, and the Cancel sends no cancel for it.
+  failNextCall('cancelPairing', `/admin/oauth/sessions/${sessions.at(-1)}`, 'pairing session already consumed', { status: 409 });
+  const sealedCancels = countCalls('cancelPairing');
   // A Cancel on the sealed answer gives the dialog back, and a Re-pair opens it afresh with Confirm on its second step.
   buttonIn(dlg, 'Cancel')?.click();
   await page.settle(200);
+  sealedCancels.restore();
+  // The lever stays armed where no cancel came, so the method goes back to the mock's own.
+  delete api.cancelPairing;
+  const consumed = [...page.container.querySelectorAll('.toast')].map((t) => t.textContent ?? '').filter((t) => t.includes('already consumed'));
+  results.push({
+    name: '/accounts/legacy a Cancel on the sealed answer sends no cancel for the pairing the router failed and raises no toast',
+    ok: sealedCancels.calls.length === 0 && consumed.length === 0,
+    missing: [`cancelPairing ${JSON.stringify(sealedCancels.calls)}`, ...consumed],
+  });
   const again = await openRepair();
   const refusedLink = link(again);
   const againSubmitted = await pasteAndSubmit(again);
