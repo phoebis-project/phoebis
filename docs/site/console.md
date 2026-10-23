@@ -983,15 +983,16 @@ Opening a row reads `Created {time}, {ago}` and one line per agent that has sent
 Account, TTL, Last request, Last probe, Next probe ("on first stream event" or "not scheduled"), Probes / credited and
 State, main first, then the busy, idle and parked agents. On a session with a companion the lines read Context and
 Prefix after Model, each agent's context in tokens with its share of the model's window under it and its cached prefix,
-main's as its row reads them and a subagent's as the router answers them for that agent, and a dash where the router
-answers none, a released agent's among them. A session no companion reports draws neither column. State reads the
-recipe's state word (`ended`, `held`, `not retained`, `paused` or `retained`) with the cause beside it and the sentence
-of each on hover, and under them the mod's lifecycle word for the agent with a parked agent's park kind and its deadline
-or wake time (`parked · background · deadline in 1h 12m`). A finished session, listed under Finished sessions, reads
-"The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the
-engine." above its lines, which keep their ended state with the TTL, Last request, Last probe, Next probe and Probes /
-credited the engine last read, and its Agents cell counts the lines drawn. A session the mod released whole keeps its
-released badge. A session without a recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
+the line of the row's own agent on the row's model as its row reads them, any other line as the router answers them for
+its agent and model, and a dash where the router answers none, a released agent's and main's on another model among
+them. A session no companion reports draws neither column. State reads the recipe's state word (`ended`, `held`, `not
+retained`, `paused` or `retained`) with the cause beside it and the sentence of each on hover, and under them the mod's
+lifecycle word for the agent with a parked agent's park kind and its deadline or wake time (`parked · background ·
+deadline in 1h 12m`). A finished session, listed under Finished sessions, reads "The mod released every agent of this
+session. Their records keep their slots of the cap until the session leaves the engine." above its lines, which keep
+their ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last read, and its
+Agents cell counts the lines drawn. A session the mod released whole keeps its released badge. A session without a
+recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
 
 ### The cost reference
 

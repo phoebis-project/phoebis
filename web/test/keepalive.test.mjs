@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 // Every clock time below is read in UTC whatever the host's zone. `node --test` gives each file a process of its own,
@@ -125,6 +126,29 @@ test("contextCell reads the tokens, the share of the model's window and the cach
   assert.deepEqual(d.contextCell(184_000, null, null, 171_000), { main: '184K', share: null, prefix: 'prefix 171K' }, 'a null window drops the share and reads the tokens alone');
   assert.deepEqual(d.contextCell(18_400, 200_000, 0.092, null), { main: '18.4K', share: '9.2% of 200K', prefix: null }, 'a pin with no entry standing reads no prefix');
   assert.deepEqual(d.contextCell(null, null, null, null), { main: '-', share: null, prefix: null }, 'a session with no pin or no figure reads a dash');
+});
+
+/** A companion row as the decoder answers it: the main agent's pin on `model` and the route's entries for the others. */
+const companionRow = (model, agentContexts) => ({ agentContexts, agentId: 'main', cachedPrefixTokens: 41_000, companion: 'reporting', contextShare: 0.26, contextWindowTokens: 200_000, lastInputTokens: 52_000, model, pinned: true });
+const pinEntry = (agentId, model, lastInputTokens) => ({ agentId, cachedPrefixTokens: null, contextShare: null, contextWindowTokens: 200_000, lastInputTokens, model });
+
+test("an agent line reads the pin of its agent on its recipe's model, and none where the route answers no such pin", () => {
+  // The route sorts the entries by agent and then model, so the first entry of the agent is the other model's pin.
+  const row = companionRow('claude-sonnet-5-5', [pinEntry('7b2e', 'claude-haiku-4-5', 18_000), pinEntry('7b2e', 'claude-sonnet-5-5', 31_000)]);
+  assert.equal(d.lineFigures(row, '7b2e', 'claude-sonnet-5-5')?.lastInputTokens, 31_000, 'the line on the second model reads the second pin');
+  assert.equal(d.lineFigures(row, '7b2e', 'claude-haiku-4-5')?.lastInputTokens, 18_000, 'the line on the first model reads the first pin');
+  assert.equal(d.lineFigures(row, '7b2e', 'claude-sonnet-5-5[1M]')?.lastInputTokens, 31_000, 'the long-context suffix folds out case-blind');
+  assert.equal(d.lineFigures(row, '7b2e', 'claude-opus-5'), null, 'an agent with no pin on the model reads none');
+  assert.equal(d.lineFigures(row, 'main', 'claude-sonnet-5-5')?.lastInputTokens, 52_000, "the row's agent on the row's model reads the row");
+  assert.equal(d.lineFigures(row, 'main', 'claude-sonnet-5'), null, "the main agent on another model than the row's pin reads none");
+});
+
+test("the fixture's companion row reads no figures for a main recipe on another model than its pin", () => {
+  const wire = JSON.parse(readFileSync(new URL('./fixtures/sessions.json', import.meta.url), 'utf8')).body.sessions.find((s) => s.session_id === 's1');
+  const s1 = d.decodeSession(wire);
+  assert.ok(s1.agentId === 'main' && s1.model !== 'claude-sonnet-5' && s1.lastInputTokens !== null, "the row's main pin is on another model and has a turn");
+  assert.equal(d.lineFigures(s1, 'main', 'claude-sonnet-5'), null);
+  assert.equal(d.lineFigures(s1, 'main', s1.model)?.lastInputTokens, s1.lastInputTokens, "the main recipe on the pin's model reads the row");
 });
 
 test('the compacted cause reads its label and the sentence that says no probe goes out until the next main turn', () => {

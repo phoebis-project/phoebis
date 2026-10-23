@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, AgentContext, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
+import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useSession } from '@/app/session';
 import { HELD_PROBE_HINT, MIGRATED_PROBE_HINT } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
@@ -15,7 +15,7 @@ import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSIONS_CODEC, type SessionsAddress }
 import { clock } from '@/lib/clock';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, contextCell, hiddenByAge, isFinished, isReleasedLine, orderRecipes, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
+import { CAUSE_HINT, CAUSE_LABEL, contextCell, hiddenByAge, isFinished, isReleasedLine, lineFigures, mainFigures, orderRecipes, type PinFigures, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
@@ -57,22 +57,6 @@ const runwayWord = (s: Session): string | null => (!s.pinned ? null : s.runwayMs
 
 /** The id as sent on hover where the cell shows less of it. */
 const modelTitle = (model: string, shown: string) => (shown === model ? undefined : model);
-
-type PinFigures = Pick<AgentContext, 'cachedPrefixTokens' | 'contextShare' | 'contextWindowTokens' | 'lastInputTokens'>;
-
-/** The main pin's figures off the row. A row with no pin, or a pin before its first turn, has no context to read. */
-const mainFigures = (s: Session): PinFigures => ({
-  cachedPrefixTokens: s.cachedPrefixTokens,
-  contextShare: s.contextShare,
-  contextWindowTokens: s.contextWindowTokens,
-  lastInputTokens: s.pinned && s.lastInputTokens ? s.lastInputTokens : null,
-});
-
-/**
- * An agent line's pin figures: the row's own for the agent the row's pin is, the route's line under the agent's id for
- * any other, and none where the route answers no line, a released agent's among them.
- */
-const lineFigures = (s: Session, agentId: string): PinFigures | null => (agentId === s.agentId ? mainFigures(s) : (s.agentContexts?.find((c) => c.agentId === agentId) ?? null));
 
 const PIN_TONE: Record<KeepaliveState, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', released: 'neutral', unknown: 'neutral' };
 const PIN_HINT: Record<KeepaliveState, string> = {
@@ -836,7 +820,7 @@ function SessionRows({
                     <span className="mono nowrap" title={modelTitle(a.model, shortModel(a.model))}>
                       {shortModel(a.model)}
                     </span>
-                    {companion && <LineContext figures={lineFigures(session, a.agentId)} />}
+                    {companion && <LineContext figures={lineFigures(session, a.agentId, a.model)} />}
                     {a.accountId === null ? <span className="muted">none</span> : <span className="mono">{a.accountId}</span>}
                     <span className="num">{fmtDuration(a.ttlSeconds * 1000)}</span>
                     <span title={a.lastRequestAt ? fmtAbsolute(a.lastRequestAt) : undefined}>{a.lastRequestAt ? <span className="num">{fmtRelative(a.lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>

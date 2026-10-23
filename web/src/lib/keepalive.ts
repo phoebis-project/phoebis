@@ -1,4 +1,4 @@
-import type { KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
+import type { AgentContext, KeepaliveRecipe, KeepaliveState, RecipeCause, Session } from '@/api/types';
 import { RANGE_PRESETS } from '@/lib/address';
 import { fmtCompact, fmtShare } from '@/lib/format';
 
@@ -218,6 +218,31 @@ export function contextCell(tokens: number | null, window: number | null, share:
   // would round away.
   return { main: fmtCompact(tokens), share: window === null || share === null ? null : `${fmtShare(share)} of ${fmtCompact(window)}`, prefix: prefix === null ? null : `prefix ${fmtCompact(prefix)}` };
 }
+
+export type PinFigures = Pick<AgentContext, 'cachedPrefixTokens' | 'contextShare' | 'contextWindowTokens' | 'lastInputTokens'>;
+
+/** The main pin's figures off the row. A row with no pin, or a pin before its first turn, has no context to read. */
+export const mainFigures = (s: Session): PinFigures => ({
+  cachedPrefixTokens: s.cachedPrefixTokens,
+  contextShare: s.contextShare,
+  contextWindowTokens: s.contextWindowTokens,
+  lastInputTokens: s.pinned && s.lastInputTokens ? s.lastInputTokens : null,
+});
+
+/** A model as the route keys a pin: the relay folds the long-context suffix out case-blind before it pins. */
+const pinModel = (model: string): string => model.toLowerCase().replace(/\[1m\]$/, '');
+
+/**
+ * An agent line's pin figures, keyed by the agent id and the recipe's model, since the route answers one entry per pin
+ * and an agent can hold pins on two models. The row's own figures are its agent's pin on the row's model, so they fill
+ * that line alone. Every other line reads the route's entry for its agent and model, and none where the route answers
+ * none: a released agent's, or the main agent's on another model, which the route never lists among its entries.
+ */
+export const lineFigures = (s: Session, agentId: string, model: string): PinFigures | null => {
+  const key = pinModel(model);
+  if (agentId === s.agentId && s.model !== null && pinModel(s.model) === key) return mainFigures(s);
+  return s.agentContexts?.find((c) => c.agentId === agentId && pinModel(c.model) === key) ?? null;
+};
 
 /** Whether the Non-companion age hides the row: never a companion row, else its last use older than the preset. */
 export function hiddenByAge(session: Pick<Session, 'companion' | 'lastRequestAt' | 'lastUsedAt'>, age: string, now: number): boolean {
