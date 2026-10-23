@@ -352,3 +352,40 @@ test('an older read that answers after a newer one leaves the newer answer stand
   assert.deepEqual(poll.snapshot().items, []);
   off();
 });
+
+// Last in the file, since the DOM globals it sets for React stay set for the rest of the process.
+test('two conditions this console does not know on one subject draw a pool card row each, under keys of their own', async (t) => {
+  // React reads whether a DOM exists when its module loads, so the window stands before the bundle that draws is
+  // imported.
+  const { JSDOM } = await import('jsdom');
+  const { window } = new JSDOM('<!doctype html><html><body></body></html>');
+  for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'Event']) {
+    Object.defineProperty(globalThis, key, { value: window[key], configurable: true, writable: true });
+  }
+  globalThis.window = window;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  t.after(() => window.close());
+  const { act, AttentionRows, createElement: h, createRoot, MemoryRouter } = await import('./dist/ui.js');
+  const since = Date.parse('2026-09-18T10:00:00.000Z');
+  const onPool = { detail: {}, link: { id: 'jobs', page: 'pools' }, pools: ['jobs'], since, subject: { id: 'jobs', label: 'jobs', type: 'pool' } };
+  const items = ['quota_drift', 'later_kind'].map((kind) => decodeAttention({ ...onPool, kind }));
+  assert.deepEqual(items.map((it) => it.kind), ['unknown', 'unknown'], 'both decode to the one unknown kind');
+  const warnings = [];
+  const error = console.error;
+  console.error = (...args) => warnings.push(args.map(String).join(' '));
+  const container = document.body.appendChild(document.createElement('div'));
+  const root = createRoot(container);
+  try {
+    act(() => root.render(h(MemoryRouter, null, h(AttentionRows, { items, now: NOW }))));
+  } finally {
+    console.error = error;
+  }
+  const rows = container.querySelectorAll('.attention__row').length;
+  act(() => root.unmount());
+  assert.equal(rows, 2);
+  assert.deepEqual(
+    warnings.filter((w) => w.includes('same key')),
+    [],
+    'React warns of no two rows under one key',
+  );
+});

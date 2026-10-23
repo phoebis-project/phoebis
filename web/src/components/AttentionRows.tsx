@@ -19,7 +19,8 @@ export function AttentionRows({ items, now }: { items: AttentionItem[]; now: num
         const detail = attentionDetail(item, now);
         const log = attentionLogLine(item, now);
         return (
-          <li key={`${item.kind}:${subject.type}:${subject.id}`} className="attention__row" title={`${detail} (${fmtRelative(item.since, now)})${log === null ? '' : `\n${log}`}`}>
+          // The raw kind keeps two conditions the console does not know apart on one subject.
+          <li key={`${item.rawKind ?? item.kind}:${subject.type}:${subject.id}`} className="attention__row" title={`${detail} (${fmtRelative(item.since, now)})${log === null ? '' : `\n${log}`}`}>
             <Badge tone={ATTENTION_TONE[item.kind]}>{ATTENTION_LABEL[item.kind]}</Badge>
             {to ? <Link to={to}>{subject.label}</Link> : <span>{subject.label}</span>}
             <span className="attention__detail">{detail}</span>

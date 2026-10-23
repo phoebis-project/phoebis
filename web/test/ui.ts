@@ -9,6 +9,7 @@ export { queueToast } from '@/app/session';
 export { AppSettingsProvider } from '@/app/settings';
 export { useFollow } from '@/app/useFollow';
 export { AddFilter, PATTERN_GRAMMAR } from '@/components/AddFilter';
+export { AttentionRows } from '@/components/AttentionRows';
 export { BodyViewer } from '@/components/BodyViewer';
 export { ChipLine } from '@/components/ChipLine';
 export { DecisionCard } from '@/components/DecisionCard';
