@@ -87,6 +87,13 @@ test('the fold keeps five chips at most, fewer when they do not fit, one when no
   assert.deepEqual([all.shown.length, all.folded.length, all.title], [3, 0, '']);
 });
 
+test("the fold's title names each folded field once, in the chips' order", () => {
+  const chip = (label, value) => ({ field: label, label, mono: false, text: `${label}: ${value}`, title: value, value, values: value });
+  const chips = [chip('account', 'primary'), chip('pool', 'jobs'), chip('pool', 'nope'), chip('status', 'disabled')];
+  const one = d.foldChips(chips, (count) => count <= 1);
+  assert.deepEqual([one.folded.length, one.title], [3, 'Folded: pool, status'], 'the two per-value pool chips name their field once');
+});
+
 test('each dimension list names keys of its codec, and every codec key but the exempt ones has a dimension', () => {
   const views = [
     ['requests', d.REQUESTS_DIMENSIONS, d.REQUESTS_CODEC],

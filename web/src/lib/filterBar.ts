@@ -140,12 +140,15 @@ export function chipsOf(dimensions: Dimension[], filters: Record<string, unknown
     });
 }
 
-/** At most five chips, fewer when `fits(count)` says so, the rest folded: the fold's title names the folded chips' labels. */
+/**
+ * At most five chips, fewer when `fits(count)` says so, the rest folded: the fold's title names each folded field once,
+ * in the chips' order, since a per-value list draws a chip per value under one label.
+ */
 export function foldChips(chips: Chip[], fits: (count: number) => boolean): { folded: Chip[]; shown: Chip[]; title: string } {
   let count = Math.min(SHOWN, chips.length);
   while (count > 1 && !fits(count)) count -= 1;
   const folded = chips.slice(count);
-  return { folded, shown: chips.slice(0, count), title: folded.length > 0 ? `Folded: ${folded.map((c) => c.label).join(', ')}` : '' };
+  return { folded, shown: chips.slice(0, count), title: folded.length > 0 ? `Folded: ${[...new Set(folded.map((c) => c.label))].join(', ')}` : '' };
 }
 
 const ACCOUNT: Dimension = { field: 'accounts', group: 'Routing', kind: 'list', label: 'Account', word: 'account' };
