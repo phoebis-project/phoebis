@@ -6,7 +6,9 @@ import { defineConfig } from 'vite';
 /**
  * The commit the bundle is built from, read from the router's sources in the router's order: `PHOEBIS_BUILD_COMMIT`
  * (blank reads as unset, as the router reads it), then `git rev-parse HEAD` in this tree, then `unknown`. Trimmed,
- * since git's answer ends in a newline the router's header never carries, and lowercased like the header's hash.
+ * since git's answer ends in a newline the router's header never carries, and lowercased like the header's hash. The
+ * router's own build helper applies the same trim and lowercase before it compares or publishes the value, so the
+ * header, the `build` members and this constant agree on a value set by hand in upper case or with a trailing newline.
  */
 function buildCommit(): string {
   const named = process.env.PHOEBIS_BUILD_COMMIT?.trim();

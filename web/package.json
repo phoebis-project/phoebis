@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=26.0.0"
   },
+  "allowScripts": {
+    "vue-demi": true
+  },
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "build:mock": "VITE_PHOEBIS_MOCK=1 vite build --outDir dist-mock",
