@@ -1312,11 +1312,11 @@
 
 .accounts__list {
   position: sticky;
-  top: 72px;
+  top: calc(var(--main-top) + 20px);
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: calc(100vh - 96px);
+  max-height: calc(100vh - var(--main-top) - 44px);
   padding: 14px;
   overflow: auto;
   background: var(--surface);
@@ -3014,7 +3014,7 @@
 
 .filter-bar--sticky {
   position: sticky;
-  top: 52px;
+  top: var(--main-top);
   z-index: 5;
   padding: 8px 0;
   background: color-mix(in srgb, var(--page) 92%, transparent);
@@ -3079,10 +3079,10 @@
 
 .drawer {
   position: sticky;
-  top: 72px;
+  top: calc(var(--main-top) + 20px);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 96px);
+  max-height: calc(100vh - var(--main-top) - 44px);
   overflow: auto;
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -4457,7 +4457,7 @@
 /* Analytics */
 .section-bar {
   position: sticky;
-  top: 52px;
+  top: var(--main-top);
   z-index: 4;
   padding: 8px 0;
   background: color-mix(in srgb, var(--page) 92%, transparent);

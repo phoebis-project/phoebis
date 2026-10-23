@@ -3,7 +3,7 @@ import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from '@/api/c
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
 import { GUARDRAIL_MODE_VALUES } from '@/api/decode';
 import { decodeStreamCut } from '@/api/decode';
-import { ApiError, catalogUnion, slug } from '@/api/http';
+import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
   ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestEvent, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
@@ -52,7 +52,14 @@ let pending = 0;
 // a harness settles on the mock's own signal rather than on a fixed wait.
 const latency = <T,>(value: T, ms = 120): Promise<T> => {
   pending += 1;
-  return new Promise((resolve) => mockClock.setTimeout(() => { pending -= 1; resolve(value); }, ms));
+  return new Promise((resolve) =>
+    mockClock.setTimeout(() => {
+      pending -= 1;
+      // On each answer, as the transport reads each one's header, since the shell's hook may register after the first.
+      if (buildMismatch()) noteBuild(OTHER_BUILD);
+      resolve(value);
+    }, ms),
+  );
 };
 /** How many mock answers are still on their timer. */
 export const inFlight = (): number => pending;
@@ -276,6 +283,22 @@ const sessionsFail = (): boolean => {
 };
 
 /**
+ * Set to stand in for a router that runs another build: each answer names a build other than the bundle's, as an
+ * answer's header names it to the transport's `call`, which the mock never goes through, so the shell draws its reload
+ * banner.
+ */
+export const BUILD_MISMATCH_KEY = 'phoebis.mockBuildMismatch';
+const buildMismatch = (): boolean => {
+  try {
+    return localStorage.getItem(BUILD_MISMATCH_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+/** A build no bundle is made from. */
+const OTHER_BUILD = '0'.repeat(40);
+
+/**
  * Set to add the one plan request on a model the cost model lists in no tier: the dashboard's day and the analytics'
  * folds read it beside the story, so the figures it moves read a window priced nothing, while without the switch the
  * served story's figures stay as they are.
@@ -291,6 +314,16 @@ const unpricedStory = (): boolean => {
 /** The rollups the analytics routes fold: none for a fresh installation, the unpriced request's beside the story's
  *  under its switch. */
 const ledgerRollups = () => (emptyStore() ? [] : unpricedStory() ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS);
+/**
+ * The key the unpriced request lands on, its lifetime and its week flagged on both windows under the switch, since the
+ * request prices neither and falls inside the week. The keys' fold runs once at load, so the flag lands at the read,
+ * and the key's figures stay the story's.
+ */
+const unpricedKey = (k: ApiKey): ApiKey => {
+  if (!unpricedStory() || k.id !== UNPRICED_REQUEST.keyId || Date.parse(k.createdAt) !== UNPRICED_REQUEST.keyGeneration) return k;
+  const flagged = <S extends Pick<ApiKey['lifetime'], 'equivalent'>>(s: S): S => ({ ...s, equivalent: { ...s.equivalent, unpriced: { fiveHour: true, sevenDay: true } } });
+  return { ...k, lifetime: flagged(k.lifetime), usage7d: flagged(k.usage7d) };
+};
 /** The detail's cut as the route lifts it, off the newest `stream_interrupted` row that names the request. */
 const streamCutOf = (requestId: string) => {
   const cuts = ROUTING_EVENTS.filter((e) => e.kind === 'stream_interrupted' && e.requestId === requestId);
@@ -1149,7 +1182,7 @@ export class MockApi implements Api {
   }
 
   listKeys() {
-    return latency(emptyStore() ? [] : this.keys.map((k) => this.keyView(k)));
+    return latency(emptyStore() ? [] : this.keys.map((k) => this.keyView(unpricedKey(k))));
   }
 
   listPools() {

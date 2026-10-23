@@ -2088,9 +2088,10 @@ m.unmount();
 {
   // jsdom lays nothing out, so the cells row reads a browser's width here and each cell its equal share of it. At 316
   // px twelve cells of 26 px hold the 24-hour "06" and print it short, under the 40 px of the full label, while under
-  // the 12-hour setting they would cut "12 AM", so six cells of 53 px draw, wide enough for "12:00 AM". At 480 px
-  // twelve cells of 40 px hold "12 AM" but not "12:00 AM", so they print the short hour with the full time on their
-  // titles. The run is UTC, so the 5-hour zoom opens on Sep 15 at 00:00.
+  // the 12-hour setting they would cut "12 AM", so six cells draw: at 316 px six cells of 52.67 px sit under the 53 px
+  // "12:00 AM" needs and print the short hour with the full time on their titles, and at 318 px six cells of 53 px
+  // print "12:00 AM" whole. At 480 px twelve cells of 40 px hold "12 AM" but not "12:00 AM", so they print the short
+  // hour with the full time on their titles. The run is UTC, so the 5-hour zoom opens on Sep 15 at 00:00.
   const measure = window.HTMLElement.prototype.getBoundingClientRect;
   let row = 0;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
@@ -2113,6 +2114,7 @@ m.unmount();
   };
   const shortHours = await drawn(480, '12h');
   const fewer = await drawn(316, '12h');
+  const fewerWhole = await drawn(318, '12h');
   const twoDigits = await drawn(316, '24h');
   window.HTMLElement.prototype.getBoundingClientRect = measure;
   const dated = (i, per) => (i % per === 0 ? `Sep ${15 + i / per} ` : '');
@@ -2124,13 +2126,15 @@ m.unmount();
     missing: [`${shortHours.length} cells`, JSON.stringify(shortHours)],
   });
   results.push({
-    name: '/quota#quota-windows at one width the 12-hour setting draws six 5-hour cells, each wide enough for its full time, where the 24-hour setting draws twelve with the two-digit hour',
+    name: '/quota#quota-windows at one width the 12-hour setting draws six 5-hour cells, at 316 px each too narrow for its full time, so it prints the short hour with the full time on its title, and at 318 px each wide enough for its full time, where the 24-hour setting draws twelve with the two-digit hour',
     ok:
       fewer.length === 6 &&
-      fewer.every(([sub, title], i) => new RegExp(`^12:00\\s${i % 2 === 0 ? 'AM' : 'PM'}$`).test(sub) && title === null) &&
+      fewer.every(([sub, title], i) => sub === ['12 AM', '12 PM'][i % 2] && new RegExp(`^${dated(i, 2)}12:00\\s${i % 2 === 0 ? 'AM' : 'PM'}$`).test(title ?? '')) &&
+      fewerWhole.length === 6 &&
+      fewerWhole.every(([sub, title], i) => new RegExp(`^12:00\\s${i % 2 === 0 ? 'AM' : 'PM'}$`).test(sub) && title === null) &&
       twoDigits.length === 12 &&
       twoDigits.every(([sub, title], i) => sub === ['00', '06', '12', '18'][i % 4] && title === `${dated(i, 4)}${sub}:00`),
-    missing: [`12-hour ${fewer.length} cells`, JSON.stringify(fewer), `24-hour ${twoDigits.length} cells`, JSON.stringify(twoDigits)],
+    missing: [`12-hour at 316 px ${fewer.length} cells`, JSON.stringify(fewer), `12-hour at 318 px ${fewerWhole.length} cells`, JSON.stringify(fewerWhole), `24-hour ${twoDigits.length} cells`, JSON.stringify(twoDigits)],
   });
 }
 {
@@ -3230,6 +3234,53 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
   });
   buttonIn(gone, 'Cancel')?.click();
   await page.settle(200);
+
+  // The route consumes a pairing session on the confirm's attempt, so a Cancel after a confirm sends no cancel, the one
+  // the transport never delivered included, whose own failure the shell toasts. A Cancel before any confirm still gives
+  // the session back.
+  const early = await openRepair();
+  const earlyId = sessions.at(-1);
+  const earlyCancels = countCalls('cancelPairing');
+  buttonIn(early, 'Cancel')?.click();
+  await page.settle(200);
+  earlyCancels.restore();
+  const lost = await openRepair();
+  const lostSubmitted = await pasteAndSubmit(lost);
+  const lostId = sessions.at(-1);
+  const toastCount = () => page.container.querySelectorAll('.toast').length;
+  const beforeConfirm = toastCount();
+  failNextCall('confirmPairing', `/admin/oauth/sessions/${lostId}/confirm`, 'the router did not answer', { network: true });
+  buttonIn(lost, 'Confirm')?.click();
+  await until(page, () => refusal(lost) !== '');
+  const lostError = refusal(lost);
+  const afterConfirm = toastCount();
+  const lostCancels = countCalls('cancelPairing');
+  buttonIn(lost, 'Cancel')?.click();
+  await page.settle(200);
+  lostCancels.restore();
+  const afterCancel = toastCount();
+  const lostOpen = shown(lost);
+  // The mock still holds the session the confirm never reached, which no read below asks for.
+  await api.cancelPairing(lostId);
+  results.push({
+    name: '/accounts/legacy a Cancel after a confirm the transport never delivered sends no cancel and adds no toast, where a Cancel before any confirm sends one',
+    ok:
+      JSON.stringify(earlyCancels.calls) === JSON.stringify([[earlyId]]) &&
+      lostSubmitted &&
+      lostError === 'the router did not answer' &&
+      afterConfirm === beforeConfirm + 1 &&
+      afterCancel === afterConfirm &&
+      lostCancels.calls.length === 0 &&
+      !lostOpen,
+    missing: [
+      `cancelPairing before any confirm ${JSON.stringify(earlyCancels.calls)}`,
+      `Confirm enabled ${lostSubmitted}`,
+      lostError || 'no error',
+      `toasts ${beforeConfirm} before the confirm, ${afterConfirm} after it, ${afterCancel} after the Cancel`,
+      `cancelPairing after the confirm ${JSON.stringify(lostCancels.calls)}`,
+      `open after the Cancel ${lostOpen}`,
+    ],
+  });
 
   const dlg = await openRepair();
   const sealedSubmitted = await pasteAndSubmit(dlg);
@@ -8211,7 +8262,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   // A key whose requests include one on a model the cost model lists in no tier flags both windows, which no story key
   // does, so the route is stood in for on a key with plan rows and on a key of billed rows alone: each reads the dash
   // titled why on its subscription side beside its billed dollars, the zero of the second read as unpriced rather than
-  // as no plan rows, and the total does the same.
+  // as no plan rows, and the total does the same. Each bar draws no fill, since its priced rows alone would size it.
   const planKey = listed.find((k) => k.lifetime.equivalent.sevenDay > 0 && k.usage7d.equivalent.sevenDay > 0);
   const billedKey = listed.find((k) => k.lifetime.equivalent.sevenDay === 0 && k.lifetime.billedUsd > 0);
   const flaggedKeys = new Set([planKey?.id, billedKey?.id]);
@@ -8228,9 +8279,10 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     ...dashedBars.filter((b) => flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.figure !== dashText(keyOf(b).lifetime) || b.title !== UNPRICED_TITLE),
     ...dashedSubs.filter((s) => flaggedKeys.has(s.id)).filter((s) => s.text !== dashText(keyById.get(s.id).usage7d) || s.title !== UNPRICED_TITLE),
     ...dashedBars.filter((b) => !flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.title === UNPRICED_TITLE),
+    ...dashedBars.filter((b) => flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.width !== '0%'),
   ];
   results.push({
-    name: "/keys under native a key whose window a request priced nothing on reads a dash titled why on its subscription side beside its billed dollars, on its bar, its 7-day line and the Lifetime cost tile, and the others read their figures",
+    name: "/keys under native a key whose window a request priced nothing on reads a dash titled why on its subscription side beside its billed dollars, on its bar, its 7-day line and the Lifetime cost tile, its bar draws no fill, and the others read their figures",
     ok:
       planKey !== undefined &&
       billedKey !== undefined &&
@@ -8239,6 +8291,40 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
       dashedBars.length === listed.length &&
       wrongDashed.length === 0,
     missing: [`plan key ${planKey?.id}, billed key ${billedKey?.id}`, JSON.stringify(dashedTile), ...wrongDashed.map((r) => JSON.stringify(r))],
+  });
+  // The mock's unpriced switch flags the key its one unpriced request lands on, desktop (the request copies the story's
+  // req_f8085653-422), in its lifetime and its week with the story's figures: its bar reads the dash beside its billed
+  // dollars under the unpriced title, draws no fill and sorts last, and the other bars keep their widths.
+  localStorage.setItem('phoebis.mockUnpriced', '1');
+  const switchedKeys = await api.listKeys();
+  const switched = await mount('/keys');
+  const switchedBars = barsRead(switched);
+  const switchedSubs = subsRead(switched);
+  switched.unmount();
+  localStorage.removeItem('phoebis.mockUnpriced');
+  const desktop = switchedKeys.find((k) => k.id === 'desktop');
+  const storyDesktop = keyById.get('desktop');
+  const flaggedIds = switchedKeys.filter((k) => k.lifetime.equivalent.unpriced.sevenDay || k.usage7d.equivalent.unpriced.sevenDay).map((k) => k.id);
+  const desktopBar = switchedBars.find((b) => b.prefix === desktop?.prefix);
+  const desktopSub = switchedSubs.find((s) => s.id === 'desktop');
+  const storyWidths = new Map(bars.map((b) => [b.prefix, b.width]));
+  const resized = switchedBars.filter((b) => b !== desktopBar && b.width !== storyWidths.get(b.prefix));
+  results.push({
+    name: "/keys under the mock's unpriced switch the key its unpriced request lands on reads a dash titled why beside its billed dollars on its bar and its 7-day line, its bar draws no fill and sorts last, and the other bars keep their widths",
+    ok:
+      JSON.stringify(flaggedIds) === JSON.stringify(['desktop']) &&
+      desktop?.lifetime.equivalent.unpriced.sevenDay === true &&
+      desktop.usage7d.equivalent.unpriced.sevenDay === true &&
+      JSON.stringify([desktop.lifetime.equivalent.sevenDay, desktop.lifetime.billedUsd, desktop.lifetime.requests]) === JSON.stringify([storyDesktop?.lifetime.equivalent.sevenDay, storyDesktop?.lifetime.billedUsd, storyDesktop?.lifetime.requests]) &&
+      desktopBar?.figure === `-, ${fmtUsd(desktop.lifetime.billedUsd)} billed` &&
+      desktopBar.title === UNPRICED_TITLE &&
+      desktopBar.width === '0%' &&
+      switchedBars.at(-1) === desktopBar &&
+      desktopSub?.text === dashText(desktop.usage7d) &&
+      desktopSub.title === UNPRICED_TITLE &&
+      switchedBars.length === listed.length &&
+      resized.length === 0,
+    missing: [`flagged ${JSON.stringify(flaggedIds)}`, JSON.stringify(desktop?.lifetime ?? 'no desktop key'), JSON.stringify(desktopBar ?? 'no desktop bar'), `last bar ${switchedBars.at(-1)?.prefix}`, JSON.stringify(desktopSub ?? 'no desktop row'), ...resized.map((b) => `${b.prefix} ${storyWidths.get(b.prefix)} to ${b.width}`)],
   });
 }
 // The Pool chip is the address: `?pools=<id>` filters the rows, the chip's x clears it, and an unknown id draws no chip
@@ -24308,7 +24394,7 @@ m.unmount();
   // The reload banner. The banner reads the router's build off an answer's header in the transport's `call`, which the
   // mock never goes through, so a plain mount draws none, and the lever feeds the transport another router build, as an
   // answer's header would. The banner's Reload is not pressed, since jsdom does not navigate.
-  const bannerOf = (p) => p.container.querySelector('.main > .callout[role="status"]');
+  const bannerOf = (p) => p.container.querySelector('.main__top > .callout[role="status"]');
   page = await mount('/keys');
   const plain = bannerOf(page);
   mismatchBuild();
@@ -24319,7 +24405,7 @@ m.unmount();
   const drawn = {
     atTop: banner?.nextElementSibling?.matches('header.topbar') === true,
     buttons: banner ? [...banner.querySelectorAll('button')].map((b) => b.textContent?.trim() ?? '') : [],
-    count: page.container.querySelectorAll('.main > .callout').length,
+    count: page.container.querySelectorAll('.main__top > .callout').length,
     words: banner?.firstElementChild?.textContent ?? null,
   };
   page.unmount();

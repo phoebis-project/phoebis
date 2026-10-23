@@ -30,7 +30,10 @@ export interface FilterBarProps<F extends { range?: RangeValue; search?: string 
   /** The range slot, which a card view leaves out. It draws while `filters.range` holds a value, and `now` is the clock, as RangeControl reads it. */
   range?: { now: () => number; window: { from: number; to: number } };
   refresh: RefreshControlProps;
-  /** The sticky variant (Analytics): sticky at 52 px, 8 px of vertical padding, the 92 % page tint and the hairline below. */
+  /**
+   * The sticky variant (Analytics): sticky under the shell's top block, 8 px of vertical padding, the 92 % page tint
+   * and the hairline below.
+   */
   sticky?: boolean;
   update: (patch: Partial<F>) => void;
 }

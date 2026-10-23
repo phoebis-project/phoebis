@@ -632,7 +632,7 @@ export function AnalyticsPage() {
         </p>
       )}
 
-      <SectionBar sections={SECTIONS} shown={tab} onChoose={chooseTab} top={TOPBAR_HEIGHT + filtersHeight} />
+      <SectionBar sections={SECTIONS} shown={tab} onChoose={chooseTab} offset={filtersHeight} />
 
       {failure !== null && (
         <ErrorState
@@ -1117,9 +1117,6 @@ export function AnalyticsPage() {
 }
 
 const pct100 = (v: number | null) => (v === null ? null : v * 100);
-
-/** Height of the shell's sticky topbar; every bar the page sticks rides under it. */
-const TOPBAR_HEIGHT = 52;
 
 /** Live border-box height of a sticky bar, so the bar below it can dock against it. */
 function useStickyHeight(ref: RefObject<HTMLElement | null>): number {

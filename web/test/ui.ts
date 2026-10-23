@@ -27,6 +27,6 @@ export { installClock } from '@/lib/clock';
 export { spanText } from '@/lib/format';
 export { useAsync, useCommittedText, useNow, useRangeTakenAt } from '@/lib/hooks';
 export { GuardrailDialog, GuardrailsPage } from '@/pages/GuardrailsPage';
-export { KeyDialog } from '@/pages/KeysPage';
+export { KeyDialog, keyRankOf } from '@/pages/KeysPage';
 export { PoolDialog } from '@/pages/PoolsPage';
 export { fakeClock } from '../smoke/clock';

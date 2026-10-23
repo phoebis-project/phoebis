@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '@/api';
 import { setBuildHook } from '@/api/http';
@@ -77,6 +77,17 @@ export function Shell() {
     return () => setBuildHook(null);
   }, []);
 
+  // A page's sticky bars dock under the block, whose height the banner changes and the stylesheet cannot read, so the
+  // shell hands it over as the token.
+  const topRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const top = topRef.current;
+    if (top === null || typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(() => top.parentElement?.style.setProperty('--main-top', `${top.getBoundingClientRect().height}px`));
+    observer.observe(top);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className={`shell ${navOpen ? 'nav-open' : ''}`}>
       <aside className="sidebar">
@@ -114,37 +125,39 @@ export function Shell() {
         </div>
       </aside>
       <div className="main">
-        {newerBuild && (
-          <div className="callout callout--info" role="status">
-            <span>The router runs a newer build than this console. Reload to pick it up.</span>
-            <Button size="sm" onClick={() => window.location.reload()}>
-              Reload
-            </Button>
-          </div>
-        )}
-        <header className="topbar">
-          <button type="button" className="topbar__menu" aria-label="Toggle navigation" onClick={() => setNavOpen((v) => !v)}>
-            <IconList size={18} />
-          </button>
-          <h1 className="topbar__title">{title}</h1>
-          <div className="topbar__right">
-            <UnitSwitch unit={unit} onChange={setUnit} short={narrow} />
-            <UnitLegend />
-            <Button variant="ghost" size="sm" className="topbar__logout" aria-label="Log out" title="Log out" icon={<IconArrowRight size={15} />} onClick={() => void logout()}>
-              <span className="topbar__logout-label">Log out</span>
-            </Button>
-            <Segmented<ThemeChoice>
-              ariaLabel="Theme"
-              value={theme}
-              onChange={setTheme}
-              options={[
-                { value: 'light', label: <IconSun size={15} />, name: 'Light' },
-                { value: 'dark', label: <IconMoon size={15} />, name: 'Dark' },
-                { value: 'system', label: <IconMonitor size={15} />, name: 'System' },
-              ]}
-            />
-          </div>
-        </header>
+        <div className="main__top" ref={topRef}>
+          {newerBuild && (
+            <div className="callout callout--info" role="status">
+              <span>The router runs a newer build than this console. Reload to pick it up.</span>
+              <Button size="sm" onClick={() => window.location.reload()}>
+                Reload
+              </Button>
+            </div>
+          )}
+          <header className="topbar">
+            <button type="button" className="topbar__menu" aria-label="Toggle navigation" onClick={() => setNavOpen((v) => !v)}>
+              <IconList size={18} />
+            </button>
+            <h1 className="topbar__title">{title}</h1>
+            <div className="topbar__right">
+              <UnitSwitch unit={unit} onChange={setUnit} short={narrow} />
+              <UnitLegend />
+              <Button variant="ghost" size="sm" className="topbar__logout" aria-label="Log out" title="Log out" icon={<IconArrowRight size={15} />} onClick={() => void logout()}>
+                <span className="topbar__logout-label">Log out</span>
+              </Button>
+              <Segmented<ThemeChoice>
+                ariaLabel="Theme"
+                value={theme}
+                onChange={setTheme}
+                options={[
+                  { value: 'light', label: <IconSun size={15} />, name: 'Light' },
+                  { value: 'dark', label: <IconMoon size={15} />, name: 'Dark' },
+                  { value: 'system', label: <IconMonitor size={15} />, name: 'System' },
+                ]}
+              />
+            </div>
+          </header>
+        </div>
         <main className="content">
           {/* A titled badge a page draws outside its cards, such as the attention line's, describes through this host. */}
           <Descriptions>

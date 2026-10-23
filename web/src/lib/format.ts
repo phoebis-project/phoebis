@@ -198,10 +198,12 @@ export function fmtShortHour(isoTime: string): string {
  * The narrowest timeline cell that holds a label, per hour cycle: `short` the short hour ("06", "12 AM") and `full` the
  * full label ("Sep 13" under 24h, "12:00 AM" under 12h). A cell has no inline padding, so each figure is its label's
  * width in the sub's mono face, measured in the mock pass's Chromium and rounded up: "06" 12.6 px, "12 AM" 31.5 px and
- * "12:00 AM" 50.4 px, with the 24-hour `full` at 40 px, a margin over the 37.8 px of "Sep 13".
+ * "12:00 AM" 50.4 px. Each `full` keeps a margin past its label, so two labels side by side stay apart: the 24-hour
+ * 40 px stands 2.2 px over the 37.8 px of "Sep 13", and the 12-hour takes the same 2.2 px over "12:00 AM", 52.6 px
+ * rounded up to 53.
  */
 export const CELL_MIN_PX: Record<TimeFormat, { full: number; short: number }> = {
-  '12h': { full: 51, short: 32 },
+  '12h': { full: 53, short: 32 },
   '24h': { full: 40, short: 13 },
 };
 

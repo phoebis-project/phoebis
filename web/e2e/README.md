@@ -159,7 +159,12 @@ rest and 83 px with a chip line, read on an address of its own), the Unit select
 the bar sideways, every short label whole and no legend button at 400 px, the long labels whole at 1280 px, and the
 legend's popover over the filter bar uncovered at 1280 px), the top bar on every view at 1280 and 400 px (nothing
 scrolling it sideways, its last control inside its padding, the title whole on one line, and Log out a text button at
-1280 px and its icon alone at 400 px), the fast lane, the request drawer, which opens once the request list's shot is
+1280 px and its icon alone at 400 px), the reload banner under the mock's build switch `phoebis.mockBuildMismatch` (mock
+pass, on loads of its own at 1280 by 800 and 400 by 800, scrolled 600 px down the Analytics view: the banner's top edge
+at the window's top, where the bar's sits with the switch off, the bar's top edge on the banner's bottom, the banner's
+paint opaque under its tint, the sticky filter bar on the block's bottom and the section bar on the filter bar's bottom,
+and at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the fast lane, the request drawer,
+which opens once the request list's shot is
 taken (its compact table with Time the fill as wide as its card at 1280 by 800 and 1440 by 900 with every id whole in
 the mock pass, and at 375 by 800 under the list scrolling inside its card, its chips in the status badge's type, and the
 Estimated cost row's 20x equivalent chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440
@@ -201,7 +206,10 @@ while the first reading is in flight (in the mock pass, after the view's shot, r
 against the note of the story's API-key account annex in type, ink, line height, margin and place), the catalog popup
 and its columns (Model and Name the fills), the Keys table's columns (Name, Models and Status the fills) and the badges
 of its fill cells (each ending inside its cell and cutting its own label with the ellipsis), the key dialog's Access
-selects, the Keys bar's pool chip against its status chip (26 px, on an address that holds both), the Sessions lead and
+selects, the Keys bar's pool chip against its status chip (26 px, on an address that holds both), the lifetime cost card
+under the mock's unpriced switch (mock pass, on loads of its own: the flagged key's bar a dash beside its billed dollars
+under the unpriced title with no fill on its track, last in the card, its figure in the type and ink of a neighbor's
+that reads a number and its track as wide), the Sessions lead and
 its disclosure at 1280 by 800 and 1440 by 900 (the head under the bar's bottom, its height closed and open, the button
 on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference one line
 at the head's top right), the stripes on every view with a table (the first four data rows plain, `--stripe`, plain,

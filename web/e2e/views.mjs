@@ -6335,6 +6335,87 @@ async function unitControl(theme) {
   }
 }
 
+/** The mock's switch that answers from another router build, so the shell draws its reload banner. */
+const BUILD_MISMATCH_SWITCH = 'phoebis.mockBuildMismatch';
+
+/**
+ * The reload banner and the top bar in the shell's one sticky block, under the mock's build switch, at 1280 by 800 and
+ * 400 by 800. Scrolled 600 px down the Analytics view, the banner's top edge sits at the window's top, where the bar's
+ * sits with the switch off, the bar's top edge on the banner's bottom, and the banner paints an opaque color under its
+ * tint, so the page scrolled under it does not read through. The view's sticky filter bar docks on the block's bottom
+ * and its section bar on the filter bar's bottom, and at 1280 by 800, the one width where the Accounts list sticks, the
+ * list scrolled the same docks 20 px under the block. Each edge within 1 px. The Analytics view loads again without
+ * the switch at 1280 by 800, so the measures after it read the view as it first drew.
+ */
+async function shellBanner(theme) {
+  const say = (what) => failures.push(`${theme} shell banner: ${what}`);
+  const SCROLL = 600;
+  const scrolled = async (path, wait) => {
+    await loadAtOrigin(path, wait);
+    await page.evaluate((y) => window.scrollTo(0, y), SCROLL);
+    await settle();
+    return page.evaluate(() => {
+      const edges = (selector) => {
+        const el = document.querySelector(selector);
+        if (!el) return null;
+        const { bottom, top } = el.getBoundingClientRect();
+        return { bottom: Math.round(bottom * 10) / 10, top: Math.round(top * 10) / 10 };
+      };
+      const banner = document.querySelector('.main__top > .callout[role="status"]');
+      const paint = banner ? getComputedStyle(banner) : null;
+      return {
+        bar: edges('.topbar'),
+        banner: edges('.main__top > .callout[role="status"]'),
+        block: edges('.main__top'),
+        filters: edges('.filter-bar--sticky'),
+        list: edges('.accounts__list'),
+        paint: paint ? { color: paint.backgroundColor, image: paint.backgroundImage } : null,
+        scrolled: Math.round(document.scrollingElement.scrollTop),
+        sections: edges('.section-bar'),
+        token: document.querySelector('.main') ? getComputedStyle(document.querySelector('.main')).getPropertyValue('--main-top').trim() : null,
+      };
+    });
+  };
+  const near = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= 1;
+  try {
+    for (const size of [
+      { height: 800, width: 1280 },
+      { height: 800, width: 400 },
+    ]) {
+      const where = `at ${size.width} by ${size.height}`;
+      await page.setViewportSize(size);
+      await page.evaluate((key) => localStorage.removeItem(key), BUILD_MISMATCH_SWITCH);
+      const off = await scrolled('/analytics', '.section-bar');
+      await page.evaluate((key) => localStorage.setItem(key, '1'), BUILD_MISMATCH_SWITCH);
+      const on = await scrolled('/analytics', '.main__top > .callout');
+      measurements.push(`${theme} shell banner /analytics ${where} scrolled ${SCROLL} px ${JSON.stringify({ off, on })}`);
+      if (off.banner !== null) say(`${where} the switch off draws a banner`);
+      if (on.banner === null) {
+        say(`${where} the switch on draws no banner`);
+        continue;
+      }
+      if (off.scrolled !== SCROLL || on.scrolled !== SCROLL) say(`${where} the Analytics view scrolls ${off.scrolled} px with the switch off and ${on.scrolled} px with it on, not ${SCROLL}`);
+      if (off.bar?.top !== 0) say(`${where} with the switch off the bar's top edge sits at ${off.bar?.top} px, not the window's top`);
+      for (const what of compare({ top: Math.round(on.banner.top) }, { top: Math.round(off.bar?.top ?? NaN) }, ['top'], `${where} the banner's top edge against the bar's with the switch off`)) say(what);
+      if (!near(on.bar?.top, on.banner.bottom)) say(`${where} the bar's top edge sits at ${on.bar?.top} px, not on the banner's bottom at ${on.banner.bottom} px`);
+      if (!/^rgb\(/.test(on.paint?.color ?? '')) say(`${where} the banner paints ${JSON.stringify(on.paint?.color)} under its tint, not an opaque color`);
+      if (!near(on.filters?.top, on.block?.bottom)) say(`${where} the sticky filter bar's top edge sits at ${on.filters?.top} px, not on the block's bottom at ${on.block?.bottom} px`);
+      if (!near(on.sections?.top, on.filters?.bottom)) say(`${where} the section bar's top edge sits at ${on.sections?.top} px, not on the filter bar's bottom at ${on.filters?.bottom} px`);
+      // Under 1100 px the list stacks above the detail and scrolls with the page.
+      if (size.width < 1100) continue;
+      const accounts = await scrolled('/accounts', '.accounts__list');
+      measurements.push(`${theme} shell banner /accounts ${where} scrolled ${SCROLL} px ${JSON.stringify(accounts)}`);
+      if (accounts.scrolled !== SCROLL) say(`${where} the Accounts view scrolls ${accounts.scrolled} px, not ${SCROLL}`);
+      if (!near(accounts.list?.top, (accounts.block?.bottom ?? NaN) + 20)) say(`${where} the Accounts list's top edge sits at ${accounts.list?.top} px, not 20 px under the block's bottom at ${accounts.block?.bottom} px`);
+    }
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), BUILD_MISMATCH_SWITCH);
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    await atRest();
+  }
+}
+
 /**
  * The Accounts section's Window usage and Pace cards hold their window toggle inside the card's head at 1280 px, with
  * nothing overflowing the head, and the toggle offers the three windows the router reads: the story samples no
@@ -8590,6 +8671,52 @@ async function keysPoolSelect(theme) {
 }
 
 /**
+ * The lifetime cost card under the mock's unpriced switch, which flags the key its unpriced request lands on: that
+ * key's bar reads a dash beside its billed dollars under the unpriced title, fills none of its track and sorts last,
+ * its figure in the type and ink of a neighbor's that reads a number and its track as wide. The neighbor's fill goes
+ * unread, since a key billed behind an API-key account draws its dollars over an empty fill too. The page loads again
+ * without the switch, so the measures after it read the story whole.
+ */
+async function keysBars(theme) {
+  const say = (what) => failures.push(`${theme} /keys: ${what}`);
+  try {
+    await page.evaluate((key) => localStorage.setItem(key, '1'), UNPRICED_SWITCH);
+    await loadAtOrigin('/keys', '.hbars li');
+    const bars = await page.evaluate(() =>
+      [...document.querySelectorAll('.hbars li')].map((li) => {
+        const width = (el) => (el ? Math.round(el.getBoundingClientRect().width * 10) / 10 : null);
+        const figure = li.querySelector('.hbars__head .num')?.firstElementChild ?? null;
+        const s = figure ? getComputedStyle(figure) : null;
+        return {
+          color: s?.color ?? null,
+          family: s?.fontFamily ?? null,
+          fill: width(li.querySelector('.hbars__fill')),
+          name: li.querySelector('.hbars__head > span')?.firstChild?.textContent?.trim() ?? '',
+          size: s?.fontSize ?? null,
+          text: figure?.textContent?.trim() ?? '',
+          title: figure?.getAttribute('title') ?? null,
+          track: width(li.querySelector('.hbars__track')),
+          weight: s?.fontWeight ?? null,
+        };
+      }),
+    );
+    const flagged = bars.filter((bar) => bar.title === UNPRICED_TITLE);
+    const neighbor = bars.find((bar) => bar.title !== UNPRICED_TITLE && !bar.text.startsWith('-') && /\d/.test(bar.text)) ?? null;
+    measurements.push(`${theme} /keys unpriced bar ${JSON.stringify({ flagged, last: bars.at(-1)?.name ?? null, neighbor })}`);
+    if (flagged.length !== 1) say(`under the unpriced switch ${flagged.length} bars read the unpriced title, not one`);
+    const bar = flagged[0];
+    if (bar === undefined) return;
+    if (!/^-(, \$[\d,.]+ billed)?$/.test(bar.text)) say(`the flagged key's bar reads ${JSON.stringify(bar.text)}, not a dash beside its billed dollars`);
+    if (bar.fill !== 0) say(`the flagged key's bar fills ${bar.fill} px of its track, not none`);
+    if (bars.at(-1)?.name !== bar.name) say(`the flagged key ${bar.name} sorts before ${bars.at(-1)?.name}, not last`);
+    for (const what of compare(bar, neighbor, ['color', 'family', 'size', 'track', 'weight'], "the flagged key's figure and track against a neighbor's that reads a number")) say(what);
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), UNPRICED_SWITCH);
+    await loadAtOrigin('/keys', '.card--table tbody tr');
+  }
+}
+
+/**
  * The Sessions head under the bar at 1280 by 800, where the disclosure wraps, and at 1440 by 900, where it does not:
  * closed, the head starts under the bar's bottom and stays under 60 px, and the disclosure ends the lead's paragraph,
  * at most two lines, on the sentence's last line where both fit and flush left on the next line where they do not.
@@ -10099,6 +10226,7 @@ try {
       // The chip line's dock and the bar's measure load their addresses themselves and leave the bare page.
       if (view.path === '/analytics') await stickyStrip(theme, true);
       if (view.path === '/analytics') await barRow(theme, view.path);
+      if (view.path === '/analytics' && mock) await shellBanner(theme);
       if (view.path === '/requests') await rangePills(theme);
       // The chip measures, the bar's and the split button's each load what they read and leave the bare log at 1280 by
       // 800, so the shot above stays the bare log and the measures after them read it.
@@ -10123,6 +10251,7 @@ try {
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
       if (view.path === '/keys') await keysPoolSelect(theme);
+      if (view.path === '/keys' && mock) await keysBars(theme);
       if (view.path === '/accounts' && mock) await firstReadingHint(theme);
       if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);

@@ -41,10 +41,10 @@ as `v{version}`. The top bar reads the open view's title (the document title is 
 switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and System, stored under
 `phoebis.theme` (`system` until you pick one). When the router answers from a build other than the one the console's
 files were built from, a banner above the top bar reads `The router runs a newer build than this console. Reload to pick
-it up.` beside a "Reload" button, and it stays until the page reloads. The time format lives under `phoebis.timeFormat`
-(`24h` by default). The theme, the time format and the unit are browser preferences, which the Settings view's
-Appearance card also sets, and nothing in the shell changes a router setting. On a narrow window a menu button opens the
-sidebar over the view.
+it up.` beside a "Reload" button, and it stays in view with the top bar until the page reloads. The time format lives
+under `phoebis.timeFormat` (`24h` by default). The theme, the time format and the unit are browser preferences, which
+the Settings view's Appearance card also sets, and nothing in the shell changes a router setting. On a narrow window a
+menu button opens the sidebar over the view.
 
 The Accounts, Analytics and Pools views load their code on first open. A view that fails to draw tells a bundle that
 changed under the tab ("This page could not load") from an error while drawing ("This page hit an error"), each with its
@@ -532,7 +532,8 @@ figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: u
 subscription traffic's 20x 7-day equivalent over the billed traffic's dollars, and a bar's figure and a cost line read a
 key's equivalent beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the cost
 line each reading the subscription side as a dash with the Dashboard's hover where a request priced nothing on the 7-day
-window, and under Window shares a dash, since a key spans its pool's accounts. The columns are Name, Prefix, Pool,
+window, and its bar draws no fill and sorts last, and under Window shares a dash, since a key spans its pool's accounts.
+The columns are Name, Prefix, Pool,
 Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the capture setting,
 `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and "keepalive off"
 for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they

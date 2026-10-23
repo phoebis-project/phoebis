@@ -98,6 +98,16 @@ function keyFigureOf(unit: UnitPosition, s: FundedSum, empty: string): { text: s
   const native = nativeFiguresOf('seven_day', sides, s.estimated);
   return { text: native.figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text)).join(', '), title: nativeTitleOf(native) };
 }
+/**
+ * A key's bar length on the lifetime cost card: under native the 7-day equivalent, where a billed key's dollars read in
+ * its label alone, and null where a plan row priced nothing on that window, since the priced rows alone would draw a
+ * length the key's traffic does not have. A dollar position ranks by its dollars, and the shares by 0, since no key
+ * reads a share to rank by.
+ */
+export const keyRankOf = (unit: UnitPosition, lifetime: FundedSum): number | null => {
+  if (unit === 'native') return lifetime.equivalent.unpriced.sevenDay ? null : lifetime.equivalent.sevenDay;
+  return unit === 'share' ? 0 : dollarsUnder(unit, lifetime);
+};
 
 /** A key row's 7-day figure under its tokens. */
 function WeekLine({ unit, usage }: { unit: UnitPosition; usage: FundedSum }) {
@@ -242,12 +252,10 @@ export function KeysPage() {
       }
     : null;
   const lifetimeTile = totals ? sumTileOf(unit, totals.lifetime) : null;
-  // The bars rank by the equivalent under native, where a billed key's dollars read in its label alone, and under the
-  // shares no key reads a figure to rank by.
-  const rankOf = (k: ApiKey) => (unit === 'native' ? k.lifetime.equivalent.sevenDay : unit === 'share' ? 0 : dollarsUnder(unit, k.lifetime));
+  const rankOf = (k: ApiKey) => keyRankOf(unit, k.lifetime);
   // The top rank sets the full width: a fixed floor such as a dollar would dwarf the equivalent's bars, each a small
   // fraction of a window.
-  const maxRank = Math.max(0, ...(keys.data ?? []).map(rankOf));
+  const maxRank = Math.max(0, ...(keys.data ?? []).map(rankOf).filter((rank) => rank !== null));
 
   /** Runs one key mutation and reloads the table behind it; a rejection only toasts, leaving the list alone. */
   const run = async (action: () => Promise<void>) => {
@@ -299,9 +307,11 @@ export function KeysPage() {
           {keys.data ? (
             <ul className="hbars">
               {[...keys.data]
-                .sort((a, b) => rankOf(b) - rankOf(a))
+                // An unknown rank sorts below a zero, so a flagged key comes last.
+                .sort((a, b) => (rankOf(b) ?? -1) - (rankOf(a) ?? -1))
                 .map((k) => {
                   const figure = keyFigureOf(unit, k.lifetime, 'No request yet');
+                  const rank = rankOf(k);
                   return (
                     <li key={k.id}>
                       <div className="hbars__head">
@@ -313,7 +323,7 @@ export function KeysPage() {
                         </span>
                       </div>
                       <div className="hbars__track">
-                        <span className="hbars__fill" style={{ width: `${maxRank > 0 ? (rankOf(k) / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
+                        <span className="hbars__fill" style={{ width: `${maxRank > 0 && rank !== null ? (rank / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
                       </div>
                     </li>
                   );
