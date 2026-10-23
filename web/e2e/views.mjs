@@ -3590,8 +3590,12 @@ async function timelinePhone(theme) {
         say(`${where} no timeline to measure`);
         continue;
       }
-      const want = [12, 6, 4, 3, 2].find((count) => got.row / count >= got.faces['12 AM']) ?? 1;
-      if (got.cells.length !== want) say(`${where} the ${got.row}px row draws ${got.cells.length} cells, not the ${want} the largest divisor of twelve whose cell holds "12 AM" at ${got.faces['12 AM']}px`);
+      // The page counts its cells by the 32 px bound `cellsFit` pins for the 12-hour short hour, not by the face as
+      // measured, so the count reads the bound and the face is held under it on its own.
+      const bound = 32;
+      const want = [12, 6, 4, 3, 2].find((count) => got.row / count >= bound) ?? 1;
+      if (got.cells.length !== want) say(`${where} the ${got.row}px row draws ${got.cells.length} cells, not the ${want} the largest divisor of twelve whose cell holds the ${bound}px bound`);
+      if (got.faces['12 AM'] > bound) say(`${where} "12 AM" measures ${got.faces['12 AM']}px, past the ${bound}px bound the cells are counted by`);
       for (const cell of got.cells) {
         const short = /^(\d{1,2}) ([AP]M)$/.exec(cell.sub);
         if (short !== null && (short[1].startsWith('0') || !new RegExp(`(^| )${short[1].padStart(2, '0')}:00\\s${short[2]}$`).test(cell.title))) say(`${where} the short hour ${JSON.stringify(cell.sub)} stands under the title ${JSON.stringify(cell.title)}, which does not carry its full time`);
@@ -5392,7 +5396,10 @@ async function barRow(theme, view) {
         if (narrow.row.scroll > narrow.row.client) say(`950 by 800: the row runs ${narrow.row.scroll} px in ${narrow.row.client}`);
         if (narrow.edge === null) say('950 by 800: the bar draws no right edge');
         else if (narrow.edge > narrow.window) say(`950 by 800: the right edge ends at ${narrow.edge} px, past the ${narrow.window} px window`);
-        if (view === '/requests' && (narrow.count === null || narrow.count > narrow.window)) say(`950 by 800: the count ends at ${narrow.count ?? 'none'} px, past the ${narrow.window} px window`);
+        if (view === '/requests') {
+          if (narrow.count === null) say('950 by 800: the bar draws no count');
+          else if (narrow.count > narrow.window) say(`950 by 800: the count ends at ${narrow.count} px, past the ${narrow.window} px window`);
+        }
       }
     }
     // At 400 px the shell drops its sidebar and leaves the row 368 px. A short row (Pools', Sessions') fits on one line
@@ -6594,9 +6601,10 @@ async function wideBodyDialog(theme) {
       const pre = body?.querySelector('.body-block__pre');
       if (!dialog || !body || !pre) return null;
       const s = getComputedStyle(body);
-      // The find row stands above the text, so the text box fills what the body leaves under the row and its gap.
+      // The find row stands above the text, so the text box fills what the body leaves under the row and its gap. A
+      // body that sets no gap computes it to `normal`, which reads as no gap rather than as a figure that is no number.
       const find = body.querySelector('.body-block__find');
-      const above = find ? find.getBoundingClientRect().height + parseFloat(getComputedStyle(find).marginTop) + parseFloat(s.rowGap) : 0;
+      const above = find ? find.getBoundingClientRect().height + parseFloat(getComputedStyle(find).marginTop) + (parseFloat(s.rowGap) || 0) : 0;
       // The text is long when its lines outrun the box, read from the block of rows that holds every line at the row
       // height rather than from the scroll it causes, since only the rows in view are drawn.
       const token = parseFloat(getComputedStyle(pre).getPropertyValue('--body-row'));

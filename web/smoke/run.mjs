@@ -535,7 +535,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   setter.call(input, 'admin');
   input.dispatchEvent(new window.Event('input', { bubbles: true }));
   [...login.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
-  await login.settle(500);
+  // The dashboard draws on its own turns, so each step waits for the screen it leads to rather than a fixed delay.
+  await until(login, () => login.text().includes('Requests, 24h'));
   unchecked.restore();
   const plainSession = await api.getSession();
   results.push({
@@ -548,7 +549,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const topbarBadges = login.container.querySelectorAll('.topbar__right .badge').length;
   results.push({ name: 'a login lands on the dashboard with no badge in the top bar', ok: login.text().includes('Requests, 24h') && topbarRight !== null && topbarBadges === 0 && !login.text().includes('Log in'), missing: [`top bar ${topbarRight === null ? 'absent' : 'drawn'}`, `top bar badges ${topbarBadges}`] });
   [...login.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
-  await login.settle(400);
+  await until(login, () => login.text().includes('Admin secret'));
   results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin secret'), missing: [] });
   const checked = countCalls('login');
   login.container.querySelector('.login__card input[type="checkbox"]')?.click();
@@ -556,7 +557,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   setter.call(again, 'admin');
   again.dispatchEvent(new window.Event('input', { bubbles: true }));
   [...login.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
-  await login.settle(500);
+  await until(login, () => login.text().includes('Requests, 24h'));
   checked.restore();
   const keptSession = await api.getSession();
   results.push({
@@ -566,7 +567,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   });
   // Signed out again, so the blocks below find the mock's session as the block found it.
   [...login.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
-  await login.settle(400);
+  const signedOut = await until(login, () => login.text().includes('Admin secret'));
+  results.push({ name: "the login block's closing Log out returns to the login screen", ok: signedOut, missing: [] });
   login.unmount();
   localStorage.setItem('phoebis.mockSession', 'admin');
 }
@@ -2174,6 +2176,13 @@ m.unmount();
     ok: new RegExp(`^usage request rate-limited, next attempt [A-Z][a-z]{2} \\d{2}, \\d{4}, ${minute}( [AP]M)?$`).test(text),
     missing: [text || 'no error block on secondary', `expected the minute ${minute}`],
   });
+  // Each error card offers Retry beside its error, the one pill that reads the account again from the card.
+  const retries = [...held.container.querySelectorAll('.qcard__error button.pill')].map((p) => [p.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? '', p.textContent?.trim() ?? '', p.disabled]);
+  results.push({
+    name: '/quota an error card offers a Retry pill beside its error',
+    ok: JSON.stringify(retries.map(([name]) => name).sort()) === JSON.stringify(['nightly', 'secondary']) && retries.every(([, label, disabled]) => label === 'Retry' && disabled === false),
+    missing: [JSON.stringify(retries)],
+  });
   api.listAccounts = listAccounts;
   held.unmount();
 }
@@ -2318,8 +2327,11 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
 await emailLines('/accounts each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/accounts/primary the head reads the email under the name', [['primary', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
-  // primary cools on its fast lane, the first of its rows and lifting in 12m, and on one model, lifting in 54m.
-  const cardOf = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  // primary cools on its fast lane, the first of its rows and lifting in 12m, and on one model, lifting in 54m. The
+  // countdowns run from the story's instant, so the reads mount on the frozen clock, where the run's own pace moves
+  // none of them.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const cardOf = (title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
   const line = cardOf('Usage')?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
   const chip = cardOf('Usage')?.querySelector('.fast-lane__cooldown');
   results.push({
@@ -2330,8 +2342,9 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
   results.push({ name: '/accounts/primary the cooling-down block names the fast lane Fast mode', ok: JSON.stringify(scopes) === JSON.stringify(['Fast mode | fast_rate_limit', 'claude-haiku-4-5-20251001 | model_rejected']), missing: scopes });
   columnsMarked('/accounts the cooling-down block marks Reason as its fill column', cardOf('Cooling down')?.querySelector('table'), ['Reason']);
-  const badge = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
+  const badge = [...page.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
   results.push({ name: "/accounts/primary the header's cooldown badge reads the model row, never the fast lane's", ok: /^cooldown ends in 5[34]m$/.test(badge ?? ''), missing: [badge ?? 'no cooldown badge'] });
+  page.unmount();
 }
 {
   // Clearing primary's other rows leaves its fast row alone, and the mock's clear derives the status by the
@@ -2354,10 +2367,11 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   // The fast lane's credits refusal is a row of its own beside the rate limit: a chip and a cooling-down row each,
   // and with the model row cleared the mock's rule reads neither fast row as cooling the account.
   const story = (await api.listAccounts()).find((a) => a.id === 'primary');
-  const credits = { reason: 'fast_credits', scope: 'fast_credits', setAt: story.cooldowns[0].setAt, until: new Date(Date.now() + 40 * 60_000).toISOString(), windowId: null };
+  const credits = { reason: 'fast_credits', scope: 'fast_credits', setAt: story.cooldowns[0].setAt, until: new Date(CLOCK_ORIGIN + 40 * 60_000).toISOString(), windowId: null };
   api.putAccount({ ...story, cooldowns: [...story.cooldowns, credits] });
   for (const c of story.cooldowns.filter((c) => c.scope.startsWith('model:'))) await api.clearCooldown('primary', c.scope);
-  const both = await mount('/accounts/primary');
+  // On the frozen clock, as above, so the countdowns read from the story's instant.
+  const both = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   const chips = [...both.container.querySelectorAll('.fast-lane__cooldown')].map((c) => c.textContent?.trim() ?? '');
   const cardOf = (title) => [...both.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
   const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
@@ -3181,6 +3195,15 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
 
   buttonIn(again, 'Confirm')?.click();
   await until(page, () => buttonIn(again, 'Disconnect') !== undefined);
+  // A refused Disconnect keeps the sealed answer's step with its error, Cancel and Disconnect, so it can be tried again.
+  failNextCall('disconnectAccount', '/admin/accounts/legacy/credentials', 'the store is unavailable', { quiet: true });
+  buttonIn(again, 'Disconnect')?.click();
+  const disconnectRefused = await until(page, () => refusal(again) === 'the store is unavailable');
+  results.push({
+    name: "/accounts/legacy a refused Disconnect keeps the sealed answer's step with its error, Cancel and Disconnect",
+    ok: disconnectRefused && shown(again) && JSON.stringify(footer(again)) === JSON.stringify(['Cancel', 'Disconnect']),
+    missing: [`open ${shown(again)}`, refusal(again) || 'no refusal', footer(again).join(', ')],
+  });
   const refused = sessions.at(-1);
   const started = sessions.length;
   const spy = countCalls('disconnectAccount');
@@ -10791,6 +10814,12 @@ await m.navigate(`/requests/${laptopRow.id}`);
     findButton(drawerGroup, 'Clear find')?.click();
     await m.settle(100);
     const cleared = { count: countOf(drawerGroup), value: field?.value };
+    // Escape with a term in the drawer's own field clears the term and stops there, short of the drawer's own Escape.
+    setInput(field, '17');
+    await m.settle(100);
+    pressKey('Escape', field);
+    await m.settle(100);
+    const drawerEscaped = { drawer: m.container.querySelector('.drawer') !== null, value: field?.value };
     pressKey('Escape', field);
     await m.settle(100);
     const drawerLeft = m.container.querySelector('.drawer') === null;
@@ -10823,6 +10852,8 @@ await m.navigate(`/requests/${laptopRow.id}`);
         retyped === '1 of 10' &&
         cleared.count === '' &&
         cleared.value === '' &&
+        drawerEscaped.drawer &&
+        drawerEscaped.value === '' &&
         drawerLeft,
       missing: [
         `idle: ${JSON.stringify(idle)}`,
@@ -10833,6 +10864,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
         `Escape with the term: ${JSON.stringify(escaped)}`,
         `the close's focus ${returned ? 'on' : 'off'} the drawer's field`,
         `retyped "1999": ${retyped}, Clear find: ${JSON.stringify(cleared)}`,
+        `Escape with "17" in the drawer's field: ${JSON.stringify(drawerEscaped)}`,
         `Escape in the empty field ${drawerLeft ? 'closed' : 'left open'} the drawer`,
       ],
     });
@@ -19306,10 +19338,15 @@ m.unmount();
     const loaded = total(page);
     await chooseInterval(page, '5 s');
     spy.calls.length = 0;
+    // A session row the ledger wrote since the walk, the newest inside the span, so the tick's first page brings it and
+    // the count moves only where the page merges the tick's answer.
+    const late = sessionRows.length === 0 ? null : { ...sessionRows[0], at: isoAt(CLOCK_ORIGIN - 1_000), durationMs: 0, id: 'req_late-session-row' };
+    if (late !== null) requests.push(late);
     tick(5_000);
     await page.settle();
     const ticked = spy.calls.map(([q]) => q);
     const after = total(page);
+    if (late !== null) requests.splice(requests.indexOf(late), 1);
     await removeChip(page, 'session');
     const left = page.location().search;
     spy.calls.length = 0;
@@ -19330,7 +19367,8 @@ m.unmount();
         ticked.length === 1 &&
         JSON.stringify(ticked[0]) === JSON.stringify(walk[0]) &&
         loaded === sessionRows.length &&
-        after === sessionRows.length &&
+        late !== null &&
+        after === sessionRows.length + 1 &&
         !left.includes('session=') &&
         walked(back) &&
         returned === sessionRows.length,
@@ -19778,7 +19816,12 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
     });
     reads.length = 0;
     (await entryOf(page, tr))?.click();
-    await page.settle(300);
+    // The Requests page lists the holder's rows on its own turns, which a busy host can leave past a fixed delay, and the
+    // earlier page's rows stand until they draw.
+    await until(page, () => {
+      const listedRows = reads.at(-1)?.answer.requests.length ?? 0;
+      return listedRows > 0 && page.container.querySelectorAll('.requests__table tbody tr').length === listedRows;
+    });
     const read = reads[reads.length - 1];
     const answered = read?.answer.requests ?? [];
     const heads = [...page.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
@@ -23966,9 +24009,9 @@ m.unmount();
     missing: [`before Log out ${JSON.stringify(beforeLogout)}, after ${JSON.stringify(afterLogout)}`, `before the 401 ${JSON.stringify(beforeExpiry)}, ended ${ended}, after ${JSON.stringify(afterExpiry)}`],
   });
 
-  // The reload banner. The mock answers its bundle's own build, so a plain mount draws none, and the lever feeds the
-  // transport another router build, as an answer's header would. The banner's Reload is not pressed, since jsdom does
-  // not navigate.
+  // The reload banner. The banner reads the router's build off an answer's header in the transport's `call`, which the
+  // mock never goes through, so a plain mount draws none, and the lever feeds the transport another router build, as an
+  // answer's header would. The banner's Reload is not pressed, since jsdom does not navigate.
   const bannerOf = (p) => p.container.querySelector('.main > .callout[role="status"]');
   page = await mount('/keys');
   const plain = bannerOf(page);
@@ -23992,10 +24035,13 @@ m.unmount();
   });
 
   // The shell registers its build hook beside the session's handlers, so with the banner drawn a failed read still
-  // toasts and a 401 still returns to the login, and the shell that mounts after the next login registers it again.
-  failNextCall('listKeys', '/admin/keys', 'ledger locked');
+  // toasts and a 401 still returns to the login, and the shell that mounts after the next login registers it again. The
+  // failure is armed once the banner stands, so it lands on a read the page makes after the shell's hook is in place.
   page = await mount('/keys');
   mismatchBuild();
+  await page.settle(100);
+  failNextCall('listKeys', '/admin/keys', 'ledger locked');
+  page.container.querySelector('.refresh-control__body')?.click();
   await page.settle(100);
   const withBanner = { banner: bannerOf(page) !== null, toasts: toasts(page) };
   globalThis.fetch = async () => new Response(JSON.stringify({ error: 'no admin session' }), { status: 401 });

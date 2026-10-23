@@ -470,7 +470,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const from = s.now - DAY;
     const edge = s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) === startOfHour(from));
-    assert.ok(from > startOfHour(from) && edge.length > 0, 'the range starts inside an hour that holds a request');
+    assert.ok(from > startOfHour(from) && s.asked(edge).length > 0, 'the range starts inside an hour that holds a request');
     const [all] = await s.api.getAnalyticsBreakdown({ from: iso(from), groupBy: 'all', to: iso(s.now) });
     const kept = s.asked(s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, s.now)));
     assert.equal(all.requests, kept.length, `the range counts ${edge.map((r) => r.id).join(', ')}`);
@@ -957,6 +957,22 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     assert.deepEqual(unpinned, [], "members at their cap with no pin of the story's");
     assert.ok(pinned > 0, 'the story holds a member at its cap');
+  });
+
+  test(`a story renewal whose move rule fired reads its cap filter dropped, at ${at}`, async () => {
+    const s = await story;
+    // The renewal's at-cap mark is off for the story, so only the story's own slots can hold such a renewal in place.
+    const passed = [];
+    let seen = 0;
+    for (const r of await decisionsOf(s)) {
+      if (!s.lib.STORY_IDS.has(r.requestId) || r.outcome.kind !== 'renewed') continue;
+      if (!r.walk.some((w) => w.step.startsWith('move:') && w.verdict === 'fired')) continue;
+      seen += 1;
+      const capFilter = r.walk.find((w) => w.step === 'cap_filter');
+      if (capFilter?.verdict !== 'dropped') passed.push(`${r.requestId}/${r.seq} ${capFilter?.verdict ?? 'no cap filter'}`);
+    }
+    assert.deepEqual(passed, [], 'a renewal whose rule fired and whose cap filter passed would have moved its pin');
+    assert.ok(seen > 0, 'the story holds a renewal whose move rule fired');
   });
 
   test(`the two run-outs read the exhaustion their members' obstacles name, at ${at}`, async () => {

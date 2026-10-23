@@ -220,6 +220,7 @@ test('Cancel and Escape close the popover and write nothing, and the next openin
   assert.equal(field('From')?.value, toLocalInput(DAY_WINDOW.from));
   act(() => field('From').dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })));
   assert.equal(popover(), null);
-  assert.equal(document.activeElement, custom(container), 'Escape returns the focus to the pill');
+  // A boolean, since a failed read of two jsdom elements hands the reporter the whole window to serialize.
+  assert.ok(document.activeElement === custom(container), 'Escape returns the focus to the pill');
   assert.deepEqual(writes, []);
 });

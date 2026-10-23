@@ -287,7 +287,8 @@ test('Escape closes a hover-opened popover with the pointer still', async () => 
   assert.ok(!popovers()[0].classList.contains('is-pinned') && !pick.classList.contains('is-selected'), 'a hover leaves it unpinned');
   const link = container.querySelector('a');
   link.focus();
-  assert.equal(document.activeElement, link);
+  // A boolean, since a failed read of two jsdom elements hands the reporter the whole window to serialize.
+  assert.ok(document.activeElement === link, 'the link holds the focus');
   escape();
   assert.equal(popovers().length, 0, 'Escape closes it with no pointer event between');
 });

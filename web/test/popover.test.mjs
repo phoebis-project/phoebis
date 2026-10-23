@@ -325,6 +325,20 @@ test('a chip body a click on the background left hands no focus to the fold chip
   assert.equal(focused(), 'body', 'the focus stays where the click left it');
 });
 
+test('the blur a browser fires on a chip body the fold hid keeps the body, so the commit that folds it hands the focus to the fold chip', () => {
+  const addRef = { current: null };
+  const page = render(lineAfterAdd(addRef));
+  const status = bodyOf(page.container, 'status');
+  focus(status);
+  // The chip is hidden ahead of the commit that folds it, and its body's blur names no control the focus went to.
+  status.parentElement.hidden = true;
+  act(() => status.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true, relatedTarget: null })));
+  lineWidth = 550;
+  page.render(lineAfterAdd(addRef));
+  const more = page.container.querySelector('.chip--more');
+  assert.ok(document.activeElement === more, `the fold chip takes the focus, not ${focused()}`);
+});
+
 test('a history step that folds the line over a focused chip body and removes another chip hands the focus to the fold chip that now holds it', () => {
   lineWidth = 550;
   const addRef = { current: null };

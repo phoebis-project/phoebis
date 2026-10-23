@@ -1150,3 +1150,7 @@ test('a key not listed and a key past the eighth named one take the fallback slo
 test('without an empty key the color slots follow the named keys in their order', () => {
   assert.equal(d.slotIndex(['a', 'b'], 'b'), 1);
 });
+
+test('an empty key between two named keys takes no slot of theirs, wherever the fallback path lists it', () => {
+  assert.equal(d.slotIndex(['a', '', 'b'], 'b'), 1);
+});
