@@ -6342,10 +6342,11 @@ const BUILD_MISMATCH_SWITCH = 'phoebis.mockBuildMismatch';
  * The reload banner and the top bar in the shell's one sticky block, under the mock's build switch, at 1280 by 800 and
  * 400 by 800. Scrolled 600 px down the Analytics view, the banner's top edge sits at the window's top, where the bar's
  * sits with the switch off, the bar's top edge on the banner's bottom, and the banner paints an opaque color under its
- * tint, so the page scrolled under it does not read through. The view's sticky filter bar docks on the block's bottom
- * and its section bar on the filter bar's bottom, and at 1280 by 800, the one width where the Accounts list sticks, the
- * list scrolled the same docks 20 px under the block. Each edge within 1 px. The Analytics view loads again without
- * the switch at 1280 by 800, so the measures after it read the view as it first drew.
+ * tint, so the page scrolled under it does not read through. The block paints one too, with the switch off and on,
+ * since the banner's rounded corners leave it bare. The view's sticky filter bar docks on the block's bottom and its
+ * section bar on the filter bar's bottom, and at 1280 by 800, the one width where the Accounts list sticks, the list
+ * scrolled the same docks 20 px under the block. Each edge within 1 px. The Analytics view loads again without the
+ * switch at 1280 by 800, so the measures after it read the view as it first drew.
  */
 async function shellBanner(theme) {
   const say = (what) => failures.push(`${theme} shell banner: ${what}`);
@@ -6363,10 +6364,12 @@ async function shellBanner(theme) {
       };
       const banner = document.querySelector('.main__top > .callout[role="status"]');
       const paint = banner ? getComputedStyle(banner) : null;
+      const top = document.querySelector('.main__top');
       return {
         bar: edges('.topbar'),
         banner: edges('.main__top > .callout[role="status"]'),
         block: edges('.main__top'),
+        blockPaint: top ? getComputedStyle(top).backgroundColor : null,
         filters: edges('.filter-bar--sticky'),
         list: edges('.accounts__list'),
         paint: paint ? { color: paint.backgroundColor, image: paint.backgroundImage } : null,
@@ -6399,6 +6402,7 @@ async function shellBanner(theme) {
       for (const what of compare({ top: Math.round(on.banner.top) }, { top: Math.round(off.bar?.top ?? NaN) }, ['top'], `${where} the banner's top edge against the bar's with the switch off`)) say(what);
       if (!near(on.bar?.top, on.banner.bottom)) say(`${where} the bar's top edge sits at ${on.bar?.top} px, not on the banner's bottom at ${on.banner.bottom} px`);
       if (!/^rgb\(/.test(on.paint?.color ?? '')) say(`${where} the banner paints ${JSON.stringify(on.paint?.color)} under its tint, not an opaque color`);
+      for (const [switched, read] of [['off', off], ['on', on]]) if (!/^rgb\(/.test(read.blockPaint ?? '')) say(`${where} with the switch ${switched} the sticky block paints ${JSON.stringify(read.blockPaint)}, not an opaque color`);
       if (!near(on.filters?.top, on.block?.bottom)) say(`${where} the sticky filter bar's top edge sits at ${on.filters?.top} px, not on the block's bottom at ${on.block?.bottom} px`);
       if (!near(on.sections?.top, on.filters?.bottom)) say(`${where} the section bar's top edge sits at ${on.sections?.top} px, not on the filter bar's bottom at ${on.filters?.bottom} px`);
       // Under 1100 px the list stacks above the detail and scrolls with the page.

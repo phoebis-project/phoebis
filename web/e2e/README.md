@@ -162,9 +162,9 @@ scrolling it sideways, its last control inside its padding, the title whole on o
 1280 px and its icon alone at 400 px), the reload banner under the mock's build switch `phoebis.mockBuildMismatch` (mock
 pass, on loads of its own at 1280 by 800 and 400 by 800, scrolled 600 px down the Analytics view: the banner's top edge
 at the window's top, where the bar's sits with the switch off, the bar's top edge on the banner's bottom, the banner's
-paint opaque under its tint, the sticky filter bar on the block's bottom and the section bar on the filter bar's bottom,
-and at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the fast lane, the request drawer,
-which opens once the request list's shot is
+paint opaque under its tint, the block's paint opaque with the switch off and on, the sticky filter bar on the block's
+bottom and the section bar on the filter bar's bottom, and at 1280 by 800 the Accounts list 20 px under the block, each
+edge within 1 px), the fast lane, the request drawer, which opens once the request list's shot is
 taken (its compact table with Time the fill as wide as its card at 1280 by 800 and 1440 by 900 with every id whole in
 the mock pass, and at 375 by 800 under the list scrolling inside its card, its chips in the status badge's type, and the
 Estimated cost row's 20x equivalent chips and muted equivalent on one line each inside the cell at 1280 by 800 and 1440

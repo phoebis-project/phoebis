@@ -151,11 +151,14 @@
   min-width: 0;
 }
 
-/* The reload banner and the bar stick as one block, so a drawn banner stays in view above the bar. */
+/* The reload banner and the bar stick as one block, so a drawn banner stays in view above the bar. The block paints the
+   page color, since the banner keeps the callout's 5 px radius and the scrolled page would show through its four
+   corners on a transparent block. */
 .main__top {
   position: sticky;
   top: 0;
   z-index: 5;
+  background-color: var(--page);
 }
 
 /* The page color under the banner's tint, which the dark theme draws translucent, so the page scrolled under the block
