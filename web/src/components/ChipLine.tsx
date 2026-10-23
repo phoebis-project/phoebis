@@ -15,8 +15,11 @@ export interface ChipLineProps {
   /** The view's address, whose change folds an expanded line again. */
   address: string;
   chips: Chip[];
-  /** The field whose values the Add filter box shows from its chip, or null. */
-  editing?: string | null;
+  /**
+   * The chip body the Add filter box opened from, or null. A per-value dimension's chips share their field, so the body
+   * names the one chip the box stands for.
+   */
+  editing?: HTMLElement | null;
   onClearAll: () => void;
   onOpen: (field: string, anchor: HTMLElement) => void;
   /** A chip's x, with the chip's own value where its dimension draws a chip per value. */
@@ -137,7 +140,7 @@ export function ChipLine({ addFilterRef, address, chips, editing = null, onClear
       }}
     >
       {drawn.map((chip, i) => (
-        <FilterChip key={idOf(chip)} chip={chip} editing={editing === chip.field} hidden={!expanded && i >= shown.length} onOpen={(anchor) => onOpen(chip.field, anchor)} onRemove={() => onRemove(chip.field, chip.value)} />
+        <FilterChip key={idOf(chip)} chip={chip} editing={editing} hidden={!expanded && i >= shown.length} onOpen={(anchor) => onOpen(chip.field, anchor)} onRemove={() => onRemove(chip.field, chip.value)} />
       ))}
       {(expanded || folded.length > 0) && (
         <button key="fold" type="button" className="chip chip--more" title={expanded ? undefined : title} aria-expanded={expanded} onClick={() => setExpandedFor(expanded ? null : address)}>

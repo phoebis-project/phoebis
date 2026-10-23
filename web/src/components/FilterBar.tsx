@@ -92,7 +92,7 @@ function Bar<F extends { range?: RangeValue; search?: string }>({ address, child
         </div>
         {/* Mounted with no chips too: the line draws nothing then, and its focus hand-off after Clear all or the last
             chip's x runs in its own effect on the render that empties it. */}
-        {dimensions !== undefined && <ChipLine addFilterRef={addFilterRef} address={address} chips={chips} editing={edit?.field ?? null} onClearAll={clearAll} onOpen={(field, anchor) => setEdit({ anchor, field })} onRemove={remove} />}
+        {dimensions !== undefined && <ChipLine addFilterRef={addFilterRef} address={address} chips={chips} editing={edit?.anchor ?? null} onClearAll={clearAll} onOpen={(field, anchor) => setEdit({ anchor, field })} onRemove={remove} />}
       </div>
     </PopoverHost.Provider>
   );

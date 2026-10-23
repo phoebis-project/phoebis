@@ -213,3 +213,31 @@ test('the Kinds dimension reads its chip through the presets, and the Model dime
   assert.equal(kinds.emptyMeansAll, true, 'an empty Kinds value is every kind');
   assert.deepEqual([d.REQUESTS_DIMENSIONS, d.ROUTING_LOG_DIMENSIONS].map((list) => list.find((x) => x.field === 'models').searchable), [true, true]);
 });
+
+// Last in the file, since the DOM globals it sets for React stay set for the rest of the process.
+test("a per-value chip opened from the bar reads expanded on its own body alone, not on its field's other chips", async (t) => {
+  // React reads whether a DOM exists when its module loads, so the window stands before the bundle that draws is
+  // imported.
+  const { JSDOM } = await import('jsdom');
+  const { window } = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true });
+  for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'getComputedStyle', 'MouseEvent', 'Event']) {
+    Object.defineProperty(globalThis, key, { value: window[key], configurable: true, writable: true });
+  }
+  globalThis.window = window;
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  t.after(() => window.close());
+  const { act, createElement: h, createRoot, FilterBar } = await import('./dist/ui.js');
+  const options = { pools: [{ label: 'Batch jobs', value: 'jobs' }, { label: 'Nightly', value: 'night' }], status: [{ label: 'Disabled', value: 'disabled' }] };
+  const refresh = { intervalMs: 0, onIntervalChange() {}, onRefresh() {}, paused: null, refreshTitle: 'Refresh' };
+  const container = document.body.appendChild(document.createElement('div'));
+  const root = createRoot(container);
+  act(() => root.render(h(FilterBar, { address: 'pools', dimensions: d.KEYS_DIMENSIONS, filters: { pools: ['jobs', 'night'], search: '', status: 'all' }, options, refresh, update() {} })));
+  try {
+    const expanded = () => [...container.querySelectorAll('.chip--filter .chip__body')].map((b) => b.getAttribute('aria-expanded'));
+    assert.deepEqual(expanded(), ['false', 'false'], 'two pool chips, both closed');
+    act(() => container.querySelectorAll('.chip--filter .chip__body')[1].click());
+    assert.deepEqual(expanded(), ['false', 'true'], 'the chip the step opened from alone reads expanded');
+  } finally {
+    act(() => root.unmount());
+  }
+});
