@@ -151,13 +151,16 @@
   min-width: 0;
 }
 
-/* The reload banner and the bar stick as one block, so a drawn banner stays in view above the bar. The block paints the
-   page color, since the banner keeps the callout's 5 px radius and the scrolled page would show through its four
-   corners on a transparent block. */
+/* The reload banner and the bar stick as one block, so a drawn banner stays in view above the bar. */
 .main__top {
   position: sticky;
   top: 0;
   z-index: 5;
+}
+
+/* The banner keeps the callout's 5 px radius, so a transparent block would show the scrolled page through its four
+   corners, and a backing with no banner would turn the bar's frosted tint solid. */
+.main__top:has(> .callout) {
   background-color: var(--page);
 }
 
