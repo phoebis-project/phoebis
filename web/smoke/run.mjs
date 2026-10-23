@@ -20538,6 +20538,13 @@ const CARD_VIEWS = [
         drawnReleased.every((l) => l.word === 'released' && l.title === 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.'),
       missing: [JSON.stringify(on.chips), `released ${releasedHere.join(',')}`, `off ${off.lines.map((l) => l.id).join(',')}`, `on ${on.lines.map((l) => `${l.id} ${l.word}`).join(',')}`],
     });
+    // The router runs an idle window set above the break-even as set, so the idle badge names the window alone.
+    const idleLines = off.lines.filter((l) => l.word === 'idle');
+    results.push({
+      name: "/sessions an idle line's lifecycle badge says the agent is probed until the pool's idle window runs out",
+      ok: idleLines.length > 0 && idleLines.every((l) => l.title === "Stopped and waiting for the user. Probed until the pool's idle window runs out."),
+      missing: idleLines.length === 0 ? ['no idle line'] : idleLines.map((l) => `${l.id}: ${l.title}`),
+    });
   }
   {
     // The age picker lists its preset at the default first and checked, then the four others, each once. A pick writes
@@ -21454,7 +21461,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const idle = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'idle limit');
     results.push({
       name: '/sessions idle limit reason says the retained prompt was discarded',
-      ok: idle !== undefined && (idle.getAttribute('title') ?? '') === "The pool's idle window, capped at the recipe's break-even, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
+      ok: idle !== undefined && (idle.getAttribute('title') ?? '') === "The pool's idle window ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
       missing: [idle?.getAttribute('title') ?? 'absent'],
     });
     results.push({ name: '/sessions no companion lease copy is left', ok: !m.text().includes('lease lapsed'), missing: [m.text().includes('lease lapsed') ? 'still there' : ''] });

@@ -61,7 +61,7 @@ const modelTitle = (model: string, shown: string) => (shown === model ? undefine
 const PIN_TONE: Record<KeepaliveState, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', released: 'neutral', unknown: 'neutral' };
 const PIN_HINT: Record<KeepaliveState, string> = {
   busy: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.',
-  idle: "Stopped and waiting for the user. Probed until the pool's idle window, capped at the recipe's break-even, runs out.",
+  idle: "Stopped and waiting for the user. Probed until the pool's idle window runs out.",
   parked: 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
   released: 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.',
   unknown: "The reporter could not tell this agent's state.",
