@@ -220,7 +220,10 @@ test("a hit whose column lies past the box scrolls sideways to a third of the bo
   assert.deepEqual(lefts, [12 + 60 * 10 - 300 / 3], 'a hit inside the box leaves it where it stands');
 });
 
-/** Stubs `ResizeObserver` for one case and answers the callbacks the viewer registers, each with the element it watches. */
+/**
+ * Stubs `ResizeObserver` for one case and answers the callbacks the viewer registers, each with the element it
+ * watches.
+ */
 const observeBoxes = (t) => {
   const observed = [];
   globalThis.ResizeObserver = class {

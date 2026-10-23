@@ -128,7 +128,10 @@ test("contextCell reads the tokens, the share of the model's window and the cach
   assert.deepEqual(d.contextCell(null, null, null, null), { main: '-', share: null, prefix: null }, 'a session with no pin or no figure reads a dash');
 });
 
-/** A companion row as the decoder answers it: the main agent's pin on `model` and the route's entries for the others. */
+/**
+ * A companion row as the decoder answers it: the main agent's pin on `model` and the route's entries for the
+ * others.
+ */
 const companionRow = (model, agentContexts) => ({ agentContexts, agentId: 'main', cachedPrefixTokens: 41_000, companion: 'reporting', contextShare: 0.26, contextWindowTokens: 200_000, lastInputTokens: 52_000, model, pinned: true });
 const pinEntry = (agentId, model, lastInputTokens) => ({ agentId, cachedPrefixTokens: null, contextShare: null, contextWindowTokens: 200_000, lastInputTokens, model });
 

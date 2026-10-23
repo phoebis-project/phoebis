@@ -1095,8 +1095,8 @@ function storyRequests(): RequestLog[] {
       usage: { input: 19_600, output: 820 },
     },
     { agentId: 'main', at: t(14, 19, 2), attempts: [{ accountId: 'primary', at: t(14, 19, 2), ms: 7_100, status: 200 }], errorCode: 'overloaded_error', id: 'req_9a07c4e1-d55', outcome: 'failed', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 44_900, cacheWrite1h: 1_800, input: 2_600, output: 960 } },
-    // The runner sends again on its key after its revocation at 14:17:30, which the selection refuses. Refused before it
-    // resolved a model, the request carries no model, as the router records it.
+    // The runner sends again on its key after its revocation at 14:17:30, which the selection refuses. Refused before
+    // it resolved a model, the request carries no model, as the router records it.
     { agentId: 'main', at: t(14, 18, 5), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: 'main', session: 'cd9a5904', status: 401 },
     // A compacted conversation renews its pin cold and writes its prefix afresh.
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },

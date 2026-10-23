@@ -3196,7 +3196,8 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
 
   buttonIn(again, 'Confirm')?.click();
   await until(page, () => buttonIn(again, 'Disconnect') !== undefined);
-  // A refused Disconnect keeps the sealed answer's step with its error, Cancel and Disconnect, so it can be tried again.
+  // A refused Disconnect keeps the sealed answer's step with its error, Cancel and Disconnect, so it can be tried
+  // again.
   failNextCall('disconnectAccount', '/admin/accounts/legacy/credentials', 'the store is unavailable', { quiet: true });
   buttonIn(again, 'Disconnect')?.click();
   const disconnectRefused = await until(page, () => refusal(again) === 'the store is unavailable');
@@ -19817,8 +19818,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
     });
     reads.length = 0;
     (await entryOf(page, tr))?.click();
-    // The Requests page lists the holder's rows on its own turns, which a busy host can leave past a fixed delay, and the
-    // earlier page's rows stand until they draw.
+    // The Requests page lists the holder's rows on its own turns, which a busy host can leave past a fixed delay, and
+    // the earlier page's rows stand until they draw.
     await until(page, () => {
       const listedRows = reads.at(-1)?.answer.requests.length ?? 0;
       return listedRows > 0 && page.container.querySelectorAll('.requests__table tbody tr').length === listedRows;
