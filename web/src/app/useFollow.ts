@@ -75,7 +75,12 @@ export function useFollow<R>(input: {
     // The rows the tab's return read brought. The interval keeps its phase, so its next tick can follow that read
     // within milliseconds and bring nothing, and that tick's answer keeps their tint beside its own rows.
     let kept: { for: string; rows: Set<string> } | null = null;
+    // The polls in the order they went out, and the latest of them that answered. The tab's return and the tick after
+    // it go out milliseconds apart with no guard, so either can answer first.
+    let issued = 0;
+    let newest = 0;
     const poll = (returned = false) => {
+      const nth = (issued += 1);
       const { address: polled, compare: order, identity: identify, mark: landedAfter, read: reader, shown: start } = latest.current;
       // Every page of one poll reads from the same stamp and is handed the same instant, so a reader that bounds its
       // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
@@ -109,10 +114,18 @@ export function useFollow<R>(input: {
           // A gap an earlier poll left stays until a reload, and Next walks on from the newest one, which reaches the
           // older ones too.
           const next = polledPages.overrun === null ? current.overrun : { cursor: polledPages.overrun, to };
+          const rows = merged(current.shown, polledPages.rows, identify, order);
+          if (nth < newest) {
+            // A later poll answered first and tinted what it brought. This older answer finds those rows known, so it
+            // merges its rows and leaves the tint for a later poll to take away.
+            setFollowed((f) => ({ for: polled, fresh: f !== null && f.for === polled ? f.fresh : new Set(), landedThrough: polledPages.landedThrough ?? landedAfter, overrun: next, rows, standIn: current.standIn }));
+            return;
+          }
+          newest = nth;
           const brought = new Set(polledPages.rows.map(identify).filter((k) => !known.has(k)));
           const fresh = kept !== null && kept.for === polled ? new Set([...kept.rows, ...brought]) : brought;
           kept = returned ? { for: polled, rows: brought } : null;
-          setFollowed({ for: polled, fresh, landedThrough: polledPages.landedThrough ?? landedAfter, overrun: next, rows: merged(current.shown, polledPages.rows, identify, order), standIn: current.standIn });
+          setFollowed({ for: polled, fresh, landedThrough: polledPages.landedThrough ?? landedAfter, overrun: next, rows, standIn: current.standIn });
         },
         (err: unknown) => {
           if (!armed.alive) return;

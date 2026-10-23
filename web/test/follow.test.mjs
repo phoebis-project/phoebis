@@ -301,6 +301,38 @@ test("the rows the tab's return brought keep the tint through the tick after it,
   assert.deepEqual([polls.at(-1), [...f.last().fresh]], [ORIGIN + 20_000, []], 'the poll after it takes the tint away');
 });
 
+test("a tick's answer that lands before the tab's return read keeps its tint when the return's answer lands after it", async () => {
+  const clock = frozen();
+  const r = route(60);
+  // As above, row 1 arrives before the first poll and row 0 while the tab is hidden. The first page of each read after
+  // the return waits for the case to release it, so the tick's read can answer before the return's.
+  const polls = [];
+  const holds = new Map();
+  const read = (cursor, to) => {
+    if (cursor === undefined) polls.push(to);
+    const page = r.read(cursor).then((p) => (to > ORIGIN + 10_000 ? p : { ...p, rows: p.rows.filter((row) => row.id !== 'row_000') }));
+    if (cursor !== undefined || to <= ORIGIN + 10_000) return page;
+    return new Promise((resolve) => holds.set(to, () => resolve(page)));
+  };
+  const f = follow({ list: { nextCursor: '27', rows: r.rows.slice(2, 27) }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  let hidden = true;
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+  act(() => clock.tick(9_990));
+  hidden = false;
+  visibility();
+  act(() => clock.tick(10));
+  assert.deepEqual(polls, [ORIGIN + 5_000, ORIGIN + 14_990, ORIGIN + 15_000], "the return's read and the tick's go out 10 ms apart");
+  act(() => holds.get(ORIGIN + 15_000)());
+  await settled();
+  assert.deepEqual([...f.last().fresh], ['row_000'], "the tick's answer tints the row it brought");
+  act(() => holds.get(ORIGIN + 14_990)());
+  await settled();
+  assert.equal(f.last().rows[0].id, 'row_000');
+  assert.deepEqual([...f.last().fresh], ['row_000'], "the return's late answer leaves the tint the tick's answer set");
+});
+
 test('an older page pauses the poll and keeps the followed rows, and the first page resumes it', async () => {
   const clock = frozen();
   const f = follow();
