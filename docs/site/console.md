@@ -828,9 +828,9 @@ Burn follows the page's grouping, and "Session (Burn only)" groups it by session
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply
 to it, which its head says while another filter is set. Plan per hour draws three cards, "5-hour per hour", "7-day per
 hour" and "Model week per hour", the last while a group's traffic ran on a model with a week of its own, each with one
-line per group, named as the breakdown names it, the requests with no classifier call under `none` under the classifier
-grouping. Under Window shares a line is the share of a subscription account's own window, which reads under the
-account grouping or with one account named in the Accounts filter, and under every other position it is the group's
+line per group, named as the breakdown names it, the requests with no classifier call listed as `none` under the
+classifier grouping. Under Window shares a line is the share of a subscription account's own window, which reads under
+the account grouping or with one account named in the Accounts filter, and under every other position it is the group's
 subscription traffic per hour in 20x equivalents of the window, the legend's figure naming the window in full on hover.
 Under those positions a bucket whose traffic ran on no model with a week of its own reads zero on the Model week card,
 as an idle bucket reads zero on the other two, and one the cost model could not price stays a gap. Under Window shares

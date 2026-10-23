@@ -736,10 +736,11 @@ async function attentionLineNarrow(theme) {
 }
 
 /**
- * The dashboard's stat grid at the pass's viewport and at 400 by 900: all five tiles drawn, wrapping as the grid's
- * columns let them, none past the grid's right edge, and no tile's figure wider than the tile's content box, since the
- * cost tile's figure keeps its window's name on one line. The tiles, the rows they fill and any figure past its tile go
- * to the measurements at both widths, and the viewport is the pass's again after.
+ * The dashboard's stat grid at the pass's viewport, at 1024 by 768 inside its two-column band and at 400 by 900: all
+ * five tiles drawn, wrapping as the grid's columns let them, none past the grid's right edge, no tile's figure wider
+ * than the tile's content box, since the cost tile's figure keeps its window's name on one line, and the fifth tile
+ * across the grid's whole width. The tiles, the rows they fill, the fifth tile's width against the grid's and any
+ * figure past its tile go to the measurements at each width, and the viewport is the pass's again after.
  */
 async function statGrid(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -762,21 +763,24 @@ async function statGrid(theme) {
         const figure = range.getBoundingClientRect().right;
         return figure > inner + 0.5 ? [{ figure: Math.round(figure * 10) / 10, inner: Math.round(inner * 10) / 10, label: t.querySelector('.stat__label')?.textContent ?? '' }] : [];
       });
-      return { past: tiles.filter((t) => t.right > right + 0.5).length, rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length, wide };
+      const round = (n) => Math.round(n * 10) / 10;
+      return { fifth: tiles[4] ? round(tiles[4].width) : null, past: tiles.filter((t) => t.right > right + 0.5).length, row: round(grid.clientWidth), rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length, wide };
     });
   try {
-    for (const width of [viewport.width, 400]) {
+    for (const size of [viewport, { height: 768, width: 1024 }, { height: 900, width: 400 }]) {
+      const { width } = size;
       if (width !== viewport.width) {
-        await page.setViewportSize({ height: 900, width });
+        await page.setViewportSize(size);
         await settle();
       }
       const grid = await read();
-      measurements.push(`${theme} / stat grid at ${width} px: ${grid?.tiles ?? 0} tiles over ${grid?.rows ?? 0} rows, figures past their tile ${JSON.stringify(grid?.wide ?? [])}`);
+      measurements.push(`${theme} / stat grid at ${width} px: ${grid?.tiles ?? 0} tiles over ${grid?.rows ?? 0} rows, the fifth ${grid?.fifth ?? 'absent'} of ${grid?.row ?? 0} px, figures past their tile ${JSON.stringify(grid?.wide ?? [])}`);
       const say = (what) => failures.push(`${theme} /: at ${width} px the stat grid ${what}`);
       if (!grid) say('is not drawn');
       else {
         if (grid.tiles < 5) say(`draws ${grid.tiles} tiles, not five`);
         if (grid.past > 0) say(`draws ${grid.past} tiles past its right edge`);
+        if (grid.fifth === null || Math.abs(grid.fifth - grid.row) > 1) say(`draws the fifth tile ${grid.fifth} px wide, not across its ${grid.row} px row`);
         for (const w of grid.wide) say(`draws the ${w.label} tile's figure to ${w.figure} px, past its content's right edge at ${w.inner} px`);
       }
     }
@@ -5253,9 +5257,10 @@ async function warmingLoneCard(theme) {
 /**
  * The Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900: on the Cost tab's tiles row and
  * the Cache warming tab's, the Wasted probes card's row among them, no tile's figure (each `.cost-figure`, the nowrap
- * run that keeps a window's name whole) is wider than its tile's content box, and in the Cache warming grid a card alone on its row spans the grid's width,
- * while a last card that shares its row stands on its neighbor's top edge. Every figure's width against its tile's and
- * every card's box go to the measurements, and the viewport and the Traffic tab are the pass's again after.
+ * run that keeps a window's name whole) is wider than its tile's content box, and in the Cache warming grid a card
+ * alone on its row spans the grid's width, while a last card that shares its row stands on its neighbor's top edge.
+ * Every figure's width against its tile's and every card's box go to the measurements, and the viewport and the Traffic
+ * tab are the pass's again after.
  */
 async function analyticsTiles(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -5312,8 +5317,8 @@ async function analyticsTiles(theme) {
 
 /**
  * The Traffic table grouped by model: the group the story's refusal before a model resolved files under, `no model`,
- * holds no request, so its Error rate cell reads a dash in the muted ink, in the type of the rate cell of the row beside
- * it, which reads a percent. The page's grouping returns to the key one, its default, afterwards.
+ * holds no request, so its Error rate cell reads a dash in the muted ink, in the type of the rate cell of the row
+ * beside it, which reads a percent. The page's grouping returns to the key one, its default, afterwards.
  */
 async function analyticsEmptyRate(theme) {
   const say = (what) => failures.push(`${theme} /analytics Traffic by model: ${what}`);

@@ -22921,7 +22921,7 @@ m.unmount();
       ok:
         JSON.stringify(drawn.fable.cells) === JSON.stringify(dashes(10)) &&
         drawn.fable.weight.text === 'by window' &&
-        drawn.fable.weight.title === 'claude-fable-5-1 carries no shared weight, only a weight per window: 10 on the 7-day Fable' &&
+        drawn.fable.weight.title === 'claude-fable-5-1 carries no shared weight, only a weight per window: 10 on the 7-day Fable window' &&
         drawn.week.label === '7-day Fable' &&
         JSON.stringify(drawn.week.cells) === JSON.stringify([...Array(5).fill(''), fmtShare(20_000), fmtShare(2_000), fmtShare(40_000), fmtShare(40_000), fmtShare(200_000)]) &&
         !drawn.opus5.sub &&

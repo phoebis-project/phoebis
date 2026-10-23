@@ -77,7 +77,9 @@ function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   };
 }
 
-/** The refusals the request figures leave out, named on the Refused tile's hover and the Traffic table's Refused column. */
+/**
+ * The refusals the request figures leave out, named on the Refused tile's hover and the Traffic table's Refused column.
+ */
 export const REFUSED_TITLE =
   "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
 

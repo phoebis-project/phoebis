@@ -214,8 +214,8 @@ export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>, _group
 const EARLIER_HOLDER = /^(.+)@(\d+)$/;
 /**
  * A burn group's label. A burn point carries no label of its own, so the words are the breakdown's: an earlier key
- * holder's, `no model` for the model grouping's empty key, and for the reserved id `none` under the classifier grouping,
- * as the Requests facet names it, and `unattributed` under every other.
+ * holder's, `no model` for the model grouping's empty key, and for the reserved id `none` under the classifier
+ * grouping, as the Requests facet names it, and `unattributed` under every other.
  */
 function burnLabelOf(groupBy: BurnGroup, key: string): string {
   if (key === '-') return groupBy === 'classifier' ? 'none' : 'unattributed';
@@ -788,5 +788,7 @@ export const MIN_RISE = 0.05;
 /** The band a completed window's ratio agrees with the table inside, symmetric in log terms, as the ledger reads it. */
 export const RATIO_HIGH = 1.25;
 export const RATIO_LOW = 0.8;
-/** Off once the rise and the priced share each reach MIN_RISE and the ratio leaves the band, as the engine badges it. */
+/**
+ * Off once the rise and the priced share each reach MIN_RISE and the ratio leaves the band, as the engine badges it.
+ */
 export const ratioOff = (row: Pick<Reconciliation, 'observedRise' | 'predictedShare' | 'ratio'>): boolean => row.observedRise >= MIN_RISE && row.predictedShare >= MIN_RISE && (row.ratio < RATIO_LOW || row.ratio > RATIO_HIGH);

@@ -1510,18 +1510,16 @@
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
-/* The day's five tiles take four columns past a phone's width and two on one, where the auto-fit grid would hold
-   five at 1440 px and four at 1280 px. The fifth tile then opens a row at every width and spans it, since a tile
-   alone at a quarter width reads as a gap. The cost tile's figure keeps its window's name on one line, and the widest
-   share it draws, `~0.0597% of 20x 7-day` at 15 px, runs to 186 px, which a two-column tile's content box holds from
-   a 495 px viewport, so under it the tiles stack. */
+/* The day's five tiles take the columns that hold the cost tile's figure, where the auto-fit grid would hold five at
+   1440 px and four at 1280 px. The figure keeps its window's name on one line, and the widest form a share at or above
+   0.001% draws, the eight-digit `~0.00998% of 20x 7-day`, runs to 194.4 px at 15 px: four tiles hold it from a
+   1260 px viewport (the shell takes 288 px) and two from 511 px (the content's 16 px padding a side), and under that
+   the tiles stack. A share under 0.001% draws a wider string still. In four columns and in two the fifth tile opens a
+   row and spans it, since a tile alone at a quarter width reads as a gap. */
 .stat-grid--day {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
-.stat-grid--day > .stat:last-child:nth-child(4n + 1) {
-  grid-column: 1 / -1;
-}
-@media (max-width: 760px) {
+@media (min-width: 511px) and (max-width: 1259.98px) {
   .stat-grid--day {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1529,9 +1527,12 @@
     grid-column: 1 / -1;
   }
 }
-@media (max-width: 494.98px) {
+@media (min-width: 1260px) {
   .stat-grid--day {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .stat-grid--day > .stat:last-child:nth-child(4n + 1) {
+    grid-column: 1 / -1;
   }
 }
 
