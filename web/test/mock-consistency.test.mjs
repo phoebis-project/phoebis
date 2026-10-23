@@ -19,7 +19,7 @@ const iso = (ms) => new Date(ms).toISOString();
 const inHours = (ms, fromMs, toMs) => ms >= startOfHour(fromMs) && ms < Math.ceil(toMs / HOUR) * HOUR;
 
 /** A rollup row's requests, as the analytics routes count them. */
-const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone;
+const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown;
 const tokensOf = (r) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
@@ -2438,9 +2438,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
     const primary = groups.find((g) => g.key === 'primary');
     // The ledger counts each request's own code beside its outcome, so the relay's 502 and the stream cut after its 200
-    // head both file under the code.
+    // head both file under the code. A canceled request is a cut, and no upstream error.
     const undecodable = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').length;
-    const otherErrors = s.counted.filter((r) => r.accountId === 'primary' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable').length;
+    const otherErrors = s.counted.filter((r) => r.accountId === 'primary' && r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable').length;
     assert.ok(undecodable > 0, 'primary served the head of an undecodable stream');
     assert.deepEqual([primary.errors.stream_undecodable, primary.errors.api_error ?? 0], [undecodable, otherErrors], 'the count leaves the upstream errors for its own entry');
     // An incomplete request files under the code it ended on, so stream_incomplete counts the rows that carry it alone.
@@ -2563,17 +2563,53 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(free?.requests === 2 && figures.length > 0 && figures.every((v) => v === 0), `the client group reads ${JSON.stringify(free && { cacheEquivalent: free.cacheEquivalent, cacheShares: free.cacheShares, costEquivalent: free.costEquivalent, costShares: free.costShares, equivalentSplit: free.equivalentSplit, requests: free.requests, savingEquivalent: free.savingEquivalent, savingShares: free.savingShares })}`);
   });
 
-  test(`the default range counts a stream the client closed as failed under the code the relay files it with, at ${at}`, async () => {
+  test(`the story holds two laptop requests the router's own stop cut, one past its head and one before any, at ${at}`, async () => {
+    const s = await story;
+    const cut = s.requests.filter((r) => r.errorCode === 'router_shutdown');
+    assert.equal(cut.length, 2, `the rows under the code: ${cut.map((r) => r.id).join(', ') || 'none'}`);
+    for (const r of cut) {
+      assert.deepEqual([r.outcome, r.keyId, r.kind, r.transport, r.attempts.length], ['canceled', 'laptop', 'inference', 'sse', 1], `${r.id} is a laptop stream of one attempt filed canceled`);
+      // The routing log's records of its last hour are written by hand and name no cut request.
+      assert.ok(Date.parse(r.at) < s.now - HOUR, `${r.id} lands before the routing log's hand-written hour`);
+      // A cut stream never reached its message_delta, so no attempt reads a stop reason.
+      for (const a of r.attempts) assert.deepEqual([a.outcome, a.response.stopReason], ['canceled', null], `${r.id}'s attempt ${a.index + 1}`);
+    }
+    assert.equal(cut.filter((r) => r.status === 200 && r.ttfbMs !== null).length, 1, 'one cut after its head went out');
+    const headless = cut.filter((r) => r.status === null);
+    assert.equal(headless.length, 1, 'one cut before any head');
+    const [row] = headless;
+    assert.deepEqual([row.ttfbMs, row.ttftMs, row.capturedBodies], [null, null, false], `${row.id} forwarded nothing to the client`);
+    for (const a of row.attempts) {
+      const facts = { cacheMissReason: a.cacheMissReason, inferenceGeo: a.response.inferenceGeo, serviceTier: a.serviceTier, speed: a.response.speed, stopReason: a.response.stopReason, upstreamMessageId: a.upstreamMessageId, upstreamStatus: a.upstreamStatus };
+      assert.deepEqual(facts, Object.fromEntries(Object.keys(facts).map((k) => [k, null])), `${row.id}'s attempt ${a.index + 1} carries no answer`);
+    }
+    // A client that left on its own keeps its code, after the head its stream sent.
+    const gone = s.requests.filter((r) => r.errorCode === 'client_gone');
+    assert.ok(gone.length > 0, 'the story holds a stream the client closed');
+    for (const r of gone) assert.deepEqual([r.outcome, r.status, r.ttfbMs !== null, r.attempts.every((a) => a.outcome === 'canceled')], ['canceled', 200, true, true], `${r.id} keeps its reading`);
+  });
+
+  test(`the default range counts a canceled request as failed under the code its cut files it with, the client's or the router's, at ${at}`, async () => {
     const s = await story;
     const closed = s.requests.filter((r) => r.outcome === 'canceled');
-    assert.ok(closed.length > 0, 'the story holds a stream the client closed');
-    for (const r of closed) assert.equal(r.errorCode, 'client_gone', `${r.id} names the code`);
+    assert.ok(closed.length > 0, 'the story holds a canceled request');
+    for (const r of closed) assert.ok(['client_gone', 'router_shutdown'].includes(r.errorCode), `${r.id} names the code, not ${r.errorCode}`);
     const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
     const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
     assert.equal(totals.errors.client_gone ?? 0, rows.filter((r) => r.errorCode === 'client_gone').length, 'the Errors by code panel reads the story');
-    // An undecodable stream files under its own code, apart from the upstream errors.
-    const upstreamErrors = rows.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable');
-    assert.equal(totals.errors.api_error ?? 0, upstreamErrors.length, 'and counts no closed stream as an upstream error');
+    // A canceled request is a cut and no upstream failure, and an undecodable stream files under its own code.
+    const upstreamErrors = rows.filter((r) => r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable');
+    assert.equal(totals.errors.api_error ?? 0, upstreamErrors.length, 'and counts no canceled request as an upstream error');
+    assert.equal(totals.errors.router_shutdown, rows.filter((r) => r.errorCode === 'router_shutdown').length, "and the router's own cut beside the client's");
+  });
+
+  test(`the default range's outcome totals add up to its request total, and that total to the rows it counts, at ${at}`, async () => {
+    const s = await story;
+    const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
+    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    const outcomes = { failed: totals.failed, incomplete: totals.incomplete, rateLimited: totals.rateLimited, succeeded: totals.succeeded };
+    assert.equal(sum(Object.values(outcomes), (n) => n), totals.requests, `the outcomes ${JSON.stringify(outcomes)} against ${totals.requests} requests`);
+    assert.equal(totals.requests, rows.length, 'each row counts once');
   });
 
   test(`the routing log lists the story's late event once the clock reaches it a few seconds after the load, on top, at ${at}`, async () => {

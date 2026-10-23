@@ -12384,7 +12384,9 @@ m.unmount();
   const openOptions = async (page, label) => ((await addFilter(page, label)) === null ? null : boxOptions());
 
   const canceledCheck = '/requests a canceled request names its outcome in the list and the drawer';
-  const canceled = requests.find((r) => r.outcome === 'canceled');
+  // The router's headless cut is canceled too and draws no status, so the case reads the client's cut, whose 200 head
+  // went out, wherever the draws place it.
+  const canceled = requests.find((r) => r.errorCode === 'client_gone');
   if (!canceled) results.push({ name: canceledCheck, ok: false, missing: ['fixture'] });
   else {
     const page = await mount(`/requests?search=${canceled.id}`);
@@ -12402,6 +12404,34 @@ m.unmount();
       missing: [`${rows.length} rows`, JSON.stringify(listed), drawn],
     });
     page.unmount();
+  }
+
+  // The story's two rows the router's own stop cut: `req_7a2c4e91-d03` after its 200 head went out, whose drawer prints
+  // the code as sent, and `req_c58d1f3a-e67` before any head, whose Status cell draws the null status as a dash.
+  const cutCheck = "/requests a request the router's own stop cut reads canceled beside its status, the drawer the code";
+  const [headed, headless] = ['req_7a2c4e91-d03', 'req_c58d1f3a-e67'].map((id) => requests.find((r) => r.errorCode === 'router_shutdown' && r.id === id));
+  if (!headed || !headless) results.push({ name: cutCheck, ok: false, missing: ['fixture'] });
+  else {
+    const statusOf = (page) => {
+      const rows = [...page.container.querySelectorAll('.requests__table tbody tr')];
+      const word = rows[0]?.querySelector('.requests__outcome');
+      return { badge: word?.closest('td')?.querySelector('.badge')?.textContent?.trim() ?? 'no badge', rows: rows.length, word: word?.textContent?.trim() ?? 'no outcome word' };
+    };
+    const page = await mount(`/requests?search=${headed.id}`);
+    const head = statusOf(page);
+    page.container.querySelector('.requests__table tbody tr')?.click();
+    await page.settle();
+    const error = [...page.container.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Error')?.querySelector('dd');
+    const drawn = { mono: error?.classList.contains('mono') ?? false, text: error?.textContent?.trim() ?? 'no Error row' };
+    page.unmount();
+    const bare = await mount(`/requests?search=${headless.id}`);
+    const none = statusOf(bare);
+    bare.unmount();
+    results.push({
+      name: cutCheck,
+      ok: JSON.stringify([head, drawn, none]) === JSON.stringify([{ badge: '200', rows: 1, word: 'canceled' }, { mono: true, text: 'router_shutdown' }, { badge: '-', rows: 1, word: 'canceled' }]),
+      missing: [JSON.stringify([head, drawn, none])],
+    });
   }
 
   // The page's rows are matched back to the story by their short id, so the rule is read against each row's own
@@ -15736,6 +15766,17 @@ m.unmount();
   refused.unmount();
 }
 
+{
+  // The story's two rows the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, sit inside the default
+  // day, so the card lists their code with its count, apart from the client's `client_gone`.
+  const cutCheck = "/analytics the Errors by code card lists the router's own cut under its code";
+  const page = await mount('/analytics');
+  const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Errors by code');
+  const bars = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
+  results.push({ name: cutCheck, ok: bars.some(([code, count]) => code === 'router_shutdown' && count === '2'), missing: [JSON.stringify(bars)] });
+  page.unmount();
+}
+
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
 expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Non-200 responses in range, the refused requests left out', 'Refusals by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
@@ -15748,7 +15789,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
 {
   // The story's refusals by key: the runner's send after its key's revocation on ci, the three guardrail blocks
   // on desktop, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the
-  // Traffic line does.
+  // Traffic line does. Laptop's Failed and the line's errors count the two rows the router's own stop cut,
+  // `req_7a2c4e91-d03` and `req_c58d1f3a-e67`.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -15759,9 +15801,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   results.push({
     name: "/analytics the Refused and Failed cells by key, the Refusals by code card and the Traffic line read the story's refusals apart from the counts",
     ok:
-      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '4', '2']]) &&
+      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '211 requests, 16.6% errors',
+      line === '213 requests, 17.4% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }

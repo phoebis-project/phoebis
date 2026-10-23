@@ -74,8 +74,9 @@ export interface HourlyRollup {
   refusals: Record<string, number>;
   /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
   requestClass: string;
-  /** `client_gone` counts the streams the client closed, which the relay files as failed under that code. */
-  requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; undecodable: number; upstream_error: number };
+  /** `client_gone` counts the streams the client closed and `router_shutdown` the requests the router's own stop cut,
+   *  with or without a head, both filed under the canceled outcome as the ledger files them. */
+  requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; router_shutdown: number; undecodable: number; upstream_error: number };
   /** The kept-warm requests' saving in dollars, each priced at the cells its own prompt selects. */
   savingUsd: number;
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
@@ -340,9 +341,10 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const upstreamError = sum(counted, (r) => r.requests.upstream_error);
   const undecodable = sum(counted, (r) => r.requests.undecodable);
   const clientGone = sum(counted, (r) => r.requests.client_gone);
+  const routerShutdown = sum(counted, (r) => r.requests.router_shutdown);
   const incomplete = sum(counted, (r) => r.requests.incomplete);
   const succeeded = sum(counted, (r) => r.requests.ok);
-  const requests = succeeded + rateLimited + overloaded + upstreamError + clientGone + incomplete;
+  const requests = succeeded + rateLimited + overloaded + upstreamError + clientGone + routerShutdown + incomplete;
   const failovers = sum(counted, (r) => r.failovers);
   const errors = emptyCounts();
   if (rateLimited) errors.rate_limit_error = rateLimited;
@@ -351,6 +353,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   if (upstreamError - undecodable) errors.api_error = upstreamError - undecodable;
   if (undecodable) errors.stream_undecodable = undecodable;
   if (clientGone) errors.client_gone = clientGone;
+  if (routerShutdown) errors.router_shutdown = routerShutdown;
   // The ledger counts a request's own code beside its outcome, so an incomplete one files under the code it ended on.
   for (const r of counted) for (const [code, n] of Object.entries(r.incompleteCodes ?? {})) errors[code] = countOf(errors, code) + n;
 
@@ -372,7 +375,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     // under Rejected.
     exhausted: 0,
     expiredBetweenTurns: sum(counted, (r) => r.expiredBetweenTurns),
-    failed: overloaded + upstreamError + clientGone,
+    failed: overloaded + upstreamError + clientGone + routerShutdown,
     failovers,
     histograms,
     incomplete,
@@ -391,7 +394,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     label,
     percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
     planOutputTokens: sum(countedPlan, (r) => r.tokens.output),
-    planRequests: sum(countedPlan, (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone),
+    planRequests: sum(countedPlan, (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown),
     probeCostUsd: sum(probeRows, (r) => r.probeCostUsd),
     probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), planOk: sum(planRows(probeRows), (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
     probeShares: shares.probeShares,
