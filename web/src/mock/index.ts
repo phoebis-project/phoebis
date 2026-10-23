@@ -262,6 +262,16 @@ const heldWriter = (): boolean => {
   }
 };
 
+/** Set to stand in for a sessions read the store refuses: the list answers a `503` and draws nothing. */
+export const SESSIONS_FAIL_KEY = 'phoebis.mockSessionsFail';
+const sessionsFail = (): boolean => {
+  try {
+    return localStorage.getItem(SESSIONS_FAIL_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Set to add the one plan request on a model the cost model lists in no tier: the dashboard's day and the analytics'
  * folds read it beside the story, so the figures it moves read a window priced nothing, while without the switch the
@@ -1172,6 +1182,7 @@ export class MockApi implements Api {
   }
 
   listSessions() {
+    if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
     return latency(emptyStore() ? [] : this.sessions);
   }
 

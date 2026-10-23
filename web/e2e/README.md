@@ -200,7 +200,10 @@ the Session column the fill),
 the session id's width, the session row menu, the agent lines,
 the fork badges (inside their cell and whole),
 the session row's chevron (14 px square at the icon's 1.75
-stroke), the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied on the
+stroke), the Sessions tiles in error (mock pass, on loads of its own under the mock's sessions failure switch: the
+Sessions and Agents tiles a dash over "could not load" titled with the read's message, in the box, the value's line and
+the note's line of the Retained tile beside them, which keeps its figure, and the notice under the tiles naming the
+sessions), the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied on the
 Settings snippet with the clipboard API removed, on the Settings view's own load, and on a Key created dialog's secret
 in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a row closes it again before the
 view's shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the router pass

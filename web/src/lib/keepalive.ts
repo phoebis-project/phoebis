@@ -88,7 +88,7 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   headers_too_large: "The request's headers were larger than a recipe may hold, so it was not kept.",
   horizon:
     "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held. Probing resumes once the wake is within the horizon while the entry is still warm, and the recipe ends as expired when the entry's TTL passes.",
-  idle_limit: "The pool's idle window ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
+  idle_limit: "The pool's idle window, the break-even where the pool sets none, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
   ineligible_credential: 'The account this session would use left the registry or its subscription ended, so nothing is sent on it.',
   instance_replaced: "A new instance of the keepalive mod took this session over, so the old instance's recipes were dropped.",
   invalid_cache_control: "The request's cache markers could not be read, so it was not kept.",
@@ -251,3 +251,17 @@ export function hiddenByAge(session: Pick<Session, 'companion' | 'lastRequestAt'
   // A row with no use on record keeps its place, as the expiry keeps it.
   return session.companion === 'none' && span !== null && lastUse !== null && now - Date.parse(lastUse) > span;
 }
+
+/** A read a tile's figure needs: the word the notice names it by, its error, and whether it has ever answered. */
+export interface TileRead {
+  error: string | null;
+  loaded: boolean;
+  name: string;
+}
+
+/**
+ * The first read, in the order handed, that failed before it ever answered, so a tile shows one error and the notice
+ * under the tiles names the read whose Try again reads it again. A refresh that fails after a first answer keeps the
+ * figures it drew, which `loaded` carries.
+ */
+export const firstFailedRead = (reads: readonly TileRead[]): TileRead | null => reads.find((r) => !r.loaded && r.error !== null) ?? null;

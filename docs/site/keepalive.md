@@ -260,6 +260,8 @@ subagent's the mod released while its session lives: the view drops it at its ne
 record, which refuses a late request and a late probe result under that id and holds its slot of the agent cap until the
 session leaves.
 
+The console's words for the causes are in the labels table under [In the console](#in-the-console).
+
 | State | What it means |
 | --- | --- |
 | `retained` | The prompt is kept and its probe is scheduled, in flight, or waiting for the first stream event. |

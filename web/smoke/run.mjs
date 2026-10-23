@@ -19580,6 +19580,53 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   page.unmount();
 }
 {
+  // The Sessions and Agents figures count the rows the sessions read builds, so a failed sessions read ends their
+  // placeholder with its error while the four tiles that read the overview alone keep their figures. The card's own
+  // error state draws a Try again of its own on the same failure, so the notice's is counted inside the notice.
+  failNextCall('listSessions', '/admin/sessions', 'store busy');
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  await page.settle();
+  const tiles = () =>
+    [...page.container.querySelectorAll('.stat-grid > .stat')].map((t) => ({
+      label: t.querySelector('.stat__label')?.textContent?.trim() ?? '',
+      note: t.querySelector(':scope > .stat__note')?.textContent?.trim() ?? '',
+      title: t.getAttribute('title'),
+      value: t.querySelector('.stat__value')?.textContent?.trim() ?? '',
+    }));
+  const COUNTED = ['Sessions', 'Agents'];
+  const drawn = (t) => t.value !== '-' && t.value !== '' && t.note !== 'could not load';
+  const fed = tiles();
+  const line = page.container.querySelector('.stat-grid + .sessions__notice');
+  const retries = [...(line?.querySelectorAll('button') ?? [])].filter((b) => b.textContent?.trim() === 'Try again');
+  results.push({
+    name: '/sessions a failed sessions read draws the Sessions and Agents tiles as dashes and names the sessions under the tiles',
+    ok:
+      page.container.querySelector('.stat-grid .skeleton') === null &&
+      fed.length === 6 &&
+      fed.filter((t) => COUNTED.includes(t.label)).length === 2 &&
+      fed.every((t) => (COUNTED.includes(t.label) ? t.value === '-' && t.note === 'could not load' && t.title === 'store busy' : drawn(t))) &&
+      line !== null &&
+      (line.textContent ?? '').startsWith('Could not load the sessions: store busy') &&
+      retries.length === 1,
+    missing: [JSON.stringify(fed), `${retries.length} Try again in the notice`, line?.textContent ?? 'no line under the tiles'],
+  });
+  const spies = Object.fromEntries(['getKeepaliveOverview', 'listKeepaliveRecipes', 'listKeys', 'listSessions'].map((name) => [name, countCalls(name)]));
+  retries[0]?.click();
+  await page.settle();
+  const counts = Object.fromEntries(Object.entries(spies).map(([name, spy]) => [name, spy.calls.length]));
+  for (const spy of Object.values(spies)) spy.restore();
+  results.push({
+    name: '/sessions Try again under the tiles reads the sessions again and no other read, and every tile draws its figure',
+    ok:
+      retries.length === 1 &&
+      JSON.stringify(counts) === JSON.stringify({ getKeepaliveOverview: 0, listKeepaliveRecipes: 0, listKeys: 0, listSessions: 1 }) &&
+      tiles().every(drawn) &&
+      page.container.querySelector('.sessions__notice') === null,
+    missing: [JSON.stringify(counts), JSON.stringify(tiles())],
+  });
+  page.unmount();
+}
+{
   // A gap discarded every observation the keepalive engine still had open, so any count warns.
   const read = (page) => {
     const tile = [...page.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Bus gaps');
@@ -20672,11 +20719,11 @@ const CARD_VIEWS = [
         drawnReleased.every((l) => l.word === 'released' && l.title === 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.'),
       missing: [JSON.stringify(on.chips), `released ${releasedHere.join(',')}`, `off ${off.lines.map((l) => l.id).join(',')}`, `on ${on.lines.map((l) => `${l.id} ${l.word}`).join(',')}`],
     });
-    // The router runs an idle window set above the break-even as set, so the idle badge names the window alone.
+    // The router runs a pool's idle window as set, the break-even where the pool sets none, so the badge names both.
     const idleLines = off.lines.filter((l) => l.word === 'idle');
     results.push({
       name: "/sessions an idle line's lifecycle badge says the agent is probed until the pool's idle window runs out",
-      ok: idleLines.length > 0 && idleLines.every((l) => l.title === "Stopped and waiting for the user. Probed until the pool's idle window runs out."),
+      ok: idleLines.length > 0 && idleLines.every((l) => l.title === "Stopped and waiting for the user. Probed until the pool's idle window runs out, the break-even where the pool sets none."),
       missing: idleLines.length === 0 ? ['no idle line'] : idleLines.map((l) => `${l.id}: ${l.title}`),
     });
   }
@@ -21595,7 +21642,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const idle = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'idle limit');
     results.push({
       name: '/sessions idle limit reason says the retained prompt was discarded',
-      ok: idle !== undefined && (idle.getAttribute('title') ?? '') === "The pool's idle window ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
+      ok: idle !== undefined && (idle.getAttribute('title') ?? '') === "The pool's idle window, the break-even where the pool sets none, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
       missing: [idle?.getAttribute('title') ?? 'absent'],
     });
     results.push({ name: '/sessions no companion lease copy is left', ok: !m.text().includes('lease lapsed'), missing: [m.text().includes('lease lapsed') ? 'still there' : ''] });

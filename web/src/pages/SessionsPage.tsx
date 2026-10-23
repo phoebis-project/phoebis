@@ -15,7 +15,7 @@ import { ANALYTICS_CODEC, REQUESTS_CODEC, SESSIONS_CODEC, type SessionsAddress }
 import { clock } from '@/lib/clock';
 import { SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel } from '@/lib/format';
-import { CAUSE_HINT, CAUSE_LABEL, contextCell, hiddenByAge, isFinished, isReleasedLine, lineFigures, mainFigures, orderRecipes, type PinFigures, releasedCount, requestsRange, WARNING_CAUSES } from '@/lib/keepalive';
+import { CAUSE_HINT, CAUSE_LABEL, contextCell, firstFailedRead, hiddenByAge, isFinished, isReleasedLine, lineFigures, mainFigures, orderRecipes, type PinFigures, releasedCount, requestsRange, type TileRead, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
@@ -61,7 +61,7 @@ const modelTitle = (model: string, shown: string) => (shown === model ? undefine
 const PIN_TONE: Record<KeepaliveState, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', released: 'neutral', unknown: 'neutral' };
 const PIN_HINT: Record<KeepaliveState, string> = {
   busy: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.',
-  idle: "Stopped and waiting for the user. Probed until the pool's idle window runs out.",
+  idle: "Stopped and waiting for the user. Probed until the pool's idle window runs out, the break-even where the pool sets none.",
   parked: 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
   released: 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.',
   unknown: "The reporter could not tell this agent's state.",
@@ -277,6 +277,12 @@ export function SessionsPage() {
   const o = overview.data;
   // A refresh that fails keeps the tiles it drew, so only a read that never answered draws them as failed.
   const overviewError = o === null ? overview.error : null;
+  const readOf = (name: string, r: { data: unknown; error: string | null }): TileRead => ({ error: r.error, loaded: r.data !== null, name });
+  // The Sessions and Agents figures count the rows, which the sessions, the recipes and the keys build, so each of
+  // those reads can end their placeholder with its error. The other tiles read the overview alone.
+  const countReads = [readOf('tiles', overview), readOf('sessions', sessions), readOf('recipes', recipes), readOf('keys', keys)];
+  const failed = firstFailedRead(countReads);
+  const reloadOf: Record<string, () => void> = { keys: keys.reload, recipes: recipes.reload, sessions: sessions.reload, tiles: overview.reload };
   // Counted over the rows shown, so the note agrees with the table under it and the count beside it.
   const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
   const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
@@ -372,7 +378,7 @@ export function SessionsPage() {
       </div>
 
       <div className="stat-grid stat-grid--caps">
-        <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} error={overviewError} />
+        <Tile label="Sessions" value={o && rows ? <span className="nowrap">{`${fmtInt(rows.length)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} title={hiddenTitle} error={failed?.error ?? null} />
         {/* The sessions and the recipes are two reads that land apart, so the figure can trail the hidden lines by a
             read, which is accepted. Only a line the recipes list carries comes off, so a record that never drew a line
             is never subtracted. */}
@@ -390,7 +396,7 @@ export function SessionsPage() {
           }
           note={lifecycle ? `${fmtInt(lifecycle.busy)} busy, ${fmtInt(lifecycle.idle)} idle, ${fmtInt(lifecycle.parked)} parked` : null}
           title={hiddenTitle}
-          error={overviewError}
+          error={failed?.error ?? null}
         />
         <Tile
           label="Retained"
@@ -415,10 +421,10 @@ export function SessionsPage() {
           error={overviewError}
         />
       </div>
-      {overviewError !== null && (
+      {failed !== null && (
         <p className="sessions__notice" role="status">
-          Could not load the tiles: {overviewError}{' '}
-          <Button size="sm" onClick={overview.reload}>
+          Could not load the {failed.name}: {failed.error}{' '}
+          <Button size="sm" onClick={reloadOf[failed.name]}>
             Try again
           </Button>
         </p>

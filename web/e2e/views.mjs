@@ -9387,6 +9387,59 @@ async function probeBarSlots(theme) {
   for (const r of read) if (r.drawn !== r.slot) say(`draws ${r.outcome} in ${r.drawn}, not the ${r.slot} the chart draws it in`);
 }
 
+/** The mock's switch that fails every sessions read, as a store that refuses the list, and the message it answers. */
+const SESSIONS_FAIL_SWITCH = 'phoebis.mockSessionsFail';
+const SESSIONS_FAIL_MESSAGE = 'store busy';
+
+/**
+ * The Sessions view under the mock's sessions failure switch: the Sessions and Agents tiles, whose figures count the
+ * rows the sessions read builds, read a dash over "could not load" titled with the read's message, in the box, the
+ * value's line and the note's line of the Retained tile beside them, which reads the overview alone and keeps its
+ * figure, and the notice under the tiles names the sessions. The page loads again without the switch, so the shot and
+ * the measures after it read the story whole.
+ */
+async function sessionsTilesError(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  try {
+    await page.evaluate((key) => localStorage.setItem(key, '1'), SESSIONS_FAIL_SWITCH);
+    // The table never draws while the sessions read fails, so the load waits on the notice under the tiles.
+    await loadAtOrigin('/sessions', '.stat-grid + .sessions__notice');
+    const read = await page.evaluate(() => {
+      const tile = (label) => {
+        const t = [...document.querySelectorAll('.stat-grid > .stat')].find((s) => s.querySelector('.stat__label')?.textContent?.trim() === label);
+        if (!t) return null;
+        const box = t.getBoundingClientRect();
+        const value = t.querySelector('.stat__value');
+        const note = t.querySelector(':scope > .stat__note');
+        return {
+          height: Math.round(box.height),
+          note: note?.textContent?.trim() ?? null,
+          noteHeight: note ? Math.round(note.getBoundingClientRect().height) : null,
+          title: t.getAttribute('title'),
+          top: Math.round(box.top),
+          value: value?.textContent?.trim() ?? null,
+          valueHeight: value ? Math.round(value.getBoundingClientRect().height) : null,
+          width: Math.round(box.width),
+        };
+      };
+      return { agents: tile('Agents'), notice: document.querySelector('.stat-grid + .sessions__notice')?.textContent?.trim() ?? null, retained: tile('Retained'), sessions: tile('Sessions') };
+    });
+    measurements.push(`${theme} /sessions tiles in error ${JSON.stringify(read)}`);
+    for (const [label, t] of [
+      ['Sessions', read.sessions],
+      ['Agents', read.agents],
+    ]) {
+      if (t?.value !== '-' || t.note !== 'could not load' || t.title !== SESSIONS_FAIL_MESSAGE) say(`under the sessions failure switch the ${label} tile reads ${JSON.stringify(t)}, not a dash over could not load titled ${SESSIONS_FAIL_MESSAGE}`);
+      for (const what of compare(t, read.retained, ['height', 'noteHeight', 'top', 'valueHeight', 'width'], `the ${label} tile in error against the Retained tile beside it`)) say(what);
+    }
+    if (!read.retained || read.retained.value === '-' || read.retained.note === 'could not load') say(`under the sessions failure switch the Retained tile reads ${JSON.stringify(read.retained)}, not its figure`);
+    if (!read.notice?.startsWith(`Could not load the sessions: ${SESSIONS_FAIL_MESSAGE}`)) say(`the notice under the tiles reads ${JSON.stringify(read.notice)}`);
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), SESSIONS_FAIL_SWITCH);
+    await loadAtOrigin('/sessions', '.sessions-table');
+  }
+}
+
 /**
  * Following the fork badge scrolls its base's row into view and marks it current. It runs after the view's shot, so
  * that shot shows the list at rest.
@@ -9561,6 +9614,8 @@ try {
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
       if (['/', '/accounts'].includes(view.path)) await windowBarLines(theme, view.path);
       if (view.path === '/sessions') {
+        // Its loads end on the bare view, so the measures after it read the view as it first drew.
+        if (mock) await sessionsTilesError(theme);
         await sessionsLead(theme);
         await costReference(theme);
         await sessionsTableFits(theme);

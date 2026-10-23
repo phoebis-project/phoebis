@@ -161,3 +161,40 @@ test('the compacted cause reads its label and the sentence that says no probe go
     'A completed compaction replaced the context this recipe kept warm, so the recipe stopped and no probe is sent. The next main turn starts a recipe for the new context.',
   );
 });
+
+test('the idle limit cause reads its label and the sentence that names the break-even where the pool sets no window', () => {
+  assert.equal(d.CAUSE_LABEL.idle_limit, 'idle limit');
+  assert.equal(
+    d.CAUSE_HINT.idle_limit,
+    "The pool's idle window, the break-even where the pool sets none, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
+  );
+});
+
+/** A read as a tile names it: the word the notice uses, its error, and whether it has ever answered. */
+const tileRead = (name, error, loaded) => ({ error, loaded, name });
+
+test('firstFailedRead answers no read while every read has answered or none has failed', () => {
+  assert.equal(d.firstFailedRead([tileRead('tiles', null, true), tileRead('sessions', null, true), tileRead('recipes', null, true), tileRead('keys', null, true)]), null, 'every read answered');
+  assert.equal(d.firstFailedRead([tileRead('tiles', null, false), tileRead('sessions', null, false), tileRead('recipes', null, true), tileRead('keys', null, false)]), null, 'the reads still in flight');
+  assert.equal(d.firstFailedRead([]), null);
+});
+
+test('firstFailedRead answers the overview where it failed before it answered, and the sessions where the overview answered', () => {
+  const overview = tileRead('tiles', 'ledger locked', false);
+  assert.equal(d.firstFailedRead([overview, tileRead('sessions', null, true), tileRead('recipes', null, true), tileRead('keys', null, true)]), overview);
+  const sessions = tileRead('sessions', 'store busy', false);
+  assert.equal(d.firstFailedRead([tileRead('tiles', null, true), sessions, tileRead('recipes', null, true), tileRead('keys', null, true)]), sessions);
+});
+
+test('firstFailedRead answers the first failed read in the order handed where two failed', () => {
+  const recipes = tileRead('recipes', 'recipes locked', false);
+  const keys = tileRead('keys', 'registry locked', false);
+  assert.equal(d.firstFailedRead([tileRead('tiles', null, true), tileRead('sessions', null, true), recipes, keys]), recipes);
+  assert.equal(d.firstFailedRead([tileRead('tiles', null, true), tileRead('sessions', null, true), keys, recipes]), keys);
+});
+
+test('firstFailedRead answers no read for a refresh that failed after a first answer, whose figures the tile keeps', () => {
+  assert.equal(d.firstFailedRead([tileRead('tiles', null, true), tileRead('sessions', 'store busy', true), tileRead('recipes', null, true), tileRead('keys', null, true)]), null);
+  const keys = tileRead('keys', 'registry locked', false);
+  assert.equal(d.firstFailedRead([tileRead('tiles', 'ledger locked', true), tileRead('sessions', null, true), tileRead('recipes', null, true), keys]), keys, 'a later read that never answered still names its error');
+});

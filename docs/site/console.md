@@ -504,11 +504,11 @@ warm", the three ceilings and the return rate: a ceiling left off reads the brea
 {range}`, a parked or horizon ceiling switched on past the break-even reads `Capped at the break-even, {range}`, and the
 idle window reads its cost as a share of one re-write priced from the set value, `Costs {pct} of one re-write`, with `at
 the saved {time}` for an unsaved edit. While the idle field reads 0 the cost line adds the window in effect, `capped at
-the break-even, {time}`, and while the field reads more than the break-even the note `Above the break-even, {range}`
-follows on a line of its own with the break-even's figures, since the window runs as set. Return rate by idle age lists
-the pool's ten buckets with the windows that returned out of those that reached it and a bar of the rate, or "No idle
-windows recorded yet". The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the buckets
-under [The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
+the break-even, {time}`, and while the field reads more than the break-even's low end the note `Above the break-even,
+{range}` follows on a line of its own with the break-even's figures, since the window runs as set. Return rate by idle
+age lists the pool's ten buckets with the windows that returned out of those that reached it and a bar of the rate, or
+"No idle windows recorded yet". The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the
+buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
 
 ## Keys
 
