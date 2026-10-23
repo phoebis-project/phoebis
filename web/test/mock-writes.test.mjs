@@ -203,6 +203,27 @@ test('a pool answers its keys from the key registry', async () => {
   assert.ok((await keysOf('work')).some(([id]) => id === 'laptop') && !(await keysOf('all')).some(([id]) => id === 'laptop'), 'a moved key answers under its new pool alone');
 });
 
+test("a key edit naming a pool that does not exist answers the route's 404 and stores nothing, and a move to a known pool lands", async () => {
+  const api = await signedIn();
+  const before = await api.listKeys();
+  const laptop = before.find((k) => k.id === 'laptop');
+  const edit = { ...keyInput, expiresAt: undefined, name: laptop.name };
+  await assert.rejects(() => api.updateKey('laptop', { ...edit, poolId: 'ghost' }), refusedAs(404, 'pool not found'));
+  assert.deepEqual(await api.listKeys(), before, 'a refused edit stores nothing');
+  const moved = await api.updateKey('laptop', { ...edit, poolId: 'work' });
+  assert.deepEqual([laptop.poolId, moved.poolId], ['all', 'work'], 'a known pool takes the key');
+});
+
+test("a key creation naming a pool that does not exist answers the route's 404 and writes no key, and one under a known pool lands", async () => {
+  const api = await signedIn();
+  const before = await api.listKeys();
+  await assert.rejects(() => api.createKey({ ...keyInput, name: 'stray', poolId: 'ghost' }), refusedAs(404, 'pool not found'));
+  assert.deepEqual(await api.listKeys(), before, 'no key was written');
+  const { key } = await api.createKey({ ...keyInput, name: 'stray', poolId: 'work' });
+  assert.deepEqual([key.id, key.poolId], ['stray', 'work']);
+  assert.equal((await api.listKeys()).length, before.length + 1, 'the key under a known pool is written');
+});
+
 const staleAs = (message) => (e) => e instanceof d.ApiError && e.status === 409 && e.message === message && e.code === 'stale_edit';
 const POOL_STALE = 'the pool changed while it was being edited, so reload and try again';
 const KEY_STALE = 'the key changed while it was being edited, so reload and try again';

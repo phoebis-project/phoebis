@@ -36,12 +36,17 @@ const GRAPHEMES = Segmenter === undefined ? null : new Segmenter(undefined, { gr
 /**
  * A line's columns as the estimate counts them: a tab to the next 8-column stop, a grapheme holding a `WIDE` code
  * point 2, any other grapheme 1, so a letter and its combining marks take one column. Without a segmenter each code
- * unit counts 1.
+ * unit counts 1 and a tab still moves to its stop. The segmenter is a parameter so the test reads the fallback without
+ * unloading `Intl`.
  */
-function columnsOf(line: string): number {
-  if (GRAPHEMES === null || !NOT_PLAIN.test(line)) return line.length;
+export function columnsOf(line: string, graphemes: { segment: (text: string) => Iterable<{ segment: string }> } | null = GRAPHEMES): number {
+  if (!NOT_PLAIN.test(line)) return line.length;
   let columns = 0;
-  for (const { segment } of GRAPHEMES.segment(line)) columns = segment === '\t' ? columns + 8 - (columns % 8) : columns + (WIDE.test(segment) ? 2 : 1);
+  if (graphemes === null) {
+    for (let i = 0; i < line.length; i++) columns = line[i] === '\t' ? columns + 8 - (columns % 8) : columns + 1;
+    return columns;
+  }
+  for (const { segment } of graphemes.segment(line)) columns = segment === '\t' ? columns + 8 - (columns % 8) : columns + (WIDE.test(segment) ? 2 : 1);
   return columns;
 }
 

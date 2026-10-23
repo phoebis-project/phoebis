@@ -20,7 +20,7 @@ const runFrames = () => {
 };
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, BodyViewer, createElement: h, createRoot } = await import('./dist/ui.js');
+const { act, BodyViewer, columnsOf, createElement: h, createRoot } = await import('./dist/ui.js');
 
 const roots = [];
 afterEach(() => {
@@ -100,6 +100,12 @@ test('the width floor copies the line of the most graphemes, so combining marks 
   const probe = container.querySelector('.body-rows > [aria-hidden="true"]');
   assert.ok(probe, 'the viewer holds its hidden copy');
   assert.equal(probe.textContent, ascii, 'the ASCII line is the wider one as drawn');
+});
+
+test('without a segmenter a tab still moves to its 8-column stop and every other code unit counts one', () => {
+  // A stop at 8, the letter to 9, a stop at 16 and the two letters past it.
+  assert.equal(columnsOf('\ta\tbc', null), 18);
+  assert.equal(columnsOf('abc', null), 3, 'a plain line counts its length');
 });
 
 test('a find whose active hit lies outside the window scrolls its row into the upper third and draws it active', () => {

@@ -190,6 +190,11 @@ const sessionSpec: ({
 
 /** How long the router lists a session after its last request, which the settings answer as well. */
 const SESSION_EXPIRE_SECONDS = 86_400;
+/**
+ * The router drops a session past `SESSION_EXPIRE_SECONDS`, so a ledger-only row is listed only while its last request
+ * is inside the span. Exported for the consistency test's two instants.
+ */
+export const insideSessionExpiry = (lastAt: string, now: number): boolean => Date.parse(lastAt) + SESSION_EXPIRE_SECONDS * 1000 > now;
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
@@ -641,7 +646,7 @@ for (const pin of SLOWED_PINS) {
 // in, which would otherwise hand it that session's next probe.
 const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
 const holderLast = holderRows[0];
-if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NOW) {
+if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: holderLast.accountId,
@@ -682,12 +687,15 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
 
 // The desktop session whose every request the key's own guardrail refused before any account was asked. The router
 // lists it off the ledger's rows with no pin and no recipe, so a drifting or blocked client stays visible, and the
-// activity fold gives it a count of none and the newest refusal as its last request.
+// activity fold gives it a count of none and the newest refusal as its last request, and only while that refusal is
+// inside the router's session expiry. The row is built at an instant since the mock's now is fixed at load, so the
+// consistency test reads it inside the expiry and past it.
 const blockedGeneration = Date.parse(keyById.get('desktop')!.createdAt);
 const blocked = ledgered.get(activityOf('desktop', blockedGeneration, BLOCKED_SESSION_ID));
 const blockedLast = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === blockedGeneration && r.sessionId === BLOCKED_SESSION_ID);
-if (blocked && blockedLast) {
-  SESSIONS.push({
+export function refusalOnlyRows(now: number): Session[] {
+  if (!blocked || !blockedLast || !insideSessionExpiry(blockedLast.at, now)) return [];
+  const row: Session = {
     ...SESSION_SAMPLE,
     accountId: null,
     agentContexts: null,
@@ -722,8 +730,10 @@ if (blocked && blockedLast) {
     sessionId: BLOCKED_SESSION_ID,
     shedFrom: null,
     shedReason: null,
-  });
+  };
+  return [row];
 }
+SESSIONS.push(...refusalOnlyRows(NOW));
 
 // A pin is the engine's: one per key, session, agent and model, so a session's subagents hold pins of their own, on
 // another account where they run there. The router renews a pin on each request and each keepalive probe, and the

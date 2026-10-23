@@ -597,6 +597,22 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.sessions.some((x) => !x.historical && x.keyId === 'desktop' && x.sessionId === held.sessionId), 'the live key holds the same session id');
   });
 
+  test(`the desktop session its key's guardrail refused whole is listed while its newest refusal is inside the session expiry, and none past it, at ${at}`, async () => {
+    const s = await story;
+    const span = s.settings.sessions.expireAfterSeconds * 1000;
+    assert.equal(s.lib.insideSessionExpiry(iso(s.now - span + 1_000), s.now), true, 'one second inside the span');
+    assert.equal(s.lib.insideSessionExpiry(iso(s.now - span - 1_000), s.now), false, 'one second past the span');
+    // The rows run newest first.
+    const refusals = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.errorCode === 'guardrail_blocked');
+    const [newest] = refusals;
+    assert.ok(refusals.length > 0 && refusals.every((r) => r.refused && r.sessionId === newest.sessionId), 'one session holds the refusals');
+    assert.ok(s.lib.insideSessionExpiry(newest.at, s.now), `the newest refusal at ${newest.at} is inside the span`);
+    const listed = s.sessions.filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
+    assert.deepEqual(listed.map((x) => [x.accountId, x.requests, x.lastRequestAt]), [[null, 0, newest.at]], 'listed off the ledger with no count');
+    assert.deepEqual(s.lib.refusalOnlyRows(s.now), listed, "the builder's row at the story's now is the listed one");
+    assert.deepEqual(s.lib.refusalOnlyRows(s.now + span), [], 'none a span later');
+  });
+
   test(`a live session row counts the non-probe requests of its own key, generation and session, at ${at}`, async () => {
     const s = await story;
     for (const x of s.sessions.filter((row) => !row.historical)) {

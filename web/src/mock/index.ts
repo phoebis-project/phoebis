@@ -194,7 +194,10 @@ const memberRefusal = (members: PoolInput['members']): string | null => {
   return null;
 };
 
-/** The affinity floor, the rule list, the keepalive policy's and the engine's refusals, first one first, as the pool routes answer them. */
+/**
+ * The affinity floor, the rule list, the keepalive policy's and the engine's refusals, first one first, as the pool
+ * routes answer them.
+ */
 const poolRefusal = (input: PoolInput): string | null => {
   // The route reads the threshold as an unsigned whole number while it parses the body, before any other check.
   const tokens = input.minSharedPrefixTokens;
@@ -356,7 +359,9 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
   return code && state ? { code, state } : null;
 }
 
-/** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
+/**
+ * A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one.
+ */
 const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
 /** A fast-lane row holds fast-mode requests alone, so the account cools only under another scope's row. */
 const cooling = (cooldowns: Account['cooldowns']) => cooldowns.some((c) => !isFastScope(c.scope));
@@ -533,7 +538,10 @@ export class MockApi implements Api {
     return { ...p, activePins: poolPins(p), guardrails: this.guardrailRefs('pools', p.id), keys, warnings: poolWarnings(p, cohort) };
   }
 
-  /** The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the read. */
+  /**
+   * The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the
+   * read.
+   */
   private keyView(k: ApiKey): ApiKey {
     return { ...k, guardrails: this.guardrailRefs('keys', k.id), poolGuardrails: this.guardrailRefs('pools', k.poolId) };
   }
@@ -587,7 +595,9 @@ export class MockApi implements Api {
     return null;
   }
 
-  /** From the guardrail's side: a subject newly named joins the end of its list, one already attached keeps its place. */
+  /**
+   * From the guardrail's side: a subject newly named joins the end of its list, one already attached keeps its place.
+   */
   private attached(g: Guardrail, kind: 'keys' | 'pools', ids: string[] | undefined): GuardrailAttachment[] {
     if (ids === undefined) return g[kind];
     const kept = g[kind].filter((a) => ids.includes(a.id));
@@ -620,7 +630,10 @@ export class MockApi implements Api {
     return key === undefined ? null : `key ${key} not found`;
   }
 
-  /** The stamp as the route reads it against the shipped presets: customized where the conditions left the stamped version's. */
+  /**
+   * The stamp as the route reads it against the shipped presets: customized where the conditions left the stamped
+   * version's.
+   */
   private presetStateOf(preset: Guardrail['preset'], conditions: Guardrail['conditions']): Guardrail['preset'] {
     if (preset === null) return null;
     const stamped = PRESETS.find((p) => p.id === preset.id && p.version === preset.version);
@@ -825,6 +838,7 @@ export class MockApi implements Api {
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
     const id = slug(input.name);
     if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
+    if (!this.pools.some((p) => p.id === input.poolId)) throw new ApiError(404, 'pool not found', null);
     const refusal = keyRulesRefusal(input);
     if (refusal) throw new ApiError(400, refusal, null);
     const body = this.token(40);
@@ -1005,7 +1019,9 @@ export class MockApi implements Api {
     return latency(seriesOf(ledgerRollups(), query));
   }
 
-  /** The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them. */
+  /**
+   * The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them.
+   */
   getAttention() {
     if (emptyStore()) return latency([]);
     return latency(this.parkedLanded ? ATTENTION.filter((i) => i.kind !== 'ledger_record_parked') : ATTENTION);
@@ -1416,6 +1432,7 @@ export class MockApi implements Api {
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
     const current = this.keys[idx];
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
+    if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
     // The pool the key lands in, a new one on a move, with the key's own list as the edit leaves it.
     const own = ownIds ?? this.guardrailRefs('keys', id).map((r) => r.id);
     const bound = boundRefusal(rest.poolId, this.guardrailRefs('pools', rest.poolId).map((r) => r.id), [[id, own]]);

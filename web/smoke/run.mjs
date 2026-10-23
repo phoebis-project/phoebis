@@ -9381,6 +9381,121 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
   await page.settle(200);
   page.unmount();
 }
+/** The row's Duplicate, through its menu: the dialog it opens. */
+const duplicateGuardrail = async (page, name) => {
+  await guardrailMenu(page, guardrailRow(page, name));
+  [...page.container.querySelectorAll('.menu__list [role="menuitem"]')].find((b) => b.textContent?.trim() === 'Duplicate')?.click();
+  await page.settle(400);
+  return openDialogs(page).pop() ?? null;
+};
+/** A condition row as its controls read, each member the row draws no control for left undefined. */
+const conditionRead = (row, n) => {
+  const read = (cell) => row?.querySelector(`[aria-label="Condition ${n} ${cell}"]`)?.value;
+  return { name: read('header name'), operator: read('operator'), path: read('path'), selector: read('selector'), subject: read('subject'), value: read('value') };
+};
+const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('.conditions-editor__row') ?? [])];
+{
+  // The story's Large auxiliary requests holds two conditions, the second its body's max_tokens over 4096, so its copy
+  // is a create with two. The route refuses a row it cannot read as `conditions[{i}]: {reason}`, here the reason its
+  // check gives a value that is not a number. A frozen mount keeps any toast up until a tick takes it down, so the
+  // toast read sees one the refusal raised.
+  const page = await mount('/guardrails', { now: CLOCK_ORIGIN });
+  await page.settle(400);
+  const dlg = await duplicateGuardrail(page, 'Large auxiliary requests');
+  const before = conditionRows(dlg).length;
+  failNextCall('createGuardrail', '/admin/guardrails', 'conditions[1]: value is not a number', { quiet: true, status: 400 });
+  buttonIn(dlg, 'Create guardrail')?.click();
+  await page.settle(500);
+  const rows = conditionRows(dlg);
+  const read = {
+    open: dlg?.hasAttribute('open') === true,
+    refusals: rows.map((r) => r.querySelector('.conditions-editor__refusal')?.textContent?.trim() ?? null),
+    refused: rows.map((r) => r.classList.contains('is-refused')),
+    shown: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')),
+    toasts: page.container.querySelectorAll('.toast').length,
+  };
+  const stored = (await api.listGuardrails()).length;
+  results.push({
+    name: "/guardrails a route refusal of a create's conditions[1] reads under the second row of Conditions and raises no toast",
+    ok:
+      before === 2 &&
+      read.open &&
+      JSON.stringify(read.refusals) === JSON.stringify([null, 'Condition 2: value is not a number']) &&
+      JSON.stringify(read.refused) === JSON.stringify([false, true]) &&
+      JSON.stringify(read.shown) === JSON.stringify(['Conditions']) &&
+      read.toasts === 0 &&
+      stored === 2,
+    missing: [`${before} rows before`, JSON.stringify(read), `${stored} stored`],
+  });
+  page.unmount();
+}
+{
+  // Duplicate on the story's Subagent status summary, the one row with a preset stamp, observed on the pool all.
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const source = (await api.listGuardrails()).find((g) => g.id === 'subagent-status-summary');
+  const presetName = (await api.listGuardrailPresets()).find((p) => p.id === source.preset.id)?.name;
+  const dlg = await duplicateGuardrail(page, source.name);
+  const identity = group(dlg, 'Identity');
+  const fieldInput = (label) => [...(identity?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+  const read = {
+    conditions: conditionRows(dlg).map((r, i) => conditionRead(r, i + 1)),
+    description: fieldInput('Description')?.value,
+    footer: ['Create guardrail', 'Save guardrail'].map((label) => buttonIn(dlg, label) !== undefined),
+    mode: identity?.querySelector('.segmented[aria-label="Mode"] button[aria-pressed="true"]')?.textContent?.trim(),
+    name: fieldInput('Name')?.value,
+    pickers: [...(group(dlg, 'Applies to')?.querySelectorAll('button[aria-haspopup="dialog"]') ?? [])].map((b) => b.textContent?.trim()),
+    stamp: identity?.querySelector('.guardrails__preset > p')?.textContent?.trim(),
+    title: dlg?.querySelector('.dialog__title')?.textContent?.trim(),
+  };
+  const want = {
+    conditions: source.conditions.map((c) => ({ name: c.name, operator: c.operator, path: c.path, selector: c.selector, subject: c.subject, value: c.value })),
+    description: source.description,
+    footer: [true, false],
+    mode: source.mode === 'enforce' ? 'Enforce' : 'Observe',
+    name: `${source.name} copy`,
+    pickers: ['No pools', 'No keys'],
+    stamp: `From the preset ${presetName} v${source.preset.version}`,
+    title: 'Create guardrail',
+  };
+  results.push({
+    name: "/guardrails Duplicate opens a create with the source's conditions, mode and preset stamp, the name {name} copy and no attachment",
+    ok: source.pools.length > 0 && source.conditions.length > 1 && JSON.stringify(read) === JSON.stringify(want),
+    missing: [JSON.stringify(read), JSON.stringify(want)],
+  });
+  page.unmount();
+}
+{
+  // The story's Large auxiliary requests: its second row reads the body's max_tokens over 4096. A move to Header and
+  // back to Body takes each subject's first operator, so the value cell leaves with it, and the path the move to Header
+  // cleared stays empty.
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const dlg = await editGuardrail(page, 'Large auxiliary requests');
+  rail(dlg, 'conditions')?.click();
+  await page.settle(150);
+  const row = () => conditionRows(dlg)[1];
+  const opened = conditionRead(row(), 2);
+  const first = conditionRead(conditionRows(dlg)[0], 1);
+  await changeSelect(page, row()?.querySelector('[aria-label="Condition 2 subject"]'), 'header');
+  const header = conditionRead(row(), 2);
+  await changeSelect(page, row()?.querySelector('[aria-label="Condition 2 subject"]'), 'body');
+  const body = conditionRead(row(), 2);
+  const kept = conditionRead(conditionRows(dlg)[0], 1);
+  const read = { body, header, kept, opened };
+  const want = {
+    body: { name: undefined, operator: 'absent', path: '', selector: undefined, subject: 'body', value: undefined },
+    header: { name: '', operator: 'absent', path: undefined, selector: undefined, subject: 'header', value: undefined },
+    kept: first,
+    opened: { name: undefined, operator: 'gt', path: 'max_tokens', selector: undefined, subject: 'body', value: '4096' },
+  };
+  results.push({
+    name: "/guardrails a row's subject change resets its operator to the subject's first and leaves the cells the subject lacks empty",
+    ok: JSON.stringify(read) === JSON.stringify(want),
+    missing: [JSON.stringify(read), JSON.stringify(want)],
+  });
+  page.unmount();
+}
 
 // The Guardrails group of the pool and key dialogs and the pool card's badge over the story's attachments, every figure
 // read through the mock: the pool all runs the preset's guardrail, and its key desktop adds the enforcing one after it.

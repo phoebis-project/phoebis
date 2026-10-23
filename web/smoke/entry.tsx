@@ -256,8 +256,13 @@ function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate
   };
 }
 
+// The three lazy pages load once before the first mount, so the settle on the in-flight count never waits on a chunk
+// fetch the count does not see.
+const lazyPages = Promise.all([import('@/pages/AccountsPage'), import('@/pages/AnalyticsPage'), import('@/pages/PoolsPage')]);
+
 /** `now` freezes the clock at that instant before the first render, so only `tick` moves it or fires a timer. */
 export async function mount(path: string, options: { now?: number } = {}): Promise<Mounted> {
+  await lazyPages;
   if (options.now !== undefined) fake.freeze(options.now);
   const container = document.createElement('div');
   document.body.appendChild(container);
