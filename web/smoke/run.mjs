@@ -15190,6 +15190,9 @@ m.unmount();
       }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound'] }),
     };
+    // The pairs whose value prints in the mono face: the cut's code, and the upstream's id where the panel draws it,
+    // as the request drawer prints the id.
+    const MONO = { stream_interrupted: ['Code', 'Upstream request'] };
     const modelLinks = {};
     for (const kind of EVENT_KINDS) {
       // The story's newest registry change revokes a key and names no field, so the account edit stands for the kind.
@@ -15217,6 +15220,19 @@ m.unmount();
           Object.entries(VALUES[kind]?.(e) ?? {}).every(([label, want]) => JSON.stringify(ddWords(pairs.find((p) => p.label === label)?.dd)) === JSON.stringify(want)),
         missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
       });
+      if (MONO[kind] !== undefined) {
+        const faces = MONO[kind]
+          .filter((label) => pairs.some((p) => p.label === label))
+          .map((label) => {
+            const dd = pairs.find((p) => p.label === label)?.dd;
+            return [label, dd?.querySelector('.mono')?.textContent ?? null, dd?.textContent ?? null];
+          });
+        results.push({
+          name: `/routing-log the ${kind} detail draws its ${MONO[kind].join(' and ')} in the mono face`,
+          ok: faces.some(([label]) => label === MONO[kind][0]) && faces.every(([, mono, text]) => mono !== null && mono === text),
+          missing: faces.map((f) => JSON.stringify(f)),
+        });
+      }
       page.unmount();
     }
     {
