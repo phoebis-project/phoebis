@@ -11,7 +11,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/comp
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 
 type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';
@@ -206,7 +206,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
   // Windows the card holds are drawn whatever the last read said; the error takes their place only with none.
-  const failed = status === 'error' && !w5 && !w7 && !account.fableWindow && account.spend === null;
+  const failed = status === 'error' && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
   return (
     <article className={`qcard ${failed ? 'is-error' : ''}`}>
       <header className="qcard__head">
@@ -233,7 +233,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             </Pill>
           </div>
         ) : account.usageBased ? (
-          account.spend === null ? (
+          !hasSpendReading(account.spend) ? (
             <p className="qcard__note muted">No spend reading yet.</p>
           ) : (
             <div className="qcard__windows">

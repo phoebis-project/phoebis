@@ -177,10 +177,16 @@ export const spendResetTitle = (spend: Pick<Spend, 'resetSource' | 'resetsAt'>):
   `resets ${fmtAbsolute(spend.resetsAt)}${spend.resetSource === 'estimated' ? ' (estimated: no reset header has been seen for this window yet)' : ''}`;
 
 /**
+ * Whether a seat's spend holds a reading: the router answers the `spend` object on every seat, with every member null
+ * before the first reading, so an object with neither amounts nor a share reads as no reading.
+ */
+export const hasSpendReading = (spend: Spend | null): spend is Spend => spend !== null && (spend.amounts !== null || spend.utilization !== null);
+
+/**
  * Whether the Quota windows timeline draws a lane for the account: a plan window, or a spend reading. The page's
  * filter and the lane builder read this one rule, since the builder never sees an account the filter leaves out.
  */
-export const onTimeline = (account: Pick<Account, 'spend' | 'windows'>): boolean => account.windows.length > 0 || account.spend !== null;
+export const onTimeline = (account: Pick<Account, 'spend' | 'windows'>): boolean => account.windows.length > 0 || hasSpendReading(account.spend);
 
 /**
  * The timeline's lanes under one zoom, in the order the accounts come: a plan account's by the zoom's window, and a

@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtCredits, fmtPct, fmtRelative } from '@/lib/format';
-import { isExpired, meterTone, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
+import { hasSpendReading, isExpired, meterTone, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
@@ -100,7 +100,7 @@ export function WindowBarAbsent({ label }: { label: string }) {
 export function WindowTriple({ account, now, compact = false, others = false }: { account: Account; compact?: boolean; now: number; others?: boolean }) {
   // A usage-based seat has no plan window, so its one spend window takes the triple's place, full width.
   if (account.usageBased) {
-    if (account.spend === null) return <div className="wbar__none muted">No spend reading yet</div>;
+    if (!hasSpendReading(account.spend)) return <div className="wbar__none muted">No spend reading yet</div>;
     return (
       <div className={`wbars wbars--1 ${compact ? 'wbars--compact' : ''}`}>
         <SpendBar spend={account.spend} now={now} compact={compact} />

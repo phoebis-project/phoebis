@@ -2470,10 +2470,10 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     page.unmount();
   }
   {
-    // The seat's spend reading is null under the override, as before its first poll: the row and the Usage card read
-    // the empty reading's sentence where the triple reads "No quota windows".
+    // The router answers a seat's spend object before its first reading with neither amounts nor a share: the row and
+    // the Usage card read the empty reading's sentence where the triple reads "No quota windows".
     const { listAccounts } = api;
-    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: null } : a));
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: null, utilization: null } } : a));
     try {
       const page = await mount('/accounts/contract', { now: CLOCK_ORIGIN });
       const row = page.container.querySelector('a.account-row[href="/accounts/contract"] .wbar__none');
@@ -2561,6 +2561,32 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
         name: "/quota a usage-based seat whose read failed still draws its Spend row, with no error and no Retry",
         ok: JSON.stringify(chips) === JSON.stringify(['Spend59% left']) && card?.querySelector('.qcard__error') === null && card?.classList.contains('is-error') === false && retries === 0,
         missing: [JSON.stringify(chips), card?.querySelector('.qcard__error')?.textContent ?? 'no error block', `${retries} Retry`],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    // A spend object with neither amounts nor a share is no window, so beside a failed read the card draws the error
+    // and its Retry, and the Quota windows timeline gives the seat no lane.
+    const { listAccounts } = api;
+    api.listAccounts = async () =>
+      (await listAccounts.call(api)).map((a) =>
+        a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: null, utilization: null }, usage: { ...a.usage, error: 'the poll has not read this account yet', fetchedAt: null, heldUntil: null, poll: null, status: 'error' } } : a,
+      );
+    try {
+      const page = await mount('/quota', { now: CLOCK_ORIGIN });
+      const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
+      const error = card?.querySelector('.qcard__error')?.textContent ?? null;
+      const retries = [...(card?.querySelectorAll('button.pill') ?? [])].filter((p) => p.textContent?.trim() === 'Retry').length;
+      const windows = card?.querySelector('.qcard__windows') ?? null;
+      await quotaSection(page, 'Quota windows');
+      const lanes = [...page.container.querySelectorAll('.lane__name')].map((n) => n.textContent?.trim());
+      results.push({
+        name: '/quota a usage-based seat whose read failed with no spend reading draws the error and one Retry, and no lane on the Quota windows timeline',
+        ok: error?.startsWith('the poll has not read this account yet') === true && card?.classList.contains('is-error') === true && windows === null && retries === 1 && lanes.length > 0 && !lanes.includes('contract'),
+        missing: [error ?? 'no error block', windows ? 'a windows block' : 'no windows block', `${retries} Retry`, JSON.stringify(lanes)],
       });
       page.unmount();
     } finally {
