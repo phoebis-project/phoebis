@@ -208,8 +208,9 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
                 return Err(RelayError::AccountUuid);
             }
             match replace_account_uuid(body, uuid) {
-                // The contract refuses an inference request without the member before an account is chosen, so this arm
-                // guards that invariant rather than answering a client: a body here carries the member.
+                // The contract refuses an inference request without the member before an account is chosen, and a
+                // keepalive probe replays a recipe taken from an admitted inference request, so this arm guards that
+                // invariant rather than answering a client: a body here carries the member.
                 Spliced::Absent => return Err(RelayError::BodyShape(BodyMember::MetadataUserId)),
                 Spliced::Replaced => true,
                 Spliced::Unchanged => false,

@@ -612,7 +612,8 @@ async fn a_body_whose_user_id_lacks_the_account_uuid_member_is_refused_for_the_c
     assert!(
         message.contains("account_uuid")
             && message.contains("metadata.user_id")
-            && !message.contains("claude-sonnet-4-5"),
+            && !message.contains("claude-sonnet-4-5")
+            && !message.contains(';'),
         "the refusal names the member it could not find and nothing of the body: {message}"
     );
     assert!(
@@ -652,6 +653,11 @@ async fn an_oauth_count_tokens_body_without_the_session_header_is_refused_for_th
             .get("x-phoebis-error-code")
             .and_then(|v| v.to_str().ok()),
         Some("client_contract")
+    );
+    assert_eq!(
+        outcome(&resp).client_contract.as_deref(),
+        Some("session_header"),
+        "the ledger row names the item"
     );
     let refusal: serde_json::Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();

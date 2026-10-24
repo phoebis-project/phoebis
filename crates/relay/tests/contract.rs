@@ -395,7 +395,7 @@ async fn a_request_whose_user_id_lacks_the_account_uuid_member_is_refused_for_th
 }
 
 /// The client writes an empty `account_uuid` when it holds no OAuth account, as it does behind the router, so the
-/// member with an empty value is the item.
+/// member with an empty value satisfies the item.
 #[tokio::test]
 async fn an_empty_account_uuid_in_metadata_user_id_is_admitted() {
     let up = upstream().await;

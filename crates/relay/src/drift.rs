@@ -1,7 +1,7 @@
-//! The caller's client version, read for the ledger. Every version is relayed the same way, so the version is
-//! recorded rather than judged, with the two client properties the relay still refuses on living with the body
-//! edits: a billing hash this build cannot reproduce (`hash`), and a `cc_version` suffix that does not reproduce
-//! from the prompt and the user agent (`version_suffix`).
+//! The caller's client version, read for the ledger and judged by the contract's version item, which refuses a
+//! `claude-cli/` version spelled any other way than the client's. The two client properties the relay refuses on
+//! beside it live with the body edits: a billing hash this build cannot reproduce (`hash`), and a `cc_version`
+//! suffix that does not reproduce from the prompt and the user agent (`version_suffix`).
 
 use axum::http::{header, HeaderMap};
 

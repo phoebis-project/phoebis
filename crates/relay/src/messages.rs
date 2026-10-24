@@ -1853,39 +1853,35 @@ impl Relay {
         // The contract: a Claude Code request carries what the router reads of it, or is refused before an account
         // is chosen. The gate answered any other client before the body was read, so no class is judged here. After
         // resolve, so a refused model is answered first, and before the drift checks, so a missing line is never a
-        // drift. A token count and a probe are judged for the version and the session header alone.
-        if matches!(
+        // drift. Every kind is judged for the version and the session header, and an inference request for the
+        // other five items too.
+        if let Some(item) = contract_gap(
+            &parts.headers,
+            &identity,
+            &facts,
+            request_class.as_deref(),
+            client_version.as_deref(),
             trace.kind,
-            Kind::Inference | Kind::CountTokens | Kind::Probe
         ) {
-            if let Some(item) = contract_gap(
+            let refusal = self.contract_refusal(
+                item,
                 &parts.headers,
+                &trace,
+                &key,
                 &identity,
-                &facts,
                 request_class.as_deref(),
                 client_version.as_deref(),
-                trace.kind,
-            ) {
-                let refusal = self.contract_refusal(
-                    item,
-                    &parts.headers,
+            );
+            return self
+                .refused(
                     &trace,
-                    &key,
-                    &identity,
-                    request_class.as_deref(),
+                    0,
+                    refusal,
+                    Some(&key),
+                    Some(&identity),
                     client_version.as_deref(),
-                );
-                return self
-                    .refused(
-                        &trace,
-                        0,
-                        refusal,
-                        Some(&key),
-                        Some(&identity),
-                        client_version.as_deref(),
-                    )
-                    .await;
-            }
+                )
+                .await;
         }
         // A separate field from `restore`: every client inference request of a conversation gets one,
         // because the diagnostics member the option forces names the previous answer in
