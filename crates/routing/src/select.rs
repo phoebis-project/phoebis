@@ -15,11 +15,10 @@ use crate::affinity::{AffinityEntry, AffinityMap, RungWalk, Visited};
 use crate::record::{
     key_fact, settings_of, BudgetFacts, By, CandidateFacts, ChainFacts, CooldownFacts,
     CreditsFacts, DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue,
-    HoldOutcome, LaneFacts, MarkClearedFacts, MoveCause, ObstacleFacts, Outcome,
-    OverageFacts, PaceFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup,
-    RefusalFacts, RequestFacts, RequestFlags, ReservationFacts, Score, ShedPinFacts,
-    ShedRoundFacts, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION,
-    WALK_STEPS,
+    HoldOutcome, LaneFacts, MarkClearedFacts, MoveCause, ObstacleFacts, Outcome, OverageFacts,
+    PaceFacts, PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
+    RequestFacts, RequestFlags, ReservationFacts, Score, ShedPinFacts, ShedRoundFacts, SummaryFact,
+    TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, entrypoint_of,
@@ -72,7 +71,9 @@ pub struct SelectRequest {
     pub key_generation: i64,
     /// The identity's agent: `main`, or a subagent's own id, so a pin is held per agent of a session.
     pub agent_id: String,
-    pub session_id: Option<String>,
+    /// The client's own session id, which the contract guarantees of every request the relay selects for: the
+    /// pin and the pin events are keyed on it.
+    pub session_id: String,
     pub canonical_model: String,
     /// The client's spelling with the `[1m]` suffix removed and ASCII lowercased, the relay's own folded id, so
     /// the stale-revision re-resolve keeps the client's spelling rather than the canonical id, also when the
@@ -397,6 +398,7 @@ pub fn warmth_of(
     }) {
         return refreshed(WarmthCause::ContinuesPin);
     }
+    // The static prefix without a continuation restarted the conversation.
     if request.static_hash.is_some() && request.static_hash == current.static_hash {
         return (Warmth::Cold, WarmthCause::StaticRestart);
     }
@@ -1307,7 +1309,7 @@ fn run(
     let ttl_ms = affinity_ttl_ms(pool);
     // A marker-less request writes no cache, so under `when_cached` it has no pin to keep and spreads by the
     // strategy instead of pinning; `always`, a marked request, or a non-portable one still pins.
-    let session = request.session_id.as_deref().filter(|_| {
+    let session = Some(request.session_id.as_str()).filter(|_| {
         ttl_ms > 0
             && (pool.affinity.mode == AffinityMode::Always || request.marker || !request.portable)
     });
@@ -1476,6 +1478,7 @@ fn run(
             rec.step("pin", if pin.is_some() { "match" } else { "none" }, line);
         }
         None => {
+            // Only a request filtered off pinning reaches here, so the reason was set above.
             let reason = rec.pin_reason.unwrap_or("pinning_off");
             rec.step("pin", "none", vec![Fact::text("reason", reason)]);
         }
@@ -1645,7 +1648,6 @@ fn run(
         );
         return (SelectResult::Exhausted(exhaustion), writes);
     }
-
     // Step 4: the moves, for a portable request with a live pin. A pin on an account past its saved end never
     // reaches them: step 5 releases it as it releases a cooled account's. A token count follows its pin: it
     // creates no pin (step 7), so a move it made would leave the session with none.
@@ -5507,16 +5509,14 @@ fn placement_of<'a>(
         none(rec, "rung:with_main", "policy_off");
     } else {
         // The class knob places a subagent with its parent or not at all: the static rung never runs under it.
-        let parent = request.session_id.as_deref().and_then(|session_id| {
-            state.pin(&PinKey {
-                key_id: request.key_id.clone(),
-                session_id: session_id.to_string(),
-                agent_id: request
-                    .parent_agent_id
-                    .clone()
-                    .unwrap_or_else(|| "main".to_string()),
-                model: request.canonical_model.clone(),
-            })
+        let parent = state.pin(&PinKey {
+            key_id: request.key_id.clone(),
+            session_id: request.session_id.clone(),
+            agent_id: request
+                .parent_agent_id
+                .clone()
+                .unwrap_or_else(|| "main".to_string()),
+            model: request.canonical_model.clone(),
         });
         let Some(pin) = parent else {
             none(rec, "rung:with_main", "no_pin");
@@ -5679,7 +5679,7 @@ fn any_agent_pin<'a>(
     idle_ms: i64,
     rec: &mut Recorder,
 ) -> Option<&'a Candidate> {
-    let session_id = request.session_id.as_deref()?;
+    let session_id = request.session_id.as_str();
     let account_id = state
         .session_pins(&request.key_id, session_id, &request.canonical_model)
         .find(|p| {
@@ -7571,7 +7571,7 @@ mod banded_tests {
             key_id: "k".into(),
             key_generation: 0,
             agent_id: "main".into(),
-            session_id: Some("s1".into()),
+            session_id: "s1".into(),
             canonical_model: model.into(),
             folded_model: model.into(),
             candidates: Vec::new(),

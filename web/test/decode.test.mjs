@@ -604,7 +604,7 @@ test("both record versions decode their settings, a version 1 record's three rem
   const body = fixture('decision');
   const v2 = d.decodeDecisionRecord(body);
   const s = body.settings;
-  assert.equal(v2.version, 2);
+  assert.equal(v2.version, 3);
   assert.equal(Object.keys(s).length, 25, 'the route answers twenty-five settings');
   assert.deepEqual(Object.keys(v2.settings).filter((k) => k !== 'legacy').length, 25);
   assert.deepEqual(shedding(v2.settings), SHEDDING_FIELDS.map((f) => s[f]), 'a version 2 record reads the new names');
@@ -664,7 +664,7 @@ test("a record decodes the five settings, the hold's figures, the cause, the fac
   assert.equal(before.outcome.cause, null);
   assert.ok(before.candidates.every((c) => c.factor === null && Object.values(c.windows).every((w) => w.demand === null)), 'no factor and no demand');
   assert.deepEqual([before.pin.cycleMs, before.pin.slowDownUntil], [null, null]);
-  assert.equal(before.version, 2, 'the record stays version 2');
+  assert.equal(before.version, 3, 'the record stays version 3');
 });
 
 test('a request row reads its waits, and a row without them reads an empty list', () => {
@@ -1501,7 +1501,7 @@ test('the routing log page decodes both row shapes from the fixture', () => {
 test('a decision record decodes its six blocks and the completion', () => {
   const body = fixture('decision');
   const r = d.decodeDecisionRecord(body);
-  assert.deepEqual([r.version, r.requestId, r.seq], [2, 'r-static', 1]);
+  assert.deepEqual([r.version, r.requestId, r.seq], [3, 'r-static', 1]);
   assert.equal(r.raw, body, 'the record keeps the route answer whole for the card to copy');
   assert.ok(isIso(r.request.at));
   assert.deepEqual([r.request.keyId, r.request.poolId, r.request.canonicalModel], ['desktop', 'main', 'claude-sonnet-5']);
@@ -1528,7 +1528,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
   assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
   assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);
-  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 6, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
+  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 7, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
   assert.deepEqual(r.outcome.pinEvents, [{ kind: 'pin_created', reason: null }]);
   assert.equal(r.outcome.completion.hit, true);
   assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
@@ -2126,8 +2126,8 @@ test('a session view given its held rows reads the first page alone, replacing t
 });
 
 test('the dashboard reads the live pin count the route answers beside the rollups', () => {
-  assert.equal(fixture('dashboard').sessions.active_pins, 4);
-  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 4);
+  assert.equal(fixture('dashboard').sessions.active_pins, 5);
+  assert.equal(d.decodeDashboard(fixture('dashboard')).activePins, 5);
   assert.equal(d.decodeDashboard({ ...fixture('dashboard'), sessions: { active_pins: 3 } }).activePins, 3);
 });
 

@@ -4469,8 +4469,8 @@ async fn routed(parts: &common::Full, cookie: &str) {
     .await;
 }
 
-/// One selection through the harness's router as the relay asks for it, at `at`: no session, so no pin and no pin
-/// event beside the decision.
+/// One selection through the harness's router as the relay asks for it, at `at`, under a session of the request's
+/// own.
 async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, at: i64) {
     let answer = parts
         .router
@@ -4506,7 +4506,7 @@ fn select_request(
         key_id: "desktop".into(),
         key_generation: common::generation(&parts.store, "desktop"),
         agent_id: "main".into(),
-        session_id: None,
+        session_id: format!("s-{request_id}"),
         canonical_model: "claude-sonnet-5".into(),
         folded_model: "claude-sonnet-5".into(),
         candidates,
@@ -4674,10 +4674,11 @@ async fn the_routing_log_answers_the_merged_page_with_the_api_page_s_field_names
             now + 10_000
         ),
         &cookie,
-        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 6),
     )
     .await;
     let rows = page["rows"].as_array().unwrap();
+    // Each placement pins its session, so a `pin_created` event lands at the instant of its decision.
     assert_eq!(
         rows.iter()
             .map(|row| (row["type"].as_str().unwrap(), row["at"].as_i64().unwrap()))
@@ -4685,8 +4686,10 @@ async fn the_routing_log_answers_the_merged_page_with_the_api_page_s_field_names
         [
             ("decision", now + 3_000),
             ("event", now + 3_000),
+            ("event", now + 3_000),
             ("event", now + 2_000),
-            ("decision", now + 1_000)
+            ("decision", now + 1_000),
+            ("event", now + 1_000)
         ],
         "newest first, a decision before an event at one instant"
     );
@@ -4703,7 +4706,13 @@ async fn the_routing_log_answers_the_merged_page_with_the_api_page_s_field_names
         (Some("r2"), Some("placed"))
     );
     assert_eq!(rows[0]["account_id"], "direct");
-    assert_eq!(rows[1]["detail"], serde_json::json!({ "scope": "account" }));
+    // The two events at `now + 3_000` keep the order they were written in, which the bus leaves open, so the
+    // cooldown's row is found by its kind.
+    let cleared = rows
+        .iter()
+        .find(|row| row["kind"] == "cooldown_cleared")
+        .expect("the cooldown's clearing is on the page");
+    assert_eq!(cleared["detail"], serde_json::json!({ "scope": "account" }));
     assert!(page["next_cursor"].is_null());
     assert!(
         page.get("counts").is_none(),
@@ -4732,13 +4741,13 @@ async fn the_routing_log_pages_through_its_cursor() {
         &parts.app,
         &format!("/admin/routing-log?{range}"),
         &cookie,
-        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 6),
     )
     .await;
     let first = json(
         get(
             &parts.app,
-            &format!("/admin/routing-log?{range}&limit=2"),
+            &format!("/admin/routing-log?{range}&limit=3"),
             Some(&cookie),
         )
         .await,
@@ -4752,20 +4761,21 @@ async fn the_routing_log_pages_through_its_cursor() {
             .map(|row| row["at"].as_i64().unwrap())
             .collect::<Vec<_>>()
     };
-    assert_eq!(ats(&first), [now + 4_000, now + 3_000]);
+    // Each placement pins its session, so a `pin_created` event lands at the instant of its decision.
+    assert_eq!(ats(&first), [now + 4_000, now + 4_000, now + 3_000]);
     let cursor = first["next_cursor"]
         .as_str()
-        .expect("two rows lie past the first page");
+        .expect("three rows lie past the first page");
     let second = json(
         get(
             &parts.app,
-            &format!("/admin/routing-log?{range}&limit=2&cursor={cursor}"),
+            &format!("/admin/routing-log?{range}&limit=3&cursor={cursor}"),
             Some(&cookie),
         )
         .await,
     )
     .await;
-    assert_eq!(ats(&second), [now + 2_000, now + 1_000]);
+    assert_eq!(ats(&second), [now + 2_000, now + 1_000, now + 1_000]);
     assert!(
         second["next_cursor"].is_null(),
         "the last page names no cursor"
@@ -4993,11 +5003,12 @@ async fn an_empty_kinds_reads_as_every_kind() {
     // The window closes a millisecond before `now`, the instant the store stamped the pool and the key with, so
     // their registry rows cannot land between the two reads.
     let window = format!("from={}&to={}", now - 10_000, now - 1);
+    // The placement pins its session, so its `pin_created` event is a row beside its decision.
     let absent = wait_json(
         &parts.app,
         &format!("/admin/routing-log?{window}"),
         &cookie,
-        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 3),
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
     )
     .await;
     let emptied = json(
@@ -5123,7 +5134,7 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
     let answer = parts
         .router
         .select(phoebis_routing::SelectRequest {
-            session_id: Some("s1".into()),
+            session_id: "s1".into(),
             marker: true,
             ..select_request(&parts, "r1", 1, 1, now)
         })
@@ -5145,7 +5156,7 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
 }
 
 #[tokio::test]
-async fn a_decision_record_answers_record_v2_with_its_completion() {
+async fn a_decision_record_answers_record_v3_with_its_completion() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     routed(&parts, &cookie).await;
@@ -5178,7 +5189,7 @@ async fn a_decision_record_answers_record_v2_with_its_completion() {
         (
             &serde_json::json!("r1"),
             &serde_json::json!(1),
-            &serde_json::json!(2)
+            &serde_json::json!(3)
         )
     );
     assert_eq!(record["outcome"]["kind"], "placed");
@@ -5278,7 +5289,7 @@ async fn select_s1(
             key_id: "desktop".into(),
             key_generation: common::generation(&parts.store, "desktop"),
             agent_id: "main".into(),
-            session_id: Some("s1".into()),
+            session_id: "s1".into(),
             canonical_model: "claude-sonnet-5".into(),
             folded_model: "claude-sonnet-5".into(),
             candidates,

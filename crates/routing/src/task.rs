@@ -2973,22 +2973,20 @@ impl Task {
                     }
                     request.revision = snapshot.revision;
                 }
-                let pin_key = request.session_id.as_ref().map(|s| PinKey {
+                let pin_key = PinKey {
                     key_id: request.key_id.clone(),
-                    session_id: s.clone(),
+                    session_id: request.session_id.clone(),
                     agent_id: request.agent_id.clone(),
                     model: request.canonical_model.clone(),
-                });
-                let before = pin_key
-                    .as_ref()
-                    .and_then(|key| self.state.pin(key).cloned());
+                };
+                let before = self.state.pin(&pin_key).cloned();
                 // A failover inside the window lands on the row its source lost: the selection prices the session's
                 // own burn and names the cause on the record. A key that holds a pin again is no landing, and the
                 // entry stays until a selection lands the session, so a held one leaves it for the next.
-                request.failed_over = pin_key
-                    .as_ref()
+                request.failed_over = self
+                    .invalidated
+                    .get(&pin_key)
                     .filter(|_| before.is_none())
-                    .and_then(|key| self.invalidated.get(key))
                     .filter(|entry| request.now - entry.at <= MIGRATION_WINDOW_MS)
                     .map(|entry| FailedOver {
                         from_account_id: entry.account_id.clone(),
@@ -3011,17 +3009,15 @@ impl Task {
                 // A round that marked the request's own pin wrote that row ahead of the write that replaced it, so a
                 // release in the same selection reads the mark off the round's write: the row as it stood before the
                 // selection carries none.
-                let marked_here = pin_key.as_ref().and_then(|key| {
-                    writes.iter().rev().find_map(|write| match write {
-                        StateWrite::UpsertPin(row)
-                            if row.key() == *key
-                                && mark_holds(row)
-                                && before.as_ref().is_some_and(|old| old.epoch == row.epoch) =>
-                        {
-                            Some(row.clone())
-                        }
-                        _ => None,
-                    })
+                let marked_here = writes.iter().rev().find_map(|write| match write {
+                    StateWrite::UpsertPin(row)
+                        if row.key() == pin_key
+                            && mark_holds(row)
+                            && before.as_ref().is_some_and(|old| old.epoch == row.epoch) =>
+                    {
+                        Some(row.clone())
+                    }
+                    _ => None,
                 });
                 self.write(writes);
                 if let Some(pin) = record.pin.as_mut() {
@@ -3030,52 +3026,83 @@ impl Task {
                 // Collected rather than emitted, so the decision naming them goes out first and the ledger lands
                 // its row and its pin events in one tick.
                 let mut pin_events = Vec::new();
-                if let Some(key) = &pin_key {
-                    let (k, s, ag, m) = (&key.key_id, &key.session_id, &key.agent_id, &key.model);
-                    let after = self.state.pin(key).cloned();
-                    let now = request.now;
-                    let selected = matches!(result, SelectResult::Selected(_));
-                    match (before.as_ref(), after) {
-                        (None, Some(new)) if selected => {
-                            match self
-                                .invalidated
-                                .remove(key)
-                                .filter(|entry| now - entry.at <= MIGRATION_WINDOW_MS)
-                            {
-                                Some(Invalidated {
-                                    account_id: from,
-                                    reason,
-                                    ..
-                                }) => {
-                                    // A hard fail-over's move is named on the attempt row the same way a
-                                    // selector's move is.
-                                    if let SelectResult::Selected(selection) = &mut result {
-                                        selection.trace.moved = Some(reason);
-                                    }
-                                    record.outcome.rule = Some(reason);
-                                    // The invalidation removed the pin `finish` reads a move's source from, so the
-                                    // entry it left behind names the account the request left.
-                                    record.outcome.from_account_id = Some(from.clone());
-                                    summary.rule = Some(reason);
-                                    let (fit, runway_ms, binding) =
-                                        destination_fit(&record, &new.account_id);
-                                    pin_events.push(RouterEvent::PinMigrated {
-                                        key_id: k.clone(),
-                                        session_id: s.clone(),
-                                        agent_id: ag.clone(),
-                                        model: m.clone(),
-                                        from_account: from,
-                                        to_account: new.account_id.clone(),
-                                        epoch: new.epoch,
-                                        reason: reason.into(),
-                                        fit,
-                                        runway_ms,
-                                        binding,
-                                        cause: record.outcome.cause.clone(),
-                                        at: now,
-                                    });
+                let (k, s, ag, m) = (
+                    &pin_key.key_id,
+                    &pin_key.session_id,
+                    &pin_key.agent_id,
+                    &pin_key.model,
+                );
+                let after = self.state.pin(&pin_key).cloned();
+                let now = request.now;
+                let selected = matches!(result, SelectResult::Selected(_));
+                match (before.as_ref(), after) {
+                    (None, Some(new)) if selected => {
+                        match self
+                            .invalidated
+                            .remove(&pin_key)
+                            .filter(|entry| now - entry.at <= MIGRATION_WINDOW_MS)
+                        {
+                            Some(Invalidated {
+                                account_id: from,
+                                reason,
+                                ..
+                            }) => {
+                                // A hard fail-over's move is named on the attempt row the same way a
+                                // selector's move is.
+                                if let SelectResult::Selected(selection) = &mut result {
+                                    selection.trace.moved = Some(reason);
                                 }
-                                None => pin_events.push(RouterEvent::PinCreated {
+                                record.outcome.rule = Some(reason);
+                                // The invalidation removed the pin `finish` reads a move's source from, so the
+                                // entry it left behind names the account the request left.
+                                record.outcome.from_account_id = Some(from.clone());
+                                summary.rule = Some(reason);
+                                let (fit, runway_ms, binding) =
+                                    destination_fit(&record, &new.account_id);
+                                pin_events.push(RouterEvent::PinMigrated {
+                                    key_id: k.clone(),
+                                    session_id: s.clone(),
+                                    agent_id: ag.clone(),
+                                    model: m.clone(),
+                                    from_account: from,
+                                    to_account: new.account_id.clone(),
+                                    epoch: new.epoch,
+                                    reason: reason.into(),
+                                    fit,
+                                    runway_ms,
+                                    binding,
+                                    cause: record.outcome.cause.clone(),
+                                    at: now,
+                                });
+                            }
+                            None => pin_events.push(RouterEvent::PinCreated {
+                                key_id: k.clone(),
+                                session_id: s.clone(),
+                                agent_id: ag.clone(),
+                                model: m.clone(),
+                                account_id: new.account_id.clone(),
+                                epoch: new.epoch,
+                                at: now,
+                            }),
+                        }
+                    }
+                    (Some(old), Some(new)) if old.epoch != new.epoch => {
+                        if let SelectResult::Selected(selection) = &result {
+                            let reason = selection
+                                .migrated
+                                .map(MigrateReason::as_str)
+                                .unwrap_or("expired");
+                            if reason == "expired" {
+                                pin_events.push(RouterEvent::PinExpired {
+                                    key_id: k.clone(),
+                                    session_id: s.clone(),
+                                    agent_id: ag.clone(),
+                                    model: m.clone(),
+                                    account_id: old.account_id.clone(),
+                                    reasons: released.clone(),
+                                    at: now,
+                                });
+                                pin_events.push(RouterEvent::PinCreated {
                                     key_id: k.clone(),
                                     session_id: s.clone(),
                                     agent_id: ag.clone(),
@@ -3083,81 +3110,53 @@ impl Task {
                                     account_id: new.account_id.clone(),
                                     epoch: new.epoch,
                                     at: now,
-                                }),
+                                });
+                            } else {
+                                let (fit, runway_ms, binding) =
+                                    destination_fit(&record, &new.account_id);
+                                pin_events.push(RouterEvent::PinMigrated {
+                                    key_id: k.clone(),
+                                    session_id: s.clone(),
+                                    agent_id: ag.clone(),
+                                    model: m.clone(),
+                                    from_account: old.account_id.clone(),
+                                    to_account: new.account_id.clone(),
+                                    epoch: new.epoch,
+                                    reason: reason.into(),
+                                    fit,
+                                    runway_ms,
+                                    binding,
+                                    cause: None,
+                                    at: now,
+                                });
                             }
                         }
-                        (Some(old), Some(new)) if old.epoch != new.epoch => {
-                            if let SelectResult::Selected(selection) = &result {
-                                let reason = selection
-                                    .migrated
-                                    .map(MigrateReason::as_str)
-                                    .unwrap_or("expired");
-                                if reason == "expired" {
-                                    pin_events.push(RouterEvent::PinExpired {
-                                        key_id: k.clone(),
-                                        session_id: s.clone(),
-                                        agent_id: ag.clone(),
-                                        model: m.clone(),
-                                        account_id: old.account_id.clone(),
-                                        reasons: released.clone(),
-                                        at: now,
-                                    });
-                                    pin_events.push(RouterEvent::PinCreated {
-                                        key_id: k.clone(),
-                                        session_id: s.clone(),
-                                        agent_id: ag.clone(),
-                                        model: m.clone(),
-                                        account_id: new.account_id.clone(),
-                                        epoch: new.epoch,
-                                        at: now,
-                                    });
-                                } else {
-                                    let (fit, runway_ms, binding) =
-                                        destination_fit(&record, &new.account_id);
-                                    pin_events.push(RouterEvent::PinMigrated {
-                                        key_id: k.clone(),
-                                        session_id: s.clone(),
-                                        agent_id: ag.clone(),
-                                        model: m.clone(),
-                                        from_account: old.account_id.clone(),
-                                        to_account: new.account_id.clone(),
-                                        epoch: new.epoch,
-                                        reason: reason.into(),
-                                        fit,
-                                        runway_ms,
-                                        binding,
-                                        cause: None,
-                                        at: now,
-                                    });
-                                }
-                            }
-                        }
-                        (Some(old), None) => pin_events.push(RouterEvent::PinExpired {
-                            key_id: k.clone(),
-                            session_id: s.clone(),
-                            agent_id: ag.clone(),
-                            model: m.clone(),
-                            account_id: old.account_id.clone(),
-                            reasons: released,
-                            at: now,
-                        }),
-                        _ => {}
                     }
+                    (Some(old), None) => pin_events.push(RouterEvent::PinExpired {
+                        key_id: k.clone(),
+                        session_id: s.clone(),
+                        agent_id: ag.clone(),
+                        model: m.clone(),
+                        account_id: old.account_id.clone(),
+                        reasons: released,
+                        at: now,
+                    }),
+                    _ => {}
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
                 // The mark the selection cleared (a heal, the move that consumed it, or the pool's switch turned off),
                 // else the one a pin released or expired here carried: the pin left without a move, so its mark left
                 // with it.
-                let mark = pin_key.as_ref().and_then(|key| {
+                let mark = before.as_ref().and_then(|old| {
                     let cleared = record.outcome.mark_cleared.as_ref();
-                    let account_id = before.as_ref().map(|old| old.account_id.clone())?;
+                    let account_id = old.account_id.clone();
                     match cleared {
                         Some(facts) => Some(RouterEvent::MarkCleared {
                             account_id,
-                            key_id: key.key_id.clone(),
-                            session_id: key.session_id.clone(),
-                            agent_id: key.agent_id.clone(),
-                            model: key.model.clone(),
+                            key_id: pin_key.key_id.clone(),
+                            session_id: pin_key.session_id.clone(),
+                            agent_id: pin_key.agent_id.clone(),
+                            model: pin_key.model.clone(),
                             reason: facts.reason,
                             marked_at: facts.marked_at,
                             marked_on: facts.marked_on.clone(),
@@ -3171,7 +3170,7 @@ impl Task {
                             .iter()
                             .any(|event| matches!(event, RouterEvent::PinExpired { .. })) =>
                         {
-                            released_mark(before.as_ref()?, request.now).or_else(|| {
+                            released_mark(old, request.now).or_else(|| {
                                 marked_here
                                     .as_ref()
                                     .and_then(|row| released_mark(row, request.now))

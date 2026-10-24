@@ -546,7 +546,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             key_id: "desktop".into(),
             key_generation,
             agent_id: "main".into(),
-            session_id: Some("s-fixture".into()),
+            session_id: "s-fixture".into(),
             canonical_model: "claude-sonnet-5".into(),
             folded_model: "claude-sonnet-5".into(),
             candidates,
@@ -628,8 +628,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             key_id: "desktop".into(),
             key_generation,
             agent_id: "main".into(),
-            // No session, so the placement writes no pin and adds no row to `sessions.json`.
-            session_id: None,
+            session_id: "s-fixture-2".into(),
             canonical_model: "claude-sonnet-5-5".into(),
             folded_model: "claude-sonnet-5-5".into(),
             candidates: phoebis_routing::resolve(
@@ -1262,7 +1261,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 key_id: "desktop".into(),
                 key_generation,
                 agent_id: agent.into(),
-                session_id: Some("s1".into()),
+                session_id: "s1".into(),
                 canonical_model: model.into(),
                 folded_model: model.into(),
                 candidates,
@@ -2040,7 +2039,8 @@ async fn replay_held(parts: &common::Full, cookie: &str) -> Value {
 }
 
 /// A selection of the desktop key on `claude-sonnet-5` at the capture's instant, as the relay asks for its first
-/// wire attempt: no prefix chains and no holds, each story setting what it reads.
+/// wire attempt: no prefix chains and no holds, each story setting what it reads, under the story's session or one of
+/// the request's own.
 fn asked(
     parts: &common::Full,
     key_generation: i64,
@@ -2060,7 +2060,7 @@ fn asked(
         key_id: "desktop".into(),
         key_generation,
         agent_id: "main".into(),
-        session_id: session.map(String::from),
+        session_id: session.map_or_else(|| format!("s-{request_id}"), String::from),
         canonical_model: "claude-sonnet-5".into(),
         folded_model: "claude-sonnet-5".into(),
         candidates: phoebis_routing::resolve(

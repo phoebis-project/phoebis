@@ -3,14 +3,14 @@ use phoebis_routing::{
     warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain, AffinityMap,
     AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts,
     ClientClass, CohortHold, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
-    FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldWait,
-    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause,
-    OverageEvidence, PinKeyFacts, PinRef, PinShed, Placement, RateTable, Rates, RefusalFacts,
-    RefusedRequest, RegimeRates, RegistrySnapshot, RequestFlags, Reservation, RoutingState,
-    SelectRequest, SelectResult, SharePricer, SlowDownEdge, SlowDownRead, SlowDownState,
-    StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading,
-    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
-    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
+    FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldWait, LaneFacts,
+    LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef,
+    PinShed, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
+    RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
+    SharePricer, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample,
+    WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
+    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -23,6 +23,7 @@ use rand::SeedableRng;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 const HOUR: i64 = 3_600_000;
@@ -369,8 +370,15 @@ fn key_recreated(s: &RegistrySnapshot, created_at: i64) -> RegistrySnapshot {
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
+/// A session id no other call of this suite answered, for a case that measures the strategy or the eligible set
+/// with no pin in play.
+fn fresh_session() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    format!("s-fresh-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
 /// A select request on `s`'s key `k` for `model` from the main agent, portable or not, with the session the caller
-/// names.
+/// names, or a fresh one where it names none.
 fn request(
     s: &RegistrySnapshot,
     session: Option<&str>,
@@ -404,7 +412,7 @@ fn select_request(
         key_id: key_id.into(),
         key_generation: key.created_at,
         agent_id: agent_id.into(),
-        session_id: session.map(String::from),
+        session_id: session.map(String::from).unwrap_or_else(fresh_session),
         canonical_model: model.into(),
         folded_model: model.into(),
         candidates: resolve(s, key, model, model).unwrap(),
@@ -704,10 +712,10 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
     st.record_sample("a", reading(0.5, 1_000 + 24 * HOUR, 1));
     st.record_sample("b", reading(0.2, 1_000 + 96 * HOUR, 1));
     // `c` stays unsampled: untouched, remaining 1 over the full week.
-    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    let req = || request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     for seed in 0..8u64 {
         assert_eq!(
-            picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+            picked(&select(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed)).0),
             "a",
             "0.5 used resetting in 24h (0.0208) outranks 0.2 used resetting in 96h (0.0083) and an untouched account (1/168)"
         );
@@ -715,7 +723,7 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
     st.record_sample("a", reading(0.9, 1_000 + 24 * HOUR, 2));
     for seed in 0..8u64 {
         assert_eq!(
-            picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+            picked(&select(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed)).0),
             "b",
             "spent to 0.1 remaining (0.0042), a falls behind b's wider allowance"
         );
@@ -826,10 +834,10 @@ fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by
             strategy,
             ..Pool::default()
         });
-        let req = request(&s, None, "claude-fable-5-1", true, &[], 1_000);
+        let req = || request(&s, None, "claude-fable-5-1", true, &[], 1_000);
         for seed in 0..8u64 {
             assert_ne!(
-                picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+                picked(&select(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed)).0),
                 "a",
                 "a spent fable window is out of the selection set under {strategy:?}"
             );
@@ -839,22 +847,30 @@ fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by
         strategy: Strategy::Pace,
         ..Pool::default()
     });
-    let fable = request(&earliest, None, "claude-fable-5-1", true, &[], 1_000);
-    for seed in 0..8u64 {
-        assert_eq!(
-            picked(&select(&mut st, &earliest, &fable, &mut StdRng::seed_from_u64(seed)).0),
-            "c",
-            "and the rest are ordered by the fable reset, not the 7d one"
-        );
-    }
-    let shared = request(&earliest, None, "claude-sonnet-5", true, &[], 1_000);
+    let fable = || request(&earliest, None, "claude-fable-5-1", true, &[], 1_000);
     for seed in 0..8u64 {
         assert_eq!(
             picked(
                 &select(
                     &mut st,
                     &earliest,
-                    &shared,
+                    &fable(),
+                    &mut StdRng::seed_from_u64(seed)
+                )
+                .0
+            ),
+            "c",
+            "and the rest are ordered by the fable reset, not the 7d one"
+        );
+    }
+    let shared = || request(&earliest, None, "claude-sonnet-5", true, &[], 1_000);
+    for seed in 0..8u64 {
+        assert_eq!(
+            picked(
+                &select(
+                    &mut st,
+                    &earliest,
+                    &shared(),
                     &mut StdRng::seed_from_u64(seed)
                 )
                 .0
@@ -945,12 +961,12 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
         st.record_sample("a", refreshing(0.95, HOUR, HOUR, 1));
         st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1));
         st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1));
-        let req = SelectRequest {
+        let req = || SelectRequest {
             body_tokens: 200_000,
             ..request(&s, None, "claude-sonnet-5", true, &[], 1_000)
         };
         for seed in 0..8u64 {
-            let d = decide(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed));
+            let d = decide(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed));
             assert_ne!(
                 picked(&d.result),
                 "a",
@@ -982,7 +998,7 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
             Strategy::Priority | Strategy::RoundRobin => None,
         };
         for seed in 0..8u64 {
-            let d = decide(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed));
+            let d = decide(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed));
             assert_eq!(
                 fact(line(&d.record, "partitions"), "no_fit"),
                 &FactValue::Text("fell_through".into()),
@@ -2671,6 +2687,7 @@ fn a_candidate_the_snapshot_no_longer_holds_is_never_eligible() {
     let mut r = rng();
     for i in 0..10 {
         req.now = i;
+        req.session_id = fresh_session();
         assert_eq!(
             picked(&select(&mut st, &s, &req, &mut r).0),
             "a",
@@ -2678,8 +2695,10 @@ fn a_candidate_the_snapshot_no_longer_holds_is_never_eligible() {
         );
     }
     req.attempted = vec!["a".into(), "deleted".into()];
+    req.session_id = fresh_session();
     assert_eq!(picked(&select(&mut st, &s, &req, &mut rng()).0), "b");
     req.attempted = vec!["a".into(), "b".into(), "deleted".into()];
+    req.session_id = fresh_session();
     assert!(matches!(
         select(&mut st, &s, &req, &mut rng()).0,
         SelectResult::Exhausted(Exhaustion::Untimed)
@@ -7983,10 +8002,10 @@ fn pace_reads_the_window_map_and_ranks_an_api_key_account_by_its_worst_bucket() 
     };
     st.record_sample("a", bucket(0.3, Some(5_000), 1_000));
     st.record_sample("b", bucket(0.6, Some(1_000_000), 1_000));
-    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    let req = || request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     for seed in 0..8u64 {
         assert_eq!(
-            picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0),
+            picked(&select(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed)).0),
             "a",
             "0.3 utilization beats 0.6 utilization whatever the resets, since a bucket's own reset never enters the score"
         );
@@ -7998,7 +8017,7 @@ fn pace_reads_the_window_map_and_ranks_an_api_key_account_by_its_worst_bucket() 
     let mut seen = std::collections::HashSet::new();
     for seed in 0..16u64 {
         seen.insert(
-            picked(&select(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed)).0).to_string(),
+            picked(&select(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed)).0).to_string(),
         );
     }
     assert_eq!(seen.len(), 2, "both accounts are seen: {seen:?}");
@@ -8785,8 +8804,8 @@ fn a_fresh_placement_prefers_an_account_under_its_in_flight_cap_and_the_trace_na
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
     let ticket = st.in_flight().dispatched("a", 1_000);
-    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
-    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+    let req = || request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req(), &mut rng()).0 else {
         panic!()
     };
     assert_eq!(
@@ -8802,7 +8821,7 @@ fn a_fresh_placement_prefers_an_account_under_its_in_flight_cap_and_the_trace_na
         sel.trace.skipped
     );
     drop(ticket);
-    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req(), &mut rng()).0 else {
         panic!()
     };
     assert_eq!(
@@ -8878,9 +8897,9 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
         .into_iter()
         .map(|id| st.in_flight().dispatched(id, 1_000))
         .collect();
-    let req = request(&s, None, "claude-sonnet-5", true, &[], 1_000);
+    let req = || request(&s, None, "claude-sonnet-5", true, &[], 1_000);
     assert_eq!(
-        select(&mut st, &s, &req, &mut rng()).0,
+        select(&mut st, &s, &req(), &mut rng()).0,
         SelectResult::Held {
             account_id: "a".into(),
             hold: HoldFacts {
@@ -8899,12 +8918,12 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
     );
     drop(tickets);
     assert_eq!(
-        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        picked(&select(&mut st, &s, &req(), &mut rng()).0),
         "a",
         "the hold placed nothing, so the turn is still a's"
     );
     assert_eq!(
-        picked(&select(&mut st, &s, &req, &mut rng()).0),
+        picked(&select(&mut st, &s, &req(), &mut rng()).0),
         "b",
         "the placement on a moved the turn on"
     );
@@ -8926,11 +8945,11 @@ fn the_cap_binds_before_the_fit_so_a_free_account_without_runway_takes_the_place
     // b has no room for the body's rewrite.
     st.record_sample("b", sample(0.94, 0.1, 1_000));
     let on_a = st.in_flight().dispatched("a", 1_000);
-    let req = SelectRequest {
+    let req = || SelectRequest {
         body_tokens: 200_000,
         ..request(&s, None, "claude-sonnet-5", true, &[], 1_000)
     };
-    let d = decide(&mut st, &s, &req, &mut rng());
+    let d = decide(&mut st, &s, &req(), &mut rng());
     let SelectResult::Selected(sel) = &d.result else {
         panic!("a free account takes the placement")
     };
@@ -8955,7 +8974,7 @@ fn the_cap_binds_before_the_fit_so_a_free_account_without_runway_takes_the_place
     );
     let on_b = st.in_flight().dispatched("b", 1_000);
     assert_eq!(
-        select(&mut st, &s, &req, &mut rng()).0,
+        select(&mut st, &s, &req(), &mut rng()).0,
         SelectResult::Held {
             account_id: "a".into(),
             hold: HoldFacts {
@@ -14196,7 +14215,7 @@ fn a_renewal_records_five_no_move_lines_and_their_facts() {
             ("reserve", "none"),
         ]
     );
-    assert_eq!(d.record.version, 2);
+    assert_eq!(d.record.version, 3);
     assert_eq!(d.record.request.body_tokens, Some(0));
     assert_eq!(
         line(&d.record, "reserve")
@@ -15235,7 +15254,7 @@ fn a_static_placement_records_the_three_rung_lines_and_the_partitions() {
         &mut rng(),
     );
     assert_eq!(picked(&d.result), "a");
-    assert_eq!(d.record.version, 2);
+    assert_eq!(d.record.version, 3);
     assert_eq!(d.record.request.body_tokens, Some(200_000));
     // The fresh subagent books its body as one five-minute write on the account the rung placed it on.
     assert_eq!(
@@ -17592,18 +17611,18 @@ fn a_classifier_request_with_a_nonzero_body_lands_on_the_account_its_body_would_
     st.record_sample("a", refreshing(0.94, HOUR, HOUR, 1));
     st.record_sample("b", refreshing(0.5, HOUR, 2 * HOUR, 1));
     st.record_sample("c", refreshing(0.6, HOUR, 8 * HOUR, 1));
-    let plain = SelectRequest {
+    let plain = || SelectRequest {
         request_id: "r-plain".into(),
         body_tokens: 200_000,
         ..request(&s, None, "claude-sonnet-5", true, &[], 1_000)
     };
-    let classifier = SelectRequest {
+    let classifier = || SelectRequest {
         request_id: "r-classifier".into(),
         classifier: true,
-        ..plain.clone()
+        ..plain()
     };
     for seed in 0..8u64 {
-        let d = decide(&mut st, &s, &classifier, &mut StdRng::seed_from_u64(seed));
+        let d = decide(&mut st, &s, &classifier(), &mut StdRng::seed_from_u64(seed));
         assert_eq!(
             picked(&d.result),
             "a",
@@ -17620,7 +17639,7 @@ fn a_classifier_request_with_a_nonzero_body_lands_on_the_account_its_body_would_
         );
     }
     for seed in 0..8u64 {
-        let d = decide(&mut st, &s, &plain, &mut StdRng::seed_from_u64(seed));
+        let d = decide(&mut st, &s, &plain(), &mut StdRng::seed_from_u64(seed));
         assert_ne!(
             picked(&d.result),
             "a",
@@ -21261,7 +21280,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
         (&main.record, 0),
         (&fresh.record, 200_000),
     ] {
-        assert_eq!(record.version, 2);
+        assert_eq!(record.version, 3);
         assert_eq!(record.request.body_tokens, Some(body_tokens));
     }
     for renewal in [&at_70.record, &at_85.record, &back.record] {

@@ -1,4 +1,4 @@
-//! Record v2: the exact log of one routing decision, what the engine read in the order it read it and what it
+//! Record v3: the exact log of one routing decision, what the engine read in the order it read it and what it
 //! wrote. It travels beside the attempt's `SelectionTrace`, which the analytics keep reading. Nothing a rollup
 //! reads lives here alone. A word from a fixed vocabulary is a `&'static str`, an entity is its id, and a field
 //! the decision did not reach serializes as `null`.
@@ -11,7 +11,7 @@ use crate::select::{ClientClass, CohortHold, HoldFacts, Placement, SelectRequest
 use crate::state::Tier;
 use crate::RegistrySnapshot;
 
-pub const RECORD_VERSION: u32 = 2;
+pub const RECORD_VERSION: u32 = 3;
 
 /// Every step id the engine records with the verdict words it writes, in the ids' order, the two steps the refusal
 /// record writes by hand (`admission`, `selection`) and the fit table it appends whole (`fit`) included. The
@@ -811,7 +811,7 @@ impl From<&SelectRequest> for RefusedRequest {
             key_generation: request.key_generation,
             agent_id: request.agent_id.clone(),
             parent_agent_id: request.parent_agent_id.clone(),
-            session_id: request.session_id.clone(),
+            session_id: Some(request.session_id.clone()),
             request_class: request.request_class.clone(),
             canonical_model: request.canonical_model.clone(),
             lane: LaneFacts::of(&request.lane),
@@ -1211,7 +1211,7 @@ mod tests {
             ],
             "the blocks follow the walk: what came in, the pin, the settings, the members, the steps, the answer"
         );
-        assert_eq!(value["version"], 2);
+        assert_eq!(value["version"], 3);
         assert_eq!(
             keys(&value["settings"]),
             [

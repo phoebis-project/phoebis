@@ -5504,7 +5504,7 @@ async fn main_turn(
             key_id: "desktop".into(),
             key_generation: common::generation(&parts.store, "desktop"),
             agent_id: "main".into(),
-            session_id: Some(session.into()),
+            session_id: session.into(),
             canonical_model: "claude-sonnet-5".into(),
             folded_model: "claude-sonnet-5".into(),
             candidates,

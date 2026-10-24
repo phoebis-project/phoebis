@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -128,6 +128,13 @@ fn clock(now: &Arc<AtomicI64>) -> Clock {
     Arc::new(move || now.load(Ordering::SeqCst))
 }
 
+/// A session id no other call of this suite answered, for a case that measures the strategy or the eligible set
+/// with no pin in play.
+fn fresh_session() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    format!("s-fresh-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
 fn request(
     handle: &phoebis_routing::RouterHandle,
     session: Option<&str>,
@@ -141,7 +148,7 @@ fn request(
         key_id: "k".into(),
         key_generation: s.key("k").unwrap().created_at,
         agent_id: "main".into(),
-        session_id: session.map(String::from),
+        session_id: session.map(String::from).unwrap_or_else(fresh_session),
         canonical_model: "claude-sonnet-5".into(),
         folded_model: "claude-sonnet-5".into(),
         candidates: resolve(
@@ -1119,7 +1126,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             key_id: "k".into(),
             key_generation: s.key("k").unwrap().created_at,
             agent_id: "main".into(),
-            session_id: Some("s1".into()),
+            session_id: "s1".into(),
             canonical_model: "claude-sonnet-4-5".into(),
             folded_model: "claude-sonnet-4-5".into(),
             candidates: resolve(
@@ -1259,7 +1266,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             key_id: "k".into(),
             key_generation: s.key("k").unwrap().created_at,
             agent_id: "main".into(),
-            session_id: Some("s1".into()),
+            session_id: "s1".into(),
             canonical_model: "claude-sonnet-4-5".into(),
             folded_model: "claude-sonnet-4-5".into(),
             candidates: resolve(
@@ -5786,7 +5793,7 @@ async fn a_fork_after_a_resolution_places_on_the_warm_entry_a_late_report_filed_
         .await;
     // A fork under a session of its own, admitted on the dated id, continues the source's messages.
     let fork = SelectRequest {
-        session_id: Some("s2".into()),
+        session_id: "s2".into(),
         canonical_model: DATED.into(),
         lane: lane_key(DATED, "standard", "none", "-"),
         boundaries: Arc::from(["b1".to_string(), "fork-1".to_string()]),

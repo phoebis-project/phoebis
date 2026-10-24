@@ -3,7 +3,7 @@
   "body": {
     "request_id": "r-static",
     "seq": 1,
-    "version": 2,
+    "version": 3,
     "request": {
       "request_id": "r-static",
       "attempt": 1,
@@ -421,7 +421,7 @@
       "in_overage": false,
       "pin_written": {
         "action": "created",
-        "epoch": 6,
+        "epoch": 7,
         "lane": "claude-sonnet-5|standard|none|-",
         "refresh_stamped": true,
         "hashes_stamped": false

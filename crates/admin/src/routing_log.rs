@@ -318,7 +318,7 @@ pub(crate) struct Counts {
 }
 
 /// The record of the request's decision `seq`, counted from 1 in the order the router answered it: a hold and the
-/// placement after its wait are two decisions of one attempt. Record v2 decoded, with `request_id` and `seq` ahead
+/// placement after its wait are two decisions of one attempt. Record v3 decoded, with `request_id` and `seq` ahead
 /// of it. The record holds what the engine read, in the order it read it, and what it wrote. Every entity is its
 /// id, and no credential, token or message content is in it.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -326,14 +326,14 @@ pub(crate) struct Counts {
 pub(crate) struct DecisionRecord {
     pub request_id: String,
     pub seq: u32,
-    /// 2.
+    /// 3.
     pub version: u32,
     /// `request_id`, `attempt`, `seq`, `at`, `received_at` (when the relay received the request, the same on every
     /// selection of it, a refusal's `at`), `key_id`, `key_generation`, `pool_id`, `routing_session_id`, `agent_id`,
     /// `parent_agent_id`, `client_class`, `request_class`, `canonical_model`, `lane` (`speed`, `thinking`,
-    /// `effort`), `flags` (`fast`, `count`, `probe`, `portable`, `marker`, `context_compacted`), `identity` (`rung`,
-    /// `root`, `depth`, `account_id`), `chain` (`static_boundaries` and `boundaries`, the chains' lengths, and
-    /// `static_hash`), `attempted` (the accounts already tried), `holds` (each `account_id`, `cohort`, `held_ms`,
+    /// `effort`), `flags` (`fast`, `count`, `probe`, `portable`, `marker`, `context_compacted`), `chain`
+    /// (`static_boundaries` and `boundaries`, the chains' lengths, and `static_hash`), `attempted` (the accounts
+    /// already tried), `holds` (each `account_id`, `cohort`, `held_ms`,
     /// `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran out with no slot freed), `reason`
     /// (`cap` for a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait before its
     /// head, `rewrite` for a moved pin's wait for the head of the request that carried the move), `until` (the

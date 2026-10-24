@@ -83,7 +83,7 @@ fn snapshot() -> RegistrySnapshot {
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
-/// A fresh selection on key `k` for `model`, with no session.
+/// A fresh selection on key `k` for `model` under a session that holds no pin yet.
 fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
     let key = s.key("k").unwrap();
     SelectRequest {
@@ -93,7 +93,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         key_id: "k".into(),
         key_generation: key.created_at,
         agent_id: "main".into(),
-        session_id: None,
+        session_id: "s1".into(),
         canonical_model: model.into(),
         folded_model: model.into(),
         candidates: resolve(s, key, model, model).unwrap(),

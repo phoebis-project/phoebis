@@ -156,7 +156,7 @@ test('listRoutingLog encodes comma lists, ISO instants and kinds, and getDecisio
   assert.equal(calls[1].url, '/admin/routing-log', 'no filter sends no query');
   const decoded = await api.getDecision('req/1', 2);
   assert.equal(calls[2].url, '/admin/requests/req%2F1/decisions/2');
-  assert.deepEqual([decoded.version, decoded.requestId], [2, 'r-static']);
+  assert.deepEqual([decoded.version, decoded.requestId], [3, 'r-static']);
   assert.equal(await api.getDecision('gone', 1), null, 'a decision the ledger no longer holds answers null');
 });
 

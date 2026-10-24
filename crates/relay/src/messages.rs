@@ -2138,7 +2138,10 @@ impl Relay {
                     key_id: key.id.clone(),
                     key_generation: key.created_at,
                     agent_id: identity.agent_id.clone(),
-                    session_id: identity.session_id.clone(),
+                    session_id: identity
+                        .session_id
+                        .clone()
+                        .expect("the contract admits no request without a session id"),
                     canonical_model: identity.canonical_model.clone(),
                     folded_model: identity.folded_model.clone(),
                     candidates: candidates.clone(),
@@ -2697,7 +2700,11 @@ impl Relay {
             // it forked from. A fork that regenerated its parent's tail holds its answer in the memory alone, as
             // the shared boundary keeps the parent's. The session memory's last id is the fallback, as a first
             // turn after a compaction or a model switch has no boundary to match.
-            let own_root = admitted.identity.session_id.as_deref();
+            let own_root = admitted
+                .identity
+                .session_id
+                .as_deref()
+                .expect("the contract admits no request without a session id");
             let no_incarnation = |_: &str| None;
             let predecessor_under = |root: &str| {
                 self.router.predecessor(&PredecessorQuery {
@@ -2727,8 +2734,7 @@ impl Relay {
                     if detach {
                         return None;
                     }
-                    own_root
-                        .and_then(predecessor_under)
+                    predecessor_under(own_root)
                         .or_else(|| {
                             admitted
                                 .identity
@@ -3859,12 +3865,7 @@ impl Relay {
         if ctx.trace.kind == Kind::CountTokens {
             return None;
         }
-        let root = ctx
-            .identity
-            .session_id
-            .is_some()
-            .then(|| ctx.identity.session_id.clone())
-            .flatten();
+        let root = ctx.identity.session_id.clone();
         // An auxiliary request leaves no content entry: the client's quota probe has one message every probe of
         // the key shares, so an entry under it would read the next session's probe as a fork of this one. Its
         // static boundaries still land, a cache of their own the next probe of the same shape reads.
