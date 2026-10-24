@@ -142,7 +142,7 @@ export function SettingsPage() {
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
                 { label: 'Requests, samples and the routing log', value: keptFor(s.retention.retentionDays), title: bootstrapNote('stats.retention_days') },
                 { label: 'Rollups', value: keptFor(s.retention.rollupRetentionDays), title: bootstrapNote('stats.rollup_retention_days') },
-                { label: 'Body capture', value: `at most ${s.retention.bodyCaptureMaxHours} hours`, title: bootstrapNote('stats.body_capture_max_hours') },
+                { label: 'Body capture', value: `at most ${s.retention.bodyCaptureMaxHours} ${s.retention.bodyCaptureMaxHours === 1 ? 'hour' : 'hours'}`, title: bootstrapNote('stats.body_capture_max_hours') },
                 { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names. It reaches every route.' },
               ]}
             />

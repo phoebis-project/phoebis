@@ -2383,7 +2383,7 @@ export function PoolDialog({
           label="Retention (hours)"
           hint={
             <>
-              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${captureMaxHours} hours here, `}shown on the <PageLink to="/settings">Settings page</PageLink>&apos;s About card.
+              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${captureMaxHours} ${captureMaxHours === 1 ? 'hour' : 'hours'} here, `}shown on the <PageLink to="/settings">Settings page</PageLink>&apos;s About card.
             </>
           }
         >

@@ -6137,6 +6137,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
 
   {
+    // A one-hour bootstrap limit reads in the singular in the Retention hint.
+    const { getSettings } = api;
+    api.getSettings = async (...args) => {
+      const settings = await getSettings.apply(api, args);
+      return { ...settings, retention: { ...settings.retention, bodyCaptureMaxHours: 1 } };
+    };
+    try {
+      const page = await mount('/pools', { now: CLOCK_ORIGIN });
+      [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+      await page.settle(300);
+      const hint = group(page.container.querySelector('dialog[open]'), 'Body capture')?.textContent ?? '';
+      results.push({ name: '/pools a one-hour body capture limit reads 1 hour here in the Retention hint', ok: hint.includes("At most the bootstrap's body capture limit, 1 hour here, shown on the Settings page"), missing: [hint || 'no Body capture group'] });
+      page.unmount();
+    } finally {
+      api.getSettings = getSettings;
+    }
+  }
+
+  {
     const memberRows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
     const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
     {
@@ -24051,6 +24070,23 @@ m.unmount();
   results.push({ name: '/settings a zero retention reads kept forever, a one-day retention kept for 1 day, and the body capture limit its own hours', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day', 'Body capture=at most 6 hours']), missing: kept });
   api.getSettings = getSettings;
   page.unmount();
+}
+// A one-hour body capture limit reads in the singular on the About card.
+{
+  const { getSettings } = api;
+  api.getSettings = async (...args) => {
+    const settings = await getSettings.apply(api, args);
+    return { ...settings, retention: { ...settings.retention, bodyCaptureMaxHours: 1 } };
+  };
+  try {
+    const page = await mount('/settings', { now: CLOCK_ORIGIN });
+    const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const line = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).find((row) => row.startsWith('Body capture='));
+    results.push({ name: '/settings a one-hour body capture limit reads at most 1 hour', ok: line === 'Body capture=at most 1 hour', missing: [line ?? 'no Body capture line'] });
+    page.unmount();
+  } finally {
+    api.getSettings = getSettings;
+  }
 }
 
 m = await mount('/settings', { now: CLOCK_ORIGIN });
