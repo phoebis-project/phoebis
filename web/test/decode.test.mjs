@@ -323,6 +323,18 @@ test('a quota history both samplers wrote merges into one series in time order',
   assert.equal(history[0].accountId, 'business');
 });
 
+test("a quota history reads the head's stored Fable key as the one 7-day Fable series, in time order", () => {
+  const history = d.decodeQuotaHistory({
+    account_id: 'business',
+    windows: [
+      { id: 'seven_day_overage_included', samples: [{ at: 2_000_000, utilization: 0.8 }] },
+      { id: 'seven_day_fable', samples: [{ at: 1_000_000, utilization: 0.2 }] },
+    ],
+  });
+  assert.deepEqual(history.map((h) => h.windowId), ['7d_fable'], "the ledger stores a head's Fable reading under seven_day_overage_included, and the trend reads one Fable series");
+  assert.deepEqual(history[0].samples.map((s) => [s.at, s.utilization]), [[d.iso(1_000_000), 0.2], [d.iso(2_000_000), 0.8]], 'the poll sample, then the later head sample');
+});
+
 test('the window key helper names the three known windows and keeps any other key as its own window', () => {
   const keys = ['five_hour', '5h', 'seven_day', '7d', 'seven_day_fable', '7d_oi', 'fable', 'seven_day_overage_included', 'seven_day_opus'];
   assert.deepEqual(

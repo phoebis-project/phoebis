@@ -228,11 +228,15 @@ export function decodePairingConfirmed(v: unknown): PairingConfirmed {
   return { accountId: str(c.account_id), firstPollInFlight: bool(c.first_poll_in_flight), status: str(c.status) };
 }
 
+/** The history's samples keep the ledger's stored key, which spells a head's Fable week `seven_day_overage_included`,
+ *  so the history alone reads that key as the 7-day Fable window. */
+const historyWindowId = (id: string): WindowId | null => (id === 'seven_day_overage_included' ? '7d_fable' : windowId(id));
+
 export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
   const q = rec(v);
   const byId = new Map<WindowId, QuotaHistory>();
   for (const w of list(q.windows).map(rec)) {
-    const id = windowId(str(w.id));
+    const id = historyWindowId(str(w.id));
     if (id === null) continue;
     const samples = list(w.samples).map(rec).map((s) => ({ at: isoOr(s.at, epoch), utilization: num(s.utilization) }));
     const seen = byId.get(id);
