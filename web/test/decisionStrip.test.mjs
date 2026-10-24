@@ -91,7 +91,7 @@ function highestAt(path, x) {
   return best;
 }
 
-test('every step the router records has a station, a renderer and a stub word, and every station a step, in both record versions', () => {
+test('every step the router records has a station, a renderer and a stub word, and every station a step, in every record version', () => {
   const renderers = ['candidate', 'chips', 'hold', 'list', 'outcome', 'rung', 'sentence', 'table'];
   const stubs = ['fires', 'match', 'released'];
   // A record from version 2 on draws through the table, a version 1 record through the frozen fixture's legacy table.
@@ -464,8 +464,8 @@ test('a record of twelve candidates gives eight leaves and "and 4 more", the cho
 
 test('a bound renewal is the short shape with no placeholder', async () => {
   const base = await recordOf('req_ef099b34-453/1');
-  const m = modelOf(built(base, [step('pin', 'none'), step('eligible', 'match'), step('bound', 'bound', [fact('account_id', 'primary', null, 'primary')]), step('renew', 'renewed')], 'renewed'));
-  assert.deepEqual(read(m), ['Pin: none (taken)', 'Eligible: match (taken)', 'Bound: bound (taken)', 'Renew: renewed (taken)']);
+  const m = modelOf(built(base, [step('pin', 'none'), step('eligible', 'match'), step('bound', 'renewed', [fact('account_id', 'primary', null, 'primary')]), step('renew', 'renewed')], 'renewed'));
+  assert.deepEqual(read(m), ['Pin: none (taken)', 'Eligible: match (taken)', 'Bound: renewed (taken)', 'Renew: renewed (taken)']);
   assert.deepEqual([m.shape, m.decisive, m.host, m.branch, m.brackets], ['short', 'renew', 'renew', null, []]);
   assert.deepEqual(terminiOf(m), THREE_TERMINI(['chosen', 'renewed']));
 });

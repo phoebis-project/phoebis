@@ -1404,7 +1404,7 @@ test('the settings fold lists twenty-four rows, draws the five as not recorded o
   assert.deepEqual(rows({ ...SETTINGS, slowDown: false }).find(([label]) => label === 'Slow-down'), ['Slow-down', ['off']]);
   const before = rows({ ...SETTINGS, ...BEFORE_SLOW_DOWN });
   assert.deepEqual(['Return to plan', 'Return dwell', 'Slow-down', 'Stretch', 'Hold'].map((label) => before.find(([l]) => l === label)), ['Return to plan', 'Return dwell', 'Slow-down', 'Stretch', 'Hold'].map((label) => [label, ['not recorded']]));
-  assert.equal(before.filter(([, [value]]) => value === 'not recorded').length, 5, 'the switch and the ceiling a version 2 record carries read as recorded');
+  assert.equal(before.filter(([, [value]]) => value === 'not recorded').length, 5, 'the switch and the ceiling a record from version 2 on carries read as recorded');
   const legacy = rows(LEGACY_SETTINGS);
   assert.deepEqual(legacy.slice(8, 10), [['Window ceiling', ['not recorded']], ['Load shedding', ['not recorded']]]);
   assert.deepEqual(legacy.slice(-3), [['Shed above (then)', ['90%']], ['Select below (then)', ['off']], ['Pace floor (then)', ['5%']]]);

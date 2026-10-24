@@ -1372,10 +1372,10 @@ export interface RecordOutcome {
 }
 
 /**
- * A record as the record route answers it, every block in camelCase: version 2, or version 1 for a decision made
- * before the projection, whose settings read the old names and whose walk carries the cool reading. `raw` is the
- * route's answer as it arrived, kept for the card's Copy as JSON, and `settings` null for a refusal under a key or
- * pool the registry no longer held.
+ * A record as the record route answers it, every block in camelCase: version 2 or later, or version 1 for a decision
+ * made before the projection, whose settings read the old names and whose walk carries the cool reading. `raw` is the
+ * route's answer as it arrived, kept for the card's Copy as JSON, and `settings` null for a refusal under a key or pool
+ * the registry no longer held.
  */
 export interface DecisionRecord {
   candidates: RecordCandidate[];

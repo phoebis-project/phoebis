@@ -669,7 +669,7 @@ test('a session decodes its runway and whether it is bounded', () => {
   assert.deepEqual(read(bare), [null, null], 'a row without the members reads no projection');
 });
 
-test("both record versions decode their settings, a version 1 record's three removed ones under legacy", () => {
+test("every record version decodes its settings, a version 1 record's three removed ones under legacy", () => {
   const body = fixture('decision');
   const v3 = d.decodeDecisionRecord(body);
   const s = body.settings;
