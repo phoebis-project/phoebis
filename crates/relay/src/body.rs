@@ -208,14 +208,14 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
                 return Err(RelayError::AccountUuid);
             }
             match replace_account_uuid(body, uuid) {
-                // Silently sending a body the account identity never reached would bill the request against
-                // whatever the caller wrote, so the caller is told which member the relay could not find.
+                // The contract refuses an inference request without the member before an account is chosen, so this arm
+                // guards that invariant rather than answering a client: a body here carries the member.
                 Spliced::Absent => return Err(RelayError::BodyShape(BodyMember::MetadataUserId)),
                 Spliced::Replaced => true,
                 Spliced::Unchanged => false,
             }
         }
-        // An API-key account binds no identity, so a body without the member (an SDK caller's) goes as sent.
+        // An API-key account binds no identity, so the value is blanked where the member is present.
         AccountUuidEdit::Blank => matches!(replace_account_uuid(body, ""), Spliced::Replaced),
     };
     let model_replaced = match replace_model(body, edit.upstream_model) {
@@ -602,13 +602,12 @@ fn starts_with_object(body: &[u8]) -> bool {
         == Some(&b'{')
 }
 
-fn replace_account_uuid(body: &mut Vec<u8>, uuid: &str) -> Spliced {
-    let Some((start, end)) = phoebis_cch::string_member_span(body, &["metadata", "user_id"]) else {
-        return Spliced::Absent;
-    };
-    let Some(key_at) = find(&body[start..end], ESCAPED_UUID_KEY) else {
-        return Spliced::Absent;
-    };
+/// The span of the `account_uuid` value inside the escaped `metadata.user_id` string, `None` where the body
+/// has no such string member, the member has no `account_uuid` key, or the value never closes. The contract
+/// and the splice read one search, so the item holds exactly where the splice succeeds.
+pub(crate) fn account_uuid_value_span(body: &[u8]) -> Option<(usize, usize)> {
+    let (start, end) = phoebis_cch::string_member_span(body, &["metadata", "user_id"])?;
+    let key_at = find(&body[start..end], ESCAPED_UUID_KEY)?;
     let value_start = start + key_at + ESCAPED_UUID_KEY.len();
     // The value ends at the first `\"` that opens an escape of its own. Stepping over each escape pair keeps the
     // second backslash of a `\\` from pairing with the next quote, which on a value ending in that pair is the
@@ -617,13 +616,19 @@ fn replace_account_uuid(body: &mut Vec<u8>, uuid: &str) -> Spliced {
     let mut at = 0;
     let value_len = loop {
         match raw.get(at) {
-            None => return Spliced::Absent,
+            None => return None,
             Some(b'\\') if raw.get(at + 1) == Some(&b'"') => break at,
             Some(b'\\') => at += 2,
             Some(_) => at += 1,
         }
     };
-    let value_end = value_start + value_len;
+    Some((value_start, value_start + value_len))
+}
+
+fn replace_account_uuid(body: &mut Vec<u8>, uuid: &str) -> Spliced {
+    let Some((value_start, value_end)) = account_uuid_value_span(body) else {
+        return Spliced::Absent;
+    };
     if body[value_start..value_end] == *uuid.as_bytes() {
         return Spliced::Unchanged;
     }

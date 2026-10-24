@@ -1,6 +1,7 @@
 //! What the relay reads off a Claude Code request's headers at admission: the client's own auto-mode classifier
 //! call, marked by the class header `auxiliary` with the classifier beta and nothing of the body, and the contract,
-//! the items a Claude Code inference request carries or is refused for before any account is chosen.
+//! the items a Claude Code request carries, two of them on a token count and a probe, or is refused for before any
+//! account is chosen.
 mod common;
 
 use std::time::Duration;
@@ -20,6 +21,7 @@ use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
+const K: &str = "sk-ant-api03-KKKK";
 
 /// The classifier's own shape: the unstamped line, the monitor's prompt, the two user turns, the stop sequence and
 /// the short answer. The marker is header-only, so the body is here for the shape alone.
@@ -160,27 +162,6 @@ fn assert_refused_for(answer: &Answer, up: &FakeUpstream, item: &str, name: &str
         up.requests().is_empty(),
         "{item}: nothing was sent upstream"
     );
-}
-
-/// The refusal the router recorded as the request's decision, under a five-second bound.
-async fn recorded_refusal(
-    events: &mut broadcast::Receiver<RouterEvent>,
-    request_id: &str,
-) -> Option<RefusalFacts> {
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-            .await
-            .expect("the request's decision arrives")
-            .expect("not lagged");
-        if let RouterEvent::Decision {
-            summary, record, ..
-        } = event
-        {
-            if record.request.request_id == request_id {
-                return summary.refusal.clone();
-            }
-        }
-    }
 }
 
 /// The request class the router recorded with the request's decision, under a five-second bound.
@@ -390,6 +371,51 @@ async fn a_compaction_request_without_the_compaction_header_is_refused_for_the_c
     up.shutdown().await;
 }
 
+/// The splice binds the account into the `account_uuid` member of `metadata.user_id`, so a string without that
+/// member is refused for the contract before any account is chosen, on an OAuth leg and an API-key leg alike.
+#[tokio::test]
+async fn a_request_whose_user_id_lacks_the_account_uuid_member_is_refused_for_the_contract() {
+    let body = classifier_body_with(|value| {
+        value["metadata"]["user_id"] = serde_json::json!("{\"session_id\":\"s-1\"}");
+    });
+    for account in [api_key("k", K, 0), oauth("a", A, 0)] {
+        let up = upstream().await;
+        let kind = account.kind;
+        let (h, mut sub) = observing(&up, &[account]).await;
+        let answer = send(
+            &h,
+            &mut sub,
+            shaped(FixtureKind::OauthFirstParty, &body, Some("main")),
+        )
+        .await;
+        assert_eq!(answer.status, 400, "{kind:?}");
+        assert_refused_for(&answer, &up, "metadata_user_id", "account_uuid");
+        up.shutdown().await;
+    }
+}
+
+/// The client writes an empty `account_uuid` when it holds no OAuth account, as it does behind the router, so the
+/// member with an empty value is the item.
+#[tokio::test]
+async fn an_empty_account_uuid_in_metadata_user_id_is_admitted() {
+    let up = upstream().await;
+    let (h, mut sub) = observing(&up, &[oauth("a", A, 0)]).await;
+    let answer = send(
+        &h,
+        &mut sub,
+        shaped(
+            FixtureKind::OauthFirstParty,
+            &classifier_body(),
+            Some("main"),
+        ),
+    )
+    .await;
+    assert_eq!(answer.status, 200);
+    assert_eq!(up.requests().len(), 1);
+    assert_eq!(answer.complete().client_contract, None);
+    up.shutdown().await;
+}
+
 /// The client's attribution opt-out drops the line and leaves its own prompt at `system[0]`.
 #[tokio::test]
 async fn the_attribution_opt_out_shape_is_refused_for_the_line() {
@@ -408,8 +434,8 @@ async fn the_attribution_opt_out_shape_is_refused_for_the_line() {
     up.shutdown().await;
 }
 
-/// The public `count_tokens` schema has no slot for the line or `metadata`, so a token count is outside the
-/// contract.
+/// The public `count_tokens` schema has no slot for the line or `metadata`, so a token count is judged on the
+/// version and the session header alone, and this count sends both.
 #[tokio::test]
 async fn a_token_count_without_a_line_and_without_metadata_is_admitted_as_today() {
     let up = upstream().await;

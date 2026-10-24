@@ -101,8 +101,8 @@ pub(crate) fn carried_version<'a>(
 /// The version half of a `claude-cli/` user agent, accepted only as the client's own spelling of one: digits
 /// and dots, then at most one `-` and a prerelease suffix of ASCII letters, digits, dots, and hyphens. A header
 /// value admits `;` and `=`, so an unconstrained version could smuggle a `;`-separated field of its own
-/// choosing into the billing line this build then signs; anything else restores nothing rather than a guessed
-/// version.
+/// choosing into the billing line this build then signs. Anything else is refused under the contract's version
+/// item rather than restored from a guessed version.
 pub fn restorable_version(cli_version: &str) -> Option<&str> {
     let (release, prerelease) = match cli_version.split_once('-') {
         Some((release, prerelease)) => (release, Some(prerelease)),

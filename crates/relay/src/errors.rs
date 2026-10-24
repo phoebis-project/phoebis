@@ -196,6 +196,10 @@ const REPEATED_SYSTEM: &str =
 /// The item's own message: what is missing, and the environment line that sends it.
 fn contract_message(item: &str) -> &'static str {
     match item {
+        "client_version" => {
+            "the client version in the User-Agent header is not spelled as Claude Code spells one. \
+             Report the client version to the operator, who updates the router"
+        }
         "session_header" => {
             "the request carries no x-claude-code-session-id header the router requires of a \
              Claude Code client. Send the requests as Claude Code sends them"
@@ -209,8 +213,8 @@ fn contract_message(item: &str) -> &'static str {
              Claude Code client. Leave CLAUDE_CODE_ATTRIBUTION_HEADER unset"
         }
         "metadata_user_id" => {
-            "the request body has no metadata.user_id the router requires of a \
-             Claude Code client. Send the body as Claude Code sends it"
+            "the request body has no metadata.user_id with an account_uuid member the router requires of a \
+             Claude Code client. Send the requests as Claude Code sends them"
         }
         "agent_id_header" => {
             "the request names a subagent class and carries no \
@@ -223,7 +227,8 @@ fn contract_message(item: &str) -> &'static str {
              Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1"
         }
         _ => unreachable!(
-            "contract_gap only ever names session_header, class_header, attribution_line, metadata_user_id, agent_id_header or compaction_header"
+            "contract_gap only ever names client_version, session_header, class_header, attribution_line, \
+             metadata_user_id, agent_id_header or compaction_header"
         ),
     }
 }
@@ -577,14 +582,15 @@ mod tests {
     #[test]
     fn every_contract_message_names_its_item_and_ends_without_a_semicolon() {
         use crate::identity::{
-            ITEM_AGENT_ID_HEADER, ITEM_ATTRIBUTION_LINE, ITEM_CLASS_HEADER, ITEM_COMPACTION_HEADER,
-            ITEM_METADATA_USER_ID, ITEM_SESSION_HEADER,
+            ITEM_AGENT_ID_HEADER, ITEM_ATTRIBUTION_LINE, ITEM_CLASS_HEADER, ITEM_CLIENT_VERSION,
+            ITEM_COMPACTION_HEADER, ITEM_METADATA_USER_ID, ITEM_SESSION_HEADER,
         };
         for (item, name) in [
+            (ITEM_CLIENT_VERSION, "User-Agent"),
             (ITEM_SESSION_HEADER, "x-claude-code-session-id"),
             (ITEM_CLASS_HEADER, "x-claude-code-request-class"),
             (ITEM_ATTRIBUTION_LINE, "system[0]"),
-            (ITEM_METADATA_USER_ID, "metadata.user_id"),
+            (ITEM_METADATA_USER_ID, "account_uuid"),
             (ITEM_AGENT_ID_HEADER, "x-claude-code-agent-id"),
             (ITEM_COMPACTION_HEADER, "x-claude-code-compaction"),
         ] {
@@ -624,10 +630,15 @@ mod tests {
     #[test]
     fn every_contract_message_reads_as_the_client_page_quotes_it() {
         use crate::identity::{
-            ITEM_AGENT_ID_HEADER, ITEM_ATTRIBUTION_LINE, ITEM_CLASS_HEADER, ITEM_COMPACTION_HEADER,
-            ITEM_METADATA_USER_ID, ITEM_SESSION_HEADER,
+            ITEM_AGENT_ID_HEADER, ITEM_ATTRIBUTION_LINE, ITEM_CLASS_HEADER, ITEM_CLIENT_VERSION,
+            ITEM_COMPACTION_HEADER, ITEM_METADATA_USER_ID, ITEM_SESSION_HEADER,
         };
         for (item, quoted) in [
+            (
+                ITEM_CLIENT_VERSION,
+                "the client version in the User-Agent header is not spelled as Claude Code spells one. Report the \
+                 client version to the operator, who updates the router",
+            ),
             (
                 ITEM_SESSION_HEADER,
                 "the request carries no x-claude-code-session-id header the router requires of a Claude Code \
@@ -645,8 +656,8 @@ mod tests {
             ),
             (
                 ITEM_METADATA_USER_ID,
-                "the request body has no metadata.user_id the router requires of a Claude Code client. Send the \
-                 body as Claude Code sends it",
+                "the request body has no metadata.user_id with an account_uuid member the router requires of a \
+                 Claude Code client. Send the requests as Claude Code sends them",
             ),
             (
                 ITEM_AGENT_ID_HEADER,

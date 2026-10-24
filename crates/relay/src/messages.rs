@@ -48,7 +48,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::billing::{restorable_version, Restore};
+use crate::billing::Restore;
 use crate::body::{tier_ttls, uniform_ttl, AccountUuidEdit, VersionCheck, BILLING_LINE_PATH};
 use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
@@ -1850,13 +1850,22 @@ impl Relay {
                     .await
             }
         };
-        // The contract: a Claude Code inference request carries what the router reads of it, or is refused before
-        // an account is chosen. After resolve, so a refused model is answered first, and
-        // before the drift checks, so a missing line is never a drift.
-        if identity.class == ClientClass::ClaudeCode && trace.kind == Kind::Inference {
-            if let Some(item) =
-                contract_gap(&parts.headers, &identity, &facts, request_class.as_deref())
-            {
+        // The contract: a Claude Code request carries what the router reads of it, or is refused before an account
+        // is chosen. The gate answered any other client before the body was read, so no class is judged here. After
+        // resolve, so a refused model is answered first, and before the drift checks, so a missing line is never a
+        // drift. A token count and a probe are judged for the version and the session header alone.
+        if matches!(
+            trace.kind,
+            Kind::Inference | Kind::CountTokens | Kind::Probe
+        ) {
+            if let Some(item) = contract_gap(
+                &parts.headers,
+                &identity,
+                &facts,
+                request_class.as_deref(),
+                client_version.as_deref(),
+                trace.kind,
+            ) {
                 let refusal = self.contract_refusal(
                     item,
                     &parts.headers,
@@ -1908,23 +1917,20 @@ impl Relay {
         }
         let prev_req = restores_prev_req(request_class.as_deref(), &parts.headers);
         // Claude Code's own inference requests alone: a probe replays what the client sent, a token count has no
-        // line to fill, and a body without the block is relayed as sent and gets no client request id either.
-        let restore = match (client_version.as_deref(), identity.session_id.as_deref()) {
-            // The version lands in a line this build signs, so one spelled any other way than the client's
-            // own restores nothing rather than a version guessed around whatever it carried.
-            (Some(version), _) if trace.kind == Kind::Inference && facts.carries_line => {
-                restorable_version(version).map(|version| {
-                    if let Some(key) = memory_key.as_ref() {
-                        self.memory
-                            .touch(key, hints.prompt_id.as_deref(), received_at);
-                    }
-                    RestoreContext {
-                        cli_version: version.to_string(),
-                        prompt_units: facts.prompt_units.clone(),
-                        prompt_id: hints.prompt_id.clone(),
-                        prev_req,
-                        system_is_array: facts.system_is_array,
-                    }
+        // line to fill, and a body without the block is relayed as sent and gets no client request id either. The
+        // contract admitted the version, so it lands in the line as the client spelled it.
+        let restore = match client_version.as_deref() {
+            Some(version) if trace.kind == Kind::Inference && facts.carries_line => {
+                if let Some(key) = memory_key.as_ref() {
+                    self.memory
+                        .touch(key, hints.prompt_id.as_deref(), received_at);
+                }
+                Some(RestoreContext {
+                    cli_version: version.to_string(),
+                    prompt_units: facts.prompt_units.clone(),
+                    prompt_id: hints.prompt_id.clone(),
+                    prev_req,
+                    system_is_array: facts.system_is_array,
                 })
             }
             _ => None,
@@ -4261,7 +4267,11 @@ impl Relay {
                 request_class: request_class.map(str::to_string),
                 canonical_model: identity.canonical_model.clone(),
                 lane: LaneFacts::default(),
-                flags: RequestFlags::default(),
+                flags: RequestFlags {
+                    count: trace.kind == Kind::CountTokens,
+                    probe: trace.kind == Kind::Probe,
+                    ..RequestFlags::default()
+                },
                 chain: ChainFacts::default(),
                 attempted: Vec::new(),
                 holds: Vec::new(),

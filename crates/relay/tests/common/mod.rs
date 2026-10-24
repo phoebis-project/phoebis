@@ -23,7 +23,7 @@ use phoebis_relay::{
     ShutdownMark, UpstreamGzip,
 };
 use phoebis_routing::{
-    spawn, DecisionRecord, DecisionSummary, RouterConfig, RouterEvent, RouterHandle,
+    spawn, DecisionRecord, DecisionSummary, RefusalFacts, RouterConfig, RouterEvent, RouterHandle,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Failover,
@@ -1534,6 +1534,27 @@ pub fn decisions_of(
             _ => None,
         })
         .collect()
+}
+
+/// The refusal the router recorded as the request's decision, under a five-second bound.
+pub async fn recorded_refusal(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    request_id: &str,
+) -> Option<RefusalFacts> {
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the request's decision arrives")
+            .expect("not lagged");
+        if let RouterEvent::Decision {
+            summary, record, ..
+        } = event
+        {
+            if record.request.request_id == request_id {
+                return summary.refusal.clone();
+            }
+        }
+    }
 }
 
 pub fn outcome(resp: &axum::http::Response<Body>) -> RelayOutcome {

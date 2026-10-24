@@ -557,11 +557,11 @@ async fn a_drifted_stamp_is_refused(drifted: Vec<u8>, kind: &str) {
 }
 
 /// A body the account identity cannot be written into would be billed against whatever the caller wrote, so
-/// it is refused before any account is tried rather than relayed as it stands. The body carries the
-/// `metadata.user_id` member the contract requires of a Claude Code request, with no `account_uuid` inside it for
-/// the splice to find.
+/// it is refused before any account is tried rather than relayed as it stands. The body carries a
+/// `metadata.user_id` string with no `account_uuid` member inside it for the splice to find, which the contract
+/// reads as the member missing.
 #[tokio::test]
-async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
+async fn a_body_whose_user_id_lacks_the_account_uuid_member_is_refused_for_the_contract() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Json {
@@ -589,7 +589,7 @@ async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
         resp.headers()
             .get("x-phoebis-error-code")
             .and_then(|v| v.to_str().ok()),
-        Some("body_shape")
+        Some("client_contract")
     );
     let outcome = resp
         .extensions()
@@ -597,16 +597,22 @@ async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
         .expect("a refused request carries its outcome")
         .clone();
     assert_eq!(
-        (outcome.error_code.as_deref(), outcome.attempt),
-        (Some("body_shape"), 0),
-        "the ledger row names the refusal and no attempt was spent"
+        (
+            outcome.error_code.as_deref(),
+            outcome.client_contract.as_deref(),
+            outcome.attempt
+        ),
+        (Some("client_contract"), Some("metadata_user_id"), 0),
+        "the ledger row names the refusal and its item, and no attempt was spent"
     );
     let refusal: serde_json::Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(refusal["error"]["type"], "invalid_request_error");
     let message = refusal["error"]["message"].as_str().unwrap();
     assert!(
-        message.contains("metadata.user_id") && !message.contains("claude-sonnet-4-5"),
+        message.contains("account_uuid")
+            && message.contains("metadata.user_id")
+            && !message.contains("claude-sonnet-4-5"),
         "the refusal names the member it could not find and nothing of the body: {message}"
     );
     assert!(
@@ -616,10 +622,10 @@ async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
     up.shutdown().await;
 }
 
-/// The public `count_tokens` schema has no `metadata` member and the upstream refuses unknown top-level
-/// members, so the account identity has no slot here and its absence is not a malformed body.
+/// The client sends its session header on every call, a token count among them, so a count without it is refused
+/// for the contract before any account is tried, whatever its body holds.
 #[tokio::test]
-async fn an_oauth_count_tokens_body_without_metadata_reaches_the_upstream() {
+async fn an_oauth_count_tokens_body_without_the_session_header_is_refused_for_the_contract() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages/count_tokens".into(),
         respond: Respond::Json {
@@ -640,11 +646,23 @@ async fn an_oauth_count_tokens_body_without_metadata_reaches_the_upstream() {
         ))
         .unwrap();
     let resp = app.oneshot(request).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let sent = String::from_utf8(up.requests()[0].body.clone()).unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        sent, r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#,
-        "the model the registry resolved is spliced in and no metadata member is invented"
+        resp.headers()
+            .get("x-phoebis-error-code")
+            .and_then(|v| v.to_str().ok()),
+        Some("client_contract")
+    );
+    let refusal: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let message = refusal["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("x-claude-code-session-id") && !message.contains(';'),
+        "{message}"
+    );
+    assert!(
+        up.requests().is_empty(),
+        "a count the contract refuses is not sent upstream"
     );
     up.shutdown().await;
 }

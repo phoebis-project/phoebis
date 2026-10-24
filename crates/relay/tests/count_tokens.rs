@@ -10,7 +10,8 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::{CACHE_DIAGNOSIS_BETA, EXTENDED_TTL_BETA};
-use phoebis_routing::warm;
+use phoebis_routing::{warm, RefusalFacts, RouterEvent};
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-api03-AAAA0001";
@@ -345,5 +346,93 @@ async fn a_count_on_a_pinned_session_leaves_the_pins_refresh_its_ttl_and_its_war
         warm(&after, false, counted_at + 600_000),
         "the turn's hour still stands ten minutes after the count"
     );
+    up.shutdown().await;
+}
+
+/// The contract's answer to a count for `item`: a `400` whose message names `name` with no semicolon, nothing sent
+/// upstream, and the router's record of a count refused for the item.
+async fn assert_count_refused_for(
+    resp: axum::http::Response<axum::body::Body>,
+    up: &FakeUpstream,
+    decisions: &mut broadcast::Receiver<RouterEvent>,
+    item: &str,
+    name: &str,
+) {
+    assert_eq!(resp.status(), 400, "{item}");
+    assert_eq!(
+        resp.headers()["x-phoebis-error-code"],
+        "client_contract",
+        "{item}"
+    );
+    let request_id = outcome(&resp).request_id;
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let refusal: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let message = refusal["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(name) && !message.contains(';'),
+        "{item}: {message}"
+    );
+    assert!(
+        up.requests().is_empty(),
+        "{item}: nothing was sent upstream"
+    );
+    let events = router_events_until(decisions, |event| {
+        matches!(event, RouterEvent::Decision { record, .. } if record.request.request_id == request_id)
+    })
+    .await;
+    let (summary, record) = decisions_of(&events, &request_id)
+        .pop()
+        .expect("the refusal's decision");
+    assert!(
+        record.request.flags.count,
+        "{item}: the record names a count"
+    );
+    assert_eq!(
+        summary.refusal,
+        Some(RefusalFacts {
+            kind: "client",
+            code: "contract",
+            reason: item.into(),
+        }),
+        "{item}"
+    );
+}
+
+/// The client sends its session header on every call, a token count among them, so a count without it is refused
+/// for the contract.
+#[tokio::test]
+async fn a_count_without_the_session_header_is_refused_for_the_contract() {
+    let up = FakeUpstream::start(vec![count_rule()]).await;
+    let h = harness(&up, &[api_key("acct", A, 0)], PoolSpec::default()).await;
+    let mut decisions = h.router.subscribe_events();
+    let mut req = count_request(FixtureKind::CountApiKey, BodyFixture::CountApiKey);
+    remove_header(&mut req, "x-claude-code-session-id");
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_count_refused_for(
+        resp,
+        &up,
+        &mut decisions,
+        "session_header",
+        "x-claude-code-session-id",
+    )
+    .await;
+    up.shutdown().await;
+}
+
+/// The version is judged on a count as on any request, so a `claude-cli/` version outside the client's spelling is
+/// refused for the contract on a count too.
+#[tokio::test]
+async fn a_count_with_a_version_outside_the_clients_spelling_is_refused_for_the_contract() {
+    let up = FakeUpstream::start(vec![count_rule()]).await;
+    let h = harness(&up, &[api_key("acct", A, 0)], PoolSpec::default()).await;
+    let mut decisions = h.router.subscribe_events();
+    let mut req = count_request(FixtureKind::CountApiKey, BodyFixture::CountApiKey);
+    set_header(
+        &mut req,
+        "user-agent",
+        "claude-cli/2.1.278;x=y (external, cli)",
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_count_refused_for(resp, &up, &mut decisions, "client_version", "User-Agent").await;
     up.shutdown().await;
 }

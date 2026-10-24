@@ -7,8 +7,10 @@ use axum::body::Body;
 use axum::http::{HeaderValue, Request};
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
+use phoebis_bus::{Bus, Delivery};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::{MemoryKey, CLASSIFIER_BETA};
+use phoebis_routing::RefusalFacts;
 use phoebis_store::{AccountKind, ApiKeyRow, MemoryStore, RulesMode, StorageKey, Store};
 use tower::ServiceExt;
 
@@ -489,10 +491,31 @@ async fn assert_refused_for_the_line(resp: axum::http::Response<Body>, up: &Fake
     assert!(up.requests().is_empty(), "nothing was sent upstream");
 }
 
-/// A forged `claude-cli/` agent buys nothing on a body that carries no attribution line: the relay never
-/// writes a line the client did not, and the contract refuses the body before any account is chosen.
+/// The contract's answer to a `claude-cli/` version spelled any other way than the client's: a `400` the client is
+/// told not to retry, its message naming the User-Agent header with no semicolon, and nothing sent upstream.
+async fn assert_refused_for_the_version(resp: axum::http::Response<Body>, up: &FakeUpstream) {
+    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.headers()["x-phoebis-error-code"], "client_contract");
+    assert_eq!(resp.headers()["x-should-retry"], "false");
+    assert_eq!(
+        outcome(&resp).client_contract.as_deref(),
+        Some("client_version")
+    );
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let refusal: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(refusal["error"]["type"], "invalid_request_error");
+    let message = refusal["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("User-Agent") && !message.contains(';'),
+        "{message}"
+    );
+    assert!(up.requests().is_empty(), "nothing was sent upstream");
+}
+
+/// A forged version half buys nothing on a body that carries no attribution line: the contract judges the version
+/// before the line and refuses it before any account is chosen.
 #[tokio::test]
-async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_is_refused_for_the_contract() {
+async fn a_forged_claude_code_user_agent_is_refused_for_the_contract() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;
     let mut req = without_billing_line("s-1");
@@ -501,16 +524,25 @@ async fn a_forged_claude_code_user_agent_on_a_body_without_the_block_is_refused_
         "user-agent",
         "claude-cli/2.1.269;cc_prev_req=forged (external, cli)",
     );
-    assert_refused_for_the_line(app.clone().oneshot(req).await.unwrap(), &up).await;
+    assert_refused_for_the_version(app.clone().oneshot(req).await.unwrap(), &up).await;
     up.shutdown().await;
 }
 
-/// The same forged version half, proven where a line already exists to fill: the version gate refuses it
-/// there too, not only where there is no line at all.
+/// The same forged version half on a body that carries the line: the version lands in a line this build signs, so
+/// the contract refuses it before any account is chosen, and the refusal is recorded as any contract refusal is.
 #[tokio::test]
-async fn a_version_spelled_any_other_way_than_the_clients_restores_nothing_on_a_sent_line() {
+async fn a_version_spelled_any_other_way_than_the_clients_is_refused_for_the_contract() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
-    let app = relay_with(AccountKind::Oauth, &up).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-VERSION", 0)],
+        PoolSpec::default(),
+        bus,
+    )
+    .await;
+    let mut decisions = h.router.subscribe_events();
     let mut req = request_from_fixture(
         inference_head(FixtureKind::OauthNonFirstParty),
         body(BodyFixture::Oauth),
@@ -522,12 +554,32 @@ async fn a_version_spelled_any_other_way_than_the_clients_restores_nothing_on_a_
         "user-agent",
         "claude-cli/2.1.269;cc_prev_req=forged (external, cli)",
     );
-    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), 200);
-    let sent = &up.requests()[0];
-    let line = billing_line(&sent.body);
-    assert_eq!(field(&line, "cch"), None);
-    assert_eq!(field(&line, "cc_prompt_id"), None);
-    assert_eq!(header(sent, "x-client-request-id"), None);
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    let request_id = outcome(&resp).request_id;
+    assert_refused_for_the_version(resp, &up).await;
+    assert_eq!(
+        recorded_refusal(&mut decisions, &request_id).await,
+        Some(RefusalFacts {
+            kind: "client",
+            code: "contract",
+            reason: "client_version".into(),
+        })
+    );
+    // The request row as the ledger assembles it from the same events.
+    let events = drain_until_complete(&mut sub).await;
+    let mut assembler = phoebis_ledger::Assembler::new(Arc::new(|| 0));
+    let row = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .find_map(|record| match record {
+            phoebis_ledger::Record::Request { request, .. } => Some(request),
+            _ => None,
+        })
+        .expect("the refusal's request row");
+    assert_eq!(
+        (row.error_code.as_deref(), row.client_contract.as_deref()),
+        (Some("client_contract"), Some("client_version"))
+    );
     up.shutdown().await;
 }
 

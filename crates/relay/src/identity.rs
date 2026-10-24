@@ -5,11 +5,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use axum::http::HeaderMap;
-use phoebis_bus::OTHER_CLIENT;
+use phoebis_bus::{Kind, OTHER_CLIENT};
 use phoebis_routing::{ClientClass, ConversationLookup, ConversationQuery, REFRESHING_CLASSES};
 use phoebis_store::ApiKeyRow;
 
-use crate::billing::entrypoint_of;
+use crate::billing::{entrypoint_of, restorable_version};
 use crate::facts::BodyFacts;
 use crate::RelayError;
 
@@ -18,6 +18,7 @@ const MAIN_AGENT: &str = "main";
 
 // The words of the contract's items, in the table's order: the refusal's reason, the request row's
 // `client_contract` column and the routing log carry them.
+pub(crate) const ITEM_CLIENT_VERSION: &str = "client_version";
 pub(crate) const ITEM_SESSION_HEADER: &str = "session_header";
 pub(crate) const ITEM_CLASS_HEADER: &str = "class_header";
 pub(crate) const ITEM_ATTRIBUTION_LINE: &str = "attribution_line";
@@ -66,7 +67,8 @@ pub struct RequestIdentity {
     /// identity. `None` for a session's own continuation, for a match at depth 1 and for an auxiliary request.
     pub forked_from: Option<String>,
     pub fork_depth: Option<u32>,
-    /// `metadata.user_id` is a string member of the body, read once here for the contract.
+    /// `metadata.user_id` is a string member of the body whose escaped text carries the `account_uuid` member
+    /// with a value that closes inside the string, as the splice locates both.
     pub has_user_id: bool,
 }
 
@@ -106,7 +108,7 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
         client,
         forked_from: None,
         fork_depth: None,
-        has_user_id: string_member(body, &["metadata", "user_id"]).is_some(),
+        has_user_id: crate::body::account_uuid_value_span(body).is_some(),
     })
 }
 
@@ -240,17 +242,28 @@ pub(crate) fn is_auxiliary(request_class: Option<&str>) -> bool {
     request_class.is_some_and(|class| !REFRESHING_CLASSES.contains(&class))
 }
 
-/// The first item of the contract the request lacks, in the table's order, or `None`. The class header is judged
-/// before the two items that depend on it, so a request without it is never refused for them, and the line is
-/// required where `system` is an array alone, so the client's quota probe (no `system`) is outside the item.
+/// The first item of the contract the request lacks, in the table's order, or `None`. The version and the
+/// session header are judged for every kind, since a token count and a probe send both, and the five body and
+/// class items for an inference request alone. `client_version` is the user agent's version as `DriftGuard`
+/// reads it, judged against the client's own spelling. The class header is judged before the two items that
+/// depend on it, so a request without it is never refused for them, and the line is required where `system` is an
+/// array alone, so the client's quota probe (no `system`) is outside the item.
 pub(crate) fn contract_gap(
     headers: &HeaderMap,
     identity: &RequestIdentity,
     facts: &BodyFacts,
     request_class: Option<&str>,
+    client_version: Option<&str>,
+    kind: Kind,
 ) -> Option<&'static str> {
+    if client_version.and_then(restorable_version).is_none() {
+        return Some(ITEM_CLIENT_VERSION);
+    }
     if header_id(headers, "x-claude-code-session-id").is_none() {
         return Some(ITEM_SESSION_HEADER);
+    }
+    if kind != Kind::Inference {
+        return None;
     }
     let Some(class) = request_class else {
         return Some(ITEM_CLASS_HEADER);
@@ -494,7 +507,7 @@ mod tests {
         assert_eq!(identity.class, ClientClass::Other);
     }
 
-    // -- contract_gap: the items a Claude Code inference request carries --
+    // -- contract_gap: the items a Claude Code request carries, two of them on a token count and a probe --
 
     const LINE: &str = "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli;";
 
@@ -535,14 +548,70 @@ mod tests {
         headers
     }
 
-    /// The gap as `handle` reads it: the identity and the body facts off the one body, the class through
-    /// `header_id`.
-    fn gap(headers: &HeaderMap, body: &serde_json::Value) -> Option<&'static str> {
+    /// The gap of a request of `kind` as `handle` reads it: the identity and the body facts off the one body, the
+    /// class through `header_id` and the version through `DriftGuard`.
+    fn gap_of(headers: &HeaderMap, body: &serde_json::Value, kind: Kind) -> Option<&'static str> {
         let bytes = serde_json::to_vec(body).unwrap();
         let identity = identify(headers, &bytes).expect("the body has a model");
         let (facts, _) = crate::facts::BodyFacts::read_with_tree(&bytes);
         let class = header_id(headers, "x-claude-code-request-class");
-        contract_gap(headers, &identity, &facts, class.as_deref())
+        let version = crate::DriftGuard.check(headers);
+        contract_gap(
+            headers,
+            &identity,
+            &facts,
+            class.as_deref(),
+            version.as_deref(),
+            kind,
+        )
+    }
+
+    /// The gap of an inference request.
+    fn gap(headers: &HeaderMap, body: &serde_json::Value) -> Option<&'static str> {
+        gap_of(headers, body, Kind::Inference)
+    }
+
+    #[test]
+    fn contract_gap_names_the_version_first_and_judges_a_count_and_a_probe_for_the_two_header_items(
+    ) {
+        let mut misspelled = contract_headers(Some("main"));
+        misspelled.insert(
+            axum::http::header::USER_AGENT,
+            "claude-cli/2.1.269;x=y (external, cli)".parse().unwrap(),
+        );
+        misspelled.remove("x-claude-code-session-id");
+        assert_eq!(
+            gap(&misspelled, &whole_body()),
+            Some(ITEM_CLIENT_VERSION),
+            "the version is judged before the session header"
+        );
+        let prerelease = {
+            let mut h = contract_headers(Some("main"));
+            h.insert(
+                axum::http::header::USER_AGENT,
+                "claude-cli/2.1.269-beta.1 (external, cli)".parse().unwrap(),
+            );
+            h
+        };
+        assert_eq!(gap(&prerelease, &whole_body()), None);
+        let count_body = serde_json::json!({
+            "model": "claude-sonnet-5",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        for kind in [Kind::CountTokens, Kind::Probe] {
+            assert_eq!(
+                gap_of(&contract_headers(None), &count_body, kind),
+                None,
+                "{kind:?} needs no class, line or member"
+            );
+            let mut sessionless = contract_headers(None);
+            sessionless.remove("x-claude-code-session-id");
+            assert_eq!(
+                gap_of(&sessionless, &count_body, kind),
+                Some(ITEM_SESSION_HEADER),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
@@ -577,7 +646,27 @@ mod tests {
         );
         let mut empty = whole_body();
         empty["metadata"]["user_id"] = serde_json::json!("");
-        assert_eq!(gap(&main, &empty), None, "whatever the string holds");
+        assert_eq!(
+            gap(&main, &empty),
+            Some(ITEM_METADATA_USER_ID),
+            "an empty string carries no account_uuid"
+        );
+        let mut keyless = whole_body();
+        keyless["metadata"]["user_id"] = serde_json::json!("{\"session_id\":\"s-1\"}");
+        assert_eq!(
+            gap(&main, &keyless),
+            Some(ITEM_METADATA_USER_ID),
+            "a string without the account_uuid member is not the member"
+        );
+        let mut blank_uuid = whole_body();
+        blank_uuid["metadata"]["user_id"] = serde_json::json!(
+            "{\"device_id\":\"d-1\",\"account_uuid\":\"\",\"session_id\":\"s-1\"}"
+        );
+        assert_eq!(
+            gap(&main, &blank_uuid),
+            None,
+            "the client writes an empty account_uuid when it holds no OAuth account"
+        );
         assert_eq!(
             gap(&contract_headers(Some("subagent")), &whole_body()),
             Some(ITEM_AGENT_ID_HEADER)
