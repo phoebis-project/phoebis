@@ -14,10 +14,10 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { figuresValue } from '@/components/ui/Tile';
 import { equivalentOrDash, nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE } from '@/lib/analytics';
-import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
+import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
-import { costHeaderTitle, costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
+import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
@@ -51,12 +51,12 @@ interface CostTile {
   value: ReactNode;
 }
 /**
- * The day's cost tile under a position. Native stacks the plan rows' 20x 5-hour equivalent, the window a day's figure
- * leads with, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in each
- * unit. A day whose 5-hour window a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash
- * too while no request was billed, and a zero reads as no plan rows only where neither window is flagged. The dollar
- * positions read their dollars. The shares are one account's, and the tile sums every account, so it reads a dash, its
- * note saying why and its spark kept so the tile never waits on a placeholder.
+ * The day's cost tile under a position. Native stacks the plan rows' 20x 7-day equivalent, the Pools page's reading of
+ * a day, over the billed rows' dollars, a side with no rows left out, and an empty day reads its zero in each unit. A
+ * day whose 7-day window a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash too while
+ * no request was billed, and a zero reads as no plan rows only where neither window is flagged. The dollar positions
+ * read their dollars. The shares are one account's, and the tile sums every account, so it reads a dash, its note
+ * saying why and its spark kept so the tile never waits on a placeholder.
  */
 function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   if (unit === 'all') return { note: `${fmtUsd(o.cost24h / 24)} per hour`, spark: o.hourly.map((h) => h.cost), value: fmtUsd(o.cost24h) };
@@ -66,12 +66,12 @@ function costTileOf(unit: UnitPosition, o: Overview): CostTile {
   const day = o.equivalent24h;
   const plan = day.fiveHour > 0 || day.sevenDay > 0 || day.unpriced.fiveHour || day.unpriced.sevenDay;
   const billed = o.billed24h > 0;
-  const { figures, marked, unpriced } = nativeFiguresOf('five_hour', { billed: billed ? o.billed24h : undefined, equivalent: plan ? day.fiveHour : undefined, unpriced: day.unpriced.fiveHour }, o.estimated24h);
+  const { figures, marked, unpriced } = nativeFiguresOf('seven_day', { billed: billed ? o.billed24h : undefined, equivalent: plan ? day.sevenDay : undefined, unpriced: day.unpriced.sevenDay }, o.estimated24h);
   return {
-    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('five_hour', unpriced ? null : day.fiveHour / 24, marked)} per hour`,
+    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash('seven_day', unpriced ? null : day.sevenDay / 24, marked)} per hour`,
     // In percent: the spark's scale floors at one, a dollar an hour on the dollar positions, and a floor of a whole
     // window an hour would flatten the day.
-    spark: plan || !billed ? o.hourly.map((h) => h.equivalent.fiveHour * 100) : o.hourly.map((h) => h.billed),
+    spark: plan || !billed ? o.hourly.map((h) => h.equivalent.sevenDay * 100) : o.hourly.map((h) => h.billed),
     title: unpriced ? UNPRICED_TITLE : marked ? ESTIMATED_TITLE : undefined,
     value: figuresValue(figures),
   };
@@ -122,7 +122,7 @@ export function DashboardPage() {
       {failedFirst(overview) ? (
         <ReadFailed title="Could not load the 24-hour figures" error={overview.error} retry={overview.reload} />
       ) : (
-        <div className="stat-grid">
+        <div className="stat-grid stat-grid--day">
           <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} title="Requests the router asked an account for. The refused requests are in the Refused tile." color={ink.series[0]} />
           <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={hourly.map((h) => h.tokens)} color={ink.series[2]} />
           <StatTile label="Estimated cost, 24h" value={costTile?.value ?? null} note={costTile?.note ?? null} spark={costTile?.spark ?? []} title={costTile?.title} color={ink.series[1]} />
@@ -134,7 +134,7 @@ export function DashboardPage() {
             title="Errors among the requests the router asked an account for, the refused requests left out"
             color={ink.series[7]}
           />
-          <StatTile label="Refused, 24h" value={o ? fmtInt(o.refused24h) : null} note={o ? (o.topRefusalCode ? `Most common: ${o.topRefusalCode}` : 'None') : null} spark={hourly.map((h) => h.refused)} color={ink.series[3]} />
+          <StatTile label="Refused, 24h" value={o ? fmtInt(o.refused24h) : null} note={o ? (o.topRefusalCode ? `Most common: ${o.topRefusalCode}` : 'None') : null} spark={hourly.map((h) => h.refused)} title={REFUSED_TITLE} color={ink.series[3]} />
         </div>
       )}
       {asOf && (
@@ -302,7 +302,8 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
       {account.email && <div className="account-mini__sub mono muted">{account.email}</div>}
       <WindowTriple account={account} now={now} compact />
       <div className="account-mini__foot">
-        {account.extraUsage?.inUse && <Badge tone="serious">Overage active</Badge>}
+        {/* A usage-based seat always pays in dollars, which is no overage, whatever its flags read. */}
+        {!account.usageBased && account.extraUsage?.inUse && <Badge tone="serious">Overage active</Badge>}
         {account.status === 'cooldown' && cooldown && (
           <span className="muted" title={fmtAbsolute(cooldown.until)}>
             cooldown ends {fmtRelative(cooldown.until, now)}
@@ -341,8 +342,8 @@ function RecentTable({ rows, error, settings }: { error: string | null; rows: Re
       <table className="table dash__recent">
         <thead>
           <tr>
-            <th className="col-fit">Time</th>
-            <th className="col-fill">Key</th>
+            <th className="col-fill">Time</th>
+            <th className="col-fit">Key</th>
             <th className="col-fit">Account</th>
             <th className="col-fit">Model</th>
             <th className="col-fit">Status</th>
@@ -372,11 +373,13 @@ function RecentTable({ rows, error, settings }: { error: string | null; rows: Re
                 const shown = shortModel(r.model);
                 return (
                   <tr key={r.id}>
-                    <td className="num col-fit" title={fmtAbsolute(r.at)}>
+                    <td className="num col-fill" title={fmtAbsolute(r.at)}>
                       <Link to={`/requests/${r.id}`}>{fmtTime(r.at)}</Link>
-                      <span className="sub mono">{shortId(r.id, 12)}</span>
+                      <span className="sub mono" title={r.id}>
+                        {r.id}
+                      </span>
                     </td>
-                    <td className="mono col-fill" title={r.keyId ?? undefined}>
+                    <td className="mono col-fit" title={r.keyId ?? undefined}>
                       {r.keyId}
                     </td>
                     <td className="col-fit">{r.accountId}</td>

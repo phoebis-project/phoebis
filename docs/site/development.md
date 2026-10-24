@@ -20,8 +20,9 @@ The console is embedded at build time. The UI crate's build script builds `web/d
 than its sources: it checks `node --version` against `>=26.0.0` and stops with
 `the console build needs Node >=26.0.0, and {found} was found` outside that range, then runs
 `npm ci --no-audit --no-fund` in `web/` unless `node_modules` carries the stamp of an install at least as new as the
-lockfile, and `npm run build`. `web/.nvmrc` names 26.11.1, the version the workflows install. When the bundle cannot be
-built, the script discards `web/dist` and warns
+lockfile, and `npm run build`. The `allowScripts` key of `web/package.json` lists the packages whose install scripts are
+reviewed, so `npm ci` runs them without its warning. `web/.nvmrc` names 26.11.1, the version the workflows install. When
+the bundle cannot be built, the script discards `web/dist` and warns
 `the web bundle could not be built, so web/dist was discarded and the router will serve the placeholder page. Set
 PHOEBIS_SKIP_UI_BUILD=1 to embed the bundle on disk as it is.`, since a build that quietly embeds the previous console
 reports nothing wrong and ships the wrong one. `PHOEBIS_SKIP_UI_BUILD=1` skips the Node step and embeds `web/dist` as it
@@ -64,10 +65,11 @@ build emitted one chunk, the entry passes 500 kB, or the entry or a chunk it loa
 pages stay chunks of their own and the first paint loads none of them, and it holds the API reference page's entry to
 the same Recharts rule and to loading neither entry from the other, and the console's entry and the chunks it loads to
 no Vue code, a marker check that also fails when no chunk the reference loads carries the marker. `npm run lint` is
-`eslint . --max-warnings 0`. `npm test` builds the test bundle and runs `node --test test/*.test.mjs`. `npm run smoke`
-builds the smoke bundle and runs `smoke/run.mjs` under jsdom with `TZ=UTC`. The last two lines are the browser pass
-against the mock and the reference smoke, both in the next section. The workflow writes the screenshots under the
-runner's temporary directory, and locally the directory has to lie outside the repository.
+`eslint . --max-warnings 0`. `npm test` builds the test bundle and runs
+`node --test --localstorage-file test/dist/localstorage.json test/*.test.mjs`. `npm run smoke` builds the smoke bundle
+and runs `smoke/run.mjs` under jsdom with `TZ=UTC`. The last two lines are the browser pass against the mock and the
+reference smoke, both in the next section. The workflow writes the screenshots under the runner's temporary directory,
+and locally the directory has to lie outside the repository.
 
 ## The browser pass
 

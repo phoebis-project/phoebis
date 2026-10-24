@@ -134,13 +134,13 @@ test('the pool retention is unbounded with the short hint and the floor alone un
   const hint = () => shownText(fieldIn(container, 'Retention (hours)')?.querySelector('.field__hint'));
   assert.equal(field()?.value, String(pool.bodyCaptureHours), 'the field opens on the stored retention');
   assert.equal(field()?.hasAttribute('max'), false, 'no ceiling stands before the read answers');
-  assert.equal(hint(), "At most the bootstrap's body capture limit, shown on the Settings page.");
+  assert.equal(hint(), "At most the bootstrap's body capture limit, shown on the Settings page's About card.");
   type(field(), '');
   assert.equal(statusOf(container), 'Save is held: Retention is a whole number of hours of at least 1.', 'an emptied field names the floor alone');
   answer();
   await settled();
   assert.equal(field()?.getAttribute('max'), String(LIMIT), 'the limit lands as the ceiling');
-  assert.equal(hint(), `At most the bootstrap's body capture limit, ${LIMIT} hours here, shown on the Settings page.`);
+  assert.equal(hint(), `At most the bootstrap's body capture limit, ${LIMIT} hours here, shown on the Settings page's About card.`);
   assert.equal(statusOf(container), `Save is held: Retention is a whole number of hours from 1 to ${LIMIT}.`);
 });
 

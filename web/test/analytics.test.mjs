@@ -161,6 +161,12 @@ test('the burn fold keeps the groups that burn the most tokens and sums the rest
   assert.deepEqual(d.foldBurn([point(0, '-', { cachedTokens: 60 })], 'key', 60, NONE).lines.map((l) => l.label), ['unattributed']);
 });
 
+test('a burn line under the classifier grouping names the reserved id none, as the breakdown labels it, and unattributed under any other', () => {
+  const reserved = [point(0, 'client', { cachedTokens: 120 }), point(0, '-', { cachedTokens: 60 })];
+  assert.deepEqual(d.foldBurn(reserved, 'classifier', 60, NONE).lines.map((l) => [l.key, l.label]), [['client', 'client'], ['-', 'none']]);
+  for (const groupBy of ['account', 'client', 'key', 'pool', 'user_agent']) assert.deepEqual(d.foldBurn(reserved, groupBy, 60, NONE).lines.map((l) => l.label), ['client', 'unattributed'], groupBy);
+});
+
 test('under the account grouping the rest folds into one other per unit, so no dollars hide behind a window share', () => {
   // Seven accounts burn the most; the three smallest are a priced subscription, a tier-unknown one and an
   // API key.
@@ -479,7 +485,7 @@ test("the mock files its hourly rows under the speed each hour's answers reporte
   assert.deepEqual(groups.map((g) => g.key), ['fast', 'standard']);
   const fast = d.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
   assert.ok(fast.length > 0 && fast.every((r) => r.keyId === 'desktop' && r.model.includes('opus') && r.kind === 'inference'));
-  const served = (rows) => rows.filter((r) => r.kind !== 'probe').reduce((n, r) => n + r.requests.incomplete + r.requests.ok + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone, 0);
+  const served = (rows) => rows.filter((r) => r.kind !== 'probe').reduce((n, r) => n + r.requests.incomplete + r.requests.ok + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown, 0);
   assert.deepEqual(groups.map((g) => g.requests), [served(fast), served(d.ALL_ROLLUPS.filter((r) => r.speed === 'standard'))]);
 });
 
@@ -793,12 +799,12 @@ test('the idle slots of the plan cards zero-fill against the flags under the equ
   assert.deepEqual([shares.rows.map((r) => r.fiveHour[0]), shares.lines[0].unpriced.fiveHour], [[0.02, null], true]);
 });
 
-test("the Cost by card's note counts the groups unpriced in range and their buckets, singular at one", () => {
-  assert.equal(d.unpricedNote(0, 0), null, 'nothing unpriced reads no note');
-  assert.equal(d.unpricedNote(1, 1), '1 group unpriced in 1 bucket, drawn as a gap');
-  assert.equal(d.unpricedNote(3, 5), '3 groups unpriced in 5 buckets, drawn as gaps');
-  assert.equal(d.unpricedNote(1, 3), '1 group unpriced in 3 buckets, drawn as gaps', 'the gaps follow the buckets');
-  assert.equal(d.unpricedNote(2, 1), '2 groups unpriced in 1 bucket, drawn as a gap', 'two groups unpriced in one bucket leave one gap per stack');
+test("the Cost by card's note names the groups unpriced in range up to three, counts them past three, and counts their buckets, singular at one", () => {
+  assert.equal(d.unpricedNote([], 0), null, 'nothing unpriced reads no note');
+  assert.equal(d.unpricedNote(['research'], 1), 'research unpriced in 1 bucket, drawn as a gap');
+  assert.equal(d.unpricedNote(['a', 'b', 'c'], 5), 'a, b, c unpriced in 5 buckets, drawn as gaps', 'up to three labels joined by commas');
+  assert.equal(d.unpricedNote(['a'], 3), 'a unpriced in 3 buckets, drawn as gaps', 'the gaps follow the buckets');
+  assert.equal(d.unpricedNote(['a', 'b', 'c', 'd'], 4), '4 groups unpriced in 4 buckets, drawn as gaps', 'past three labels the note counts the groups');
 });
 
 test("the probe tiles mark the plan side's estimate on the probe estimate alone, never on a dash or a side with no plan probe", () => {
@@ -847,8 +853,8 @@ test('the model week is labeled by the key the share map carries, so a second mo
   assert.equal(d.weekLabelOf(undefined), '7-day Fable', 'no map names a week');
   assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_opus: 0.04 } }), accountGroup({ costShares: null })]), 'seven_day_opus');
   assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08, seven_day_fable: 0.04 } }), accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05, seven_day_opus: 0.02 } })]), '7-day Fable, seven_day_opus', 'each distinct week once');
-  assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08 } })]), '7-day Fable', 'a table of Sonnet groups keeps the Fable week column');
-  assert.deepEqual(d.shareLines([{ at: '2026-09-16T11:00:00.000Z', groups: [accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05, seven_day_opus: 0.02 }, key: 'primary' })] }], 'account').weeks, { primary: 'seven_day_opus' }, 'the lines name the week each account charts');
+  assert.equal(d.weekColumnOf([accountGroup({ costShares: { five_hour: 0.2, seven_day: 0.08 } })]), '7-day Fable', 'a table of Sonnet groups keeps the 7-day Fable column');
+  assert.deepEqual(d.shareLines([{ at: '2026-09-16T11:00:00.000Z', groups: [accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05, seven_day_opus: 0.02 }, key: 'primary' })] }]).weeks, { primary: 'seven_day_opus' }, 'the lines name the week each account charts');
 });
 
 test('a share row labels each window and divides the 7-day share per plan request and per 1k plan output', () => {
@@ -869,7 +875,7 @@ test("the share lines carry each account's 7-day and week shares per bucket with
   const { accounts, data } = d.shareLines([
     { at: at(11), groups: [fable, haiku, apiKey] },
     { at: at(12), groups: [{ ...fable, costShares: { five_hour: 0.3, seven_day: 0.1, seven_day_fable: null } }, apiKey] },
-  ], 'account');
+  ]);
   assert.deepEqual(accounts, ['nightly', 'primary'], 'the accounts with a share map, an API key account left out');
   assert.deepEqual(
     data,
@@ -879,9 +885,9 @@ test("the share lines carry each account's 7-day and week shares per bucket with
     ],
     'a bucket an account has no group in, and a window it has no share on, read null, which the chart leaves as a gap',
   );
-  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }], 'account'), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }], labels: {}, weeks: {} }, 'no share map, no line');
+  assert.deepEqual(d.shareLines([{ at: at(11), groups: [apiKey] }]), { accounts: [], data: [{ at: Date.UTC(2026, 8, 16, 11) }], labels: {}, weeks: {} }, 'no share map, no line');
   const holder = accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05 }, key: 'desktop@1000', label: 'desktop (deleted)' });
-  assert.deepEqual(d.shareLines([{ at: at(11), groups: [holder] }], 'account').labels, { 'desktop@1000': 'desktop (deleted)' }, 'a line is named by its group label, the grouping the page reads, rather than its key');
+  assert.deepEqual(d.shareLines([{ at: at(11), groups: [holder] }]).labels, { 'desktop@1000': 'desktop (deleted)' }, 'a line is named by its group label rather than its key');
 });
 
 test('a share line with one priced bucket between two gaps marks it as an isolated slot, which the chart draws as a dot', () => {
@@ -891,26 +897,24 @@ test('a share line with one priced bucket between two gaps marks it as an isolat
     { at: at(11), groups: [primary(null)] },
     { at: at(12), groups: [primary({ five_hour: 0.1, seven_day: 0.05 })] },
     { at: at(13), groups: [primary(null)] },
-  ], 'account');
+  ]);
   assert.deepEqual(data.map((r) => r['primary:7d']), [null, 0.05, null], 'the priced bucket sits between two gaps');
   assert.deepEqual(d.isolatedSlots(data.map((r) => r['primary:7d'])), [false, true, false], 'so it is the one isolated slot');
   assert.deepEqual(d.isolatedSlots(data.map((r) => r['primary:week'])), [false, false, false], 'a window never priced marks none');
-  const edge = d.shareLines([{ at: at(11), groups: [primary({ five_hour: 0.1, seven_day: 0.05 })] }, { at: at(12), groups: [primary(null)] }], 'account').data;
+  const edge = d.shareLines([{ at: at(11), groups: [primary({ five_hour: 0.1, seven_day: 0.05 })] }, { at: at(12), groups: [primary(null)] }]).data;
   assert.deepEqual(d.isolatedSlots(edge.map((r) => r['primary:7d'])), [true, false], "the range's edge counts as a gap");
 });
 
-test("modelGroupLabel reads the route's label under every grouping, the model grouping's empty key included", () => {
-  assert.equal(d.modelGroupLabel({ key: '', label: 'no model' }, 'model'), 'no model', "the label the route answers for the model grouping's empty key");
-  assert.equal(d.modelGroupLabel({ key: '', label: '' }, 'model'), '', 'an empty label from the route reads empty, with no word in its place');
-  assert.equal(d.modelGroupLabel({ key: 'claude-haiku-4-5', label: 'claude-haiku-4-5' }, 'model'), 'claude-haiku-4-5', 'a named model reads the label the route answered');
-  assert.equal(d.modelGroupLabel({ key: '', label: '' }, 'pool'), '', 'another grouping keeps the label the route answered');
+test("modelGroupLabel reads the route's label, the model grouping's empty key included", () => {
+  assert.equal(d.modelGroupLabel({ key: '', label: 'no model' }), 'no model', "the label the route answers for the model grouping's empty key");
+  assert.equal(d.modelGroupLabel({ key: '', label: '' }), '', 'an empty label from the route reads empty, with no word in its place');
+  assert.equal(d.modelGroupLabel({ key: 'claude-haiku-4-5', label: 'claude-haiku-4-5' }), 'claude-haiku-4-5', 'a named model reads the label the route answered');
 });
 
 test('a share line and a burn line by model name the group without a model "no model"', () => {
   const at = new Date(Date.UTC(2026, 8, 16, 11)).toISOString();
   const modelless = accountGroup({ costShares: { five_hour: 0.1, seven_day: 0.05 }, key: '', label: 'no model' });
-  assert.deepEqual(d.shareLines([{ at, groups: [modelless] }], 'model').labels, { '': 'no model' }, 'the share line under the model grouping');
-  assert.deepEqual(d.shareLines([{ at, groups: [modelless] }], 'pool').labels, { '': 'no model' }, "the share line reads the group's label under another grouping too");
+  assert.deepEqual(d.shareLines([{ at, groups: [modelless] }]).labels, { '': 'no model' }, "the share line reads the group's label");
   const { lines } = d.foldBurn([point(0, 'claude-haiku-4-5', { uncachedTokens: 60 }), point(0, '')], 'model', 60, NONE);
   assert.deepEqual(lines.map((l) => l.label), ['claude-haiku-4-5', 'no model'], 'the burn line under the model grouping');
 });
@@ -1113,17 +1117,23 @@ test("a share note names the half that applies: the filter for one account's who
 });
 
 test('ratioOff marks a ratio outside the band after a rise of five percent', () => {
-  assert.equal(d.ratioOff({ observedRise: 0.3, ratio: 2 }), true, 'a window charged twice the table');
-  assert.equal(d.ratioOff({ observedRise: 0.3, ratio: 0.7 }), true, 'a window charged under the table');
-  assert.equal(d.ratioOff({ observedRise: 0.04, ratio: 3 }), false, 'a rise under five percent marks nothing, since whole-percent readings make it coarse');
-  assert.equal(d.ratioOff({ observedRise: 0.05, ratio: 3 }), true, 'a rise of five percent counts');
-  assert.equal(d.ratioOff({ observedRise: 0.3, ratio: 1.1 }), false);
-  assert.deepEqual([0.8, 1.25].map((ratio) => d.ratioOff({ observedRise: 0.3, ratio })), [false, false], 'the edges sit inside the band');
+  assert.equal(d.ratioOff({ observedRise: 0.3, predictedShare: 0.3, ratio: 2 }), true, 'a window charged twice the table');
+  assert.equal(d.ratioOff({ observedRise: 0.3, predictedShare: 0.3, ratio: 0.7 }), true, 'a window charged under the table');
+  assert.equal(d.ratioOff({ observedRise: 0.04, predictedShare: 0.3, ratio: 3 }), false, 'a rise under five percent marks nothing, since whole-percent readings make it coarse');
+  assert.equal(d.ratioOff({ observedRise: 0.05, predictedShare: 0.3, ratio: 3 }), true, 'a rise of five percent counts');
+  assert.equal(d.ratioOff({ observedRise: 0.3, predictedShare: 0.3, ratio: 1.1 }), false);
+  assert.deepEqual([0.8, 1.25].map((ratio) => d.ratioOff({ observedRise: 0.3, predictedShare: 0.3, ratio })), [false, false], 'the edges sit inside the band');
+});
+
+test('ratioOff marks no row whose priced share sits under the floor the rise reads, as the engine badges it', () => {
+  assert.equal(d.ratioOff({ observedRise: 0.3, predictedShare: 0.04, ratio: 3 }), false, 'a priced share under five percent marks nothing, though the rise and the ratio would');
+  assert.equal(d.ratioOff({ observedRise: 0.3, predictedShare: 0.04, ratio: 0.5 }), false, 'nor under the band');
+  assert.equal(d.ratioOff({ observedRise: 0.3, predictedShare: d.MIN_RISE, ratio: 3 }), true, 'a priced share at the floor counts');
 });
 
 test('the error rate is the requests that did not succeed over the requests', () => {
   assert.equal(d.errorRateOf({ requests: 10, succeeded: 9 }), 0.1);
-  assert.equal(d.errorRateOf({ requests: 0, succeeded: 0 }), 0, 'no request rates zero');
+  assert.equal(d.errorRateOf({ requests: 0, succeeded: 0 }), null, 'a group with no request has no rate, which the cells draw as a dash');
   // The fold never counts a refused request, so no code needs a rule of the console's own.
   assert.equal(d.blockedOf, undefined);
   assert.equal(d.GUARDRAIL_BLOCKED, undefined);

@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=26.0.0"
   },
+  "allowScripts": {
+    "vue-demi": true
+  },
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "build:mock": "VITE_PHOEBIS_MOCK=1 vite build --outDir dist-mock",
@@ -18,7 +21,7 @@
     "preview": "vite preview",
     "smoke": "vite build -c smoke/vite.config.ts && TZ=UTC node smoke/run.mjs",
     "sync-mock": "node scripts/sync-mock.mjs",
-    "test": "vite build -c test/vite.config.ts && node --test test/*.test.mjs"
+    "test": "vite build -c test/vite.config.ts && node --test --localstorage-file test/dist/localstorage.json test/*.test.mjs"
   },
   "dependencies": {
     "@scalar/api-reference": "1.72.1",

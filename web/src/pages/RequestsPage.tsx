@@ -262,12 +262,13 @@ export function RequestsPage() {
   // filter, Reset, a link) drops them in the render that brings it, with no reset of their own to render apart and read
   // the old filters once more without the cursor. The stale entry is replaced in that same render, so changing a
   // filter back does not return to the page left behind under it.
-  // `to` holds the range's end a walk from the poll's overrun reads under, the end its cursor came from.
+  // `to` holds the end the walk's cursor came from. Under a preset a cursor page here reads to the router's clock, as
+  // the poll under the watermark does, so only the first page and a custom range read an end.
   const [paging, setPaging] = useState<Paging>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
-  // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
-  // Refresh moves the end to now.
+  // The range ends where the list was loaded, so the first page and a custom range's cursor pages read against the
+  // window the list was loaded under, a preset's cursor page to the router's clock, and Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
   // Off on the logs until the reader picks an interval, and page state, so a link or a reload opens the log off.
   const [intervalMs, setIntervalMs] = useState(0);
@@ -285,7 +286,7 @@ export function RequestsPage() {
   const polledMs = effectiveInterval(intervalMs, ended);
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    () => ({ accountIds: filters.accounts, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
     [filters, cursor, custom, span, pagedTo],
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
@@ -864,18 +865,18 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
   // The dialog leaves the tree while it is open, so the browser's close steps never hand the focus back to the control
   // that opened it. The link takes it as the dialog goes, or the drawer's field where a step opened the dialog.
   const link = useRef<HTMLButtonElement>(null);
-  const drawerFind = useRef<HTMLDivElement>(null);
-  const dialogFind = useRef<HTMLDivElement>(null);
+  const drawerFind = useRef<HTMLInputElement>(null);
+  const dialogFind = useRef<HTMLInputElement>(null);
   const fromField = useRef(false);
   const wasWide = useRef(false);
   // A child's effects run before its parent's, so the dialog's showModal has run and its own focus is taken over here.
   useEffect(() => {
     if (wide) {
       wasWide.current = true;
-      if (fromField.current) dialogFind.current?.querySelector('input')?.focus();
+      if (fromField.current) dialogFind.current?.focus();
     } else if (wasWide.current) {
       wasWide.current = false;
-      (fromField.current ? drawerFind.current?.querySelector('input') : link.current)?.focus();
+      (fromField.current ? drawerFind.current : link.current)?.focus();
       fromField.current = false;
     }
   }, [wide]);
@@ -890,8 +891,9 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
     setFind((f) => ({ ...f, index: (Math.min(f.index, hits.length - 1) + by + hits.length) % hits.length, step: f.step + 1 }));
   };
   const findGroup = (at: typeof drawerFind, inDialog: boolean) => (
-    <div ref={at} className="body-block__find">
+    <div className="body-block__find">
       <Input
+        ref={at}
         placeholder="Find"
         aria-label={`Find in the ${label} body`}
         value={find.term}
@@ -919,7 +921,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
             aria-label="Clear find"
             onClick={() => {
               setFind({ index: 0, step: 0, term: '' });
-              at.current?.querySelector('input')?.focus();
+              at.current?.focus();
             }}
           />
         )}

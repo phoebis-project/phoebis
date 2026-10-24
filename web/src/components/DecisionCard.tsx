@@ -154,6 +154,11 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                       {cells.windows.length === 1 ? (
                         <td colSpan={3} className="num">
                           {cells.windows[0][0]}
+                          {cells.windows[0].slice(1).map((line, j) => (
+                            <span key={j} className="sub">
+                              {line}
+                            </span>
+                          ))}
                         </td>
                       ) : (
                         cells.windows.map((lines, i) => (

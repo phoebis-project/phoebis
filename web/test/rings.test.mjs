@@ -151,3 +151,14 @@ test('a disconnected account with the windows of its last reading and no profile
     assert.deepEqual(figures.leftOut, [], `the ${id} ring's left-out list`);
   }
 });
+
+test('a usage-based seat is on no ring and in no left-out list, as an API-key account is', () => {
+  // A window the seat carried into the class, so the case reads the class and not the window's absence. Its tier is
+  // in no cost model, which names it under the ring unless the class leaves it out first.
+  const accounts = [account('primary', 'default_claude_max_20x', [window('5h', 0.5), window('7d', 0.4)]), account('seat', 'default_claude_zero', [window('5h', 0.3), window('7d', 0.2)], { usageBased: true })];
+  for (const id of ['5h', '7d']) {
+    const figures = d.ringFigures(accounts, id, COSTS, NOW);
+    assert.deepEqual(figures.rows.map((r) => r.id), ['primary'], `the ${id} ring`);
+    assert.deepEqual(figures.leftOut, [], `the ${id} ring's left-out list`);
+  }
+});

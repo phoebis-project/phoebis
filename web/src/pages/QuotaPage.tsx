@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
+import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend } from '@/api/types';
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
 import { SectionBar } from '@/components/SectionBar';
@@ -9,9 +9,9 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
-import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
+import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, isExpired, isQuotaListed, meterTone, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 
 type Sort = 'default' | 'pace5h' | 'pace7d' | 'paceWeek' | 'soonest';
@@ -57,7 +57,9 @@ export function QuotaPage() {
     if (sort === 'paceWeek') return sortByPace(subscriptions, '7d_fable', now);
     if (sort === 'soonest') {
       const nextReset = (a: Account) => {
-        const future = a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now);
+        // A usage-based seat recovers at its spend window's reset, the one reset it carries.
+        const resets = [...a.windows.map((w) => w.resetsAt), ...(a.spend ? [a.spend.resetsAt] : [])];
+        const future = resets.flatMap((at) => (at === null ? [] : [Date.parse(at)])).filter((t) => t > now);
         return future.length ? Math.min(...future) : Number.POSITIVE_INFINITY;
       };
       return [...subscriptions].sort((a, b) => nextReset(a) - nextReset(b));
@@ -128,7 +130,7 @@ export function QuotaPage() {
         </section>
       ) : (
         <section className="quota-section" id="quota-windows" role="tabpanel" aria-labelledby="tab-quota-windows">
-          {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter((a) => a.windows.length > 0)} now={now} slotOf={slotOf} />)}
+          {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter(onTimeline)} now={now} slotOf={slotOf} />)}
         </section>
       )}
     </div>
@@ -174,7 +176,8 @@ function ExtraUsageLine({ extra }: { extra: ExtraUsage | null }) {
     <div className="qcard__extra" title={reason ?? undefined}>
       <span className={`chip ${state === 'in_use' ? 'chip--serious' : 'qcard__extra-quiet'}`}>
         <span className="chip__label">Extra usage</span>
-        {extra && extra.enabled && `${fmtCredits(extra.usedCredits)} / ${fmtCredits(extra.monthlyLimitCredits)}`}
+        {/* A reading a head wrote carries no amounts, which would read as $0.00 / $0.00. */}
+        {extra && extra.enabled && extra.usedCredits !== null && extra.monthlyLimitCredits !== null && `${fmtCredits(extra.usedCredits)} / ${fmtCredits(extra.monthlyLimitCredits)}`}
         {state === 'in_use' ? <span className="chip__flag">{EXTRA_USAGE_WORD.in_use}</span> : <span>{EXTRA_USAGE_WORD[state]}</span>}
       </span>
       {reason && <span className="qcard__extra-reason">{reason}</span>}
@@ -202,8 +205,9 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
-  // Windows the card holds are drawn whatever the last read said; the error takes their place only with none.
-  const failed = status === 'error' && !w5 && !w7 && !account.fableWindow;
+  // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
+  // spend reading with neither amounts nor a share counts as none.
+  const failed = status === 'error' && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
   return (
     <article className={`qcard ${failed ? 'is-error' : ''}`}>
       <header className="qcard__head">
@@ -229,6 +233,14 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
               Retry
             </Pill>
           </div>
+        ) : account.usageBased ? (
+          !hasSpendReading(account.spend) ? (
+            <p className="qcard__note muted">No spend reading yet.</p>
+          ) : (
+            <div className="qcard__windows">
+              <SpendWindow spend={account.spend} now={now} soon={soonest === 'spend'} />
+            </div>
+          )
         ) : !w5 && !w7 && !account.fableWindow ? (
           <p className="qcard__note muted">No quota windows reported yet.</p>
         ) : (
@@ -240,7 +252,8 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         )}
       </div>
 
-      <ExtraUsageLine extra={account.extraUsage} />
+      {/* A usage-based seat's Spend row is that reading, so its Extra usage line would draw one figure twice. */}
+      {!account.usageBased && <ExtraUsageLine extra={account.extraUsage} />}
 
       <div className="qcard__chips">
         {plan ? (
@@ -361,6 +374,55 @@ function QuotaWindow({ end, name, window: w, now, slowDown = null, soon }: { end
   );
 }
 
+/**
+ * A usage-based seat's spend window as one row of the card grid, in a window row's shape: the chip with the share left,
+ * the meter, and the reset label with the estimate's word where the router estimated it. It reads no pace, since the
+ * router projects no burn on the seat. With no limit set the chip reads the amount spent in its currency and no meter
+ * draws.
+ */
+function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: Spend }) {
+  const { amounts, utilization } = spend;
+  const unlimited = amounts !== null && amounts.limitMinor === null;
+  const left = utilization === null || unlimited ? null : Math.max(0, Math.min(1, 1 - utilization));
+  const figures =
+    amounts === null
+      ? null
+      : amounts.limitMinor === null
+        ? `${fmtMinor(amounts.usedMinor, amounts.currency, amounts.exponent)} spent`
+        : `${fmtMinor(amounts.usedMinor, amounts.currency, amounts.exponent)} of ${fmtMinor(amounts.limitMinor, amounts.currency, amounts.exponent)}`;
+  const parts = [...(left === null ? [] : [`${fmtPct(left)} left`]), ...(figures === null ? [] : [figures])];
+  const reading = parts.length === 0 ? 'Spend limit' : `Spend limit: ${parts.join(', ')}`;
+  return (
+    <>
+      <span className={`qwin__chip qchip ${left === null ? 'qchip--absent' : `qchip--${meterTone(left)}`}`} title={reading}>
+        <span className="qchip__name">Spend</span>
+        <span className="qchip__pct num">{left !== null ? `${fmtPct(left)} left` : (figures ?? 'n/a')}</span>
+      </span>
+      {left !== null ? (
+        <Meter value={left} tone={meterTone(left)} thin label={reading} title={reading} />
+      ) : unlimited ? (
+        // An empty cell keeps the reset in its column of the card's grid.
+        <span aria-hidden="true" />
+      ) : (
+        <div className="meter meter--thin meter--absent" role="presentation">
+          <div className="meter__fill" style={{ width: '100%' }} />
+        </div>
+      )}
+      {/* The estimate's word is a part of its own, so a column too narrow for the line breaks before it, as a live
+          window's label breaks before its projection. */}
+      <span className={`qwin__reset ${spend.resetSource === 'estimated' ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`${spend.resetSource === 'estimated' ? spendResetTitle(spend) : fmtAbsolute(spend.resetsAt)}${soon ? ', the first of this account to recover' : ''}`}>
+        {spend.resetSource === 'estimated' ? (
+          <>
+            <span className="qwin__part">resets {fmtRelative(spend.resetsAt, now)},</span> <span className="qwin__part muted">estimated</span>
+          </>
+        ) : (
+          `resets ${fmtRelative(spend.resetsAt, now)}`
+        )}
+      </span>
+    </>
+  );
+}
+
 /* Reset timeline */
 
 type Mode = 'session' | 'weekly';
@@ -401,6 +463,118 @@ function LaneChip({ label, window: w, now }: { label: string; now: number; windo
     <span className={`tl-chip tl-chip--${meterTone(remaining)}`} title={`${fmtPct(remaining)} of the ${label.toLowerCase()} left, resets ${fmtAbsolute(w.resetsAt)}`}>
       {label} <b className="tl-chip__pct num">{fmtPct(remaining)} left</b>
     </span>
+  );
+}
+
+/**
+ * A spend window's chip on its lane: the amount left of the limit in its currency, the amount spent alone with no limit
+ * set, toned by the share left as a window's chip is, with the reset and the estimate's word on hover.
+ */
+function SpendChip({ spend }: { spend: Spend }) {
+  const { amounts, utilization } = spend;
+  const left = utilization === null || amounts?.limitMinor === null ? null : Math.max(0, Math.min(1, 1 - utilization));
+  const figure =
+    amounts === null
+      ? left === null
+        ? 'n/a'
+        : `${fmtPct(left)} left`
+      : amounts.limitMinor === null
+        ? `${fmtMinor(amounts.usedMinor, amounts.currency, amounts.exponent)} spent`
+        : `${fmtMinor(Math.max(0, amounts.limitMinor - amounts.usedMinor), amounts.currency, amounts.exponent)} of ${fmtMinor(amounts.limitMinor, amounts.currency, amounts.exponent)} left`;
+  return (
+    <span className={`tl-chip lane__spend ${left === null ? '' : `tl-chip--${meterTone(left)}`}`} title={`${figure}, ${spendResetTitle(spend)}`}>
+      Spend limit <b className="tl-chip__pct num">{figure}</b>
+    </span>
+  );
+}
+
+/**
+ * The instant `months` calendar months from `ms` in UTC, the router's clock, a day past the month's end held to its
+ * last.
+ */
+function addMonths(ms: number, months: number): number {
+  const d = new Date(ms);
+  const first = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 1));
+  const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  return Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d.getUTCDate(), last), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds());
+}
+
+/**
+ * A usage-based seat's lane: one chip for its spend limit and one bar per monthly spend window in the account's color.
+ * The current window runs from one calendar month before the reading's reset to the reset, filled by the share spent
+ * and labeled as a plan bar is, the upcoming one dashed where the span reaches it. With no limit set the current
+ * window's outline stands alone, with no share to fill it.
+ */
+function SpendLane({ account, cells, color, now, nowPct, span, spend, stamp, steps }: { account: Account; cells: { at: number; weekend: boolean }[]; color: string; now: number; nowPct: number | null; span: { endMs: number; startMs: number }; spend: Spend; stamp: (at: number) => string; steps: ReadonlyMap<string, LabelStep> }) {
+  const width = span.endMs - span.startMs;
+  const reset = spend.resetsAt === null ? Number.NaN : Date.parse(spend.resetsAt);
+  const unlimited = spend.amounts !== null && spend.amounts.limitMinor === null;
+  const share = spend.utilization === null || unlimited ? null : `${fmtPct(Math.max(0, Math.min(1, 1 - spend.utilization)))} left`;
+  // The reading's own window ends at its reset. Its share says nothing of any other, so only that one is filled.
+  const bars: { current: boolean; end: number; start: number; state: 'live' | 'next' | 'past' }[] = [];
+  if (Number.isFinite(reset)) {
+    let k = 0;
+    while (addMonths(reset, k - 1) > span.startMs) k -= 1;
+    for (; addMonths(reset, k - 1) < span.endMs; k += 1) {
+      const [start, end] = [addMonths(reset, k - 1), addMonths(reset, k)];
+      if (end <= span.startMs || (unlimited && k !== 0)) continue;
+      bars.push({ current: k === 0, end, start, state: now >= start && now < end ? 'live' : end <= now ? 'past' : 'next' });
+    }
+  }
+  return (
+    <div className="lane" style={{ ['--lane-color' as string]: color }}>
+      <div className="lane__head">
+        <div className="lane__id">
+          <span className="lane__dot" />
+          <span className="lane__name" title={account.email ?? account.label}>
+            {account.label}
+          </span>
+          <span className="lane__period">month</span>
+        </div>
+        <div className="lane__chips">
+          <SpendChip spend={spend} />
+        </div>
+      </div>
+      <div className="lane__track">
+        <span className="lane__raster" aria-hidden>
+          {rasterCells(cells)}
+        </span>
+        {bars.map((b) => {
+          const from = Math.max(b.start, span.startMs);
+          const to = Math.min(b.end, span.endMs);
+          const key = `${account.id} ${b.start}`;
+          const step = steps.get(key) ?? 0;
+          const filled = b.state === 'live' && b.current && share !== null;
+          const usedEnd = b.start + Math.min(1, Math.max(0, spend.utilization ?? 0)) * (b.end - b.start);
+          const used = filled ? Math.max(0, (Math.min(usedEnd, to) - from) / (to - from)) * 100 : 0;
+          return (
+            <div
+              key={b.start}
+              className={`lane__bar lane__bar--${b.state}`}
+              style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${((to - from) / width) * 100}%` }}
+              title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${filled ? `\n${share}` : ''}`}
+            >
+              {filled && (
+                <span className="lane__clip">
+                  <span className="lane__used" style={{ width: `${used}%` }} />
+                </span>
+              )}
+              {filled ? (
+                <span className="lane__label" data-bar={key} hidden={step === 2}>
+                  {share}
+                  <span className="lane__label-reset" hidden={step !== 0}> · {stamp(b.end)}</span>
+                </span>
+              ) : (
+                <span className="lane__label" data-bar={key} hidden={step !== 0}>
+                  {stamp(b.end)}
+                </span>
+              )}
+            </div>
+          );
+        })}
+        {nowPct !== null && <span className="lane__now" style={{ left: `${nowPct}%` }} aria-hidden />}
+      </div>
+    </div>
   );
 }
 
@@ -491,9 +665,7 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
     return () => observer.disconnect();
   }, []);
 
-  const lanes = accounts
-    .map((a) => ({ account: a, window: windowOf(a, mode === 'session' ? '5h' : '7d') }))
-    .filter((l): l is { account: Account; window: RateLimitWindow } => l.window !== null);
+  const lanes = timelineLanes(accounts, mode === 'session' ? '5h' : '7d');
 
   return (
     <section className="timeline card">
@@ -566,13 +738,14 @@ function ResetTimeline({ accounts, now, slotOf }: { accounts: Account[]; now: nu
             </div>
           )}
 
-          {lanes.map(({ account, window: w }) => {
+          {lanes.map(({ account, spend, window: w }) => {
+            if (w === null) return spend === null ? null : <SpendLane key={account.id} account={account} cells={cells} color={accountColor(ink, slotOf(account.id))} now={now} nowPct={nowPct} span={span} spend={spend} stamp={stamp} steps={steps} />;
             // The bars project the period on from the last reset, but an expired window's share is of the period
             // before it, so the current bar names no share.
             const share = isExpired(w, now) ? null : `${fmtPct(remainingOf(w))} left`;
             const period = w.periodHours * HOUR;
             const resetAt = Date.parse(w.resetsAt ?? '');
-            // A cancelled account's saved end: no window opens after it, and the one that spans it stops there.
+            // A canceled account's saved end: no window opens after it, and the one that spans it stops there.
             const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
             const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
             const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / width) * 100 : null;

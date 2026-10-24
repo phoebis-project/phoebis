@@ -394,7 +394,7 @@ export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' |
 
 /** The identity card's subscription end as the operator leaves it; `endsAt` is a `datetime-local` value, empty for none. */
 export interface SubscriptionEndForm {
-  cancelled: boolean;
+  canceled: boolean;
   endsAt: string;
   /** The revision of the row the editor opened with, which the save sends as its fence. */
   revision: number;
@@ -404,7 +404,7 @@ export function subscriptionEndFormOf(
   account: Pick<Account, 'canceled' | 'revision' | 'subscription'>,
 ): SubscriptionEndForm {
   const end = account.canceled ? (account.subscription?.endsAt ?? null) : null;
-  return { cancelled: account.canceled, endsAt: end ? toLocalInput(Date.parse(end)) : '', revision: account.revision };
+  return { canceled: account.canceled, endsAt: end ? toLocalInput(Date.parse(end)) : '', revision: account.revision };
 }
 
 /** The viewer's zone as the end editor names it beside its label, `Ends (Europe/Berlin)`. */
@@ -414,20 +414,20 @@ export const endZoneLabel = (zone = Intl.DateTimeFormat().resolvedOptions().time
  * Ticking leaves the field as it stands, since the end is the date the provider's billing page shows and nothing the
  * console can work out. Unticking clears it, since the route keeps no end without the flag.
  */
-export function tickCancelled(form: SubscriptionEndForm, cancelled: boolean): SubscriptionEndForm {
-  if (!cancelled) return { ...form, cancelled: false, endsAt: '' };
-  return { ...form, cancelled: true };
+export function tickCanceled(form: SubscriptionEndForm, canceled: boolean): SubscriptionEndForm {
+  if (!canceled) return { ...form, canceled: false, endsAt: '' };
+  return { ...form, canceled: true };
 }
 
 /** Why the account route would refuse the pair, or null. */
 export function subscriptionEndRefusal(form: SubscriptionEndForm): string | null {
-  if (form.cancelled && form.endsAt === '') return 'A cancelled plan needs the date it ends.';
-  if (!form.cancelled && form.endsAt !== '') return 'An end is saved only with Cancelled ticked.';
+  if (form.canceled && form.endsAt === '') return 'A canceled plan needs the date it ends.';
+  if (!form.canceled && form.endsAt !== '') return 'An end is saved only with Canceled ticked.';
   return null;
 }
 
 export function accountPatchOf(form: SubscriptionEndForm): AccountPatch {
-  return { cancelled: form.cancelled, subscriptionEndsAt: form.endsAt === '' ? null : new Date(form.endsAt).toISOString() };
+  return { canceled: form.canceled, subscriptionEndsAt: form.endsAt === '' ? null : new Date(form.endsAt).toISOString() };
 }
 
 /** An account's edit token carries its revision in the low 32 bits and its incarnation above them. */

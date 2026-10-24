@@ -235,27 +235,27 @@ test('the key form reads its own guardrails in position order, the input leaves 
   assert.deepEqual(d.guardrailsChange([], ['first']), { guardrails: [] }, 'removing the last sends the empty list');
 });
 
-test('ticking cancelled leaves the end as typed, unticking clears it, and the form refuses what the route refuses', () => {
+test('ticking canceled leaves the end as typed, unticking clears it, and the form refuses what the route refuses', () => {
   const body = fixture('account');
   const account = d.decodeAccount(body);
   const form = d.subscriptionEndFormOf(account);
-  assert.deepEqual(form, { cancelled: false, endsAt: '', revision: account.revision }, 'an account never cancelled opens unticked with no end');
-  const ticked = d.tickCancelled(form, true);
-  assert.deepEqual(ticked, { cancelled: true, endsAt: '', revision: account.revision }, 'the tick copies nothing into the field');
-  assert.equal(d.subscriptionEndRefusal(ticked), 'A cancelled plan needs the date it ends.', 'so the form asks for the date the billing page shows');
+  assert.deepEqual(form, { canceled: false, endsAt: '', revision: account.revision }, 'an account never canceled opens unticked with no end');
+  const ticked = d.tickCanceled(form, true);
+  assert.deepEqual(ticked, { canceled: true, endsAt: '', revision: account.revision }, 'the tick copies nothing into the field');
+  assert.equal(d.subscriptionEndRefusal(ticked), 'A canceled plan needs the date it ends.', 'so the form asks for the date the billing page shows');
   const typed = { ...ticked, endsAt: '2026-10-05T12:00' };
-  assert.equal(d.tickCancelled({ ...typed, cancelled: false }, true).endsAt, '2026-10-05T12:00', 'a date already in the field is kept');
-  assert.deepEqual(d.tickCancelled(typed, false), { cancelled: false, endsAt: '', revision: account.revision }, 'unticking clears the end with the flag');
+  assert.equal(d.tickCanceled({ ...typed, canceled: false }, true).endsAt, '2026-10-05T12:00', 'a date already in the field is kept');
+  assert.deepEqual(d.tickCanceled(typed, false), { canceled: false, endsAt: '', revision: account.revision }, 'unticking clears the end with the flag');
   assert.equal(d.subscriptionEndRefusal(typed), null);
-  assert.equal(d.subscriptionEndRefusal({ cancelled: false, endsAt: '' }), null);
-  assert.equal(d.subscriptionEndRefusal({ cancelled: true, endsAt: '' }), 'A cancelled plan needs the date it ends.', 'a ticked box whose date was cleared');
-  assert.equal(d.subscriptionEndRefusal({ cancelled: false, endsAt: '2026-10-05T12:00' }), 'An end is saved only with Cancelled ticked.');
-  assert.deepEqual(d.accountPatchOf(typed), { cancelled: true, subscriptionEndsAt: new Date('2026-10-05T12:00').toISOString() });
-  assert.deepEqual(d.accountPatchOf({ cancelled: false, endsAt: '' }), { cancelled: false, subscriptionEndsAt: null });
+  assert.equal(d.subscriptionEndRefusal({ canceled: false, endsAt: '' }), null);
+  assert.equal(d.subscriptionEndRefusal({ canceled: true, endsAt: '' }), 'A canceled plan needs the date it ends.', 'a ticked box whose date was cleared');
+  assert.equal(d.subscriptionEndRefusal({ canceled: false, endsAt: '2026-10-05T12:00' }), 'An end is saved only with Canceled ticked.');
+  assert.deepEqual(d.accountPatchOf(typed), { canceled: true, subscriptionEndsAt: new Date('2026-10-05T12:00').toISOString() });
+  assert.deepEqual(d.accountPatchOf({ canceled: false, endsAt: '' }), { canceled: false, subscriptionEndsAt: null });
   const saved = d.decodeAccount({ ...body, canceled: true, subscription: { ...body.subscription, ends_at: Date.parse('2026-10-05T12:00:00.000Z') } });
   const reopened = d.subscriptionEndFormOf(saved);
-  assert.equal(reopened.cancelled, true);
-  assert.equal(new Date(reopened.endsAt).toISOString(), '2026-10-05T12:00:00.000Z', 'a cancelled account opens with the end it was saved with');
+  assert.equal(reopened.canceled, true);
+  assert.equal(new Date(reopened.endsAt).toISOString(), '2026-10-05T12:00:00.000Z', 'a canceled account opens with the end it was saved with');
   assert.equal(reopened.revision, saved.revision, 'the reopened editor fences on the revision of the row it opened with');
 });
 

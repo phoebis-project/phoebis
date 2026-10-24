@@ -203,7 +203,7 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
     <>
-      Pace scores each member by its spare rate: the allowance left in the window it reads, the model&apos;s own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an hour, within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
+      Pace scores each member by its spare rate: the allowance left in the window it reads, the model&apos;s own 7-day Fable window where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an hour, within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
     </>
   ),
   priority: (
@@ -1782,7 +1782,7 @@ export function PoolDialog({
           beside
           hint={
             <>
-              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then API keys, and <GroupLink id="members">priority</GroupLink> orders each of those groups.
+              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then the metered accounts, and <GroupLink id="members">priority</GroupLink> orders each of those groups.
             </>
           }
         >
@@ -2194,7 +2194,7 @@ export function PoolDialog({
             label={ENGINE_FIELD_LABELS.windDownMinutes}
             hint={
               <>
-                This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
+                This long before a canceled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
               </>
             }
           >
@@ -2383,7 +2383,7 @@ export function PoolDialog({
           label="Retention (hours)"
           hint={
             <>
-              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${captureMaxHours} hours here, `}shown on the <PageLink to="/settings">Settings page</PageLink>.
+              At most the bootstrap&apos;s body capture limit, {captureMaxHours !== undefined && `${captureMaxHours} ${captureMaxHours === 1 ? 'hour' : 'hours'} here, `}shown on the <PageLink to="/settings">Settings page</PageLink>&apos;s About card.
             </>
           }
         >

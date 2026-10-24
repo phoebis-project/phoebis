@@ -53,7 +53,7 @@ export type { AccountInput, AnalyticsQuery } from './types';
 
 /** The account route's cancellation pair; the route refuses an end without the flag and the flag without an end. */
 export interface AccountPatch {
-  cancelled: boolean;
+  canceled: boolean;
   /** An ISO instant, or null to clear it. */
   subscriptionEndsAt: string | null;
 }

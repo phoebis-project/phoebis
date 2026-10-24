@@ -6,7 +6,9 @@ import { defineConfig } from 'vite';
 /**
  * The commit the bundle is built from, read from the router's sources in the router's order: `PHOEBIS_BUILD_COMMIT`
  * (blank reads as unset, as the router reads it), then `git rev-parse HEAD` in this tree, then `unknown`. Trimmed,
- * since git's answer ends in a newline the router's header never carries, and lowercased like the header's hash.
+ * since git's answer ends in a newline the router's header never carries, and lowercased like the header's hash. The
+ * router's own build helper applies the same trim and lowercase before it compares or publishes the value, so the
+ * header, the `build` members and this constant agree on a value set by hand in upper case or with a trailing newline.
  */
 function buildCommit(): string {
   const named = process.env.PHOEBIS_BUILD_COMMIT?.trim();
@@ -29,7 +31,9 @@ export default defineConfig({
     target: 'es2022',
     // The console and the API reference page are two entries of one bundle, so the ui crate embeds one dist/
     // and the page's hashed assets sit beside the console's. An entry's chunk is named after its key, and the
-    // console's stays `index` for the `index-<hash>.js` name the release's binary smoke looks for.
+    // console's stays `index` for the `index-<hash>.js` name the release's binary smoke looks for. The warning limit
+    // sits just above the API reference entry's chunk, the largest of the bundle, so that entry's growth shows again.
+    chunkSizeWarningLimit: 1_700,
     rolldownOptions: {
       input: {
         index: fileURLToPath(new URL('./index.html', import.meta.url)),

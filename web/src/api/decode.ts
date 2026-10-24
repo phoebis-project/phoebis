@@ -2,7 +2,7 @@ import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, CostRevision, CostSplit, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, ReturnToPlan, RewritesAnswer,
-  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SharedEquivalent, Spend, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId, WindowSample,
 } from './types';
 import type { AgentContext } from './types';
 import type { StreamCut } from './types';
@@ -70,14 +70,27 @@ function decodeWindow(w: Rec): RateLimitWindow | null {
   };
 }
 
-/** One window per id, the newest reading when both samplers wrote one, in the order the pages draw them. */
-function foldWindows(windows: RateLimitWindow[]): RateLimitWindow[] {
-  const newest = new Map<WindowId, RateLimitWindow>();
-  for (const w of windows) {
-    const seen = newest.get(w.id);
-    if (!seen || Date.parse(w.observedAt) > Date.parse(seen.observedAt)) newest.set(w.id, w);
-  }
-  return inDrawnOrder(newest);
+/** The windows in the order the pages draw them, then every other id in the order the route sent it. */
+function drawnOrder(windows: RateLimitWindow[]): RateLimitWindow[] {
+  const known: readonly WindowId[] = WINDOW_ORDER;
+  const rank = (w: RateLimitWindow) => (known.includes(w.id) ? known.indexOf(w.id) : known.length);
+  // A stable sort, so the ids the pages do not know keep the route's order.
+  return [...windows].sort((x, y) => rank(x) - rank(y));
+}
+
+/** A usage-based seat's spend window, null on every other account and on a row from a router without the member. */
+function decodeSpend(v: unknown): Spend | null {
+  if (v === null || v === undefined) return null;
+  const s = rec(v);
+  const amounts = s.amounts === null || s.amounts === undefined ? null : rec(s.amounts);
+  return {
+    amounts: amounts ? { currency: str(amounts.currency, 'USD'), exponent: num(amounts.exponent, 2), limitMinor: numOrNull(amounts.limit_minor), polledAt: isoOr(amounts.polled_at, epoch), usedMinor: num(amounts.used_minor) } : null,
+    observedAt: isoOr(s.observed_at, epoch),
+    // A source this build does not know names no header's instant, so the reset reads as unconfirmed.
+    resetSource: str(s.reset_source) === 'head' ? 'head' : 'estimated',
+    resetsAt: isoOrNull(s.resets_at),
+    utilization: numOrNull(s.utilization),
+  };
 }
 
 /** The account's state and its flags folded onto the one badge the pages show. */
@@ -133,7 +146,7 @@ export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscr
 export function decodeAccount(v: unknown): Account {
   const a = rec(v);
   const cooldowns = list(a.cooldowns).map(rec);
-  const windows = foldWindows(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null));
+  const windows = drawnOrder(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null));
   const fastLane = a.fast_lane === null || a.fast_lane === undefined ? null : rec(a.fast_lane);
   const extra = a.extra_usage === null || a.extra_usage === undefined ? null : rec(a.extra_usage);
   const overage = a.overage === null || a.overage === undefined ? null : rec(a.overage);
@@ -150,7 +163,7 @@ export function decodeAccount(v: unknown): Account {
     credential: { accessTokenExpiresAt: isoOrNull(credential.access_expires_at), lastError: strOrNull(credential.last_error), lastRefreshAt: isoOrNull(credential.last_refresh_at), quarantined: bool(credential.quarantined), refreshTokenExpiresAt: isoOrNull(credential.refresh_expires_at) },
     email: strOrNull(identity.email),
     // Kept when the provider switched extra usage off: the reason it gave exists for exactly that account.
-    extraUsage: extra ? { disabledReason: strOrNull(extra.disabled_reason), enabled: bool(extra.is_enabled), inUse: bool(extra.in_use), monthlyLimitCredits: num(extra.monthly_limit), usedCredits: num(extra.used_credits) } : null,
+    extraUsage: extra ? { disabledReason: strOrNull(extra.disabled_reason), enabled: bool(extra.is_enabled), inUse: bool(extra.in_use), monthlyLimitCredits: numOrNull(extra.monthly_limit), usedCredits: numOrNull(extra.used_credits) } : null,
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
     fastLane: fastLane ? { input: fastLaneReading(fastLane.input), output: fastLaneReading(fastLane.output) } : null,
     id: str(a.id),
@@ -158,6 +171,7 @@ export function decodeAccount(v: unknown): Account {
     label: str(a.label),
     overage: overage ? { inUse: bool(overage.in_use), observedAt: isoOr(overage.observed_at, epoch), reset: isoOrNull(overage.reset), since: isoOrNull(overage.since) } : null,
     plan: planName(subscription),
+    planEndedAt: isoOrNull(a.plan_ended_at),
     pool: pool ? { poolId: str(pool.pool_id), priority: num(pool.priority) } : null,
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
@@ -167,9 +181,11 @@ export function decodeAccount(v: unknown): Account {
     slowDown: slowDown
       ? { factor: num(slowDown.factor, 1), holdMs: num(slowDown.hold_ms), since: isoOrNull(slowDown.since), speed: num(slowDown.speed, 1), stretchMs: num(slowDown.stretch_ms), thresholdMs: num(slowDown.threshold_ms) }
       : null,
+    spend: decodeSpend(a.spend),
     status: accountStatus(a, cooldowns),
     subscription,
     usage: a.usage === null || a.usage === undefined ? null : decodeSnapshot(str(a.id), a.usage),
+    usageBased: bool(a.usage_based),
     windows: windows.filter((w) => w.id !== '7d_fable'),
   };
 }
@@ -212,11 +228,15 @@ export function decodePairingConfirmed(v: unknown): PairingConfirmed {
   return { accountId: str(c.account_id), firstPollInFlight: bool(c.first_poll_in_flight), status: str(c.status) };
 }
 
+/** The history's samples keep the ledger's stored key, which spells a head's 7-day Fable window
+ *  `seven_day_overage_included`, so the history alone reads that key as the Fable series. */
+const historyWindowId = (id: string): WindowId | null => (id === 'seven_day_overage_included' ? '7d_fable' : windowId(id));
+
 export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
   const q = rec(v);
   const byId = new Map<WindowId, QuotaHistory>();
   for (const w of list(q.windows).map(rec)) {
-    const id = windowId(str(w.id));
+    const id = historyWindowId(str(w.id));
     if (id === null) continue;
     const samples = list(w.samples).map(rec).map((s) => ({ at: isoOr(s.at, epoch), utilization: num(s.utilization) }));
     const seen = byId.get(id);
@@ -502,7 +522,7 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
     autoMode: AUTO_MODE_VALUES.find((m) => m === str(r.auto_mode)) ?? null,
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: r.classifier === 'client' ? 'client' : null, client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: r.cost_equivalent === null || r.cost_equivalent === undefined ? null : nullableNumberMap(r.cost_equivalent),
@@ -1112,7 +1132,7 @@ export function decodeSettings(v: unknown): Settings {
 const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));
 const encodeTtlRules = (r: TtlRules) => ({ main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
 
-export const encodeAccountPatch = (p: AccountPatch) => ({ canceled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
+export const encodeAccountPatch = (p: AccountPatch) => ({ canceled: p.canceled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
   auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),

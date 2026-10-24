@@ -14,9 +14,9 @@ after(() => window.close());
 const { act, createElement: h, createRoot, UnitLegend } = await import('./dist/ui.js');
 
 const LEGEND = {
-  native: 'Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, overage or fast-mode request in dollars.',
+  native: 'Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, fast-mode, overage or usage-based request in dollars.',
   all: 'Every request in dollars at the API price list, a subscription request at its dollar equivalent.',
-  usd: 'The overage, fast-mode and API key requests alone, the dollars the account holder is charged.',
+  usd: 'The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
   share: "A subscription account's requests as shares of its own 5-hour, 7-day and model-week windows. Reads where one account is named, since shares of different accounts' windows do not add.",
   equivalent: 'The subscription requests alone at the API price list.',
 };

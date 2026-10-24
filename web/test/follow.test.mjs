@@ -624,3 +624,81 @@ test("a poll that stands in for a failed list read takes its page's stamp as the
   await settled();
   assert.deepEqual(sent, [undefined, 7], 'the first read has no stamp to read at, and the next reads at its page');
 });
+
+test("a poll's stand-in gives way to the list's answer under its address, its rows, cursor and stamp with it, and a Refresh or another address clears it", async () => {
+  const clock = frozen();
+  const sent = [];
+  // The newest page answers a next cursor while the poll has no stamp to read at, and nothing once it reads at one.
+  const read = async (cursor, to, landedAfter) => {
+    sent.push(landedAfter);
+    return landedAfter === undefined ? { landedThrough: 7, nextCursor: 'p2', rows: [{ at: at(1), id: 'a' }] } : { landedThrough: 9, nextCursor: null, rows: [] };
+  };
+  const f = follow({ error: 'ledger locked', list: null, read });
+  const drawn = () => [f.last().rows.map(byId), f.last().error, f.last().nextCursor];
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(drawn(), [['a'], null, 'p2'], 'the newest page stands in for the list');
+  act(() => f.last().setFollowed(null));
+  assert.deepEqual(drawn(), [[], 'ledger locked', null], "a Refresh clears the stand-in and the list's error shows again");
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(drawn(), [['a'], null, 'p2'], 'the next poll stands in for the list again');
+  f.render({ address: 'r' });
+  assert.deepEqual(drawn(), [[], 'ledger locked', null], 'another address clears the stand-in the poll set again');
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(drawn(), [['a'], null, 'p2'], 'a poll under the new address stands in for its list');
+  f.render({ error: null, list: { landedThrough: 9, nextCursor: 'c2', rows: [{ at: at(2), id: 'b' }, { at: at(1), id: 'a' }] } });
+  assert.deepEqual(drawn(), [['b', 'a'], null, 'c2'], "the list's answer under the same address draws its rows and its cursor");
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(sent, [undefined, undefined, undefined, 9], "and the next poll reads at the list's stamp");
+});
+
+test("a list with no stamp walks Next past an overrun under the end its poll read to, so the rows between the list and the poll's cursor are the next page", async () => {
+  const clock = frozen();
+  // Two hundred and ten rows arrived above the 25 the list shows, more than the poll's eight pages of 25 bring, and the
+  // list answers no stamp, as the Routing log's does.
+  const r = route(400);
+  const f = follow({ list: { nextCursor: '235', rows: r.rows.slice(210, 235) }, read: (cursor) => r.read(cursor) });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual([f.last().overrun, f.last().nextCursor], [{ cursor: '200', to: ORIGIN + 5_000 }, '200'], 'eight pages leave rows 200 to 209 unread');
+  act(() => f.last().goNext());
+  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: '200', stack: [undefined], to: ORIGIN + 5_000 }, "Next walks from the poll's cursor under the poll's end");
+});
+
+test("Next from a poll's stand-in walks on under the end its page was read to", async () => {
+  const clock = frozen();
+  const read = async () => ({ landedThrough: 7, nextCursor: 'p2', rows: [{ at: at(1), id: 'a' }] });
+  const f = follow({ error: 'ledger locked', list: null, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  act(() => f.last().goNext());
+  assert.deepEqual(d.pagingFor(f.last().paging, 'q'), { cursor: 'p2', stack: [undefined], to: ORIGIN + 5_000 });
+});
+
+test("a custom range's poll reads the next poll at the stamp its first page answered, with the range's own end kept", async () => {
+  const clock = frozen();
+  const end = ORIGIN;
+  const r = route(60);
+  const sent = [];
+  const read = async (cursor, to, landedAfter) => {
+    sent.push(d.pollQuery({ limit: 25 }, true, end, to, cursor, landedAfter));
+    return { landedThrough: 7, nextCursor: null, rows: [] };
+  };
+  follow({ list: { landedThrough: 5, nextCursor: '26', rows: r.rows.slice(1, 26) }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  act(() => clock.tick(5_000));
+  await settled();
+  const kept = new Date(end).toISOString();
+  assert.deepEqual(
+    sent.map((q) => [q.landedAfter, q.to]),
+    [
+      [5, kept],
+      [7, kept],
+    ],
+    "the first poll reads at the list's stamp and the next at the first poll's, both to the range's end",
+  );
+});

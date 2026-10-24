@@ -28,6 +28,8 @@ export function ringFigures(accounts: Account[], windowId: WindowId, costs: Subs
   const leftOut: RingLeftOut[] = [];
   for (const a of accounts) {
     if (!isQuotaListed(a) || !a.routingEnabled) continue;
+    // A usage-based seat has no plan window to weigh and the cost model sizes no tier for it, as for an API key.
+    if (a.usageBased) continue;
     const w = windowOf(a, windowId);
     if (w === null) continue;
     if (a.subscription === null) {

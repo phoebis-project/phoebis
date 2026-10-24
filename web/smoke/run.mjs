@@ -66,10 +66,13 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, CACHE_MISS_LABEL, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a window priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
+/** The hover of the Dashboard's Refused tile and the Traffic table's Refused header, the pages' sentence. */
+const REFUSED_TITLE =
+  "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
 
 const results = [];
 /**
@@ -137,22 +140,23 @@ const fillTitles = (name, table, estimated = false) => {
 /**
  * The declarations `pages.css` gives `selector` in its top-level rules whose selector list names it, a later rule's
  * value over an earlier one's. The smoke bundle drops the CSS and jsdom lays nothing out, so a layout rule is read
- * off the stylesheet's text. A rule under an at-rule is left out, since it holds only where its condition does.
+ * off the stylesheet's text. A rule under an at-rule is left out, since it holds only where its condition does, unless
+ * `media` names that at-rule's head as written (`@media (min-width: 1344px)`), when the rules directly under it are
+ * read in place of the top-level ones.
  */
-const declarationsOf = (selector) => {
+const declarationsOf = (selector, media = null) => {
   const css = readFileSync(new URL('../src/styles/pages.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   const read = {};
-  let depth = 0;
+  const heads = [];
   let from = 0;
-  let head = '';
   for (let i = 0; i < css.length; i += 1) {
     if (css[i] === '{') {
-      if (depth === 0) [head, from] = [css.slice(from, i).trim(), i + 1];
-      depth += 1;
+      heads.push(css.slice(from, i).trim().replace(/\s+/g, ' '));
+      from = i + 1;
     } else if (css[i] === '}') {
-      depth -= 1;
-      if (depth > 0) continue;
-      if (!head.startsWith('@') && head.split(',').map((s) => s.trim().replace(/\s+/g, ' ')).includes(selector)) {
+      const head = heads.pop() ?? '';
+      const scope = heads.length === 0 ? null : heads.length === 1 ? heads[0] : undefined;
+      if (scope === media && !head.startsWith('@') && head.split(',').map((s) => s.trim()).includes(selector)) {
         for (const [, property, value] of css.slice(from, i).matchAll(/([\w-]+)\s*:\s*([^;]+)/g)) read[property] = value.trim();
       }
       from = i + 1;
@@ -443,11 +447,11 @@ const changeSelect = async (page, select, value) => {
 const chooseUnit = (page, value) => changeSelect(page, shellUnit(page), value);
 /** The Cost header's title under each position and the Cost cell's two dashes, spelled as the console words them. */
 const COST_HEADER_TITLE = {
-  all: 'Dollar equivalent for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an overage, fast mode or API key request',
-  native: '20x window equivalents for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  share: 'Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  usd: 'A dash for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+  all: 'Dollar equivalent for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an API key, fast mode, overage or usage-based request',
+  native: '20x window equivalents for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  share: 'Window shares for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  usd: 'A dash for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
 };
 const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
 const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
@@ -488,7 +492,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   await p.settle(300);
   results.push({
     name: '/pools a first attention read that fails draws the unavailable line above the grid, while the pools load and over cards without a badge',
-    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0]',
+    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0,0]',
     missing: [JSON.stringify(loading), line()?.outerHTML.slice(0, 200) ?? 'no line', rows()],
   });
   api.getAttention = getAttention;
@@ -650,15 +654,26 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     // opens Analytics on the account.
     ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/analytics', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows.map((w) => ({ ...w, window_end: fmtAbsolute(new Date(w.window_end).toISOString()) })))}`]],
     // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log.
-    // Nightly's wall has no 5-hour round before it, so it names no projection.
-    ['nightly: 1 wall reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]']],
+    // Nightly's walls, its poll's edge and the 429's head after the clear, have no 5-hour round before them, so they
+    // name no projection.
+    ['nightly: 2 walls reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 2', 'windows: ["five_hour"]']],
     [
       'secondary: 1 wall reached on the 5h window, the last round projected 109 %, shed_cap and window_ceiling, since 14:02',
       'badge--warning',
       '/routing-log',
       ['projection_error: -0.087', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
     ],
-    ['nightly: 1 move landed and the 5h window was spent within the hour, window_ceiling, since 11:01', 'badge--warning', '/routing-log', ['fits: {"least_bad":1}', 'moves: 1', 'setting: ["window_ceiling"]', 'windows: ["five_hour"]']],
+    // Studio's wall at a poll of 14:20 follows the round its stretch fired at 14:05, so it reads how long before the
+    // 15:29 reset it came, read off the mock's studio wall seed.
+    [
+      'studio: 1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap and window_ceiling, since 14:20',
+      'badge--warning',
+      '/routing-log',
+      ['early_ms: 4140000', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
+    ],
+    // The least-bad move at 11:01:50 and the failover onto nightly within the hour of its second wall, which names no
+    // fit.
+    ['nightly: 2 moves landed and the 5h window was spent within the hour, window_ceiling, since 11:01', 'badge--warning', '/routing-log', ['fits: {"least_bad":1,"unknown":1}', 'moves: 2', 'setting: ["window_ceiling"]', 'windows: ["five_hour"]']],
     [
       'all: 1 round marked nothing, no destination had runway, window_ceiling 75 %, since 14:12',
       'badge--warning',
@@ -676,9 +691,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all sixteen while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all seventeen while no layout folds it",
     ok:
-      lead() === '16 need attention' &&
+      lead() === '17 need attention' &&
       unweighted !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
@@ -766,7 +781,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its sixteen items again', ok: lead() === '16 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its seventeen items again', ok: lead() === '17 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 
   {
@@ -851,10 +866,10 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its sixteen items shows the four that fit and folds the other twelve behind \"+12 more\" titled with their words one per line, whose list holds all sixteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its seventeen items shows the four that fit and folds the other thirteen behind \"+13 more\" titled with their words one per line, whose list holds all seventeen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+12 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+13 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
         JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
@@ -866,7 +881,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
       ok:
         JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
-        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+15 more', ['Replay parked records']]),
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+16 more', ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
     results.push({
@@ -960,13 +975,23 @@ expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost
   const requestsHint = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
   const rateHint = 'Errors among the requests the router asked an account for, the refused requests left out';
   results.push({
-    name: "/ the Refused tile reads the story's six refusals with guardrail_blocked the most common and the two tiles carry their hints",
-    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '6', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint,
-    missing: [JSON.stringify(read(tiles[4])), `first tile ${tiles[0]?.getAttribute('title') ?? 'no title'}`, `fourth tile ${tiles[3]?.getAttribute('title') ?? 'no title'}`],
+    name: "/ the Refused tile reads the story's six refusals with guardrail_blocked the most common and the three tiles carry their hints, the Refused tile's naming the router's own refusals",
+    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '6', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint && tiles[4]?.getAttribute('title') === REFUSED_TITLE,
+    missing: [JSON.stringify(read(tiles[4])), `first tile ${tiles[0]?.getAttribute('title') ?? 'no title'}`, `fourth tile ${tiles[3]?.getAttribute('title') ?? 'no title'}`, `fifth tile ${tiles[4]?.getAttribute('title') ?? 'no title'}`],
   });
 }
-columnsMarked('/ the recent requests table marks Key as its fill column', m.container.querySelector('.dash__recent'), ['Key']);
-fillTitles('/ every Key cell of the recent requests table carries its own text as its title', m.container.querySelector('.dash__recent'));
+columnsMarked('/ the recent requests table marks Time as its fill column', m.container.querySelector('.dash__recent'), ['Time']);
+{
+  // Time, the fill, cuts the request id under the time by the room, so the id line prints the whole id with the id
+  // as its title, and Key, a fit column, reads the row's key id whole with the same title.
+  const rows = [...m.container.querySelectorAll('.dash__recent tbody tr')].map((tr) => {
+    const [time, key] = tr.children;
+    const id = tr.querySelector('a[href^="/requests/"]')?.getAttribute('href')?.split('/').pop() ?? '';
+    return { id, key: key?.textContent ?? null, keyClass: key?.className ?? '', keyTitle: key?.getAttribute('title') ?? null, sub: time?.querySelector('.sub')?.textContent ?? null, subTitle: time?.querySelector('.sub')?.getAttribute('title') ?? null, want: requests.find((r) => r.id === id) };
+  });
+  const off = rows.filter((r) => !(r.want !== undefined && r.sub === r.id && r.subTitle === r.id && r.key === (r.want.keyId ?? '') && r.keyTitle === r.want.keyId && r.keyClass.split(' ').includes('col-fit')));
+  results.push({ name: "/ the recent requests table's id line under the time prints the whole id titled with it, and the Key cell reads its key whole in a fit column", ok: rows.length === 10 && off.length === 0, missing: [`${rows.length} rows`, ...off.map((r) => JSON.stringify({ ...r, want: r.want === undefined ? 'no such request' : r.want.keyId }))] });
+}
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
@@ -974,16 +999,16 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 29, 0 and 6 pins, one per key, session, agent and model under their keys, on primary,
-  // nightly, secondary and studio, over 19 pinned rows, so a hero counting the pinned rows or a note counting every
-  // row's account reads otherwise. A hero counting every session row reads otherwise only while the story's row count
-  // differs from its pins, so the count is read first and a story where the two meet fails here.
-  const PINS = 35;
+  // The story's pools hold 29, 0, 6 and 1 pins, one per key, session, agent and model under their keys, on primary,
+  // nightly, secondary, studio and contract, over 21 pinned rows, so a hero counting the pinned rows or a note counting
+  // every row's account reads otherwise. A hero counting every session row reads otherwise only while the story's row
+  // count differs from its pins, so the count is read first and a story where the two meet fails here.
+  const PINS = 36;
   const sessionRows = (await api.listSessions()).length;
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({
     name: "/ the sessions card counts the router's live pins, which the story keeps apart from its session rows, over the pinned rows' accounts",
-    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 4 accounts',
+    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 5 accounts',
     missing: [`${sessionRows} session rows against ${PINS} pins`, hero?.textContent ?? 'absent'],
   });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
@@ -1006,7 +1031,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} ${f.anchor} windows left`;
   results.push({
     name: '/ the line under each ring reads the weighed figures',
-    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 4 && JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'secondary', 'studio']),
+    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 5 && JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'reserve', 'secondary', 'studio']),
     missing: [`5-hour ${JSON.stringify(lineOf('5h'))} against ${JSON.stringify(lineFrom(f5))}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7))}`, `rows ${f5.rows.map((r) => r.id)} and ${f7.rows.map((r) => r.id)}`],
   });
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
@@ -1054,7 +1079,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // Each remaining list reads in its ring's order, the account with the most of its own window left first, so the
-  // shares it prints run down the list. On the story the registry's order of its four routable subscription accounts
+  // shares it prints run down the list. On the story the registry's order of its five routable subscription accounts
   // runs down on neither window.
   const listOf = (title) => {
     const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
@@ -1064,7 +1089,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const descending = (rows) => rows.every(([, share], i) => i === 0 || Number.parseFloat(share) <= Number.parseFloat(rows[i - 1][1]));
   results.push({
     name: '/ each remaining list reads the account with the most of its own window left first, the shares it prints running down the list',
-    ok: lists.every((l) => l.rows.length === 4 && l.rows.every(([label, share]) => label !== '' && /^\d+%$/.test(share)) && descending(l.rows)),
+    ok: lists.every((l) => l.rows.length === 5 && l.rows.every(([label, share]) => label !== '' && /^\d+%$/.test(share)) && descending(l.rows)),
     missing: lists.map((l) => `${l.title}: ${JSON.stringify(l.rows)}`),
   });
 }
@@ -1076,7 +1101,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const accounts = await api.listAccounts();
   const read = [...page.container.querySelectorAll('a.account-mini')].flatMap((card) => {
     const a = accounts.find((x) => x.id === idOf(card));
-    return a ? barPhrases([...card.querySelectorAll('.wbar')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
+    // A usage-based seat's spend bar reads no projection, and the seat's own block reads it.
+    return a ? barPhrases([...card.querySelectorAll('.wbar:not(.wbar--spend)')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
   });
   const primary = read.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
   results.push({
@@ -1206,8 +1232,41 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   });
 }
 {
-  // The day's tile sums both fundings, so under native it stacks the plan rows' 20x 5-hour equivalent over the billed
-  // rows' dollars, each with its word, and its note reads the billed dollars per hour. The story's day holds estimated
+  // Neither of the story's two client classifier calls, at 12:41:08 and 12:41:10, is among the ten newest rows, so the
+  // recent requests read here puts the first of them in the ten. Under native, the shell's default, its Cost cell
+  // reads its zero 20x equivalent with the free sentence leading the title, ahead of the reading and the revisions.
+  const FREE = 'Free on the plan: a client classifier call takes no window share';
+  const call = requests.find((r) => r.classifier === 'client');
+  const listRequests = api.listRequests;
+  api.listRequests = async (...args) => {
+    const page = await listRequests.apply(api, args);
+    return call === undefined ? page : { ...page, requests: [call, ...page.requests.filter((r) => r.id !== call.id)].slice(0, 10) };
+  };
+  const glance = await mount('/');
+  api.listRequests = listRequests;
+  const row = [...glance.container.querySelectorAll('.dash__recent tbody tr')].find((tr) => tr.querySelector(`a[href="/requests/${call?.id}"]`) !== null);
+  const cell = row?.lastElementChild ?? null;
+  const read = { main: cell ? [...cell.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim() : null, title: cell?.getAttribute('title') ?? null };
+  glance.unmount();
+  const settings = decodeSettings(SETTINGS_WIRE);
+  const dateOf = (entry) => (entry === null ? 'no revision' : effectiveLabel(entry.effective));
+  const inForce = call === undefined ? '' : `Priced at the API prices of ${dateOf(revisionAt(settings.apiPrices.revisions, call.at))} and the cost model of ${dateOf(revisionAt(settings.subscriptionCosts.revisions, call.at))}`;
+  const unit = call === undefined ? null : costUnitOf(call, 'native');
+  results.push({
+    name: "/ under native the recent requests' Cost cell of a client classifier call reads its zero 20x equivalent with the free sentence leading the title, ahead of the reading and the revisions",
+    ok:
+      call !== undefined &&
+      call.shareReason === 'client_classifier' &&
+      unit?.kind === 'equivalent' &&
+      read.main === '0% 20x 5h' &&
+      read.title === `${FREE}. ${unit.equivalents.map(() => '0%').join(', ')}, ${fmtUsd(call.costUsd)} equivalent. ${inForce}`,
+    missing: [JSON.stringify(read), call?.id ?? 'no classifier call in the story', JSON.stringify(unit)],
+  });
+}
+{
+  // The day's tile sums both fundings, so under native it stacks the plan rows' 20x 7-day equivalent over the billed
+  // rows' dollars, each with its word, and its note reads the billed dollars per hour, since the story's day bills, in
+  // place of the equivalent per hour a day without billed traffic reads. The story's day holds estimated
   // plan rows, so the equivalent leads with the tilde and the tile carries the estimate's title. Billed dollars reads
   // the billed side alone, and under Window shares no one account's share answers on this page, so the tile reads a
   // dash under the share note while its note and its spark still draw.
@@ -1224,13 +1283,13 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     };
   };
   const native = tileRead(m);
-  const lead = `~${fmtEquivalent('five_hour', day.equivalent24h.fiveHour)}`;
+  const lead = `~${fmtEquivalent('seven_day', day.equivalent24h.sevenDay)}`;
   results.push({
-    name: "/ under native the Estimated cost, 24h tile stacks the day's 20x 5-hour equivalent over subscription, marked as an estimate, above the billed dollars over billed, and its note reads the billed dollars per hour",
+    name: "/ under native the Estimated cost, 24h tile stacks the day's 20x 7-day equivalent over subscription, marked as an estimate, above the billed dollars over billed, and its note reads the billed dollars per hour",
     ok:
       shellUnit(m)?.value === 'native' &&
       day.estimated24h &&
-      day.equivalent24h.fiveHour > 0 &&
+      day.equivalent24h.sevenDay > 0 &&
       day.billed24h > 0 &&
       JSON.stringify(native.lines) === JSON.stringify([[lead, 'subscription'], [fmtUsd(day.billed24h), 'billed']]) &&
       /^\$[\d,.]+ billed per hour$/.test(native.note) &&
@@ -1267,9 +1326,22 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     ok: plain.lines.length === 2 && !plain.lines.some(([figure]) => figure.startsWith('~')) && plain.title === null,
     missing: [JSON.stringify(plain)],
   });
+  // The same day with nothing billed reads the subscription line alone, and its note the equivalent per hour on the
+  // window the figure reads.
+  api.getOverview = async () => ({ ...(await overviewOf.call(api)), billed24h: 0 });
+  const unbilled = await mount('/');
+  const unbilledRead = tileRead(unbilled);
+  unbilled.unmount();
+  delete api.getOverview;
+  results.push({
+    name: "/ under native a day with nothing billed reads the Estimated cost, 24h tile's 20x 7-day equivalent alone, and its note the equivalent per hour on the 7-day window",
+    ok: JSON.stringify(unbilledRead.lines) === JSON.stringify([[lead, 'subscription']]) && unbilledRead.note === `~${fmtEquivalent('seven_day', day.equivalent24h.sevenDay / 24)} per hour` && unbilledRead.title === ESTIMATED_TITLE,
+    missing: [JSON.stringify(unbilledRead), lead],
+  });
   // The mock's unpriced switch adds one plan request on a model the cost model lists in no tier, which prices no
-  // window, so the day's sum keeps its priced rows and flags both windows: the subscription line reads the dash under
-  // its title beside the billed dollars. The same day with nothing billed reads the dash in its note too.
+  // window, so the day's sum keeps its priced rows and flags both windows: the subscription line, which reads the
+  // 7-day window, reads the dash under its title beside the billed dollars. The same day with nothing billed reads the
+  // dash in its note too.
   localStorage.setItem('phoebis.mockUnpriced', '1');
   const unpricedDay = await api.getOverview();
   const switched = await mount('/');
@@ -1284,8 +1356,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({
     name: "/ under native a day a subscription request priced nothing on reads a dash titled why on the Estimated cost, 24h tile's subscription line beside the billed dollars, and a dash per hour in the note of a day with nothing billed",
     ok:
-      unpricedDay.equivalent24h.unpriced?.fiveHour === true &&
-      unpricedDay.equivalent24h.fiveHour === day.equivalent24h.fiveHour &&
+      unpricedDay.equivalent24h.unpriced?.sevenDay === true &&
+      unpricedDay.equivalent24h.sevenDay === day.equivalent24h.sevenDay &&
       JSON.stringify(flagged.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(unpricedDay.billed24h), 'billed']]) &&
       flagged.title === UNPRICED_TITLE &&
       JSON.stringify(planRead.lines) === JSON.stringify([['-', 'subscription']]) &&
@@ -1307,8 +1379,9 @@ const quotaSection = async (page, label) => {
  */
 const quotaListed = (a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired';
 m = await mount('/quota');
-// secondary's backoff is the one listed row needing attention: legacy's failing poll leaves with its card.
-expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).length} accounts`, '1 needs attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'polled', 'rate limited', 'backing off']);
+// secondary's backoff and reserve's failed poll are the listed rows needing attention, legacy's failing poll leaving
+// with its card.
+expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).length} accounts`, '2 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'polled', 'rate limited', 'backing off']);
 /**
  * The story's count on the bar, `{n} accounts, {n} need attention`, as its two figures. A funding_required account
  * under an override keeps its place in both, read against these after the shared mount has gone.
@@ -1425,12 +1498,12 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn), JSON.stringify(wanted)],
   });
-  // secondary is cancelled with its end five days after the anchor: inside a week, so the chip reads serious.
+  // secondary is canceled with its end five days after the anchor: inside a week, so the chip reads serious.
   const endChips = (label) => [...(cardOf(label)?.querySelectorAll('.qcard__chips .chip') ?? [])].filter((c) => /^End(s in|ed) /.test(c.textContent?.trim() ?? ''));
   const secondaryEnd = endChips('secondary')[0];
   const secondaryAccount = (await api.listAccounts()).find((a) => a.id === 'secondary');
   results.push({
-    name: '/quota a cancelled account says when it ends, serious inside a week, and one not cancelled says nothing',
+    name: '/quota a canceled account says when it ends, serious inside a week, and one not canceled says nothing',
     ok:
       secondaryEnd?.textContent?.trim() === 'Ends in 4 days' &&
       secondaryEnd.classList.contains('chip--serious') &&
@@ -1477,11 +1550,14 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
 }
 {
   // The counts come from the list, so an account the story adds moves no check: a card draws its windows when the
-  // account holds a 5-hour, 7-day or Fable window.
-  const windowed = (await api.listAccounts()).filter((a) => quotaListed(a) && (a.windows.length > 0 || a.fableWindow !== null)).length;
-  const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
+  // account holds a 5-hour, 7-day or Fable window. A usage-based seat's card draws its one Spend row instead, which
+  // the seat's own block reads.
+  const listedAccounts = await api.listAccounts();
+  const windowed = listedAccounts.filter((a) => quotaListed(a) && (a.windows.length > 0 || a.fableWindow !== null)).length;
+  const seatLabels = new Set(listedAccounts.filter((a) => a.usageBased).map((a) => a.label));
+  const chipRows = [...m.container.querySelectorAll('.qcard__windows')].filter((g) => !seatLabels.has(g.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? ''));
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
-  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === windowed && names.every((n) => n === '5h,7d,Fable'), missing: [`${chipRows.length} of ${windowed}`, ...new Set(names)] });
+  results.push({ name: '/quota every plan account\'s card chips 5h, 7d, Fable in that order', ok: chipRows.length === windowed && names.every((n) => n === '5h,7d,Fable'), missing: [`${chipRows.length} of ${windowed}`, ...new Set(names)] });
   const tones = [...m.container.querySelectorAll('.qcard__windows .qchip')].map((c) => [...c.classList].find((n) => n.startsWith('qchip--')) ?? 'none');
   results.push({ name: '/quota chips carry a meter tone', ok: tones.length > 0 && tones.every((t) => ['qchip--absent', 'qchip--good', 'qchip--low', 'qchip--warn'].includes(t)), missing: [...new Set(tones)] });
   results.push({ name: '/quota fixtures exercise all three meter tones', ok: ['qchip--good', 'qchip--low', 'qchip--warn'].every((t) => tones.includes(t)), missing: [...new Set(tones)] });
@@ -1494,7 +1570,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
   const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
-  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === windowed && aligned.every((n) => n === 3), missing: aligned.map(String) });
+  results.push({ name: "/quota every plan account's window row owns a cell in the aligned chip column", ok: aligned.length === windowed && aligned.every((n) => n === 3), missing: aligned.map(String) });
   const shares = [...m.container.querySelectorAll('.qcard__windows .qchip__pct')].map((e) => e.textContent?.trim() ?? '');
   const off = shares.filter((t) => t !== 'n/a' && !/\d+% left/.test(t));
   results.push({ name: '/quota every window share on the cards reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && off.length === 0, missing: [...new Set(off)] });
@@ -1526,8 +1602,8 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
   // subscription block, a failed poll or none, or reads funding_required, so one mount reads them all under one
   // override: nightly reads funding_required, its 5-hour window is legacy's, read two days ago before its reset and
   // never since, and its poll is null, while studio carries legacy's extra usage block, off with the provider's reason,
-  // legacy's poll, which failed three minutes before the story's anchor, and no subscription block, with the plan the
-  // decoder derives from it.
+  // legacy's poll, whose last attempt ran the refresh that lapsed it two days and two hours before the story's anchor,
+  // and no subscription block, with the plan the decoder derives from it.
   const { listAccounts } = api;
   const legacy = (await listAccounts.call(api)).find((a) => a.id === 'legacy');
   const stale = legacy.windows.find((w) => w.id === '5h');
@@ -1571,32 +1647,36 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
   }
   {
     // The story draws the line in use on nightly, enabled and not in use on primary, and with no extra usage reported
-    // on secondary, and studio's block under the override is off.
+    // on secondary, and studio's block under the override is off. Nightly's reading a head wrote carries no amounts
+    // (the seed's extraUsage), so its line names its state alone. The contract seat's Spend row is that reading, so its
+    // card draws no line.
     const read = (label) => {
       const chip = cardOf(label)?.querySelector('.qcard__extra .chip');
       return [chip?.textContent?.trim() ?? 'no line', chip?.classList.contains('chip--serious') ? 'serious' : chip?.classList.contains('qcard__extra-quiet') ? 'quiet' : 'neither'];
     };
     const drawn = { nightly: read('nightly'), primary: read('primary'), secondary: read('secondary'), studio: read('studio') };
     const wanted = {
-      nightly: ['Extra usage$6.12 / $20.00in use', 'serious'],
+      nightly: ['Extra usagein use', 'serious'],
       primary: ['Extra usage$12.34 / $50.00not in use', 'quiet'],
       secondary: ['Extra usagenot reported', 'quiet'],
       studio: ['Extra usageoff', 'quiet'],
     };
-    const placed = cards.filter((c) => !(c.querySelectorAll('.qcard__extra').length === 1 && c.querySelector('.qcard__body')?.nextElementSibling?.classList.contains('qcard__extra')));
-    const fableLast = cards.filter((c) => c.querySelector('.qcard__windows')).every((c) => [...c.querySelectorAll('.qcard__windows .qchip__name')].pop()?.textContent === 'Fable');
+    const plans = cards.filter((c) => c !== cardOf('contract'));
+    const placed = plans.filter((c) => !(c.querySelectorAll('.qcard__extra').length === 1 && c.querySelector('.qcard__body')?.nextElementSibling?.classList.contains('qcard__extra')));
+    const fableLast = plans.filter((c) => c.querySelector('.qcard__windows')).every((c) => [...c.querySelectorAll('.qcard__windows .qchip__name')].pop()?.textContent === 'Fable');
+    const seatLines = cardOf('contract')?.querySelectorAll('.qcard__extra').length ?? -1;
     results.push({
-      name: '/quota every card draws one Extra usage line directly after the Fable row, in use in the serious tone and each quiet state in the muted ink',
-      ok: cards.length > 0 && placed.length === 0 && fableLast && JSON.stringify(drawn) === JSON.stringify(wanted) && cardOf('nightly')?.querySelector('.qcard__extra .chip__flag')?.textContent === 'in use',
-      missing: [JSON.stringify(drawn), ...placed.map((c) => `misplaced on ${c.querySelector('.qcard__name')?.textContent?.trim()}`), fableLast ? 'Fable last' : 'a row after Fable'],
+      name: "/quota every plan account's card draws one Extra usage line directly after the Fable row, in use in the serious tone and each quiet state in the muted ink, and the usage-based seat's none",
+      ok: plans.length > 0 && placed.length === 0 && fableLast && seatLines === 0 && JSON.stringify(drawn) === JSON.stringify(wanted) && cardOf('nightly')?.querySelector('.qcard__extra .chip__flag')?.textContent === 'in use',
+      missing: [JSON.stringify(drawn), ...placed.map((c) => `misplaced on ${c.querySelector('.qcard__name')?.textContent?.trim()}`), fableLast ? 'Fable last' : 'a row after Fable', `${seatLines} lines on contract`],
     });
     // studio's block under the override carries the provider's reason, drawn inside the line and whole in its title.
     const line = cardOf('studio')?.querySelector('.qcard__extra');
     results.push({ name: '/quota draws the reason the provider gave for its extra usage inside the Extra usage line, whole in its title', ok: line?.querySelector('.qcard__extra-reason')?.textContent?.includes('Payment method declined') === true && line.getAttribute('title')?.includes('Payment method declined') === true, missing: [line?.outerHTML.slice(0, 200) ?? 'no line on studio'] });
   }
   {
-    // The Plan chip leads the chips row on every card, and studio, with no subscription block under the override,
-    // keeps its place empty.
+    // The Plan chip leads the chips row on every card, and studio, with no subscription block under the override, and
+    // contract, an Enterprise seat whose profile names no plan, keep the place empty.
     const firsts = cards.map((c) => {
       const first = c.querySelector('.qcard__chips')?.firstElementChild;
       const what = !first ? 'no chips row' : first.classList.contains('chip--empty') ? 'empty' : (first.querySelector('.chip__label')?.textContent?.trim() ?? first.textContent?.trim());
@@ -1604,7 +1684,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     });
     results.push({
       name: '/quota every card draws the chips row led by the Plan chip, and a card whose account reports no plan holds the empty slot first',
-      ok: firsts.some(([name]) => name === 'studio') && firsts.every(([name, what]) => what === (name === 'studio' ? 'empty' : 'Plan')),
+      ok: firsts.some(([name]) => name === 'studio') && firsts.every(([name, what]) => what === (name === 'studio' || name === 'contract' ? 'empty' : 'Plan')),
       missing: firsts.map(([name, what]) => `${name}: ${what}`),
     });
   }
@@ -1622,7 +1702,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
         /^polled 1[12]m ago: rate limited$/.test(drawn.secondary[0] ?? '') &&
         /^backing off, next attempt in [34]m$/.test(drawn.secondary[1] ?? '') &&
         drawn.studio.length === 1 &&
-        /^polled [34]m ago: failed: usage request rejected with status 503$/.test(drawn.studio[0] ?? '') &&
+        /^polled 2d 2h ago: failed: acquire: account has to be paired again$/.test(drawn.studio[0] ?? '') &&
         JSON.stringify(drawn.nightly) === JSON.stringify(['not yet polled']),
       missing: [JSON.stringify(drawn)],
     });
@@ -1634,10 +1714,10 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     results.push({
       name: "/quota a failed poll's line names its reason in a span of its own, the whole message in the title between the attempt's time and the snapshot's",
       ok:
-        failedLine?.querySelector('.qcard__reason')?.textContent === 'usage request rejected with status 503' &&
+        failedLine?.querySelector('.qcard__reason')?.textContent === 'acquire: account has to be paired again' &&
         failedTitle.length === 3 &&
         year.test(failedTitle[0]) &&
-        failedTitle[1] === 'usage request rejected with status 503' &&
+        failedTitle[1] === 'acquire: account has to be paired again' &&
         failedTitle[2].startsWith('checked ') &&
         year.test(failedTitle[2]) &&
         cardOf('secondary')?.querySelector('.qcard__reason') === null,
@@ -1787,13 +1867,16 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
 }
 {
   // Every card draws the same slots in the same order whatever its account's state, so a conditional line never
-  // grows one card past the rest.
+  // grows one card past the rest. A usage-based seat's Spend row is its extra usage reading, so its card draws no
+  // Extra usage line.
   const SLOTS = ['qcard__head', 'qcard__body', 'qcard__extra', 'qcard__chips', 'qcard__foot'];
   const subscriptions = (await api.listAccounts()).filter(quotaListed);
+  const seats = new Set(subscriptions.filter((a) => a.usageBased).map((a) => a.label));
   const cards = [...m.container.querySelectorAll('.qcard')];
   const slotsOf = (card) => [...card.children].map((e) => SLOTS.find((s) => e.classList.contains(s)) ?? e.className).join();
-  const odd = cards.filter((c) => slotsOf(c) !== SLOTS.join()).map((c) => `${c.querySelector('.qcard__name')?.textContent?.trim()}: ${slotsOf(c)}`);
-  results.push({ name: '/quota every card holds the same slots in the same order', ok: cards.length === subscriptions.length && odd.length === 0, missing: [`${cards.length} cards of ${subscriptions.length}`, ...odd] });
+  const want = (card) => (seats.has(card.querySelector('.qcard__name')?.textContent?.trim() ?? '') ? SLOTS.filter((s) => s !== 'qcard__extra') : SLOTS).join();
+  const odd = cards.filter((c) => slotsOf(c) !== want(c)).map((c) => `${c.querySelector('.qcard__name')?.textContent?.trim()}: ${slotsOf(c)}`);
+  results.push({ name: "/quota every card holds the same slots in the same order, a usage-based seat's without the Extra usage line", ok: seats.size > 0 && cards.length === subscriptions.length && odd.length === 0, missing: [`${cards.length} cards of ${subscriptions.length}`, ...odd] });
 }
 {
   results.push({ name: '/quota draws no fast-mode line or chip on any card', ok: m.container.querySelector('.fast-lane') === null && !m.text().includes('Fast mode'), missing: [m.container.querySelector('.fast-lane')?.outerHTML.slice(0, 160) ?? 'Fast mode in the text'] });
@@ -1899,11 +1982,15 @@ await quotaSection(m, 'Quota windows');
 }
 expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'used', 'past window', 'plan ends']);
 {
-  const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
+  // A usage-based seat's lane carries its one Spend limit chip, which the seat's own block reads, so these read the
+  // plan accounts' lanes.
+  const seatLabels = new Set((await api.listAccounts()).filter((a) => a.usageBased).map((a) => a.label));
+  const planLanes = [...m.container.querySelectorAll('.lane')].filter((l) => !seatLabels.has(l.querySelector('.lane__name')?.textContent?.trim() ?? ''));
+  const laneChips = planLanes.map((l) => [...l.querySelectorAll('.tl-chip')].length);
   results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
-  const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
+  const chipLabels = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')]).map((c) => c.childNodes[0]?.textContent?.trim());
   results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
-  const chips = [...m.container.querySelectorAll('.tl-chip')].map((c) => ({ pct: [...(c.querySelector('.tl-chip__pct')?.classList ?? [])].find((n) => n.startsWith('tl-chip__pct--')) ?? 'none', text: c.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--')) ?? 'none' }));
+  const chips = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')]).map((c) => ({ pct: [...(c.querySelector('.tl-chip__pct')?.classList ?? [])].find((n) => n.startsWith('tl-chip__pct--')) ?? 'none', text: c.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--')) ?? 'none' }));
   const withShare = chips.filter((c) => c.text.includes('% left'));
   const withoutShare = chips.filter((c) => !c.text.includes('% left'));
   results.push({
@@ -1912,13 +1999,13 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     missing: [...new Set(chips.map((c) => `${c.text}: ${c.tone} ${c.pct}`))],
   });
   // A lane chip without a share carries no tone where the card chip of that window reads absent.
-  const laneChipTones = [...m.container.querySelectorAll('.lane')].flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
+  const laneChipTones = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
   const chipOff = laneChipTones.filter((c) => c.tone !== cardTone(c.label, c.window)).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
   results.push({ name: "/quota each timeline chip carries the tone of the same account's card chip for its window, and none where that chip has no share", ok: laneChipTones.length > 0 && chipOff.length === 0, missing: chipOff });
   const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
   results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
-  const shares = [...m.container.querySelectorAll('.tl-chip__pct')].map((e) => e.textContent?.trim() ?? '');
+  const shares = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip__pct')]).map((e) => e.textContent?.trim() ?? '');
   const liveShares = live.filter((l) => l.includes('%'));
   const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
   results.push({ name: '/quota every window share on the timeline reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
@@ -1987,7 +2074,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   results.push({ name: "/quota the fill of primary's 5-hour bar carries no meter tone and takes its lane's color variable, the one its lane's dot reads", ok: session.color, missing: [String(session.classes)] });
 }
 {
-  // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so
+  // secondary is canceled with its saved end five days after the anchor, inside the weekly zoom's current period, so
   // its lane marks the end and the window that spans it stops there.
   const endsAt = (await api.listAccounts()).find((a) => a.id === 'secondary').subscription.endsAt;
   const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
@@ -1997,7 +2084,7 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   const past = bars.filter(([left, right]) => left > at || right > at + 1e-9);
   const day = new Date(endsAt).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
   results.push({
-    name: "/quota on the weekly zoom a cancelled account's lane marks its saved end with no window past it, and a lane not cancelled marks none",
+    name: "/quota on the weekly zoom a canceled account's lane marks its saved end with no window past it, and a lane not canceled marks none",
     ok: ends.length === 1 && (ends[0].getAttribute('title') ?? '').startsWith(`secondary ends ${day}`) && bars.length > 0 && past.length === 0 && laneOf('primary')?.querySelectorAll('.lane__end').length === 0,
     missing: [`${ends.length} end markers`, ends[0]?.getAttribute('title') ?? 'no title', JSON.stringify(bars), `at ${at}`, `primary ${laneOf('primary')?.querySelectorAll('.lane__end').length}`],
   });
@@ -2017,9 +2104,10 @@ m.unmount();
 {
   // jsdom lays nothing out, so the cells row reads a browser's width here and each cell its equal share of it. At 316
   // px twelve cells of 26 px hold the 24-hour "06" and print it short, under the 40 px of the full label, while under
-  // the 12-hour setting they would cut "12 AM", so six cells of 53 px draw, wide enough for "12:00 AM". At 480 px
-  // twelve cells of 40 px hold "12 AM" but not "12:00 AM", so they print the short hour with the full time on their
-  // titles. The run is UTC, so the 5-hour zoom opens on Sep 15 at 00:00.
+  // the 12-hour setting they would cut "12 AM", so six cells draw: at 316 px six cells of 52.67 px sit under the 53 px
+  // "12:00 AM" needs and print the short hour with the full time on their titles, and at 318 px six cells of 53 px
+  // print "12:00 AM" whole. At 480 px twelve cells of 40 px hold "12 AM" but not "12:00 AM", so they print the short
+  // hour with the full time on their titles. The run is UTC, so the 5-hour zoom opens on Sep 15 at 00:00.
   const measure = window.HTMLElement.prototype.getBoundingClientRect;
   let row = 0;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
@@ -2042,6 +2130,7 @@ m.unmount();
   };
   const shortHours = await drawn(480, '12h');
   const fewer = await drawn(316, '12h');
+  const fewerWhole = await drawn(318, '12h');
   const twoDigits = await drawn(316, '24h');
   window.HTMLElement.prototype.getBoundingClientRect = measure;
   const dated = (i, per) => (i % per === 0 ? `Sep ${15 + i / per} ` : '');
@@ -2053,17 +2142,19 @@ m.unmount();
     missing: [`${shortHours.length} cells`, JSON.stringify(shortHours)],
   });
   results.push({
-    name: '/quota#quota-windows at one width the 12-hour setting draws six 5-hour cells, each wide enough for its full time, where the 24-hour setting draws twelve with the two-digit hour',
+    name: '/quota#quota-windows at 316 and 318 px the 12-hour setting draws six 5-hour cells, at 316 px each too narrow for its full time, so it prints the short hour with the full time on its title, and at 318 px each wide enough for its full time, where the 24-hour setting draws twelve with the two-digit hour',
     ok:
       fewer.length === 6 &&
-      fewer.every(([sub, title], i) => new RegExp(`^12:00\\s${i % 2 === 0 ? 'AM' : 'PM'}$`).test(sub) && title === null) &&
+      fewer.every(([sub, title], i) => sub === ['12 AM', '12 PM'][i % 2] && new RegExp(`^${dated(i, 2)}12:00\\s${i % 2 === 0 ? 'AM' : 'PM'}$`).test(title ?? '')) &&
+      fewerWhole.length === 6 &&
+      fewerWhole.every(([sub, title], i) => new RegExp(`^12:00\\s${i % 2 === 0 ? 'AM' : 'PM'}$`).test(sub) && title === null) &&
       twoDigits.length === 12 &&
       twoDigits.every(([sub, title], i) => sub === ['00', '06', '12', '18'][i % 4] && title === `${dated(i, 4)}${sub}:00`),
-    missing: [`12-hour ${fewer.length} cells`, JSON.stringify(fewer), `24-hour ${twoDigits.length} cells`, JSON.stringify(twoDigits)],
+    missing: [`12-hour at 316 px ${fewer.length} cells`, JSON.stringify(fewer), `12-hour at 318 px ${fewerWhole.length} cells`, JSON.stringify(fewerWhole), `24-hour ${twoDigits.length} cells`, JSON.stringify(twoDigits)],
   });
 }
 {
-  // A period paged past a cancelled account's end draws none of its windows, the one that opened before the end and
+  // A period paged past a canceled account's end draws none of its windows, the one that opened before the end and
   // spans the period's start among them. The story's end falls inside the current period, so the check moves it into
   // the week that straddles the next period's start.
   const { listAccounts } = api;
@@ -2076,7 +2167,7 @@ m.unmount();
   const bars = (label) => laneOf(label)?.querySelectorAll('.lane__bar').length ?? -1;
   const subtitle = paged.container.querySelector('.timeline .card__subtitle')?.textContent ?? 'no subtitle';
   results.push({
-    name: "/quota a period paged past a cancelled account's end draws no window on its lane",
+    name: "/quota a period paged past a canceled account's end draws no window on its lane",
     ok: !subtitle.includes('current') && bars('secondary') === 0 && laneOf('secondary')?.querySelector('.lane__end') === null && bars('primary') > 0,
     missing: [subtitle, `secondary ${bars('secondary')} bars`, `primary ${bars('primary')} bars`],
   });
@@ -2324,6 +2415,357 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     missing: [foot('primary'), foot('legacy'), cardOf('Pools') ? 'a Pools card' : 'no Pools card', JSON.stringify(rows)],
   });
 }
+// The story's usage-based seat across the views: contract (mock/accounts.ts) has spent $1,025.00 of its $2,500.00
+// monthly limit, a share of 0.41, with its reset estimated at 00:00 UTC on the first of the next month, as the one
+// member of the pool contract behind the key fleet, which three story rows bill as usage-based. The smoke runs under
+// TZ=UTC, so each reset reads its UTC text, where a viewer's zone would move its hour and day.
+{
+  const seat = (await api.listAccounts()).find((a) => a.id === 'contract');
+  const reset = seat?.spend?.resetsAt ?? null;
+  const ESTIMATE = 'estimated: no reset header has been seen for this window yet';
+  const hover = `resets ${fmtAbsolute(reset)} (${ESTIMATE})`;
+  const estimatedLine = `resets ${fmtRelative(reset, CLOCK_ORIGIN)}, estimated`;
+  const OVERAGE_WORDS = ['Overage', 'extra usage on', 'Overage active', 'Overage since', 'in use'];
+  /** A spend bar's head, its reset line and the word the line mutes, its hover, and the triple's bars beside it. */
+  const spendBar = (root) => {
+    const bar = root?.querySelector('.wbars--1 .wbar--spend');
+    const line = bar?.querySelector('.wbar__reset');
+    return {
+      absent: root?.querySelectorAll('.wbar--absent').length ?? -1,
+      head: bar?.querySelector('.wbar__head')?.textContent ?? null,
+      label: bar?.querySelector('.wbar__label')?.textContent ?? null,
+      line: line?.textContent ?? null,
+      meter: bar?.querySelectorAll('.meter').length ?? -1,
+      muted: line?.querySelector('.muted')?.textContent ?? null,
+      title: line?.getAttribute('title') ?? null,
+      triple: root?.querySelectorAll('.wbars--3').length ?? -1,
+    };
+  };
+  const overageWords = (text) => OVERAGE_WORDS.filter((w) => text.includes(w));
+  {
+    const page = await mount('/accounts/contract', { now: CLOCK_ORIGIN });
+    const row = page.container.querySelector('a.account-row[href="/accounts/contract"]');
+    const compact = spendBar(row);
+    results.push({
+      name: "/accounts the usage-based seat's row draws one compact spend bar in the triple's place, its dollars and its estimated reset, and no overage word",
+      ok:
+        compact.label === 'Spend' && compact.head === 'Spend$1,025.00 of $2,500.00' && compact.line === estimatedLine && compact.muted === 'estimated' && compact.title === hover && compact.meter === 1 && compact.absent === 0 && compact.triple === 0 &&
+        overageWords(row?.querySelector('.account-row__foot')?.textContent ?? '').length === 0,
+      missing: [JSON.stringify(compact), row?.querySelector('.account-row__foot')?.textContent ?? 'no row'],
+    });
+    const detail = page.container.querySelector('.detail');
+    const cardOf = (title) => [...(detail?.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+    const usage = cardOf('Usage');
+    const whole = spendBar(usage);
+    const tier = [...(cardOf('Identity')?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === 'Rate-limit tier')?.querySelector('dd')?.textContent ?? null;
+    const badges = [...(detail?.querySelectorAll('.detail__head .badge') ?? [])].map((b) => b.textContent?.trim());
+    results.push({
+      name: "/accounts/contract draws the whole spend bar on its Usage card, no Extra usage line, no overage badge, and its Rate-limit tier reads usage-based",
+      ok:
+        whole.label === 'Spend limit' && whole.head === 'Spend limit$1,025.00 of $2,500.00' && whole.line === estimatedLine && whole.muted === 'estimated' && whole.title === hover && whole.meter === 1 && whole.triple === 0 &&
+        !(usage?.textContent ?? '').includes('Extra usage this month') && !(usage?.textContent ?? '').includes('does not report quota windows') && !badges.some((b) => b?.startsWith('Overage')) && !(detail?.textContent ?? '').includes('Overage since') &&
+        tier === 'default_claude_zero, usage-based',
+      missing: [JSON.stringify(whole), JSON.stringify(badges), String(tier)],
+    });
+    page.unmount();
+  }
+  {
+    // The router answers a seat's spend object before its first reading with neither amounts nor a share: the row and
+    // the Usage card read the empty reading's sentence where the triple reads "No quota windows".
+    const { listAccounts } = api;
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: null, utilization: null } } : a));
+    try {
+      const page = await mount('/accounts/contract', { now: CLOCK_ORIGIN });
+      const row = page.container.querySelector('a.account-row[href="/accounts/contract"] .wbar__none');
+      const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+      const none = usage?.querySelector('.wbar__none');
+      results.push({
+        name: '/accounts a usage-based seat with no spend reading yet reads "No spend reading yet" in the muted ink on its row and its Usage card',
+        ok: row?.textContent === 'No spend reading yet' && row.classList.contains('muted') && none?.textContent === 'No spend reading yet' && none.classList.contains('muted') && usage?.querySelector('.wbar') === null,
+        missing: [row?.textContent ?? 'no row line', none?.textContent ?? 'no card line'],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    // primary's extra usage reading is a poll's, with its amounts, and nightly's the heads', which carry none: its line
+    // reads the label and the in use badge alone, with no amounts and no meter.
+    const lineOf = async (id) => {
+      const page = await mount(`/accounts/${id}`, { now: CLOCK_ORIGIN });
+      const line = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage')?.querySelector('.extra-usage');
+      const read = { meter: line?.querySelectorAll('.meter').length ?? -1, text: line?.querySelector('.wbar__head')?.textContent ?? null };
+      page.unmount();
+      return read;
+    };
+    const read = { nightly: await lineOf('nightly'), primary: await lineOf('primary') };
+    results.push({
+      name: "/accounts the Usage card's extra usage line draws its amounts and meter where the reading carries them, and the state alone where a head wrote it",
+      ok: JSON.stringify(read) === JSON.stringify({ nightly: { meter: 0, text: 'Extra usage this monthin use' }, primary: { meter: 1, text: 'Extra usage this month$12.34 of $50.00' } }),
+      missing: [JSON.stringify(read)],
+    });
+  }
+  {
+    const page = await mount('/', { now: CLOCK_ORIGIN });
+    const card = page.container.querySelector('a.account-mini[href="/accounts/contract"]');
+    const bar = spendBar(card);
+    results.push({
+      name: "/ the usage-based seat's account card draws the compact spend bar and no Overage active",
+      ok: bar.head === 'Spend$1,025.00 of $2,500.00' && bar.line === estimatedLine && bar.title === hover && bar.triple === 0 && overageWords(card?.querySelector('.account-mini__foot')?.textContent ?? '').length === 0,
+      missing: [JSON.stringify(bar), card?.querySelector('.account-mini__foot')?.textContent ?? 'no card'],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/quota', { now: CLOCK_ORIGIN });
+    const cardOf = (label) => [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+    const card = cardOf('contract');
+    const chips = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].map((c) => c.textContent);
+    const line = card?.querySelector('.qcard__windows .qwin__reset');
+    const meter = card?.querySelector('.qcard__windows .meter');
+    results.push({
+      name: "/quota the usage-based seat's card draws one Spend row, its share left over its estimated reset with no pace, and no Extra usage line",
+      ok:
+        JSON.stringify(chips) === JSON.stringify(['Spend59% left']) && line?.textContent === estimatedLine && line.querySelector('.muted')?.textContent === 'estimated' && line.getAttribute('title')?.startsWith(hover) === true &&
+        meter?.getAttribute('aria-valuenow') === '59' && meter.getAttribute('title') === 'Spend limit: 59% left, $1,025.00 of $2,500.00' && card?.querySelector('.qcard__extra') === null && !/pace/.test(card?.textContent ?? ''),
+      missing: [JSON.stringify(chips), line?.textContent ?? 'no line', line?.getAttribute('title') ?? '', meter?.getAttribute('title') ?? 'no meter', card?.querySelector('.qcard__extra') ? 'an Extra usage line' : 'no Extra usage line'],
+    });
+    // Soonest recovery reads each card's earliest reset ahead, the seat's its spend window's.
+    const ahead = (a) => [...a.windows.map((w) => w.resetsAt), ...(a.spend ? [a.spend.resetsAt] : [])].flatMap((at) => (at === null ? [] : [Date.parse(at)])).filter((t) => t > CLOCK_ORIGIN);
+    const soonest = (a) => (ahead(a).length ? Math.min(...ahead(a)) : Number.POSITIVE_INFINITY);
+    const listed = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired');
+    const want = [...listed].sort((a, b) => soonest(a) - soonest(b)).map((a) => a.label);
+    await changeSelect(page, page.container.querySelector('.quota-sort select'), 'soonest');
+    const order = [...page.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim());
+    results.push({
+      name: '/quota Soonest recovery places the usage-based seat by its spend window\'s reset',
+      ok: want.includes('contract') && JSON.stringify(order) === JSON.stringify(want),
+      missing: [JSON.stringify(order), JSON.stringify(want)],
+    });
+    page.unmount();
+  }
+  {
+    // The router answers a seat's usage block as a failed read beside its full spend reading until the poll first
+    // reads it (the usage-seat row of test/fixtures/accounts.json). The spend reading is the seat's one window, so the
+    // card keeps its Spend row where a plan account with no window draws the error.
+    const { listAccounts } = api;
+    api.listAccounts = async () =>
+      (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, usage: { ...a.usage, error: 'the poll has not read this account yet', fetchedAt: null, heldUntil: null, poll: null, status: 'error' } } : a));
+    try {
+      const page = await mount('/quota', { now: CLOCK_ORIGIN });
+      const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
+      const chips = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].map((c) => c.textContent);
+      const retries = [...(card?.querySelectorAll('button.pill') ?? [])].filter((p) => p.textContent?.trim() === 'Retry').length;
+      results.push({
+        name: "/quota a usage-based seat whose read failed still draws its Spend row, with no error and no Retry",
+        ok: JSON.stringify(chips) === JSON.stringify(['Spend59% left']) && card?.querySelector('.qcard__error') === null && card?.classList.contains('is-error') === false && retries === 0,
+        missing: [JSON.stringify(chips), card?.querySelector('.qcard__error')?.textContent ?? 'no error block', `${retries} Retry`],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    // A spend object with neither amounts nor a share is no window, so beside a failed read the card draws the error
+    // and its Retry, and the Quota windows timeline gives the seat no lane.
+    const { listAccounts } = api;
+    api.listAccounts = async () =>
+      (await listAccounts.call(api)).map((a) =>
+        a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: null, utilization: null }, usage: { ...a.usage, error: 'the poll has not read this account yet', fetchedAt: null, heldUntil: null, poll: null, status: 'error' } } : a,
+      );
+    try {
+      const page = await mount('/quota', { now: CLOCK_ORIGIN });
+      const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
+      const error = card?.querySelector('.qcard__error')?.textContent ?? null;
+      const retries = [...(card?.querySelectorAll('button.pill') ?? [])].filter((p) => p.textContent?.trim() === 'Retry').length;
+      const windows = card?.querySelector('.qcard__windows') ?? null;
+      await quotaSection(page, 'Quota windows');
+      const lanes = [...page.container.querySelectorAll('.lane__name')].map((n) => n.textContent?.trim());
+      results.push({
+        name: '/quota a usage-based seat whose read failed with no spend reading draws the error and one Retry, and no lane on the Quota windows timeline',
+        ok: error?.startsWith('the poll has not read this account yet') === true && card?.classList.contains('is-error') === true && windows === null && retries === 1 && lanes.length > 0 && !lanes.includes('contract'),
+        missing: [error ?? 'no error block', windows ? 'a windows block' : 'no windows block', `${retries} Retry`, JSON.stringify(lanes)],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    // Once a reset header has named the spend window's reset, the Spend row reads as a plan row: the relative reset
+    // with no estimate's word, and the absolute instant alone on hover.
+    const { listAccounts } = api;
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, resetSource: 'head' } } : a));
+    try {
+      const page = await mount('/quota', { now: CLOCK_ORIGIN });
+      const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
+      const line = card?.querySelector('.qcard__windows .qwin__reset');
+      results.push({
+        name: "/quota a usage-based seat's Spend row with a header's reset reads as a plan row, the absolute instant alone on hover",
+        ok: line?.textContent === `resets ${fmtRelative(reset, CLOCK_ORIGIN)}` && line.querySelector('.muted') === null && line.getAttribute('title') === `${fmtAbsolute(reset)}, the first of this account to recover`,
+        missing: [line?.textContent ?? 'no line', line?.getAttribute('title') ?? 'no title'],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    // With no limit set the Spend row reads the amount spent alone and draws no meter track, its reset line kept.
+    const { listAccounts } = api;
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: { ...a.spend.amounts, limitMinor: null } } } : a));
+    try {
+      const page = await mount('/quota', { now: CLOCK_ORIGIN });
+      const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
+      const chips = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].map((c) => c.textContent);
+      const meters = card?.querySelectorAll('.qcard__windows .meter').length ?? -1;
+      const line = card?.querySelector('.qcard__windows .qwin__reset');
+      results.push({
+        name: "/quota a usage-based seat's Spend row with no limit set reads the amount spent with no meter track, its reset line kept",
+        ok: JSON.stringify(chips) === JSON.stringify(['Spend$1,025.00 spent']) && meters === 0 && line?.textContent === estimatedLine,
+        missing: [JSON.stringify(chips), `${meters} meters`, line?.textContent ?? 'no line'],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    const page = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
+    const laneOf = () => [...page.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'contract');
+    const readLane = () => {
+      const lane = laneOf();
+      const live = lane?.querySelector('.lane__bar--live');
+      return {
+        bar: live ? [live.style.left, live.style.width] : null,
+        chips: [...(lane?.querySelectorAll('.tl-chip') ?? [])].map((c) => [c.textContent, c.getAttribute('title')]),
+        label: live?.querySelector('.lane__label')?.textContent ?? null,
+        used: live?.querySelector('.lane__used')?.style.width ?? null,
+      };
+    };
+    const weekly = readLane();
+    [...page.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === '5-hour')?.click();
+    await page.settle();
+    const session = readLane();
+    const chip = [['Spend limit $1,475.00 of $2,500.00 left', `$1,475.00 of $2,500.00 left, ${hover}`]];
+    results.push({
+      name: "/quota#quota-windows the usage-based seat's lane draws its one Spend limit chip and its current spend window, filled by the share spent, under both zooms",
+      ok:
+        JSON.stringify(weekly.chips) === JSON.stringify(chip) && JSON.stringify(session.chips) === JSON.stringify(chip) && /^59% left · .+ 00:00$/.test(weekly.label ?? '') && weekly.used !== null &&
+        JSON.stringify(weekly.bar) === JSON.stringify(['0%', '100%']) && JSON.stringify(session.bar) === JSON.stringify(['0%', '100%']),
+      missing: [JSON.stringify(weekly), JSON.stringify(session)],
+    });
+    page.unmount();
+  }
+  {
+    // The reset falls on the first of the next month, past the default two weeks, so one Next period reaches it: the
+    // live bar ends at the reset's place and the upcoming window starts there. The smoke runs under TZ=UTC, so the span
+    // starts at a UTC midnight, three days before the anchor's day plus the period.
+    const page = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
+    page.container.querySelector('.timeline button[aria-label="Next period"]')?.click();
+    await page.settle();
+    const lane = [...page.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'contract');
+    const live = lane?.querySelector('.lane__bar--live');
+    const next = lane?.querySelector('.lane__bar--next');
+    const DAY = 86_400_000;
+    const start = new Date(CLOCK_ORIGIN).setUTCHours(0, 0, 0, 0) - 3 * DAY + 14 * DAY;
+    const at = ((Date.parse(reset) - start) / (14 * DAY)) * 100;
+    const liveEnd = live ? parseFloat(live.style.left) + parseFloat(live.style.width) : NaN;
+    const nextLeft = next ? parseFloat(next.style.left) : NaN;
+    results.push({
+      name: "/quota#quota-windows one Next period reaches the seat's reset, where the live spend window ends and the upcoming one starts",
+      ok: at > 0 && at < 100 && Math.abs(liveEnd - at) < 1e-6 && Math.abs(nextLeft - at) < 1e-6,
+      missing: [`reset at ${at}%`, `live ends at ${liveEnd}%`, `next starts at ${nextLeft}%`],
+    });
+    page.unmount();
+  }
+  {
+    // With no limit set the row and the Usage card read the amount spent alone with no meter, the reset line kept, and
+    // the lane's chip the amount spent.
+    const { listAccounts } = api;
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: { ...a.spend.amounts, limitMinor: null } } } : a));
+    try {
+      const page = await mount('/accounts/contract', { now: CLOCK_ORIGIN });
+      const row = spendBar(page.container.querySelector('a.account-row[href="/accounts/contract"]'));
+      const usage = spendBar([...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage'));
+      page.unmount();
+      const lanes = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
+      const chip = [...lanes.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'contract')?.querySelector('.tl-chip')?.textContent ?? null;
+      lanes.unmount();
+      results.push({
+        name: '/accounts and /quota#quota-windows a usage-based seat with no limit set reads the amount spent with no meter on its row and its Usage card, the reset kept, and its lane chip the amount spent',
+        ok: row.head === 'Spend$1,025.00 spent' && row.meter === 0 && row.line === estimatedLine && usage.head === 'Spend limit$1,025.00 spent' && usage.meter === 0 && usage.line === estimatedLine && chip === 'Spend limit $1,025.00 spent',
+        missing: [JSON.stringify(row), JSON.stringify(usage), String(chip)],
+      });
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    const page = await mount('/pools', { now: CLOCK_ORIGIN });
+    const rows = [...page.container.querySelectorAll('[id="contract"] .serving tbody tr')].map((tr) => [tr.children[0]?.textContent?.trim(), tr.children[1]?.querySelector('a')?.textContent?.trim(), tr.children[2]?.querySelector('.chips')?.textContent?.trim()]);
+    results.push({
+      name: "/pools the contract pool's serving table files its usage-based member in the metered tier at P1, next for a fresh session",
+      ok: JSON.stringify(rows) === JSON.stringify([['metered P1', 'contract', 'next']]),
+      missing: [JSON.stringify(rows)],
+    });
+    // The Member utilization bar measures the plan windows the ceiling binds, so the pool's one usage-based member
+    // draws no tick on it.
+    [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool contract')?.click();
+    await page.settle(300);
+    const track = page.container.querySelector('dialog[open] .ubar__track');
+    const ticks = track?.querySelectorAll('.ubar__tick').length ?? -1;
+    results.push({
+      name: "/pools the contract pool's Member utilization bar draws no tick for its usage-based member",
+      ok: track !== null && ticks === 0,
+      missing: [track ? `${ticks} ticks` : 'no bar'],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    const cells = [...page.container.querySelectorAll('.requests__table tbody td[title^="Billed in dollars: usage-based"]')];
+    const words = cells.map((td) => [td.querySelector('.sub')?.textContent ?? null, td.getAttribute('title')?.split('. ')[0] ?? null]);
+    const fleet = (await api.listRequests({ keyIds: ['fleet'], limit: 50 })).requests;
+    results.push({
+      name: "/requests the usage-based seat's rows read their dollars over usage-based, titled billed in dollars",
+      ok: fleet.length === 3 && cells.length === fleet.length && words.every(([word, title]) => word === 'usage-based' && title === 'Billed in dollars: usage-based'),
+      missing: [`${fleet.length} fleet rows`, JSON.stringify(words)],
+    });
+    page.unmount();
+  }
+  {
+    // Billed dollars keeps the seat's rows beside the overage, fast and API-key ones: the fleet key's billed dollars
+    // are its three rows' own.
+    localStorage.removeItem('phoebis.unit');
+    const page = await mount('/analytics?by=key&unit=usd#cost', { now: CLOCK_ORIGIN });
+    await page.settle(900);
+    const table = [...page.container.querySelectorAll('#cost .card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by key');
+    const row = [...(table?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'fleet');
+    const cells = row ? [...row.children].slice(0, 3).map((td) => td.textContent?.trim()) : null;
+    const rows = (await api.listRequests({ keyIds: ['fleet'], limit: 50 })).requests;
+    const usd = rows.reduce((s, r) => s + r.costUsd, 0);
+    results.push({
+      name: '/analytics under Billed dollars the fleet key reads its three usage-based rows and their dollars',
+      ok: rows.length === 3 && JSON.stringify(cells) === JSON.stringify(['fleet', '3', fmtUsd(usd)]),
+      missing: [JSON.stringify(cells), `${rows.length} rows, ${fmtUsd(usd)}`],
+    });
+    page.unmount();
+    localStorage.removeItem('phoebis.unit');
+  }
+  {
+    const page = await mount('/keys', { now: CLOCK_ORIGIN });
+    const row = [...page.container.querySelectorAll('tbody tr')].find((tr) => tr.children[0]?.textContent?.includes('fleet'));
+    results.push({
+      name: '/keys lists the fleet key on the contract pool',
+      ok: row !== undefined && (row.textContent ?? '').includes('contract'),
+      missing: [row?.textContent ?? 'no fleet row'],
+    });
+    page.unmount();
+  }
+}
 await emailLines('/accounts each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/accounts/primary the head reads the email under the name', [['primary', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
@@ -2466,11 +2908,11 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     button('Edit end')?.click();
     await m.settle(100);
     expect('/accounts/primary the subscription end editor', identity()?.textContent ?? '', [
-      'Cancelled',
+      'Canceled',
       'Ends',
       "The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.",
     ]);
-    // The smoke runs in UTC, so the label names UTC. The `.field` scope skips the checkbox's Cancelled field label.
+    // The smoke runs in UTC, so the label names UTC. The `.field` scope skips the checkbox's Canceled field label.
     const endsLabel = identity()?.querySelector('.field .field__label')?.textContent?.trim() ?? '';
     results.push({ name: "/accounts/primary the Ends field names the browser's zone beside its label", ok: endsLabel === 'Ends (UTC)', missing: [endsLabel || 'no Ends label'] });
     const before = field()?.value;
@@ -2478,8 +2920,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     await m.settle(100);
     const asked = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
     results.push({
-      name: '/accounts/primary ticking Cancelled leaves the Ends field empty and the refusal names the date',
-      ok: before === '' && box()?.checked === true && field()?.value === '' && asked.includes('A cancelled plan needs the date it ends.'),
+      name: '/accounts/primary ticking Canceled leaves the Ends field empty and the refusal names the date',
+      ok: before === '' && box()?.checked === true && field()?.value === '' && asked.includes('A canceled plan needs the date it ends.'),
       missing: [String(before), String(box()?.checked), field()?.value ?? 'no field', asked || 'no callout'],
     });
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -2489,7 +2931,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     const refusal = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
     results.push({
       name: '/accounts/primary a ticked box whose date was cleared is refused before the save',
-      ok: refusal.includes('A cancelled plan needs the date it ends.') && button('Save')?.disabled === true,
+      ok: refusal.includes('A canceled plan needs the date it ends.') && button('Save')?.disabled === true,
       missing: [refusal || 'no callout', String(button('Save')?.disabled)],
     });
     setter.call(field(), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16));
@@ -2498,6 +2940,19 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     box()?.click();
     await m.settle(80);
     const cleared = field()?.value;
+    // An end typed with the box unticked is refused, since the route saves an end only on a canceled plan.
+    setter.call(field(), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16));
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(80);
+    const unticked = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
+    results.push({
+      name: '/accounts/primary an end typed with Canceled unticked is refused before the save',
+      ok: box()?.checked === false && unticked.includes('An end is saved only with Canceled ticked.') && button('Save')?.disabled === true,
+      missing: [String(box()?.checked), unticked || 'no callout', String(button('Save')?.disabled)],
+    });
+    setter.call(field(), '');
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(80);
     box()?.click();
     await m.settle(80);
     // The smoke runs in UTC, so the field's local value is the instant's own minute.
@@ -2569,7 +3024,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const accounts = await api.listAccounts();
   const rows = [...page.container.querySelectorAll('a.account-row')].flatMap((row) => {
     const a = accounts.find((x) => x.id === new URL(row.getAttribute('href') ?? '/', 'http://127.0.0.1').pathname.split('/').pop());
-    return a ? barPhrases([...row.querySelectorAll('.wbar')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
+    // A usage-based seat's spend bar reads no projection, and the seat's own block reads it.
+    return a ? barPhrases([...row.querySelectorAll('.wbar:not(.wbar--spend)')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
   });
   const primary = accounts.find((a) => a.id === 'primary');
   const detail = primary ? barPhrases([...(page.container.querySelector('.detail .wbars--3')?.querySelectorAll('.wbar') ?? [])], primary, at, false) : [];
@@ -3048,7 +3504,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   // The discard question: a dialog that only shows the link closes on an outside click, a pasted text asks first.
   const unchanged = await openRepair();
   await discardCounted(m, '/accounts the pairing dialog closes on an outside click before anything is pasted', () => outsideOf(m, unchanged), { before: 1, after: 0 });
-  // Armed after that close, which cancelled its own session, so the count below reads the Discard alone.
+  // Armed after that close, which canceled its own session, so the count below reads the Discard alone.
   const cancels = countCalls('cancelPairing');
   const pasted = await openRepair();
   const pastedInput = pasted?.querySelector('input[placeholder^="http://localhost"]');
@@ -3159,6 +3615,53 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
   });
   buttonIn(gone, 'Cancel')?.click();
   await page.settle(200);
+
+  // The route consumes a pairing session on the confirm's attempt, so a Cancel after a confirm sends no cancel, the one
+  // the transport never delivered included, whose own failure the shell toasts. A Cancel before any confirm still gives
+  // the session back.
+  const early = await openRepair();
+  const earlyId = sessions.at(-1);
+  const earlyCancels = countCalls('cancelPairing');
+  buttonIn(early, 'Cancel')?.click();
+  await page.settle(200);
+  earlyCancels.restore();
+  const lost = await openRepair();
+  const lostSubmitted = await pasteAndSubmit(lost);
+  const lostId = sessions.at(-1);
+  const toastCount = () => page.container.querySelectorAll('.toast').length;
+  const beforeConfirm = toastCount();
+  failNextCall('confirmPairing', `/admin/oauth/sessions/${lostId}/confirm`, 'the router did not answer', { network: true });
+  buttonIn(lost, 'Confirm')?.click();
+  await until(page, () => refusal(lost) !== '');
+  const lostError = refusal(lost);
+  const afterConfirm = toastCount();
+  const lostCancels = countCalls('cancelPairing');
+  buttonIn(lost, 'Cancel')?.click();
+  await page.settle(200);
+  lostCancels.restore();
+  const afterCancel = toastCount();
+  const lostOpen = shown(lost);
+  // The mock still holds the session the confirm never reached, which no read below asks for.
+  await api.cancelPairing(lostId);
+  results.push({
+    name: '/accounts/legacy a Cancel after a confirm the transport never delivered sends no cancel and adds no toast, where a Cancel before any confirm sends one',
+    ok:
+      JSON.stringify(earlyCancels.calls) === JSON.stringify([[earlyId]]) &&
+      lostSubmitted &&
+      lostError === 'the router did not answer' &&
+      afterConfirm === beforeConfirm + 1 &&
+      afterCancel === afterConfirm &&
+      lostCancels.calls.length === 0 &&
+      !lostOpen,
+    missing: [
+      `cancelPairing before any confirm ${JSON.stringify(earlyCancels.calls)}`,
+      `Confirm enabled ${lostSubmitted}`,
+      lostError || 'no error',
+      `toasts ${beforeConfirm} before the confirm, ${afterConfirm} after it, ${afterCancel} after the Cancel`,
+      `cancelPairing after the confirm ${JSON.stringify(lostCancels.calls)}`,
+      `open after the Cancel ${lostOpen}`,
+    ],
+  });
 
   const dlg = await openRepair();
   const sealedSubmitted = await pasteAndSubmit(dlg);
@@ -3274,6 +3777,44 @@ expect('/accounts/secondary', m.text(), [
     ok: value('Ends')?.textContent?.trim() === 'ends in 4 days' && value('Trial ends')?.textContent?.trim() === 'ends in 7 days' && Boolean(value('Ends')?.getAttribute('title')) && Boolean(value('Trial ends')?.getAttribute('title')),
     missing: [value('Ends')?.textContent ?? 'no Ends row', value('Trial ends')?.textContent ?? 'no Trial ends row'],
   });
+}
+// The Identity list draws a Plan ended row only while a profile read's instant stands on the account, and no story
+// account's plan has ended. An answer that carries the instant draws the row after Ends, the relative instant with the
+// absolute on hover as the Ends row prints its own, and the row leaves once a read answers the flag cleared.
+{
+  const identityRows = (page) => {
+    const identity = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+    return [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => ({ label: r.querySelector('dt')?.textContent?.trim() ?? '', title: r.querySelector('dd')?.getAttribute('title') ?? null, value: r.querySelector('dd')?.textContent?.trim() ?? '' }));
+  };
+  const story = await api.listAccounts();
+  const walk = await mount('/accounts');
+  const drawn = [];
+  for (const account of story) {
+    await walk.navigate(`/accounts/${account.id}`);
+    if (identityRows(walk).some((r) => r.label === 'Plan ended')) drawn.push(account.id);
+  }
+  walk.unmount();
+  const flagged = story.filter((a) => a.planEndedAt !== null).map((a) => `${a.id} ended ${a.planEndedAt}`);
+  results.push({ name: '/accounts no story account carries an ended plan, so no Identity list draws a Plan ended row', ok: story.length > 0 && flagged.length === 0 && drawn.length === 0, missing: [...flagged, ...drawn] });
+  // Three hours before the anchor, which the smoke's UTC zone prints as 11:30 on the hover.
+  const endedAt = new Date(CLOCK_ORIGIN - 3 * 3_600_000).toISOString();
+  const { listAccounts } = api;
+  api.listAccounts = async (...args) => (await listAccounts.apply(api, args)).map((a) => (a.id === 'secondary' ? { ...a, planEndedAt: endedAt } : a));
+  const ended = await mount('/accounts/secondary', { now: CLOCK_ORIGIN });
+  const rows = identityRows(ended);
+  const row = rows.find((r) => r.label === 'Plan ended');
+  results.push({
+    name: '/accounts/secondary an ended plan reads Plan ended after Ends, the relative instant with the absolute on hover',
+    ok: rows.map((r) => r.label).join('|') === 'Type|Plan|Rate-limit tier|Ends|Plan ended|Trial ends|Organization|Billing type' && row?.value === '3h ago' && row?.title === fmtAbsolute(endedAt) && row?.title === 'Sep 16, 2026, 11:30:00',
+    missing: [rows.map((r) => r.label).join('|'), JSON.stringify(row ?? null)],
+  });
+  api.listAccounts = listAccounts;
+  tick(5_000);
+  await ended.settle(400);
+  const cleared = identityRows(ended).map((r) => r.label);
+  // The row the answer drew first, so a page that never drew it fails here too.
+  results.push({ name: '/accounts/secondary the Plan ended row leaves once a read answers the flag cleared', ok: row !== undefined && cleared.length > 0 && !cleared.includes('Plan ended'), missing: [row ? 'drawn first' : 'never drawn', ...cleared] });
+  ended.unmount();
 }
 {
   // Each row clears its own scope by name, so the account's other scope stays through the clear.
@@ -3561,7 +4102,7 @@ m.unmount();
   let opened = (await primary())?.revision ?? null;
   await editLabel();
   await typeInto(labelInput(), 'primary 2');
-  await api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: '2027-03-01T10:00:00.000Z' });
+  await api.updateAccount('primary', { canceled: true, subscriptionEndsAt: '2027-03-01T10:00:00.000Z' });
   let written = (await primary())?.revision ?? null;
   titleButton('Save')?.click();
   await page.settle(600);
@@ -3590,7 +4131,7 @@ m.unmount();
     missing: [`input ${renameSaved.input}`, `header ${renameSaved.header}`, `toast ${renameSaved.toast}`, `revision ${renameSaved.revision}, opened ${opened}`],
   });
   await api.renameAccount('primary', 'primary');
-  await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+  await api.updateAccount('primary', { canceled: false, subscriptionEndsAt: null });
   // The list's own read at its 5 s auto reload takes the put-back row in, and the confirmation down, so the end editor
   // opens on the stored row with no toast left over.
   tick(5_000);
@@ -3612,7 +4153,7 @@ m.unmount();
   results.push({
     name: '/accounts a save over an account written since the end editor opened is refused as stale with a Reload in the callout',
     ok: written === opened + 1 && endRefused.field && endRefused.callout === `${sentence} Reload` && !!endReload && endRefused.toast === '' && endRefused.stored === false,
-    missing: [`written ${written}, opened ${opened}`, `field ${endRefused.field}`, endRefused.callout || 'no callout', `reload ${!!endReload}`, `toast ${endRefused.toast}`, `stored cancelled ${endRefused.stored}`],
+    missing: [`written ${written}, opened ${opened}`, `field ${endRefused.field}`, endRefused.callout || 'no callout', `reload ${!!endReload}`, `toast ${endRefused.toast}`, `stored canceled ${endRefused.stored}`],
   });
   const endReads = await accountReads(() => endReload?.click());
   results.push({
@@ -3665,7 +4206,7 @@ m.unmount();
   // its save lands without a Reload: the label first, then the subscription end.
   const putBack = async () => {
     await api.renameAccount('primary', 'primary');
-    await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+    await api.updateAccount('primary', { canceled: false, subscriptionEndsAt: null });
     tick(30_000);
     await page.settle(400);
   };
@@ -3723,7 +4264,7 @@ m.unmount();
   identityButton('Cancel')?.click();
   await page.settle(400);
   await api.renameAccount('primary', 'primary');
-  await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+  await api.updateAccount('primary', { canceled: false, subscriptionEndsAt: null });
   page.unmount();
 }
 {
@@ -3769,7 +4310,7 @@ m.unmount();
     identityButton('Edit end')?.click();
     await page.settle(100);
   };
-  const markCancelled = async () => {
+  const markCanceled = async () => {
     if (box()?.checked === false) box()?.click();
     await page.settle(100);
     await typeInto(field(), '2027-03-01T10:00');
@@ -3786,7 +4327,7 @@ m.unmount();
     await page.settle(400);
     for (const id of [first, second]) {
       await api.renameAccount(id, id);
-      await api.updateAccount(id, { cancelled: false, subscriptionEndsAt: null });
+      await api.updateAccount(id, { canceled: false, subscriptionEndsAt: null });
     }
     const token = await level();
     tick(5_000);
@@ -3805,7 +4346,7 @@ m.unmount();
   held.release();
   await page.settle(600);
   held.restore();
-  await markCancelled();
+  await markCanceled();
   const endSends = countCalls('updateAccount');
   identityButton('Save')?.click();
   await page.settle(600);
@@ -3825,7 +4366,7 @@ m.unmount();
   held.release();
   await page.settle(600);
   held.restore();
-  await markCancelled();
+  await markCanceled();
   identityButton('Save')?.click();
   await page.settle(600);
   const fenced = { callout: endCallout() ?? '', second: await stored(second) };
@@ -3849,7 +4390,7 @@ m.unmount();
   const endOpened = await reset();
   await goTo(first);
   await editEnd();
-  await markCancelled();
+  await markCanceled();
   held = deferNextCall('updateAccount');
   identityButton('Save')?.click();
   await page.settle(100);
@@ -3910,7 +4451,7 @@ m.unmount();
   results.push({
     name: '/accounts a save refused after the operator left the account raises the toast',
     ok: read.path === '/accounts/secondary' && read.toast === 'Save on primary refused: the account changed while the edit was being saved' && read.stored === false,
-    missing: [`path ${read.path}`, read.toast || 'no toast', `stored cancelled ${read.stored}`],
+    missing: [`path ${read.path}`, read.toast || 'no toast', `stored canceled ${read.stored}`],
   });
   page.unmount();
 }
@@ -4286,8 +4827,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     // Under Window shares a card whose one member is a subscription account reads that account's own 7-day share of
     // the pool's day, as the breakdown route prices it when the request names the account, so the check reads the
     // page's own read through the wrapper. Every other card and the tile name no one account and read dashes. Each of
-    // the story's pools holds more than one member, so these checks read work with its subscription member alone, the
-    // page above held still meanwhile, since its own reads would take the staged membership in.
+    // the story's pools but contract, whose one member is the usage-based seat, holds more than one member, so these
+    // checks read work with its subscription member alone, the page above held still meanwhile, since its own reads
+    // would take the staged membership in.
     await chooseInterval(m, 'Off');
     const poolsRead = api.listPools;
     api.listPools = async (...args) => (await poolsRead.apply(api, args)).map((p) => (p.id === 'work' ? { ...p, members: p.members.filter((x) => x.kind === 'oauth') } : p));
@@ -4324,14 +4866,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     // The share is the route's, priced row by row at the account tier each row recorded, so the card reads it as
     // answered: a wired figure the pool's equivalent times no tier's capacity ratio reaches, and an answer with no
     // share (the account's tier unrecorded) reads a dash that says why.
+    // Each card's wired share is its own pool's, so two cards of one subscription member each read theirs.
     const wiredRead = async (shares) => {
-      let wired = null;
+      const wired = {};
       api.getAnalyticsBreakdown = async (q) => {
         const groups = await breakdownOf.call(api, q);
         if (q.groupBy !== 'pool' || q.accountIds?.length !== 1) return groups;
         const pool = alone.find((p) => p.id === q.poolIds?.[0]);
-        wired = shares(pool);
-        return groups.map((g) => ({ ...g, costShares: wired }));
+        wired[pool.id] = shares(pool);
+        return groups.map((g) => ({ ...g, costShares: wired[pool.id] }));
       };
       localStorage.setItem('phoebis.unit', 'share');
       const page = await mount('/pools');
@@ -4346,9 +4889,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({
       name: "/pools under Window shares the card of one subscription member reads the 7-day share the route priced with the 5-hour share on its title, and a dash that says why where the route answered no share",
       ok:
-        priced.wired !== null &&
         priced.read.length > 0 &&
-        priced.read.every(([, r]) => r.text.replace(/^~/, '') === shareLabel('seven_day', priced.wired.seven_day) && (r.title ?? '').includes(shareLabel('five_hour', priced.wired.five_hour))) &&
+        priced.read.every(([id, r]) => priced.wired[id] !== undefined && r.text.replace(/^~/, '') === shareLabel('seven_day', priced.wired[id].seven_day) && (r.title ?? '').includes(shareLabel('five_hour', priced.wired[id].five_hour))) &&
         unpriced.read.every(([, r]) => r.text === '-' && !!r.title && r.title !== SHARE_NOTE),
       missing: [JSON.stringify(priced), JSON.stringify(unpriced)],
     });
@@ -4463,15 +5005,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
   // Overflow workspace out of funding, secondary's poll backoff, nightly's meter drift and the three routing conditions
   // (the walls on nightly and secondary, nightly spent within the hour of a move, and all's round without a
-  // destination). work draws studio slowed past twice the stretch, and the routing state writer belongs to no pool's
-  // card.
+  // destination). work draws studio's wall after the round its stretch fired, in the wall's second wording, and studio
+  // slowed past twice the stretch, and the routing state writer belongs to no pool's card.
   const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
     ok:
       rowAges('jobs').length === 2 &&
       rowAges('all').length === 8 &&
-      rowAges('work').length === 1 &&
+      rowAges('work').length === 2 &&
       [...rowAges('jobs'), ...rowAges('all'), ...rowAges('work')].every(aged) &&
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) ===
@@ -4485,8 +5027,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Destination spent within the hour', 'nightly', '/routing-log'],
           ['Rounds without a destination', 'all', '/routing-log'],
         ]) &&
-      JSON.stringify(attentionRows('work')) === JSON.stringify([['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
-      JSON.stringify(workDetail) === JSON.stringify(['slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
+      JSON.stringify(attentionRows('work')) === JSON.stringify([['Wall reached under the ceiling', 'studio', '/routing-log'], ['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
+      JSON.stringify(workDetail) ===
+        JSON.stringify(['1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap and window_ceiling, since 14:20', 'slowed 2 h 8 min of the last 24 h, over 1 h, slowest 0.35x, slow_down_stretch_seconds 1800, since 09:12']),
     missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))} ${JSON.stringify(rowAges(name))}`), ...workDetail],
   });
   {
@@ -4520,7 +5063,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: "/pools every budget line in a serving table's Account cell carries its own text as its title", ok: lines.length > 0 && off.length === 0, missing: [`${lines.length} budget lines`, ...off.slice(0, 5)] });
   }
   const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
-  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'API keys P1']), missing: tiers });
+  // The third tier holds the API-key accounts and the usage-based seats alike, so it reads metered.
+  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'metered P1']), missing: tiers });
   const standing = (name, label) => {
     const tr = rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label);
     const td = tr ? cell(tr, 2) : null;
@@ -5230,7 +5774,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const selection = group(dlg, 'Selection');
     const strategy = selection?.querySelector('select[aria-label="Strategy"]');
     const toggle = selection?.querySelector('[role="switch"][aria-label="Prioritize subscription accounts"]');
-    expect('/pools the Prioritize subscription accounts hint reads "then API keys"', toggle?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '', ['then API keys']);
+    expect('/pools the Prioritize subscription accounts hint reads "then the metered accounts"', toggle?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '', ['then the metered accounts']);
     const options = [...(strategy?.querySelectorAll('option') ?? [])].map((o) => o.textContent?.trim());
     results.push({ name: '/pools the strategy select lists Pace, Priority, then random, and Round robin', ok: JSON.stringify(options) === JSON.stringify(['Pace', 'Priority, then random', 'Round robin']), missing: options });
     const choose = async (value) => {
@@ -5547,7 +6091,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [
       'Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.',
-      'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the Accounts page',
+      'This long before a canceled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. Inside it the account is no destination for a move. The end is set on the Accounts page',
     ]);
     {
       // The return dwell is the one Always reads, so the other two modes draw it disabled.
@@ -5599,8 +6143,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     }
     // Pool all runs the Pace strategy, so the Strategy field draws its hint. The Accounts page link carries its
     // screen-reader note after its words, so the closing sentence is read without its period.
-    expect('/pools the Pace strategy hint names the spare rate over the Fable week or the 7-day window', card('Selection')?.textContent ?? '', [
-      "Pace scores each member by its spare rate: the allowance left in the window it reads, the model's own Fable week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an hour, within the first priority tier that has an eligible account. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random.",
+    expect('/pools the Pace strategy hint names the spare rate over the 7-day Fable window or the 7-day window', card('Selection')?.textContent ?? '', [
+      "Pace scores each member by its spare rate: the allowance left in the window it reads, the model's own 7-day Fable window where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less what its sessions burn of that window an hour, within the first priority tier that has an eligible account. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random.",
       "Each account's windows are on the Accounts page",
     ]);
   }
@@ -5662,13 +6206,32 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
 
   {
+    // A one-hour bootstrap limit reads in the singular in the Retention hint.
+    const { getSettings } = api;
+    api.getSettings = async (...args) => {
+      const settings = await getSettings.apply(api, args);
+      return { ...settings, retention: { ...settings.retention, bodyCaptureMaxHours: 1 } };
+    };
+    try {
+      const page = await mount('/pools', { now: CLOCK_ORIGIN });
+      [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+      await page.settle(300);
+      const hint = group(page.container.querySelector('dialog[open]'), 'Body capture')?.textContent ?? '';
+      results.push({ name: '/pools a one-hour body capture limit reads 1 hour here in the Retention hint', ok: hint.includes("At most the bootstrap's body capture limit, 1 hour here, shown on the Settings page"), missing: [hint || 'no Body capture group'] });
+      page.unmount();
+    } finally {
+      api.getSettings = getSettings;
+    }
+  }
+
+  {
     const memberRows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
     const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
     {
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex'];
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -5678,7 +6241,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace', 'studio', 'Studio annex']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -5938,7 +6501,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const moveSelect = moveDlg?.querySelector('select[aria-label="Destination pool"]');
   expect('/pools move dialog', moveDlg?.textContent ?? '', ['Move key laptop', 'ends its current session pins', 'Move key']);
-  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
+  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work,contract', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
   [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
   await m.settle(600);
   results.push({ name: '/pools moved key leaves the list', ok: keyRows().length > 0 && !keyRows().some((tr) => tr.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((tr) => tr.children[0]?.textContent?.trim()) });
@@ -6363,12 +6926,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
   // Cancel after a stale refusal reads the lists again, as after any refusal; the write through the API moves the
   // pool's stamp alone.
-  const cancelled = await openAll();
+  const canceled = await openAll();
   await api.updatePool('all', written);
-  footButton(cancelled, 'Save pool')?.click();
+  footButton(canceled, 'Save pool')?.click();
   await m.settle(600);
-  const refusedThen = cancelled?.querySelector('.dialog__body--grouped [role="alert"]')?.textContent ?? '';
-  const cancelReads = await readsOnCancel(cancelled);
+  const refusedThen = canceled?.querySelector('.dialog__body--grouped [role="alert"]')?.textContent ?? '';
+  const cancelReads = await readsOnCancel(canceled);
   results.push({
     name: '/pools Cancel after a save refused as stale reads the pools and keys again',
     ok: refusedThen === `${sentence} Reload` && JSON.stringify(cancelReads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
@@ -7040,7 +7603,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -7069,7 +7632,7 @@ m.unmount();
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio', 'Studio annex']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -8102,7 +8665,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   // A key whose requests include one on a model the cost model lists in no tier flags both windows, which no story key
   // does, so the route is stood in for on a key with plan rows and on a key of billed rows alone: each reads the dash
   // titled why on its subscription side beside its billed dollars, the zero of the second read as unpriced rather than
-  // as no plan rows, and the total does the same.
+  // as no plan rows, and the total does the same. Each bar draws no fill, since its priced rows alone would size it.
   const planKey = listed.find((k) => k.lifetime.equivalent.sevenDay > 0 && k.usage7d.equivalent.sevenDay > 0);
   const billedKey = listed.find((k) => k.lifetime.equivalent.sevenDay === 0 && k.lifetime.billedUsd > 0);
   const flaggedKeys = new Set([planKey?.id, billedKey?.id]);
@@ -8119,9 +8682,10 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     ...dashedBars.filter((b) => flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.figure !== dashText(keyOf(b).lifetime) || b.title !== UNPRICED_TITLE),
     ...dashedSubs.filter((s) => flaggedKeys.has(s.id)).filter((s) => s.text !== dashText(keyById.get(s.id).usage7d) || s.title !== UNPRICED_TITLE),
     ...dashedBars.filter((b) => !flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.title === UNPRICED_TITLE),
+    ...dashedBars.filter((b) => flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.width !== '0%'),
   ];
   results.push({
-    name: "/keys under native a key whose window a request priced nothing on reads a dash titled why on its subscription side beside its billed dollars, on its bar, its 7-day line and the Lifetime cost tile, and the others read their figures",
+    name: "/keys under native a key whose window a request priced nothing on reads a dash titled why on its subscription side beside its billed dollars, on its bar, its 7-day line and the Lifetime cost tile, its bar draws no fill, and the others read their figures",
     ok:
       planKey !== undefined &&
       billedKey !== undefined &&
@@ -8130,6 +8694,40 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
       dashedBars.length === listed.length &&
       wrongDashed.length === 0,
     missing: [`plan key ${planKey?.id}, billed key ${billedKey?.id}`, JSON.stringify(dashedTile), ...wrongDashed.map((r) => JSON.stringify(r))],
+  });
+  // The mock's unpriced switch flags the key its one unpriced request lands on, desktop (the request copies the story's
+  // req_f8085653-422), in its lifetime and its week with the story's figures: its bar reads the dash beside its billed
+  // dollars under the unpriced title, draws no fill and sorts last, and the other bars keep their widths.
+  localStorage.setItem('phoebis.mockUnpriced', '1');
+  const switchedKeys = await api.listKeys();
+  const switched = await mount('/keys');
+  const switchedBars = barsRead(switched);
+  const switchedSubs = subsRead(switched);
+  switched.unmount();
+  localStorage.removeItem('phoebis.mockUnpriced');
+  const desktop = switchedKeys.find((k) => k.id === 'desktop');
+  const storyDesktop = keyById.get('desktop');
+  const flaggedIds = switchedKeys.filter((k) => k.lifetime.equivalent.unpriced.sevenDay || k.usage7d.equivalent.unpriced.sevenDay).map((k) => k.id);
+  const desktopBar = switchedBars.find((b) => b.prefix === desktop?.prefix);
+  const desktopSub = switchedSubs.find((s) => s.id === 'desktop');
+  const storyWidths = new Map(bars.map((b) => [b.prefix, b.width]));
+  const resized = switchedBars.filter((b) => b !== desktopBar && b.width !== storyWidths.get(b.prefix));
+  results.push({
+    name: "/keys under the mock's unpriced switch the key its unpriced request lands on reads a dash titled why beside its billed dollars on its bar and its 7-day line, its bar draws no fill and sorts last, and the other bars keep their widths",
+    ok:
+      JSON.stringify(flaggedIds) === JSON.stringify(['desktop']) &&
+      desktop?.lifetime.equivalent.unpriced.sevenDay === true &&
+      desktop.usage7d.equivalent.unpriced.sevenDay === true &&
+      JSON.stringify([desktop.lifetime.equivalent.sevenDay, desktop.lifetime.billedUsd, desktop.lifetime.requests]) === JSON.stringify([storyDesktop?.lifetime.equivalent.sevenDay, storyDesktop?.lifetime.billedUsd, storyDesktop?.lifetime.requests]) &&
+      desktopBar?.figure === `-, ${fmtUsd(desktop.lifetime.billedUsd)} billed` &&
+      desktopBar.title === UNPRICED_TITLE &&
+      desktopBar.width === '0%' &&
+      switchedBars.at(-1) === desktopBar &&
+      desktopSub?.text === dashText(desktop.usage7d) &&
+      desktopSub.title === UNPRICED_TITLE &&
+      switchedBars.length === listed.length &&
+      resized.length === 0,
+    missing: [`flagged ${JSON.stringify(flaggedIds)}`, JSON.stringify(desktop?.lifetime ?? 'no desktop key'), JSON.stringify(desktopBar ?? 'no desktop bar'), `last bar ${switchedBars.at(-1)?.prefix}`, JSON.stringify(desktopSub ?? 'no desktop row'), ...resized.map((b) => `${b.prefix} ${storyWidths.get(b.prefix)} to ${b.width}`)],
   });
 }
 // The Pool chip is the address: `?pools=<id>` filters the rows, the chip's x clears it, and an unknown id draws no chip
@@ -9186,6 +9784,121 @@ await readsAgain('/guardrails', 'listGuardrails', 5_000);
   await page.settle(200);
   page.unmount();
 }
+/** The row's Duplicate, through its menu: the dialog it opens. */
+const duplicateGuardrail = async (page, name) => {
+  await guardrailMenu(page, guardrailRow(page, name));
+  [...page.container.querySelectorAll('.menu__list [role="menuitem"]')].find((b) => b.textContent?.trim() === 'Duplicate')?.click();
+  await page.settle(400);
+  return openDialogs(page).pop() ?? null;
+};
+/** A condition row as its controls read, each member the row draws no control for left undefined. */
+const conditionRead = (row, n) => {
+  const read = (cell) => row?.querySelector(`[aria-label="Condition ${n} ${cell}"]`)?.value;
+  return { name: read('header name'), operator: read('operator'), path: read('path'), selector: read('selector'), subject: read('subject'), value: read('value') };
+};
+const conditionRows = (dlg) => [...(group(dlg, 'Conditions')?.querySelectorAll('.conditions-editor__row') ?? [])];
+{
+  // The story's Large auxiliary requests holds two conditions, the second its body's max_tokens over 4096, so its copy
+  // is a create with two. The route refuses a row it cannot read as `conditions[{i}]: {reason}`, here the reason its
+  // check gives a value that is not a number. A frozen mount keeps any toast up until a tick takes it down, so the
+  // toast read sees one the refusal raised.
+  const page = await mount('/guardrails', { now: CLOCK_ORIGIN });
+  await page.settle(400);
+  const dlg = await duplicateGuardrail(page, 'Large auxiliary requests');
+  const before = conditionRows(dlg).length;
+  failNextCall('createGuardrail', '/admin/guardrails', 'conditions[1]: value is not a number', { quiet: true, status: 400 });
+  buttonIn(dlg, 'Create guardrail')?.click();
+  await page.settle(500);
+  const rows = conditionRows(dlg);
+  const read = {
+    open: dlg?.hasAttribute('open') === true,
+    refusals: rows.map((r) => r.querySelector('.conditions-editor__refusal')?.textContent?.trim() ?? null),
+    refused: rows.map((r) => r.classList.contains('is-refused')),
+    shown: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')),
+    toasts: page.container.querySelectorAll('.toast').length,
+  };
+  const stored = (await api.listGuardrails()).length;
+  results.push({
+    name: "/guardrails a route refusal of a create's conditions[1] reads under the second row of Conditions and raises no toast",
+    ok:
+      before === 2 &&
+      read.open &&
+      JSON.stringify(read.refusals) === JSON.stringify([null, 'Condition 2: value is not a number']) &&
+      JSON.stringify(read.refused) === JSON.stringify([false, true]) &&
+      JSON.stringify(read.shown) === JSON.stringify(['Conditions']) &&
+      read.toasts === 0 &&
+      stored === 2,
+    missing: [`${before} rows before`, JSON.stringify(read), `${stored} stored`],
+  });
+  page.unmount();
+}
+{
+  // Duplicate on the story's Subagent status summary, the one row with a preset stamp, observed on the pool all.
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const source = (await api.listGuardrails()).find((g) => g.id === 'subagent-status-summary');
+  const presetName = (await api.listGuardrailPresets()).find((p) => p.id === source.preset.id)?.name;
+  const dlg = await duplicateGuardrail(page, source.name);
+  const identity = group(dlg, 'Identity');
+  const fieldInput = (label) => [...(identity?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+  const read = {
+    conditions: conditionRows(dlg).map((r, i) => conditionRead(r, i + 1)),
+    description: fieldInput('Description')?.value,
+    footer: ['Create guardrail', 'Save guardrail'].map((label) => buttonIn(dlg, label) !== undefined),
+    mode: identity?.querySelector('.segmented[aria-label="Mode"] button[aria-pressed="true"]')?.textContent?.trim(),
+    name: fieldInput('Name')?.value,
+    pickers: [...(group(dlg, 'Applies to')?.querySelectorAll('button[aria-haspopup="dialog"]') ?? [])].map((b) => b.textContent?.trim()),
+    stamp: identity?.querySelector('.guardrails__preset > p')?.textContent?.trim(),
+    title: dlg?.querySelector('.dialog__title')?.textContent?.trim(),
+  };
+  const want = {
+    conditions: source.conditions.map((c) => ({ name: c.name, operator: c.operator, path: c.path, selector: c.selector, subject: c.subject, value: c.value })),
+    description: source.description,
+    footer: [true, false],
+    mode: source.mode === 'enforce' ? 'Enforce' : 'Observe',
+    name: `${source.name} copy`,
+    pickers: ['No pools', 'No keys'],
+    stamp: `From the preset ${presetName} v${source.preset.version}`,
+    title: 'Create guardrail',
+  };
+  results.push({
+    name: "/guardrails Duplicate opens a create with the source's conditions, mode and preset stamp, the name {name} copy and no attachment",
+    ok: source.pools.length > 0 && source.conditions.length > 1 && JSON.stringify(read) === JSON.stringify(want),
+    missing: [JSON.stringify(read), JSON.stringify(want)],
+  });
+  page.unmount();
+}
+{
+  // The story's Large auxiliary requests: its second row reads the body's max_tokens over 4096. A move to Header and
+  // back to Body takes each subject's first operator, so the value cell leaves with it, and the path the move to Header
+  // cleared stays empty.
+  const page = await mount('/guardrails');
+  await page.settle(400);
+  const dlg = await editGuardrail(page, 'Large auxiliary requests');
+  rail(dlg, 'conditions')?.click();
+  await page.settle(150);
+  const row = () => conditionRows(dlg)[1];
+  const opened = conditionRead(row(), 2);
+  const first = conditionRead(conditionRows(dlg)[0], 1);
+  await changeSelect(page, row()?.querySelector('[aria-label="Condition 2 subject"]'), 'header');
+  const header = conditionRead(row(), 2);
+  await changeSelect(page, row()?.querySelector('[aria-label="Condition 2 subject"]'), 'body');
+  const body = conditionRead(row(), 2);
+  const kept = conditionRead(conditionRows(dlg)[0], 1);
+  const read = { body, header, kept, opened };
+  const want = {
+    body: { name: undefined, operator: 'absent', path: '', selector: undefined, subject: 'body', value: undefined },
+    header: { name: '', operator: 'absent', path: undefined, selector: undefined, subject: 'header', value: undefined },
+    kept: first,
+    opened: { name: undefined, operator: 'gt', path: 'max_tokens', selector: undefined, subject: 'body', value: '4096' },
+  };
+  results.push({
+    name: "/guardrails a row's subject change resets its operator to the subject's first and leaves the cells the subject lacks empty",
+    ok: JSON.stringify(read) === JSON.stringify(want),
+    missing: [JSON.stringify(read), JSON.stringify(want)],
+  });
+  page.unmount();
+}
 
 // The Guardrails group of the pool and key dialogs and the pool card's badge over the story's attachments, every figure
 // read through the mock: the pool all runs the preset's guardrail, and its key desktop adds the enforcing one after it.
@@ -9814,9 +10527,9 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   // Read while the list shows, since the drawer checks below compare their chips against these cells' titles.
   const nativeCell = sharedRow ? await costCellOf(sharedRow.id) : null;
   if (sharedRow && nativeCell) {
-    const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': 'Fable week' };
+    const FULL = { '5h': '5-hour', '7d': '7-day', '7-day Fable': '7-day Fable' };
     const full = (short) => {
-      const read = /^(\d[\d.]*%) 20x (5h|7d|Fable week)$/.exec(short ?? '');
+      const read = /^(\d[\d.]*%) 20x (5h|7d|7-day Fable)$/.exec(short ?? '');
       return read === null ? null : read[1] === '0%' ? '0%' : `${read[1]} of 20x ${FULL[read[2]]}`;
     };
     const parts = (nativeCell.title ?? '').split(', ');
@@ -9828,7 +10541,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
         /^\d[\d.]*% 20x 7d$/.test(nativeCell.sub ?? '') &&
         /^\$[\d,.]+ equivalent$/.test(parts[parts.length - 1] ?? '') &&
         named.length === costUnitOf(sharedRow, 'native').equivalents.length &&
-        named.every((n) => /^(0%|\d[\d.]*% of 20x (5-hour|7-day|Fable week))$/.test(n)) &&
+        named.every((n) => /^(0%|\d[\d.]*% of 20x (5-hour|7-day|7-day Fable))$/.test(n)) &&
         named[0] === full(nativeCell.main) &&
         named[1] === full(nativeCell.sub),
       missing: [sharedRow.id, JSON.stringify(nativeCell)],
@@ -9849,9 +10562,9 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   await chooseUnit(m, 'share');
   const shareCell = sharedRow ? await costCellOf(sharedRow.id) : null;
   if (sharedRow && shareCell) {
-    const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': '7-day Fable' };
+    const FULL = { '5h': '5-hour', '7d': '7-day', '7-day Fable': '7-day Fable' };
     const full = (short) => {
-      const read = /^(\d[\d.]*%) (5h|7d|Fable week)$/.exec(short ?? '');
+      const read = /^(\d[\d.]*%) (5h|7d|7-day Fable)$/.exec(short ?? '');
       return read ? `${read[1]} of ${FULL[read[2]]}` : null;
     };
     const parts = (shareCell.title ?? '').split(', ');
@@ -9860,7 +10573,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
       name: "/requests under the share position a subscription row's Cost cell reads its shares in their windows' short words, its sub line the 5-hour share, and its title every share in full with the dollar equivalent",
       ok:
         shellUnit(m)?.value === 'share' &&
-        /^\d[\d.]*% (7d|Fable week)$/.test(shareCell.main) &&
+        /^\d[\d.]*% (7d|7-day Fable)$/.test(shareCell.main) &&
         /^\d[\d.]*% 5h$/.test(shareCell.sub ?? '') &&
         /^\$[\d,.]+ equivalent$/.test(parts[parts.length - 1] ?? '') &&
         named.length === costUnitOf(sharedRow, 'share').shares.length &&
@@ -10813,9 +11526,14 @@ await m.navigate(`/requests/${laptopRow.id}`);
     setInput(field, '1999');
     await m.settle(100);
     const retyped = countOf(drawerGroup);
-    findButton(drawerGroup, 'Clear find')?.click();
+    // jsdom's click moves no focus, so the button takes it first as a pointer's press would, and the clear hands it
+    // back to the field.
+    const clear = findButton(drawerGroup, 'Clear find');
+    clear?.focus();
+    const away = clear !== null && document.activeElement === clear;
+    clear?.click();
     await m.settle(100);
-    const cleared = { count: countOf(drawerGroup), value: field?.value };
+    const cleared = { away, count: countOf(drawerGroup), focus: field !== null && document.activeElement === field, value: field?.value };
     // Escape with a term in the drawer's own field clears the term and stops there, short of the drawer's own Escape.
     setInput(field, '17');
     await m.settle(100);
@@ -10854,6 +11572,8 @@ await m.navigate(`/requests/${laptopRow.id}`);
         retyped === '1 of 10' &&
         cleared.count === '' &&
         cleared.value === '' &&
+        cleared.away &&
+        cleared.focus &&
         drawerEscaped.drawer &&
         drawerEscaped.value === '' &&
         drawerLeft,
@@ -11569,7 +12289,8 @@ m.unmount();
     });
   const param = (page, name) => new URLSearchParams(page.location().search).get(name);
   const served = (r) => r?.attempts.at(-1)?.cacheMissReason ?? null;
-  const KNOWN = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
+  // The known reasons in their reading order, the comparison still running left out, in the library's labels.
+  const KNOWN = ['none', 'model_changed', 'system_changed', 'tools_changed', 'messages_changed', 'previous_message_not_found', 'unavailable', 'not_requested'].map((reason) => CACHE_MISS_LABEL[reason]);
 
   const reasonCheck = '/requests the Cache miss reason filter stands in the Outcome group of Add filter and offers the known reasons in their reading order';
   const page = await mount('/requests', { now: CLOCK_ORIGIN });
@@ -11961,7 +12682,8 @@ m.unmount();
   }
   {
     // The list's own read fails and leaves the page on its error, so the first poll that answers stands in for it: its
-    // rows drawn untinted, the error gone, and Next walking on from the poll's page under the end the poll read to.
+    // rows drawn untinted, the error gone, and Next walking on from the poll's page to the router's clock, as a cursor
+    // page under a preset reads.
     failNextCall('listRequests', '/admin/requests', 'ledger locked');
     const page = await mount('/requests?rows=10', { now: CLOCK_ORIGIN });
     const errorOf = () => page.container.querySelector('.requests__table .empty--error .empty__title')?.textContent ?? null;
@@ -11989,10 +12711,60 @@ m.unmount();
       ok:
         failed.error === 'Could not load the request log' && failed.rows === 0 &&
         stood.calls === 1 && stood.error === null && stood.tinted === 0 && answer.requests.length === 10 && JSON.stringify(drawn) === JSON.stringify(answer.requests.map((r) => r.id)) &&
-        answer.nextCursor !== null && read.length === 1 && read[0].cursor === answer.nextCursor && read[0].to === end,
+        answer.nextCursor !== null && read.length === 1 && read[0].cursor === answer.nextCursor && read[0].to === undefined,
       missing: [JSON.stringify(failed), JSON.stringify(stood), `${drawn.length} drawn of ${answer.requests.length}`, `cursor ${answer.nextCursor}`, JSON.stringify(read.map((q) => [q.cursor, q.to]))],
     });
     page.unmount();
+  }
+  {
+    // The list's read fails and its Try again is held while the first poll stands in for it. The story's late request
+    // lands before the held read answers, so the list's answer holds it where the stand-in does not, and that answer
+    // replaces the stand-in: the list's rows drawn untinted, and the next poll reading at the stamp it carried.
+    const LATE = 'req_7a3f0c26-d81';
+    failNextCall('listRequests', '/admin/requests', 'ledger locked');
+    const page = await mount('/requests?rows=50', { now: CLOCK_ORIGIN });
+    const failed = page.container.querySelector('.requests__table .empty--error .empty__title')?.textContent ?? null;
+    await chooseInterval(page, '5 s');
+    const held = deferNextCall('listRequests');
+    [...page.container.querySelectorAll('.requests__table .empty--error button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
+    await page.settle();
+    // The list has no answer yet while the held read runs, so the table draws its loading rows and the bar's count
+    // names the rows the stand-in holds.
+    const drawnNow = () => ({ count: page.container.querySelector('.filter-bar__count')?.textContent ?? null, error: page.container.querySelector('.requests__table .empty--error') !== null, ids: requestRows(page).map(idOf).filter((id) => id !== null), tinted: [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf) });
+    let at = CLOCK_ORIGIN + 5_000;
+    tick(5_000);
+    await page.settle();
+    const stood = drawnNow();
+    // The late request lands a few seconds after the mock loaded, so the clock steps short of the next poll until the
+    // mock lists it, each step past the mock's latency so the answer lands with no real wait.
+    const lands = async () => {
+      const answer = api.listRequests({ request: LATE });
+      tick(200);
+      at += 200;
+      return (await answer).requests.length === 1;
+    };
+    let landed = false;
+    while (!landed && at < CLOCK_ORIGIN + 9_000) landed = await lands();
+    held.release();
+    await page.settle();
+    held.restore();
+    const replaced = drawnNow();
+    // The held query at the same instant, so it answers what the released read answered.
+    const answer = await api.listRequests(held.calls[0]?.[0]);
+    const next = countCalls('listRequests');
+    tick(CLOCK_ORIGIN + 10_000 - at);
+    await page.settle();
+    next.restore();
+    const sent = next.calls.map(([q]) => q);
+    page.unmount();
+    results.push({
+      name: "/requests the list's late answer replaces the page an auto reload poll stood in for it, and the next poll reads at the list's stamp",
+      ok:
+        failed === 'Could not load the request log' && !stood.error && stood.count === '50 shown, more available' && stood.tinted.length === 0 && landed &&
+        !replaced.error && JSON.stringify(replaced.ids) === JSON.stringify(answer.requests.map((r) => r.id)) && replaced.ids.filter((id) => id === LATE).length === 1 && replaced.tinted.length === 0 &&
+        sent.length === 1 && sent[0].cursor === undefined && sent[0].landedAfter === answer.landedThrough,
+      missing: [String(failed), `stood ${stood.ids.length} rows, count ${stood.count}, error ${stood.error}, tinted ${stood.tinted.join(' | ')}`, `landed ${landed} by ${isoAt(at)}`, `replaced ${replaced.ids.length} rows of ${answer.requests.length}, error ${replaced.error}, late ${replaced.ids.filter((id) => id === LATE).length}, tinted ${replaced.tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.landedAfter])), `list ${answer.landedThrough}`],
+    });
   }
   {
     // The drawer pauses the poll and its close resumes it on the same address and interval, so a streak that toasted
@@ -12031,7 +12803,7 @@ m.unmount();
     // Ninety requests arrive after the page loaded: the list reads up to the instant of the ninety-first newest, the
     // interval menu left open holds the poll while the clock moves past the ninety to the pinned origin, and the first
     // poll after the menu closes finds more than its eight pages of ten read, every page from the list's stamp and to
-    // the router's clock. Next reads on from the last row the poll read, up to the poll's end. The rows the poll reads
+    // the router's clock. Next reads on from the last row the poll read, to the router's clock. The rows the poll reads
     // are those the ledger holds at its end, so the late request, still running there, is not among them.
     const end = isoAt(CLOCK_ORIGIN + 5_000);
     // Every row under the bounds, newest first.
@@ -12074,16 +12846,43 @@ m.unmount();
     const read = next.calls.map((c) => c[0]);
     const after = requestRows(page).map(idOf);
     results.push({
-      name: '/requests Next past an auto reload overrun reads the rows the poll left up to its end',
+      name: "/requests Next past an auto reload overrun reads the rows the poll left to the router's clock",
       ok:
         all.length >= 100 && atOf(near[89]) > loaded && loaded < CLOCK_ORIGIN && held.calls.length === 0 && JSON.stringify(listed) === JSON.stringify(atLoad.requests.map((r) => r.id)) &&
         listed.every((id) => all.indexOf(id) >= 89) &&
         sent.length === 8 && sent.every((q) => q.to === undefined && q.limit === 10 && q.landedAfter === atLoad.landedThrough) && line === 'More rows arrived than auto reload could fetch. Reload to read them.' &&
         drawn.length === 80 + listed.length && JSON.stringify(drawn.slice(0, 80)) === JSON.stringify(all.slice(0, 80)) &&
-        overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === end && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
+        overrun !== null && read.length === 1 && read[0].cursor === overrun && read[0].to === undefined && JSON.stringify(after) === JSON.stringify(all.slice(80, 90)),
       missing: [`${all.length} rows, loaded ${isoAt(loaded)}, ${held.calls.length} reads while held`, `listed ${listed.slice(0, 2).join(' | ')}`, `${sent.length} reads, line ${line}`, `${drawn.length} drawn`, `overrun ${overrun}`, JSON.stringify(read.map((q) => [q.cursor, q.to])), `next ${after.slice(0, 2).join(' | ')}`, `gap ${all.slice(80, 82).join(' | ')}`],
     });
     page.unmount();
+  }
+  {
+    // Under a preset a cursor page reads to the router's clock, as the poll under the watermark does, so Next from the
+    // first page sends its cursor and no end. A custom range keeps its own end on every page.
+    const from = isoAt(CLOCK_ORIGIN - 24 * HOUR);
+    const end = isoAt(CLOCK_ORIGIN - HOUR);
+    // Each first page is read while the page holds the clock at the anchor, as the page read its own, since the unmount
+    // hands the clock back to the wall.
+    const nextFrom = async (path, to) => {
+      const page = await mount(path, { now: CLOCK_ORIGIN });
+      const first = await api.listRequests({ from, limit: 10, to });
+      const spy = countCalls('listRequests');
+      nextPage(page)?.click();
+      await page.settle();
+      spy.restore();
+      page.unmount();
+      return { first, sent: spy.calls.map(([q]) => q) };
+    };
+    const { first: presetFirst, sent: preset } = await nextFrom('/requests?rows=10', isoAt(CLOCK_ORIGIN));
+    const { first: customFirst, sent: custom } = await nextFrom(`/requests?rows=10&from=${from}&to=${end}`, end);
+    results.push({
+      name: "/requests Next from the first page reads to the router's clock under a preset and to the range's own end under a custom range",
+      ok:
+        presetFirst.nextCursor !== null && preset.length === 1 && preset[0].cursor === presetFirst.nextCursor && preset[0].to === undefined &&
+        customFirst.nextCursor !== null && custom.length === 1 && custom[0].cursor === customFirst.nextCursor && custom[0].to === end,
+      missing: [`cursors ${presetFirst.nextCursor} and ${customFirst.nextCursor}`, JSON.stringify(preset.map((q) => [q.cursor, q.to ?? null])), JSON.stringify(custom.map((q) => [q.cursor, q.to ?? null]))],
+    });
   }
   {
     // The interval is page state: a range and a filter change write their keys alone, and the part keeps its word.
@@ -12228,6 +13027,43 @@ m.unmount();
       name: '/requests a custom span that ends at the clock reads at the chosen interval up to its own end',
       ok: enabled && word === '5 s' && sent.length > 0 && sent.every((to) => to === isoAt(CLOCK_ORIGIN)) && short,
       missing: [`enabled ${enabled}`, String(word), JSON.stringify(sent), `a span 30 s short enabled ${short}`],
+    });
+  }
+  {
+    // A custom range's poll sends its own end, and the stamp the route answers stops at that end, so each poll reads at
+    // the stamp the answer before it carried, up to the range's end. The story's late request arrived inside the range
+    // and lands after its end: the poll after its landing brings it under the fresh tint, and the poll after that
+    // brings it again, merged by its id into the one row with no second tint. The range starts two hours back, since
+    // the late request is the oldest row of the last hour, and a poll leaves a row below the list's last row to Next.
+    const LATE = 'req_7a3f0c26-d81';
+    const from = isoAt(CLOCK_ORIGIN - 2 * HOUR);
+    const end = isoAt(CLOCK_ORIGIN);
+    const page = await mount(`/requests?rows=50&from=${from}&to=${end}`, { now: CLOCK_ORIGIN });
+    const list = await api.listRequests({ from, limit: 50, to: end });
+    const lateAt = Date.parse(requests.find((r) => r.id === LATE)?.at ?? '');
+    await chooseInterval(page, '5 s');
+    const polls = [];
+    for (let n = 0; n < 3; n += 1) {
+      const spy = countCalls('listRequests');
+      tick(5_000);
+      await page.settle();
+      spy.restore();
+      const sent = spy.calls.map(([q]) => q);
+      // The poll's query at the same instant, so it answers what the poll's read answered.
+      const answer = sent.length === 1 ? await api.listRequests(sent[0]) : null;
+      const drawn = requestRows(page).map(idOf);
+      const tinted = [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf);
+      polls.push({ after: sent[0]?.landedAfter, brought: answer?.requests.some((r) => r.id === LATE) ?? false, calls: sent.length, drawn: drawn.filter((id) => id === LATE).length, through: answer?.landedThrough, tinted: tinted.includes(LATE), to: sent[0]?.to ?? null });
+    }
+    page.unmount();
+    const [first, second, third] = polls;
+    results.push({
+      name: "/requests a custom range's polls each read at the stamp the answer before carried, capped at the range's end, and draw a late row inside it once",
+      ok:
+        !list.requests.some((r) => r.id === LATE) && lateAt > Date.parse(list.requests.at(-1)?.at ?? '') && polls.every((p) => p.calls === 1 && p.to === end) &&
+        first.after === list.landedThrough && second.after === first.through && third.after === second.through && third.after === Date.parse(end) &&
+        !first.brought && first.drawn === 0 && second.brought && second.drawn === 1 && second.tinted && third.brought && third.drawn === 1 && !third.tinted,
+      missing: [`list ${list.landedThrough}, late listed ${list.requests.some((r) => r.id === LATE)}, late at ${requests.find((r) => r.id === LATE)?.at}, last row at ${list.requests.at(-1)?.at}`, ...polls.map((p) => JSON.stringify(p))],
     });
   }
   {
@@ -12384,7 +13220,9 @@ m.unmount();
   const openOptions = async (page, label) => ((await addFilter(page, label)) === null ? null : boxOptions());
 
   const canceledCheck = '/requests a canceled request names its outcome in the list and the drawer';
-  const canceled = requests.find((r) => r.outcome === 'canceled');
+  // The router's headless cut is canceled too and draws no status, so the case reads the client's cut, whose 200 head
+  // went out, wherever the draws place it.
+  const canceled = requests.find((r) => r.errorCode === 'client_gone');
   if (!canceled) results.push({ name: canceledCheck, ok: false, missing: ['fixture'] });
   else {
     const page = await mount(`/requests?search=${canceled.id}`);
@@ -12402,6 +13240,34 @@ m.unmount();
       missing: [`${rows.length} rows`, JSON.stringify(listed), drawn],
     });
     page.unmount();
+  }
+
+  // The story's two rows the router's own stop cut: `req_7a2c4e91-d03` after its 200 head went out, whose drawer prints
+  // the code as sent, and `req_c58d1f3a-e67` before any head, whose Status cell draws the null status as a dash.
+  const cutCheck = "/requests a request the router's own stop cut reads canceled beside its status, the drawer the code";
+  const [headed, headless] = ['req_7a2c4e91-d03', 'req_c58d1f3a-e67'].map((id) => requests.find((r) => r.errorCode === 'router_shutdown' && r.id === id));
+  if (!headed || !headless) results.push({ name: cutCheck, ok: false, missing: ['fixture'] });
+  else {
+    const statusOf = (page) => {
+      const rows = [...page.container.querySelectorAll('.requests__table tbody tr')];
+      const word = rows[0]?.querySelector('.requests__outcome');
+      return { badge: word?.closest('td')?.querySelector('.badge')?.textContent?.trim() ?? 'no badge', rows: rows.length, word: word?.textContent?.trim() ?? 'no outcome word' };
+    };
+    const page = await mount(`/requests?search=${headed.id}`);
+    const head = statusOf(page);
+    page.container.querySelector('.requests__table tbody tr')?.click();
+    await page.settle();
+    const error = [...page.container.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Error')?.querySelector('dd');
+    const drawn = { mono: error?.classList.contains('mono') ?? false, text: error?.textContent?.trim() ?? 'no Error row' };
+    page.unmount();
+    const bare = await mount(`/requests?search=${headless.id}`);
+    const none = statusOf(bare);
+    bare.unmount();
+    results.push({
+      name: cutCheck,
+      ok: JSON.stringify([head, drawn, none]) === JSON.stringify([{ badge: '200', rows: 1, word: 'canceled' }, { mono: true, text: 'router_shutdown' }, { badge: '-', rows: 1, word: 'canceled' }]),
+      missing: [JSON.stringify([head, drawn, none])],
+    });
   }
 
   // The page's rows are matched back to the story by their short id, so the rule is read against each row's own
@@ -12961,7 +13827,7 @@ m.unmount();
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 35 && ['+ Mark cleared', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        events.length === 37 && ['+ Mark cleared', '+ Plan ended', '+ Plan restored', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -12989,7 +13855,7 @@ m.unmount();
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 42 && back.checked === 42,
+        back.address === null && back.chip === 'no kinds chip' && back.options === 44 && back.checked === 44,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -13647,8 +14513,10 @@ m.unmount();
       if (!all(cell(tr, 'link'), ['request'])) say(`details ${hrefs(cell(tr, 'link'))}`);
     }
     const links = [...m.container.querySelectorAll('.routing-log__table tbody a')].map((a) => a.getAttribute('href') ?? '');
-    // The hour's first page names the revoked key in a refusal's Fact.
-    const factLinks = [...m.container.querySelectorAll('.routing-log__fact .fact__value a')].map((a) => a.getAttribute('href'));
+    // Studio's wall and its clear of 14:20 and 14:29:20 take the hour's first page past the key refusal of 14:18:05, so
+    // the hour's refusals are read on a page of their own, which names the revoked key in a refusal's Fact.
+    const refusals = await mount('/routing-log?kinds=refused', { now: CLOCK_ORIGIN });
+    const factLinks = [...refusals.container.querySelectorAll('.routing-log__fact .fact__value a')].map((a) => a.getAttribute('href'));
     results.push({
       name: '/routing-log every entity in a row is a link with the route of its kind',
       ok: wrong.length === 0 && links.length > 50 && links.every((h) => Object.values(ROUTE).some((r) => r.test(h))) && factLinks.length > 0,
@@ -13656,12 +14524,13 @@ m.unmount();
     });
     // The router records an empty model for the request it refused before it resolved one, `req_6c3a9e27-5b1` in
     // `web/src/mock/requests.ts`.
-    const refused = trs(m).find((tr) => tr.getAttribute('data-row') === 'req_6c3a9e27-5b1/1');
+    const refused = trs(refusals).find((tr) => tr.getAttribute('data-row') === 'req_6c3a9e27-5b1/1');
     const refusedRead = {
       dash: cell(refused, 'model')?.querySelector('.muted')?.textContent ?? null,
       modelLinks: [...(refused?.querySelectorAll('a') ?? [])].filter((a) => (a.getAttribute('href') ?? '').startsWith('/routing-log?models=')).length,
       under: refused?.querySelector('.routing-log__model-under') ? 1 : 0,
     };
+    refusals.unmount();
     results.push({
       name: '/routing-log a request refused before it resolved a model reads a dash in its Model cell and draws no model link',
       ok: refused !== undefined && JSON.stringify(refusedRead) === JSON.stringify({ dash: '-', modelLinks: 0, under: 0 }),
@@ -13816,7 +14685,7 @@ m.unmount();
   /** The Pace column's header as the card words it, from the window the first subscription member's score read. */
   const paceWord = (record) => {
     const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
-    return id === null ? 'Pace' : `Spare rate, ${{ seven_day: '7-day', seven_day_fable: 'Fable week' }[id] ?? id.replace(/_/g, ' ')} per hour`;
+    return id === null ? 'Pace' : `Spare rate, ${{ seven_day: '7-day', seven_day_fable: '7-day Fable' }[id] ?? id.replace(/_/g, ' ')} per hour`;
   };
   /** The story's own decision: its row's page, a quarter hour either side of the request, its record and its card. */
   const story = async (id, seq = 1, kinds = '') => {
@@ -14169,10 +15038,10 @@ m.unmount();
   }
   {
     // The Fable-week round on nightly at 08:30: the 5-hour window opened 19 minutes before, under all's hold of an
-    // hour, so the shed rule's Round group reads the window's age and hold, and the Fable week fires in its place. The
-    // round lists the Fable pin on the fast lane and the Opus pin off the window, both left out before the walk, so it
-    // marks nothing off the window.
-    const name = "/routing-log the Fable-week round's card lists the Fable pin on the fast lane and the Opus pin off the window and marks nothing off the window";
+    // hour, so the shed rule's Round group reads the window's age and hold, and the 7-day Fable window fires in its
+    // place. The round walks the Fable pin with its burn on the 7-day Fable window, the one pin walked and so the last
+    // pin, and lists the Opus pin off the window, left out before the walk, so it marks nothing for the last pin.
+    const name = "/routing-log the Fable-week round's card walks the Fable pin as the last pin, lists the Opus pin off the window and marks nothing for the last pin";
     const id = 'req_3e7a5c19-f84';
     if ((await api.getDecision(id, 1)) === null) results.push({ name, ok: false, missing: ['no decision of the story at 08:30 on nightly'] });
     else {
@@ -14195,12 +15064,45 @@ m.unmount();
           JSON.stringify(labels) === JSON.stringify(['trigger', 'excess', 'fired by', 'age 5h', 'age hold 5h', 'target', 'round', 'marked', 'marks', 'skipped']) &&
           (popoverRowOf(round, 'age 5h') ?? []).includes('age 5h 19 min') && (popoverRowOf(round, 'age hold 5h') ?? []).includes('age hold 5h 1 h') && (popoverRowOf(round, 'round') ?? []).includes('round ran') &&
           JSON.stringify(facts) === JSON.stringify(['pins 0 of 2']) &&
-          JSON.stringify(pins.map((cells) => [cells[3] === '-', cells[5], cells[7]])) === JSON.stringify([[true, '-', 'fast lane'], [true, '-', 'off window']]) &&
-          JSON.stringify(pairs.Outcome) === JSON.stringify(['nothing to mark: off window']),
+          JSON.stringify(pins.map((cells) => [cells[3], cells[5], cells[7]])) === JSON.stringify([['3.0 %/h', '-', 'last pin'], ['-', '-', 'off window']]) &&
+          JSON.stringify(pairs.Outcome) === JSON.stringify(['nothing to mark: last pin']),
         missing: [labels.join(' / '), rowsRead(round), facts.join(' / '), JSON.stringify(pins), JSON.stringify(pairs.Outcome ?? null)],
       });
       page.unmount();
     }
+  }
+  {
+    // The story's tie: the failover at 08:16:21 that tied primary and nightly on Pace, both fitting a fresh session,
+    // the runway keeping primary, so the Pick station names both, the one the runway kept and that no draw was left.
+    const name = "/routing-log the tie's Pick station names the tied accounts, the one the runway kept and that no draw was left";
+    const id = 'req_8c41f2d7-a93';
+    if ((await api.getDecision(id, 2)) === null) results.push({ name, ok: false, missing: ['no failover of the story at 08:16 tied on Pace'] });
+    else {
+      const { card, page } = await story(id, 2);
+      scan('tie', card);
+      const popover = await popoverOf(page, stationButton(card, 'pick'));
+      const read = ['tied', 'by runway', 'drawn'].map((label) => popoverRowOf(popover, label));
+      results.push({ name, ok: JSON.stringify(read) === JSON.stringify([['tied primary', 'tied nightly'], ['by runway primary'], ['drawn no']]), missing: [rowsRead(popover)] });
+      page.unmount();
+    }
+  }
+  {
+    // The router's usage poll asks every five minutes and asks no account it has to pair again, so legacy writes one
+    // failed poll per slot from its last clean poll until the refresh that lapsed it, read off the mock's legacy seed.
+    const legacy = (await api.listAccounts()).find((a) => a.id === 'legacy');
+    const range = { from: iso(CLOCK_ORIGIN - 7 * DAY), limit: 200, to: iso(CLOCK_ORIGIN) };
+    const lapsed = (await api.listRoutingLog({ ...range, accountIds: ['legacy'], kinds: ['account_state_changed'] })).rows.find((e) => e.detail.to === 'reauth_required');
+    const polls = (await api.listRoutingLog({ ...range, accountIds: ['legacy'], kinds: ['poll_failed'] })).rows;
+    const clean = Date.parse(legacy?.usage?.poll?.lastCleanAt ?? '');
+    const slots = lapsed === undefined ? 0 : Math.ceil((Date.parse(lapsed.at) - clean) / (5 * MINUTE)) - 1;
+    const page = await mount(`/routing-log?accounts=legacy&kinds=poll_failed&from=${iso(clean)}&to=${iso(Date.parse(lapsed?.at ?? '') + MINUTE)}`, { now: CLOCK_ORIGIN });
+    const listed = trs(page).length;
+    page.unmount();
+    results.push({
+      name: "/routing-log lists legacy's failed polls at the poll's five-minute cadence from its last clean poll until its refresh lapsed",
+      ok: slots > 0 && polls.length === slots && listed === slots && polls.every((e) => e.detail.status === 503 && e.detail.endpoint === 'usage' && Date.parse(e.at) < Date.parse(lapsed.at)),
+      missing: [`${polls.length} rows, ${listed} drawn, ${slots} slots`, ...polls.map((e) => e.at)],
+    });
   }
   {
     const { card, page, record } = await story('req_69e30548-32e', 1);
@@ -14513,11 +15415,12 @@ m.unmount();
         id: 'req_6e1f3b98-a24',
         seq: 1,
         terminus: ['chosen', 'Chosen', 'renewed'],
-        // The round found no destination with runway, so its Round group names each pin it passed over and why.
+        // The round found no destination with runway, so its Round group names each pin it passed over and why, the
+        // parked Opus pin on the fast lane last, left out before the walk.
         own: async (card, record, page) => {
           const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
           const skipped = popoverRowOf(round, 'skipped') ?? [];
-          return skipped.length === 2 && skipped.every((c) => /^skipped [0-9a-f]{8}: no runway$/.test(c));
+          return skipped.length === 3 && skipped.slice(0, 2).every((c) => /^skipped [0-9a-f]{8}: no runway$/.test(c)) && /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]);
         },
         what: 'round that marked nothing',
       },
@@ -14804,7 +15707,7 @@ m.unmount();
         header === paceWord(record) &&
         header !== 'Pace' &&
         oauth.length > 0 &&
-        oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ (min|h) .*, less -?\d+\.\d\d %\/h of burn: -?\d+\.\d\d %\/h\. /.test(t.title) && t.title.endsWith('. Inside its tier, the highest spare rate wins.')) &&
+        oauth.every((t) => /^\d+% of (the 7-day window|the 7-day Fable window|its window) left over \d+ (min|h) .*, less -?\d+\.\d\d %\/h of burn: -?\d+\.\d\d %\/h\. /.test(t.title) && t.title.endsWith('. Inside its tier, the highest spare rate wins.')) &&
         keys.length > 0 && keys.every((t) => /worst live bucket left/.test(t.title)) && hint.startsWith('Pace: the account with the most of its window left'),
       missing: [header, ...titles.map((t) => `${t.id}: ${t.title}`), hint],
     });
@@ -15040,6 +15943,8 @@ m.unmount();
       pin_expired: ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by'],
       pin_migrated: ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Key', 'Session', 'Agent', 'Model'],
       pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
+      plan_ended: ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status'],
+      plan_restored: ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status'],
       poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
       poll_failed: ['Endpoint', 'Status', 'Error'],
@@ -15064,13 +15969,14 @@ m.unmount();
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_cleared: ['Window', 'Before', 'After', 'Reset', 'Read from'],
       window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
-      window_spent: ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request'],
+      // A spent edge a poll read names no request.
+      window_spent: (e) => ['Window', 'Reading', 'Read from', 'Resets', 'Effect', ...(e.requestId === null ? [] : ['Request'])],
     };
     const EVENT_KINDS = [
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
-      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed', 'refresh_failed',
-      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'stream_interrupted',
-      'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
+      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
+      'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
+      'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
     ];
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
     // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect, the
@@ -15082,6 +15988,10 @@ m.unmount();
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
       poll_failed: (e) => ({ Endpoint: [e.detail.endpoint], Error: [e.detail.error], Status: [String(e.detail.status)] }),
       mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
+      // Primary's ended plan and its return a minute later: the read's source in the console's words and the profile's
+      // three members as text, read off the mock's two seeds.
+      plan_ended: () => ({ 'Organization type': ['claude free'], 'Rate-limit tier': ['default claude ai'], Source: ['usage 403'], 'Subscription status': ['canceled'] }),
+      plan_restored: () => ({ 'Organization type': ['claude max'], 'Rate-limit tier': ['default claude max 20x'], Source: ['profile read'], 'Subscription status': ['active'] }),
       registry_changed: (e) => (e.detail.diff?.secret_replaced === true ? { Secret: ['replaced'] } : {}),
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
       shedding_round: (e) => ({ 'Fired by': ['the projection'], Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
@@ -15104,6 +16014,9 @@ m.unmount();
       }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request or waits in place for a reset within the retry bound'] }),
     };
+    // The pairs whose value prints in the mono face: the cut's code, and the upstream's id where the panel draws it,
+    // as the request drawer prints the id.
+    const MONO = { stream_interrupted: ['Code', 'Upstream request'] };
     const modelLinks = {};
     for (const kind of EVENT_KINDS) {
       // The story's newest registry change revokes a key and names no field, so the account edit stands for the kind.
@@ -15131,6 +16044,19 @@ m.unmount();
           Object.entries(VALUES[kind]?.(e) ?? {}).every(([label, want]) => JSON.stringify(ddWords(pairs.find((p) => p.label === label)?.dd)) === JSON.stringify(want)),
         missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
       });
+      if (MONO[kind] !== undefined) {
+        const faces = MONO[kind]
+          .filter((label) => pairs.some((p) => p.label === label))
+          .map((label) => {
+            const dd = pairs.find((p) => p.label === label)?.dd;
+            return [label, dd?.querySelector('.mono')?.textContent ?? null, dd?.textContent ?? null];
+          });
+        results.push({
+          name: `/routing-log the ${kind} detail draws its ${MONO[kind].join(' and ')} in the mono face`,
+          ok: faces.some(([label]) => label === MONO[kind][0]) && faces.every(([, mono, text]) => mono !== null && mono === text),
+          missing: faces.map((f) => JSON.stringify(f)),
+        });
+      }
       page.unmount();
     }
     {
@@ -15736,6 +16662,17 @@ m.unmount();
   refused.unmount();
 }
 
+{
+  // The story's two rows the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, sit inside the default
+  // day, so the card lists their code with its count, apart from the client's `client_gone`.
+  const cutCheck = "/analytics the Errors by code card lists the router's own cut under its code";
+  const page = await mount('/analytics');
+  const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Errors by code');
+  const bars = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
+  results.push({ name: cutCheck, ok: bars.some(([code, count]) => code === 'router_shutdown' && count === '2'), missing: [JSON.stringify(bars)] });
+  page.unmount();
+}
+
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
 expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Non-200 responses in range, the refused requests left out', 'Refusals by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
@@ -15743,12 +16680,18 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
   const hinted = [...(table?.querySelectorAll('thead th') ?? [])].filter((th) => th.querySelector('[title]') !== null).map((th) => [th.textContent?.trim(), th.querySelector('[title]').getAttribute('title')]);
   const hint = 'The refused requests are left out, see the Refused column';
-  results.push({ name: '/analytics the Requests and Error rate headers of the Traffic table say the refused requests are left out', ok: JSON.stringify(hinted) === JSON.stringify([['Requests', hint], ['Error rate', hint]]), missing: hinted.length ? hinted.map((h) => h.join(': ')) : ['no header carries a hint'] });
+  results.push({
+    name: "/analytics the Requests and Error rate headers of the Traffic table say the refused requests are left out, and the Refused header names the router's own refusals",
+    ok: JSON.stringify(hinted) === JSON.stringify([['Requests', hint], ['Refused', REFUSED_TITLE], ['Error rate', hint]]),
+    missing: hinted.length ? hinted.map((h) => h.join(': ')) : ['no header carries a hint'],
+  });
 }
 {
   // The story's refusals by key: the runner's send after its key's revocation on ci, the three guardrail blocks
   // on desktop, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the
-  // Traffic line does.
+  // Traffic line does. Laptop's Failed and the line's errors count the two rows the router's own stop cut,
+  // `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover `req_8c41f2d7-a93`, which
+  // answered on its second attempt, and the contract seat's three rows on fleet, each answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -15759,9 +16702,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   results.push({
     name: "/analytics the Refused and Failed cells by key, the Refusals by code card and the Traffic line read the story's refusals apart from the counts",
     ok:
-      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '4', '2']]) &&
+      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '211 requests, 16.6% errors',
+      line === '217 requests, 17.1% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -15807,15 +16750,27 @@ expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by ou
   });
 }
 {
-  // Five cards in two columns leave the last one alone on its row. jsdom lays nothing out, so the span is read off the
-  // stylesheet's rule for the grid's class, and the browser pass measures the card's width.
+  // Five cards in two columns leave the last one alone on its row, and from the width that holds three columns the
+  // grid fixes three, where the last card spans only past a full row of them. jsdom lays nothing out, so the spans and
+  // the columns are read off the stylesheet's rules under their width queries, and the browser pass measures the cards'
+  // widths at 1280 and 1440 px.
   const grid = m.container.querySelector('#cache-warming > .grid-2');
   const cards = [...(grid?.children ?? [])].map((c) => (c.classList.contains('card') ? (c.querySelector('.card__title')?.textContent?.trim() ?? '') : `not a card: ${c.className}`));
-  const span = declarationsOf('.warming-grid > .card:last-child:nth-child(odd)')['grid-column'] ?? 'absent';
+  const rules = {
+    bare: declarationsOf('.warming-grid > .card:last-child:nth-child(odd)')['grid-column'] ?? 'absent',
+    columns: declarationsOf('.warming-grid', '@media (min-width: 1344px)')['grid-template-columns'] ?? 'absent',
+    three: declarationsOf('.warming-grid > .card:last-child:nth-child(3n + 1)', '@media (min-width: 1344px)')['grid-column'] ?? 'absent',
+    two: declarationsOf('.warming-grid > .card:last-child:nth-child(odd)', '@media (max-width: 1343.98px)')['grid-column'] ?? 'absent',
+  };
   results.push({
-    name: "/analytics cache warming's grid ends its five cards on Kept-warm tokens, and its odd last card spans the row",
-    ok: grid?.classList.contains('warming-grid') === true && cards.length === 5 && cards.every((t) => !t.startsWith('not a card')) && cards.at(-1) === 'Kept-warm tokens' && span === '1 / -1',
-    missing: [`grid class ${grid?.className ?? 'no grid'}`, cards.join(','), `grid-column ${span}`],
+    name: "/analytics cache warming's grid ends its five cards on Kept-warm tokens, its odd last card spans the row in two columns, and from 1344 px it holds three columns with a lone last card spanning",
+    ok:
+      grid?.classList.contains('warming-grid') === true &&
+      cards.length === 5 &&
+      cards.every((t) => !t.startsWith('not a card')) &&
+      cards.at(-1) === 'Kept-warm tokens' &&
+      JSON.stringify(rules) === JSON.stringify({ bare: 'absent', columns: 'repeat(3, minmax(0, 1fr))', three: '1 / -1', two: '1 / -1' }),
+    missing: [`grid class ${grid?.className ?? 'no grid'}`, cards.join(','), JSON.stringify(rules)],
   });
 }
 await tab(m, 'Accounts');
@@ -16113,8 +17068,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // nightly's and primary's mornings ran Fable on the plan, so their rows price three windows, primary's Sonnet 4.6
     // turns among them. The cost model has no weight for Sonnet 4.6, so those turns and secondary's, which serves it
     // alone, price at their model tier's latest weight on the two shared windows. studio's one row ran a laptop-lane
-    // model with no Fable week. Every other row counts its plan requests, none on an API key account, and prices no
-    // share.
+    // model with no 7-day Fable window. Every other row counts its plan requests, none on an API key account, and
+    // prices no share.
     const tableRead = {
       nightly: reads(cellsOf('nightly'), ['count', 'share', 'share', 'share', 'share', 'share']),
       primary: reads(cellsOf('primary'), ['count', 'share', 'share', 'share', 'share', 'share']),
@@ -16328,7 +17283,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           JSON.stringify(modelNamedTiles.slice(0, 3)) === JSON.stringify(namedTiles.slice(0, 3)) &&
           sharing.length > 0 &&
           sharing.every((label) => modelChart.legend.includes(`${label} (7-day)`)) &&
-          modelChart.subtitle === "Each model's share of the named account's 7-day window per bucket, solid, and of its model week, dashed" &&
+          modelChart.subtitle === "Each group's share of the named account's 7-day window per bucket, solid, and of its model week, dashed" &&
           sharing.every((label) => modelTable.some(([row, cells]) => row === label && isShare(cells[2] ?? ''))),
         missing: [`tiles ${JSON.stringify(modelNamedTiles)} against ${JSON.stringify(namedTiles)}`, `legend ${JSON.stringify(modelChart)}`, `sharing ${sharing.join(',')}`, `table ${JSON.stringify(modelTable)}`],
       });
@@ -16566,12 +17521,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // A cell names its window in the short word, and a group with no plan row reads its billed dollars alone.
       const short = (word) => (v) => v === '-' || new RegExp(`^~?\\d[\\d.]*% 20x ${word}$`).test(v);
       const sevenDayOrDollars = (v) => short('7d')(v) || isUsd(v);
-      const CELLS = [(v) => /^\d[\d,]*$/.test(v), sevenDayOrDollars, short('5h'), short('Fable week'), sevenDayOrDollars, sevenDayOrDollars];
+      const CELLS = [(v) => /^\d[\d,]*$/.test(v), sevenDayOrDollars, short('5h'), short('7-day Fable'), sevenDayOrDollars, sevenDayOrDollars];
       const billedLine = (v) => v === '' || v === '-' || /^\$[\d,]+\.\d+ billed$/.test(v);
       // The title reads the full form of the figure the cell shows, the billed dollars after it and the estimate last.
-      const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': 'Fable week' };
+      const FULL = { '5h': '5-hour', '7d': '7-day', '7-day Fable': '7-day Fable' };
       const fullOf = (cell, title) => {
-        const figure = /^~?(\d[\d.]*%) 20x (5h|7d|Fable week)$/.exec(cell);
+        const figure = /^~?(\d[\d.]*%) 20x (5h|7d|7-day Fable)$/.exec(cell);
         return figure === null || title.startsWith(`${figure[1]} of 20x ${FULL[figure[2]]}`);
       };
       results.push({
@@ -16758,7 +17713,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     {
       // The mock's unpriced switch adds one plan request on a model the cost model lists in no tier, which prices no
       // window, to the desktop key's story hour: the range's whole flags both windows, so the Cost tile and the meta
-      // read the dash titled why, and the Cost by chart, whose desktop stack leaves that bucket a gap, notes the one
+      // read the dash titled why, and the Cost by chart, whose desktop stack leaves that bucket a gap, names the one
       // group under its subtitle. Without the switch the card carries no note.
       localStorage.removeItem('phoebis.unit');
       const SUBTITLE = '20x 7-day equivalent per bucket, stacked, the subscription requests';
@@ -16783,7 +17738,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       switchedPage.unmount();
       localStorage.removeItem('phoebis.mockUnpriced');
       results.push({
-        name: '/analytics under native a range holding a subscription request priced on no window reads the dash titled why on the Cost tile and the meta, and the Cost by chart notes the group it draws unpriced under its subtitle',
+        name: '/analytics under native a range holding a subscription request priced on no window reads the dash titled why on the Cost tile and the meta, and the Cost by chart names the group it draws unpriced under its subtitle',
         ok:
           plain.note === null &&
           plain.subtitle === SUBTITLE &&
@@ -16792,7 +17747,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           switched.title === UNPRICED_TITLE &&
           /^- (and \$[\d,.]+ )?in range$/.test(switched.meta[0]) &&
           switched.meta[1] === UNPRICED_TITLE &&
-          switched.note === '1 group unpriced in 1 bucket, drawn as a gap' &&
+          switched.note === 'desktop unpriced in 1 bucket, drawn as a gap' &&
           switched.subtitle === `${SUBTITLE}${switched.note}`,
         missing: [JSON.stringify(plain), JSON.stringify(switched)],
       });
@@ -17704,12 +18659,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // which its entry's title names.
       const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
       const markedLines = new Set(burned.points.filter((p) => p.estimated).map((p) => p.group));
-      const FULL = { '5h': '5-hour', '7d': '7-day', 'Fable week': 'Fable week' };
-      const fullOf = (value) => {
-        const figure = /^~?(\d[\d.e-]*%) 20x (5h|7d|Fable week)$/.exec(value);
-        return figure === null ? null : `${figure[1]} of 20x ${FULL[figure[2]]}`;
-      };
       const WEEK_CARD = 'Model week per hour';
+      // The hover the page writes is its formatter's reading of the percent the short figure shows, under the card's
+      // window key, so a zero reads as the formatter writes it.
+      const WINDOW_KEY = { '5-hour per hour': 'five_hour', '7-day per hour': 'seven_day', [WEEK_CARD]: 'seven_day_fable' };
+      const fullOf = (t, value) => {
+        const figure = /^~?(\d[\d.e-]*)% 20x (?:5h|7d|7-day Fable)$/.exec(value);
+        return figure === null ? null : fmtEquivalent(WINDOW_KEY[t], Number(figure[1]) / 100);
+      };
       const WEEK_HINT = 'The mean per hour of the buckets, reading one that ran on no model with a week of its own as zero and leaving out one the cost model could not price';
       const estimate = `${ESTIMATED_TITLE}.`;
       const entries = [...PLAN_CARDS, WEEK_CARD].flatMap((t) =>
@@ -17724,7 +18681,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         if (e.t === '7-day per hour') return e.entry === (markedOf(e) ? estimate : null);
         return (e.entry === null || (e.entry ?? '').endsWith(estimate) === markedOf(e)) && (bare === '' || /^Highest hour \d[\d.e-]*% of 20x 5-hour$/.test(bare));
       };
-      const wrongEntries = entries.filter((e) => fullOf(e.value) === null || e.title !== (markedOf(e) ? `${fullOf(e.value)}. ${estimate}` : fullOf(e.value)) || !entryKept(e));
+      // A dash names no window, so the page draws it with no hover of its own.
+      const titleKept = (e) => {
+        if (e.value === '-') return e.title === null;
+        const full = fullOf(e.t, e.value);
+        return full !== null && e.title === (markedOf(e) ? `${full}. ${estimate}` : full);
+      };
+      const wrongEntries = entries.filter((e) => !titleKept(e) || !entryKept(e));
       results.push({
         name: "/analytics a plan card's legend figure names its window in full on its own hover with the estimate after it where the line is marked, while the entry's title keeps the peak, the week's hint or the estimate",
         ok: [...PLAN_CARDS, WEEK_CARD].every((t) => entries.some((e) => e.t === t)) && entries.some((e) => e.t === '7-day per hour' && markedOf(e)) && entries.some((e) => e.t === '7-day per hour' && !markedOf(e)) && wrongEntries.length === 0,
@@ -18338,13 +19301,18 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await groupBy('Model');
     {
       // The story's revoked key sends one request refused before it resolved a model, so it carries no model. Its row
-      // counts the request under Refused alone, as no request and no error.
-      const row = trafficRows('model').find((cells) => cells[0] === 'no model') ?? [];
+      // counts the request under Refused alone, as no request, so its Error rate has no requests to rate and reads a
+      // muted dash where the row above it reads a percent.
+      const rows = [...(traffic('model')?.querySelectorAll('tbody tr') ?? [])];
+      const at = rows.findIndex((tr) => tr.children[0]?.textContent?.trim() === 'no model');
+      const row = at < 0 ? [] : [...rows[at].children].map((td) => td.textContent?.trim() ?? '');
+      const dash = at < 0 ? null : rows[at].children[9]?.querySelector('.muted');
+      const neighbour = rows[at === 0 ? 1 : at - 1]?.children[9]?.textContent?.trim() ?? null;
       const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
       results.push({
-        name: '/analytics grouped by model the Traffic table names the request refused before it resolved a model "no model", under Refused alone',
-        ok: row.length === 13 && figure(1) === 0 && figure(2) === 0 && row[8] === '1' && row[9] === '0.0%',
-        missing: row.length ? row : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
+        name: '/analytics grouped by model the Traffic table names the request refused before it resolved a model "no model", under Refused alone, its Error rate a muted dash',
+        ok: row.length === 13 && figure(1) === 0 && figure(2) === 0 && row[8] === '1' && row[9] === '-' && dash?.textContent === '-' && /^\d[\d.]*%$/.test(neighbour ?? ''),
+        missing: row.length ? [...row, `dash ${dash?.outerHTML ?? 'not muted'}`, `neighbour ${neighbour}`] : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
       });
     }
     const heads = [...(traffic('model')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
@@ -18368,7 +19336,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Classifier');
     const classifiers = trafficRows('classifier').map((row) => row[0]);
-    results.push({ name: "/analytics the page groups by classifier, the client's classifier calls as client and every other request as unattributed", ok: JSON.stringify([...classifiers].sort()) === JSON.stringify(['client', 'unattributed']), missing: classifiers });
+    results.push({ name: "/analytics the page groups by classifier, the client's classifier calls as client and every other request as none", ok: JSON.stringify([...classifiers].sort()) === JSON.stringify(['client', 'none']), missing: classifiers });
 
     await groupBy('User agent');
     const tokens = trafficRows('user agent').map((row) => row[0]);
@@ -18422,14 +19390,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   await tab(m, 'Cache');
   // The table heads each reason with a short word and the panel's full label on the word's title.
-  const shortWords = ['History', 'Model', 'None', 'Not asked', 'Pending', 'No previous', 'System', 'Tools', 'Unavailable'];
+  const shortWords = ['History', 'Model', 'None', 'Not requested', 'Pending', 'No previous', 'System', 'Tools', 'Unavailable'];
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
   results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: shortWords.every((w) => reasonTable.includes(w)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
   {
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'));
     const body = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
     const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested', 'Pending'];
-    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not asked', 'Pending'];
+    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not requested', 'Pending'];
     const ths = [...(table?.querySelectorAll('thead th') ?? [])];
     const heads = ths.map((th) => th.textContent?.trim());
     const titles = ths.slice(1, -1).map((th) => th.querySelector('span[title]')?.getAttribute('title') ?? null);
@@ -18481,7 +19449,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const byClass = linksUnder('request class', 'request_classes', { main: 'main', unattributed: '-' });
     results.push({ name: '/analytics a breakdown cell under the request class grouping links with its class, and any classless row that counts a miss as -', ok: byClass.linked.has('main') && byClass.wrong.length === 0, missing: [...byClass.wrong, `rows ${[...byClass.linked].join(',')}`] });
     await groupBy('Classifier');
-    const byClassifier = linksUnder('classifier', 'classifiers', { client: 'client', unattributed: '-' });
+    const byClassifier = linksUnder('classifier', 'classifiers', { client: 'client', none: '-' });
     results.push({ name: '/analytics a breakdown cell under the classifier grouping links with its standing, client as client and the rest as -', ok: byClassifier.linked.size === 2 && byClassifier.wrong.length === 0, missing: [...byClassifier.wrong, `rows ${[...byClassifier.linked].join(',')}`] });
     await groupBy('User agent');
     const agents = cellsOf('user agent');
@@ -19521,19 +20489,69 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
       retries.length === 1 &&
       line !== null &&
       line.contains(retries[0]) &&
-      (line.textContent ?? '').includes('ledger locked'),
+      (line.textContent ?? '').startsWith('Could not load the tiles: ledger locked'),
     missing: [JSON.stringify(tiles()), `${retries.length} Try again`, line?.textContent ?? 'no line under the tiles'],
   });
   retries[0]?.click();
   await page.settle();
-  // At the story's instant the default filters hide eight of its 28 rows (the two finished sessions, the earlier holder
-  // 20 hours back, the ci key's three rows, the row idle for two hours and the refusal-only row), so the Sessions and
-  // Agents tiles carry the hidden count on their hover.
+  // At the story's instant the default filters hide eight of its 28 rows (the three finished sessions, the earlier
+  // holder 20 hours back, the ci key's two rows, the row idle for two hours and the refusal-only row), so the
+  // Sessions and Agents tiles carry the hidden count on their hover.
   const away = '8 sessions hidden by the filters';
   results.push({
     name: '/sessions Try again under the tiles reads the overview again, the Sessions and Agents tiles titled with the rows the filters hide',
     ok: retries.length === 1 && tiles().every((t) => t.value !== '-' && t.value !== '' && t.title === (['Sessions', 'Agents'].includes(t.label) ? away : null)) && page.container.querySelector('.sessions__notice') === null,
     missing: [JSON.stringify(tiles()), away],
+  });
+  page.unmount();
+}
+{
+  // The Sessions and Agents figures count the rows the sessions read builds, so a failed sessions read ends their
+  // placeholder with its error while the four tiles that read the overview alone keep their figures. The card's own
+  // error state draws a Try again of its own on the same failure, so the notice's is counted inside the notice and the
+  // page holds the two.
+  failNextCall('listSessions', '/admin/sessions', 'store busy');
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  await page.settle();
+  const tiles = () =>
+    [...page.container.querySelectorAll('.stat-grid > .stat')].map((t) => ({
+      label: t.querySelector('.stat__label')?.textContent?.trim() ?? '',
+      note: t.querySelector(':scope > .stat__note')?.textContent?.trim() ?? '',
+      title: t.getAttribute('title'),
+      value: t.querySelector('.stat__value')?.textContent?.trim() ?? '',
+    }));
+  const COUNTED = ['Sessions', 'Agents'];
+  const drawn = (t) => t.value !== '-' && t.value !== '' && t.note !== 'could not load';
+  const fed = tiles();
+  const line = page.container.querySelector('.stat-grid + .sessions__notice');
+  const retries = [...(line?.querySelectorAll('button') ?? [])].filter((b) => b.textContent?.trim() === 'Try again');
+  const onPage = [...page.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Try again').length;
+  results.push({
+    name: '/sessions a failed sessions read draws the Sessions and Agents tiles as dashes and names the sessions under the tiles',
+    ok:
+      page.container.querySelector('.stat-grid .skeleton') === null &&
+      fed.length === 6 &&
+      fed.filter((t) => COUNTED.includes(t.label)).length === 2 &&
+      fed.every((t) => (COUNTED.includes(t.label) ? t.value === '-' && t.note === 'could not load' && t.title === 'store busy' : drawn(t))) &&
+      line !== null &&
+      (line.textContent ?? '').startsWith('Could not load the sessions: store busy') &&
+      retries.length === 1 &&
+      onPage === 2,
+    missing: [JSON.stringify(fed), `${retries.length} Try again in the notice, ${onPage} on the page`, line?.textContent ?? 'no line under the tiles'],
+  });
+  const spies = Object.fromEntries(['getKeepaliveOverview', 'listKeepaliveRecipes', 'listKeys', 'listSessions'].map((name) => [name, countCalls(name)]));
+  retries[0]?.click();
+  await page.settle();
+  const counts = Object.fromEntries(Object.entries(spies).map(([name, spy]) => [name, spy.calls.length]));
+  for (const spy of Object.values(spies)) spy.restore();
+  results.push({
+    name: '/sessions Try again under the tiles reads the sessions again and no other read, and every tile draws its figure',
+    ok:
+      retries.length === 1 &&
+      JSON.stringify(counts) === JSON.stringify({ getKeepaliveOverview: 0, listKeepaliveRecipes: 0, listKeys: 0, listSessions: 1 }) &&
+      tiles().every(drawn) &&
+      page.container.querySelector('.sessions__notice') === null,
+    missing: [JSON.stringify(counts), JSON.stringify(tiles())],
   });
   page.unmount();
 }
@@ -20333,7 +21351,7 @@ const CARD_VIEWS = [
   });
 }
 {
-  const name = '/pools an open Delete pool confirm pauses auto reload, and the reads resume once it is cancelled';
+  const name = '/pools an open Delete pool confirm pauses auto reload, and the reads resume once it is canceled';
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   const spy = countCalls('listPools');
   const title = () => intervalPart(page)?.getAttribute('title') ?? null;
@@ -20487,27 +21505,27 @@ const CARD_VIEWS = [
     page.unmount();
     return got;
   };
-  // The story's 28 rows at its instant: the two finished sessions (the one the mod released whole and the one it
+  // The story's 29 rows at its instant: the three finished sessions (the two the mod released whole and the one it
   // ended), twelve rows a companion reports or went silent on, the registration-only row among them, and fourteen no
-  // companion reports: the laptop row the ledger never saw, with no last use, and by their last use the pinless fork 16
-  // minutes back, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook rows 25 to 42, the
-  // refusal-only row 98 by its newest refusal, the ci content row 109, the ci rows 118 and 240, the row idle for two
-  // hours 120 and the earlier holder 20 hours back. The one hour keeps 20 and hides 8.
+  // companion reports: the laptop row the ledger never saw, with no last use, and by their last use the fleet row 4
+  // minutes back, the pinless fork 16, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook
+  // rows 25 to 42, the refusal-only row 98 by its newest refusal, the ci rows 118 and 240, the row idle for two hours
+  // 120 and the earlier holder 20 hours back. The one hour keeps 21 and hides 8.
   const bare = await read('');
   const AWAY = '8 sessions hidden by the filters';
   const drawnOf = (got) => got.drawn.map((id) => listed.find((s) => idOfRow(s) === id)).filter(Boolean);
   results.push({
     name: '/sessions the bare address keeps the rows the default filters keep, with no chip, the finished session and the row idle for two hours hidden',
-    ok: finished !== undefined && twoHours !== undefined && bare.chips.length === 0 && !bare.finished && !bare.twoHours && bare.drawn.length === 20 && bare.count === '20 sessions',
+    ok: finished !== undefined && twoHours !== undefined && bare.chips.length === 0 && !bare.finished && !bare.twoHours && bare.drawn.length === 21 && bare.count === '21 sessions',
     missing: [`finished ${finished?.sessionId ?? 'absent'}, two hours ${twoHours?.sessionId ?? 'absent'}`, JSON.stringify(bare.chips), `${bare.drawn.length} rows`, String(bare.count)],
   });
   results.push({
     name: '/sessions the Sessions and Agents tiles count the rows the filters keep and name the rows they hide on hover',
     ok:
-      bare.sessionsValue === '20 of 128' &&
+      bare.sessionsValue === '21 of 128' &&
       bare.sessionsTile === AWAY &&
       bare.agentsTile === AWAY &&
-      bare.agentsTitle === `The rows shown hold 31 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. ${AWAY}.`,
+      bare.agentsTitle === `The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. ${AWAY}.`,
     missing: [String(bare.sessionsValue), String(bare.sessionsTile), String(bare.agentsTile), String(bare.agentsTitle)],
   });
   {
@@ -20522,8 +21540,8 @@ const CARD_VIEWS = [
   }
   {
     // The age hides a row no companion reports past its preset and never a companion row, inside the expiry: fifteen
-    // minutes keeps the twelve companion rows and the laptop row with no last use, six hours all but the earlier
-    // holder, and no limit every row that is not finished.
+    // minutes keeps the twelve companion rows, the laptop row with no last use and the fleet row, six hours all but the
+    // earlier holder, and no limit every row that is not finished.
     const ages = {};
     for (const query of ['?age=15m', '?age=6h', '?age=none']) ages[query] = await read(query);
     const minutes = ages['?age=15m'];
@@ -20531,7 +21549,7 @@ const CARD_VIEWS = [
     const holder = listed.find((s) => s.historical);
     results.push({
       name: '/sessions ?age=15m hides the rows no companion reports last used over fifteen minutes back and no companion row, under the chip age: 15 min',
-      ok: JSON.stringify(minutes.chips) === JSON.stringify(['age: 15 min']) && minutes.drawn.length === 13 && drawnOf(minutes).filter(companionRow).length === 12,
+      ok: JSON.stringify(minutes.chips) === JSON.stringify(['age: 15 min']) && minutes.drawn.length === 14 && drawnOf(minutes).filter(companionRow).length === 12,
       missing: [JSON.stringify(minutes.chips), `${minutes.drawn.length} rows, ${drawnOf(minutes).filter(companionRow).length} companion rows`],
     });
     results.push({
@@ -20630,11 +21648,11 @@ const CARD_VIEWS = [
         drawnReleased.every((l) => l.word === 'released' && l.title === 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.'),
       missing: [JSON.stringify(on.chips), `released ${releasedHere.join(',')}`, `off ${off.lines.map((l) => l.id).join(',')}`, `on ${on.lines.map((l) => `${l.id} ${l.word}`).join(',')}`],
     });
-    // The router runs an idle window set above the break-even as set, so the idle badge names the window alone.
+    // The router runs a pool's idle window as set, the break-even where the pool sets none, so the badge names both.
     const idleLines = off.lines.filter((l) => l.word === 'idle');
     results.push({
       name: "/sessions an idle line's lifecycle badge says the agent is probed until the pool's idle window runs out",
-      ok: idleLines.length > 0 && idleLines.every((l) => l.title === "Stopped and waiting for the user. Probed until the pool's idle window runs out."),
+      ok: idleLines.length > 0 && idleLines.every((l) => l.title === "Stopped and waiting for the user. Probed until the pool's idle window runs out, the break-even where the pool sets none."),
       missing: idleLines.length === 0 ? ['no idle line'] : idleLines.map((l) => `${l.id}: ${l.title}`),
     });
   }
@@ -20680,7 +21698,7 @@ const CARD_VIEWS = [
     });
     results.push({
       name: "/sessions the chip line's Clear all returns the four filters to their defaults and the bare address",
-      ok: JSON.stringify(four) === JSON.stringify(['companion only', 'finished sessions', 'age: 24 h', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 20,
+      ok: JSON.stringify(four) === JSON.stringify(['companion only', 'finished sessions', 'age: 24 h', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 21,
       missing: [JSON.stringify(four), JSON.stringify(cleared)],
     });
   }
@@ -20859,7 +21877,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // as a count of the cap the bootstrap file sets, so an operator sees how close the router runs to refusing a
     // session or dropping a recipe. The Agents figure leaves out the subagents the mod released under a live session,
     // which draw no line, and its title names them beside the records and then the rows the filters hide. Read on the
-    // story's instant, where the defaults keep 20 rows holding 31 records, two of them the written session's released
+    // story's instant, where the defaults keep 21 rows holding 32 records, two of them the written session's released
     // subagents, and whose lines read 9 busy, 7 idle and 4 parked: the overview's ninth idle agent is the main of a
     // row the defaults hide.
     const ov = await api.getKeepaliveOverview();
@@ -20869,8 +21887,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const agentsTitle = [...pinned.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value [title]')?.getAttribute('title') ?? '';
     pinned.unmount();
     const want = [
-      ['Sessions', '20 of 128'],
-      ['Agents', '29 of 1,024', '9 busy, 7 idle, 4 parked'],
+      ['Sessions', '21 of 128'],
+      ['Agents', '30 of 1,024', '9 busy, 7 idle, 4 parked'],
       ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
     ];
     results.push({
@@ -20878,15 +21896,15 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok:
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         JSON.stringify([ov.agents.busy, ov.agents.idle, ov.agents.parked]) === JSON.stringify([9, 9, 4]) &&
-        agentsTitle === 'The rows shown hold 31 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. 8 sessions hidden by the filters.' &&
+        agentsTitle === 'The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. 8 sessions hidden by the filters.' &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `overview ${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`, agentsTitle || 'no Agents title'],
     });
   }
   {
     // With no line hidden the title's second sentence would count none, so it draws the records' sentence alone. The
-    // view shows every row, so no row is hidden either and the title carries no hidden count. The story's 28 rows hold
-    // 42 agent records.
+    // view shows every row, so no row is hidden either and the title carries no hidden count. The story's 29 rows hold
+    // 43 agent records.
     const { listKeepaliveRecipes } = api;
     api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => !(r.agentState === 'released' && r.cause === 'agent_released'));
     const none = await mount('/sessions?age=none&finished=1');
@@ -20894,7 +21912,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     api.listKeepaliveRecipes = listKeepaliveRecipes;
     results.push({
       name: "/sessions the Agents tile's title carries one sentence with no line and no row hidden",
-      ok: title === 'The rows shown hold 42 agent records against the cap.',
+      ok: title === 'The rows shown hold 43 agent records against the cap.',
       missing: [title || 'no Agents title'],
     });
     none.unmount();
@@ -20953,25 +21971,38 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   {
-    // The 20 rows the default filters keep at the story's instant, nine of them reading no recipe: the eight no recipe
+    // The 21 rows the default filters keep at the story's instant, ten of them reading no recipe: the nine no recipe
     // warms and the silent row past its idle limit.
     const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
     const drawn = [...pinned.container.querySelectorAll('tbody tr.srow')];
     const unwarmed = drawn.filter((tr) => sessionCell(pinned, tr, 'Cache warming')?.textContent?.trim() === 'no recipe').length;
     pinned.unmount();
-    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 20 && unwarmed === 9, missing: [`${drawn.length} rows, ${unwarmed} with no recipe`] });
+    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 21 && unwarmed === 10, missing: [`${drawn.length} rows, ${unwarmed} with no recipe`] });
   }
   // The session the mod released whole is finished and the ci key's sessions lie past the hour, so these read with
   // every row shown.
   await m.navigate('/sessions?age=none&finished=1');
   {
-    // The session the mod released whole keeps its row and reads main's released state.
+    // The two sessions the mod released whole keep their rows and read main's released state.
     const whole = new Map();
-    for (const r of await api.listKeepaliveRecipes()) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
+    const recipes = await api.listKeepaliveRecipes();
+    for (const r of recipes) whole.set(r.sessionId, (whole.get(r.sessionId) ?? true) && r.agentState === 'released');
     const released = [...whole].filter(([, all]) => all).map(([id]) => id);
-    const row = rows().find((r) => released.includes(cell(r, 'Session')?.getAttribute('title') ?? ''));
-    const badge = row ? cell(row, 'Cache warming')?.querySelector('.badge')?.textContent?.trim() : undefined;
-    results.push({ name: '/sessions lists the session the mod released whole with its released badge', ok: released.length === 1 && badge === 'released', missing: [released.join(',') || 'no such session', String(badge)] });
+    const rowOf = (id) => rows().find((r) => cell(r, 'Session')?.getAttribute('title') === id);
+    const badges = released.map((id) => (rowOf(id) ? cell(rowOf(id), 'Cache warming')?.querySelector('.badge')?.textContent?.trim() : undefined));
+    results.push({ name: '/sessions lists the sessions the mod released whole with their released badge', ok: released.length === 2 && badges.every((b) => b === 'released'), missing: [released.join(',') || 'no such session', JSON.stringify(badges)] });
+    // One of them was last used, by its turn and its probe before it, 25 minutes before the mock's anchor, past all's
+    // ten-minute affinity window, so its pin is gone and its row reads that last use, read off the mock's released row
+    // past the window. The page's clock has run on since the anchor, so the row's relative time reads 25 min or more.
+    const past = recipes.find((r) => r.agentState === 'released' && released.includes(r.sessionId) && CLOCK_ORIGIN - Math.max(Date.parse(r.lastRequestAt), Date.parse(r.lastProbeAt)) > 600_000);
+    const session = past && (await api.listSessions()).find((x) => !x.historical && x.sessionId === past.sessionId);
+    const lastUsed = past && rowOf(past.sessionId) ? cell(rowOf(past.sessionId), 'Last used')?.firstChild?.textContent?.trim() : undefined;
+    const minutes = Number(/^(\d+)m ago/.exec(lastUsed ?? '')?.[1] ?? Number.NaN);
+    results.push({
+      name: "/sessions lists the session released whole past its pool's affinity window with its last use there",
+      ok: past !== undefined && Date.parse(past.lastProbeAt) <= Date.parse(past.lastRequestAt) && session?.lastUsedAt === past.lastRequestAt && minutes >= 25,
+      missing: [past ? `${past.sessionId} ${past.lastRequestAt} ${past.lastProbeAt}` : 'no released line past its window', String(session?.lastUsedAt), String(lastUsed)],
+    });
   }
   await showColumn(m, 'Next probe');
   const ci = rows().filter((r) => cell(r, 'Key')?.textContent === 'ci');
@@ -21082,7 +22113,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
   // Of the 26 rows under no age limit, the registration-only row and the laptop row the ledger never saw carry no last
   // use and no request, so they have no expiry to count down.
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 25 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 23, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 26 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 24, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   // 21 of the 26 rows under no age limit hold ledgered requests, and the two rows with no last use, the row idle for
   // two hours, nightly's notebook row and the refusal-only row hold none.
@@ -21553,7 +22584,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const idle = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'idle limit');
     results.push({
       name: '/sessions idle limit reason says the retained prompt was discarded',
-      ok: idle !== undefined && (idle.getAttribute('title') ?? '') === "The pool's idle window ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
+      ok: idle !== undefined && (idle.getAttribute('title') ?? '') === "The pool's idle window, the break-even where the pool sets none, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
       missing: [idle?.getAttribute('title') ?? 'absent'],
     });
     results.push({ name: '/sessions no companion lease copy is left', ok: !m.text().includes('lease lapsed'), missing: [m.text().includes('lease lapsed') ? 'still there' : ''] });
@@ -21806,7 +22837,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 26, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 28, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
@@ -22001,8 +23032,8 @@ m.unmount();
     const weekCells = [...(week?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
     const want = [...TYPES.map(() => ''), ...TYPES.map((t) => fmtShare(shareOf(regimeCosts, 'seven_day_fable', anchor, 'claude-fable-5-1', usage(t, 1_000_000), OUT)))];
     results.push({
-      name: '/sessions plan rates carry a Fable week row under Fable 5.1, priced on its week alone',
-      ok: week?.classList.contains('cost-ref__sub') === true && week.children[0]?.textContent === 'Fable week' && JSON.stringify(weekCells) === JSON.stringify(want),
+      name: '/sessions plan rates carry a 7-day Fable row under Fable 5.1, priced on its week alone',
+      ok: week?.classList.contains('cost-ref__sub') === true && week.children[0]?.textContent === '7-day Fable' && JSON.stringify(weekCells) === JSON.stringify(want),
       missing: [week?.children[0]?.textContent ?? 'no sub-row', JSON.stringify(weekCells), JSON.stringify(want)],
     });
   }
@@ -22581,9 +23612,9 @@ m.unmount();
   }
 
   // On the test tables' entry in force at the pinned clock, Fable 5.1 with a null shared weight and a weight of 10 on
-  // the Fable week alone, and Opus 5 with a weight of 3 on the 7-day window alone: each prices the window it is weighed
-  // on, and Opus 5's 5-hour window reads its model tier's latest weight, marked. Fable 5.1 is its tier's one model, so
-  // no weight stands in for its shared windows.
+  // the 7-day Fable window alone, and Opus 5 with a weight of 3 on the 7-day window alone: each prices the window it
+  // is weighed on, and Opus 5's 5-hour window reads its model tier's latest weight, marked. Fable 5.1 is its tier's
+  // one model, so no weight stands in for its shared windows.
   {
     const { getSettings } = api;
     const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
@@ -22611,7 +23642,8 @@ m.unmount();
     const opus5 = rowOf('claude-opus-5');
     const dashes = (n) => Array.from({ length: n }, () => '-');
     // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10,
-    // on the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the Fable week, Opus 5's 3 x m x 1e6 / 1000.
+    // on the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the 7-day Fable window, and Opus 5's
+    // 3 x m x 1e6 / 1000.
     // Opus 5's 5-hour cells read the entry's Opus 5.5 weight, outside the band the dialog opens on.
     const fiveHour = TYPES.map((t) => `~${fmtShare(shareOf(drawnCosts, 'five_hour', anchorTier(drawnCosts), 'claude-opus-5', usage(t, 1_000_000), OUT))}`);
     const drawn = {
@@ -22627,8 +23659,8 @@ m.unmount();
       ok:
         JSON.stringify(drawn.fable.cells) === JSON.stringify(dashes(10)) &&
         drawn.fable.weight.text === 'by window' &&
-        drawn.fable.weight.title === 'claude-fable-5-1 carries no shared weight, only a weight per window: 10 on the Fable week' &&
-        drawn.week.label === 'Fable week' &&
+        drawn.fable.weight.title === 'claude-fable-5-1 carries no shared weight, only a weight per window: 10 on the 7-day Fable window' &&
+        drawn.week.label === '7-day Fable' &&
         JSON.stringify(drawn.week.cells) === JSON.stringify([...Array(5).fill(''), fmtShare(20_000), fmtShare(2_000), fmtShare(40_000), fmtShare(40_000), fmtShare(200_000)]) &&
         !drawn.opus5.sub &&
         JSON.stringify(drawn.opus5.cells) === JSON.stringify([...fiveHour, fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
@@ -22993,7 +24025,7 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
     missing: [...rows, (failed.container.querySelector('pre.snippet')?.textContent ?? 'no block').split('\n')[0]],
   });
   failed.unmount();
@@ -23099,19 +24131,36 @@ m.unmount();
 }
 
 // A zero on a retention key keeps its rows forever, so About reads "kept forever" on that line, and one day reads in
-// the singular.
+// the singular. The body capture line reads the limit the answer carries, here one the seed does not hold.
 {
   const { getSettings } = api;
   api.getSettings = async (...args) => {
     const settings = await getSettings.apply(api, args);
-    return { ...settings, retention: { ...settings.retention, retentionDays: 0, rollupRetentionDays: 1 } };
+    return { ...settings, retention: { ...settings.retention, bodyCaptureMaxHours: 6, retentionDays: 0, rollupRetentionDays: 1 } };
   };
   const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
-  const kept = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).filter((row) => row.startsWith('Requests, samples and the routing log=') || row.startsWith('Rollups='));
-  results.push({ name: '/settings a zero retention reads kept forever and a one-day retention kept for 1 day', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day']), missing: kept });
+  const kept = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).filter((row) => row.startsWith('Requests, samples and the routing log=') || row.startsWith('Rollups=') || row.startsWith('Body capture='));
+  results.push({ name: '/settings a zero retention reads kept forever, a one-day retention kept for 1 day, and the body capture limit its own hours', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day', 'Body capture=at most 6 hours']), missing: kept });
   api.getSettings = getSettings;
   page.unmount();
+}
+// A one-hour body capture limit reads in the singular on the About card.
+{
+  const { getSettings } = api;
+  api.getSettings = async (...args) => {
+    const settings = await getSettings.apply(api, args);
+    return { ...settings, retention: { ...settings.retention, bodyCaptureMaxHours: 1 } };
+  };
+  try {
+    const page = await mount('/settings', { now: CLOCK_ORIGIN });
+    const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const line = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).find((row) => row.startsWith('Body capture='));
+    results.push({ name: '/settings a one-hour body capture limit reads at most 1 hour', ok: line === 'Body capture=at most 1 hour', missing: [line ?? 'no Body capture line'] });
+    page.unmount();
+  } finally {
+    api.getSettings = getSettings;
+  }
 }
 
 m = await mount('/settings', { now: CLOCK_ORIGIN });
@@ -23132,11 +24181,11 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
   const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the two retention lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
     name: '/settings each path and retention line names its key in the configuration file and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Body capture=Set by stats.body_capture_max_hours in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
@@ -23696,16 +24745,18 @@ m.unmount();
   // what the list holds.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const filterOf = (label) => (filterBox()?.querySelector('.popover__title')?.textContent?.trim() === label ? (filterBox()?.querySelector('.option-list') ?? undefined) : undefined);
-  const read = (page, label, key) => {
+  /** `valueOf` hands back a checked row's value from its label, which is all the row draws. */
+  const read = (page, label, key, valueOf) => {
     const filter = filterOf(label);
     const head = filter?.querySelector('.mselect__option--all');
     // A preset row sets its members, so the choices are the options alone.
     const choices = [...(filter?.querySelectorAll(`${CHOICE}:not(.mselect__option--preset)`) ?? [])];
     const presets = [...(filter?.querySelectorAll('.mselect__option--preset') ?? [])];
     const chip = chipOf(page, label.toLowerCase());
+    const checked = choices.filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent?.trim() ?? '');
     return {
       address: new URLSearchParams(page.location().search).get(key)?.split(',') ?? null,
-      checked: choices.filter((o) => o.getAttribute('aria-selected') === 'true').map((o) => o.textContent?.trim() ?? ''),
+      checked,
       choices: choices.map((o) => o.textContent?.trim() ?? ''),
       first: head != null && filter?.querySelector('[role="option"]') === head,
       head: head ? { checked: head.getAttribute('aria-checked'), selected: head.getAttribute('aria-selected'), text: head.textContent?.trim() } : null,
@@ -23714,6 +24765,7 @@ m.unmount();
       set: chip !== undefined,
       title: chip?.getAttribute('title') ?? null,
       trigger: chip?.textContent?.trim() ?? `no ${label} chip`,
+      values: valueOf ? checked.map((l) => valueOf(l) ?? null) : null,
     };
   };
   /**
@@ -23735,6 +24787,32 @@ m.unmount();
   };
   const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
   const brief = (r) => `${r.trigger}, row ${JSON.stringify(r.head)}, ${r.checked.length} of ${r.choices.length} checked, ${r.address === null ? 'no address key' : `address ${r.address.length}`}`;
+  // The Cache miss reason list's labels as the page writes them, each by the reason it names.
+  const MISS_REASON = Object.fromEntries(Object.entries(CACHE_MISS_LABEL).map(([reason, label]) => [label, reason]));
+  /**
+   * Each picker's value by its row's label, from the lists the view's options come from: the Analytics page's from the
+   * breakdown under `range`, the page's own, the other views' keys, pools, accounts and models from the mock's lists, a
+   * status by its code, a cache miss reason by the label above, the unattributed request class by the key the
+   * breakdown files it under, and the label itself on every other list, whose options are their values.
+   */
+  const valueMaps = async (view, range) => {
+    const byLabel = (pairs) => {
+      const map = new Map(pairs);
+      return (label) => map.get(label);
+    };
+    const groups = async (groupBy, from, to) => byLabel((await api.getAnalyticsBreakdown({ from, groupBy, to })).map((g) => [g.label, g.key]));
+    if (view === '/analytics') return { Account: await groups('account', range.from, range.to), Key: await groups('key', range.from, range.to), Model: await groups('model', range.from, range.to), Pool: await groups('pool', range.from, range.to) };
+    const lists = {
+      Account: byLabel((await api.listAccounts()).map((a) => [a.label, a.id])),
+      Key: byLabel((await api.listKeys()).map((k) => [k.name, k.id])),
+      Model: byLabel((await api.listCatalog()).map((m) => [m.id, m.id])),
+      Pool: byLabel((await api.listPools()).map((p) => [p.name, p.id])),
+    };
+    if (view !== '/requests') return lists;
+    const same = (label) => label;
+    const classes = await groups('request_class', new Date(CLOCK_ORIGIN - 31 * 86_400_000).toISOString(), new Date(CLOCK_ORIGIN).toISOString());
+    return { ...lists, 'Agent type': same, 'Cache miss reason': (label) => MISS_REASON[label] ?? label, Effort: same, Outcome: same, 'Request class': (label) => classes(label) ?? label, Speed: same, Status: (label) => label.split(' ')[0], 'Turn origin': same };
+  };
 
   const PICKERS = [
     ['/analytics', [['Key', 'keys'], ['Pool', 'pools'], ['Account', 'accounts'], ['Model', 'models']]],
@@ -23777,7 +24855,11 @@ m.unmount();
     return read(page, label, key);
   };
   for (const [view, pickers] of PICKERS) {
+    // The Analytics lists come from the breakdown over the page's range, which its first read names.
+    const breakdowns = view === '/analytics' ? countCalls('getAnalyticsBreakdown') : null;
     const page = await mount(view, { now: CLOCK_ORIGIN });
+    breakdowns?.restore();
+    const valuesOf = await valueMaps(view, breakdowns?.calls[0]?.[0] ?? null);
     for (const [label, key] of pickers) {
       // An empty Kinds value is every kind, so the list opens with every row checked. Select all's uncheck clears every
       // check while the table still lists every kind, a kind's click from there lists that kind alone, Select all
@@ -23794,7 +24876,7 @@ m.unmount();
       const rest = kinds ? logRows(page) : [];
       const before = read(page, label, key);
       await clickHead(page, label);
-      const all = read(page, label, key);
+      const all = read(page, label, key, valuesOf[label]);
       const steps = kinds ? await kindSteps(page, label, key) : null;
       await clickHead(page, label);
       const none = read(page, label, key);
@@ -23842,14 +24924,16 @@ m.unmount();
               all.head.checked === null &&
               all.trigger === wanted.trigger &&
               all.title === wanted.title &&
-              all.address?.length === all.choices.length &&
+              all.address !== null &&
+              all.values !== null &&
+              sameSet(all.address, all.values) &&
               !none.set &&
               none.address === null &&
               none.checked.length === 0 &&
               none.head?.selected === 'false'),
         missing: steps
           ? [`opened: ${brief(before)}, ${rest.length} rows`, `unchecked: ${brief(all)}, ${all.presetsMarked} of ${all.presets} presets marked, ${steps.cleared.length} rows, as at rest ${same(steps.cleared, rest)}`, `checked again: ${brief(steps.back)}`, `${ONE_KIND}: ${brief(steps.picked)}, sent ${JSON.stringify(steps.sent?.kinds)}, ${steps.narrowed.length} rows, as answered ${same(steps.narrowed, steps.answer)}`, `Select all: ${brief(none)}`, `reopened: ${brief(reopened)}`]
-          : [`opened: ${brief(before)}`, `first click: ${brief(all)}`, `wanted: ${JSON.stringify(wanted)}`, `second click: ${brief(none)}`],
+          : [`opened: ${brief(before)}`, `first click: ${brief(all)}, address ${JSON.stringify(all.address)}, checked values ${JSON.stringify(all.values)}`, `wanted: ${JSON.stringify(wanted)}`, `second click: ${brief(none)}`],
       });
       // A searchable list's row reaches the options its query leaves, and the hidden ones keep their state.
       const [queried, query] = QUERIED[view] ?? [];
@@ -24014,7 +25098,7 @@ m.unmount();
   // The reload banner. The banner reads the router's build off an answer's header in the transport's `call`, which the
   // mock never goes through, so a plain mount draws none, and the lever feeds the transport another router build, as an
   // answer's header would. The banner's Reload is not pressed, since jsdom does not navigate.
-  const bannerOf = (p) => p.container.querySelector('.main > .callout[role="status"]');
+  const bannerOf = (p) => p.container.querySelector('.main__top > .callout[role="status"]');
   page = await mount('/keys');
   const plain = bannerOf(page);
   mismatchBuild();
@@ -24025,7 +25109,7 @@ m.unmount();
   const drawn = {
     atTop: banner?.nextElementSibling?.matches('header.topbar') === true,
     buttons: banner ? [...banner.querySelectorAll('button')].map((b) => b.textContent?.trim() ?? '') : [],
-    count: page.container.querySelectorAll('.main > .callout').length,
+    count: page.container.querySelectorAll('.main__top > .callout').length,
     words: banner?.firstElementChild?.textContent ?? null,
   };
   page.unmount();
@@ -24224,7 +25308,7 @@ m.unmount();
 
 {
   // With no tier's 7-day capacity in the cost model no account of the story is sized for that window, so that ring
-  // weighs nobody and names all three; the 5-hour ring still weighs all three and names none.
+  // weighs nobody and names each of the five, while the 5-hour ring still weighs all five and names none.
   const { getSettings } = api;
   api.getSettings = async () => {
     const settings = await getSettings.call(api);
@@ -24249,7 +25333,7 @@ m.unmount();
       !drawn.week.ring &&
       drawn.week.sentence === "No listed account's tier is sized for the 7-day window." &&
       drawn.week.listAfter &&
-      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: Max 20x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured', 'studio: Max 5x 7-day capacity not measured']) &&
+      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: Max 20x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured', 'studio: Max 5x 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured']) &&
       drawn.fiveHour.ring &&
       drawn.fiveHour.names.length === 0,
     missing: [JSON.stringify(drawn)],

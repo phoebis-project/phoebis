@@ -6,8 +6,8 @@ import * as d from './dist/api.js';
 // The test tables, round throughout. The weights are Opus 5.5 2, Haiku 4.5 0.5 (1 on the week through its override,
 // with a cache read at 0.2) and Opus 5 null. The multipliers are cache read 0.1, writes 2, input 1 and output 10. The
 // capacities are Max 20x 100 on the 5-hour window and 1000 on the week, Pro 5 and 50, and Team 10 and null. The peak
-// band runs weekdays 5 to 11 in Los Angeles at a 5-hour capacity factor of 0.5, and the Fable week is half the 7-day
-// window. The regime desk, for the entrypoints desk and pane, sizes Max 20x 200 and 1250 and Pro 10 and 62.5 and
+// band runs weekdays 5 to 11 in Los Angeles at a 5-hour capacity factor of 0.5, and the 7-day Fable window is half the
+// 7-day window. The regime desk, for the entrypoints desk and pane, sizes Max 20x 200 and 1250 and Pro 10 and 62.5 and
 // holds both windows whole in the band.
 const tables = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body;
 const costs = d.decodeSubscriptionCosts(tables.subscription_costs.content);
@@ -36,7 +36,7 @@ test("a share is the tokens' units over the tier's capacity, the 5-hour window's
   close(d.shareOf(costs, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), WEEKEND), 0.02, 'the band covers weekdays alone');
   close(d.shareOf(costs, 'five_hour', 'default_claude_ai', OPUS, usage({ input: 1 }), OUT), 0.4, 'Pro, 2 / 5');
   close(d.shareOf(costs, 'seven_day', MAX_20X, OPUS, usage({ input: 1 }), IN), 0.002, 'the week, whose factor of 1 leaves the band alone, 2 / 1000');
-  close(d.shareOf(costs, 'seven_day_fable', MAX_20X, OPUS, usage({ input: 1 }), OUT), 0.004, 'the Fable week, 2 / 1000 / 0.5');
+  close(d.shareOf(costs, 'seven_day_fable', MAX_20X, OPUS, usage({ input: 1 }), OUT), 0.004, 'the 7-day Fable window, 2 / 1000 / 0.5');
   close(d.shareOf(costs, 'five_hour', MAX_20X, OPUS, usage({ cacheRead: 10, input: 1, output: 1 }), OUT), 0.24, 'mixed usage, (10 x 0.2 + 2 + 20) / 100');
 });
 
@@ -56,8 +56,9 @@ test("a model an override weighs on the week alone prices the week at its own we
   assert.equal(d.weightOrFallback(weekOnly, 'claude-opus-5', 'seven_day')?.estimated, false, 'its own weight on the week');
 });
 
-test('a Fable model an override weighs on the Fable week alone is weighted, a dash on the shared windows and a share on its week', () => {
-  // The test table weighs Fable 5.1 10; this copy leaves its shared weight null and weighs it 10 on the Fable week.
+test('a Fable model an override weighs on the 7-day Fable window alone is weighted, a dash on the shared windows and a share on its week', () => {
+  // The test table weighs Fable 5.1 10. This copy leaves its shared weight null and weighs it 10 on the 7-day Fable
+  // window alone.
   const FABLE = 'claude-fable-5-1';
   const weekOnly = { ...costs, modelWeight: { ...costs.modelWeight, [FABLE]: null }, overrides: { ...costs.overrides, [FABLE]: { weightByWindow: { seven_day_fable: 10 } } } };
   assert.equal(d.isWeighted(weekOnly, FABLE), true, 'weighted through the override');
@@ -65,10 +66,10 @@ test('a Fable model an override weighs on the Fable week alone is weighted, a da
   assert.equal(d.isWeighted({ ...weekOnly, overrides: costs.overrides }, FABLE), false, 'unweighted without the override');
   assert.equal(d.shareOf(weekOnly, 'five_hour', MAX_20X, FABLE, usage({ input: 1 }), OUT), null, 'the 5-hour window');
   assert.equal(d.shareOf(weekOnly, 'seven_day', MAX_20X, FABLE, usage({ input: 1 }), OUT), null, 'the 7-day window');
-  close(d.shareOf(weekOnly, 'seven_day_fable', MAX_20X, FABLE, usage({ input: 1 }), OUT), 0.02, 'the Fable week, 10 x 1 / 1000 / 0.5');
-  assert.deepEqual(d.modelWeeks(weekOnly, FABLE), ['seven_day_fable'], 'a Fable model carries the Fable week');
+  close(d.shareOf(weekOnly, 'seven_day_fable', MAX_20X, FABLE, usage({ input: 1 }), OUT), 0.02, 'the 7-day Fable window, 10 x 1 / 1000 / 0.5');
+  assert.deepEqual(d.modelWeeks(weekOnly, FABLE), ['seven_day_fable'], 'a Fable model carries the 7-day Fable window');
   assert.deepEqual(d.modelWeeks(weekOnly, OPUS), [], 'an Opus model carries none');
-  // Opus carries no Fable week, so a weight there prices nothing it sends.
+  // Opus carries no 7-day Fable window, so a weight there prices nothing it sends.
   const opusWeek = { ...costs, modelWeight: { ...costs.modelWeight, 'claude-opus-5': null }, overrides: { ...costs.overrides, 'claude-opus-5': { weightByWindow: { seven_day_fable: 10 } } } };
   assert.deepEqual(d.weightedWindows(opusWeek, 'claude-opus-5'), ['five_hour', 'seven_day'], "a week the model does not carry weighs nothing, and the shared windows read its model tier's latest");
 });
@@ -544,7 +545,7 @@ test('the worked figures: a million input tokens of a model read its units over 
   assert.deepEqual(d.modelWeeks(shipped, model), [], 'Opus 5.5 carries no model week');
   const fable = 'claude-fable-5-1';
   const fableUnits = 1_000_000 * shipped.modelWeight[fable] * shipped.typeMultiplier.input;
-  close(d.equivalentOf(shipped, 'seven_day_fable', fable, million, OUT)?.equivalent, fableUnits / d.tierCapacity(shipped, anchor, 'seven_day') / shipped.modelWindows.seven_day_fable.capacityFactor, 'the 20x Fable week');
+  close(d.equivalentOf(shipped, 'seven_day_fable', fable, million, OUT)?.equivalent, fableUnits / d.tierCapacity(shipped, anchor, 'seven_day') / shipped.modelWindows.seven_day_fable.capacityFactor, 'the 20x 7-day Fable window');
   const output = usage({ output: 1_000_000 });
   close(d.equivalentOf(shipped, 'five_hour', model, output, OUT)?.equivalent, (1_000_000 * shipped.modelWeight[model] * shipped.typeMultiplier.output) / d.tierCapacity(shipped, anchor, 'five_hour'), 'output tokens at their multiplier');
   // The same request on a Pro account reads its own window's share apart and the one equivalent.

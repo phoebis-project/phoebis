@@ -41,6 +41,8 @@ export { GuardrailDialog } from '@/pages/GuardrailsPage';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
 export { anchorTier, bandFactor, bandRuns, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, regimeNames, revisionAt, shareOf, smallestTier, tierCapacity, tierGroups, tierOrder, weightOf, weightOrFallback, windowMultiple, withRegime } from '@/lib/costs';
+// The Cache miss reasons' labels, so the filter and the drawer checks read the words the pages draw.
+export { CACHE_MISS_LABEL } from '@/lib/cache';
 // The strip's model and its buttons' names, so a card check spells the stations a record draws and the names a reader
 // hears from the derivation the strip reads.
 export { leafName, stationModel, stationName, terminusName } from '@/lib/decisionStrip';
@@ -256,8 +258,13 @@ function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate
   };
 }
 
+// The three lazy pages load once before the first mount, so the settle on the in-flight count never waits on a chunk
+// fetch the count does not see.
+const lazyPages = Promise.all([import('@/pages/AccountsPage'), import('@/pages/AnalyticsPage'), import('@/pages/PoolsPage')]);
+
 /** `now` freezes the clock at that instant before the first render, so only `tick` moves it or fires a timer. */
 export async function mount(path: string, options: { now?: number } = {}): Promise<Mounted> {
+  await lazyPages;
   if (options.now !== undefined) fake.freeze(options.now);
   const container = document.createElement('div');
   document.body.appendChild(container);

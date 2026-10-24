@@ -33,7 +33,7 @@ export function rowValue(chips: Chip[]): ReactNode {
   if (chips.length === 1 && only.label === undefined && only.title === undefined) {
     if (only.entity) return <Link to={entityHref(only.entity.kind, only.entity.id)}>{only.value}</Link>;
     if (only.href) return <Link to={only.href} className={only.mono ? 'mono' : undefined}>{only.value}</Link>;
-    return only.value;
+    return only.mono ? <span className="mono">{only.value}</span> : only.value;
   }
   return <Chips chips={chips} />;
 }

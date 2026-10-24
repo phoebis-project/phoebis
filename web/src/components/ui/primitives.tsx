@@ -116,6 +116,8 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'danger' | 'ghost' | 'primary' | 'secondary';
 };
 
+type InputProps = InputHTMLAttributes<HTMLInputElement>;
+
 /** The one button primitive, forwarding its ref so a popover can anchor on it and return focus to it. */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button({ variant = 'secondary', size = 'md', icon, children, className = '', ...rest }, ref) {
   return (
@@ -256,9 +258,10 @@ export function Field({ label, hint, children, beside = false, plain = false, cl
   );
 }
 
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={`input ${props.className ?? ''}`} />;
-}
+/** Forwards its ref, so a caller can focus the field directly. */
+export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(props, ref) {
+  return <input ref={ref} {...props} className={`input ${props.className ?? ''}`} />;
+});
 
 export function SearchInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (

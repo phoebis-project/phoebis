@@ -4,7 +4,7 @@ import { accountById } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById } from './pools';
-import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
+import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead } from './time';
@@ -13,8 +13,11 @@ const rng = createRng(2_024);
 
 /** What a fixed row writes out in place of the rolls, each time in minutes before the mock's now. */
 interface WrittenFigures {
-  /** Main first, then its subagents: the id, the last request and the next probe in seconds ahead, null for none. */
-  agents: { agentId: string; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
+  /**
+   * Main first, then its subagents: the id, the last request and the next probe in seconds ahead, null for none, and
+   * the last probe where the row writes it.
+   */
+  agents: { agentId: string; lastProbeMinutes?: number; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
   burn: number;
   burnAtMinutes: number;
   /** The deepest cache-map entry's prefix of the main pin. */
@@ -36,7 +39,9 @@ interface WrittenFigures {
 // would ever drop a row. `lastUseFromRows` reads the last use off the session's
 // own requests instead, for the runner's sessions on `ci`: no pin keeps them in
 // use, and their account has been at its daily budget since its last served
-// request.
+// request. Session 0 reads it so too, since its main still awaits the evidence of
+// its last request, so no probe has renewed the pin since and the row and the line
+// agree.
 // `released` marks a session whose every
 // agent, main included, the mod released. `sessionId` writes out the id of a
 // session past the story's ids whose story row names it.
@@ -67,7 +72,7 @@ const sessionSpec: ({
       sessionId: string;
     }
 ))[] = [
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-6', state: 'idle', agents: 2, companion: 'silent' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
@@ -158,10 +163,38 @@ const sessionSpec: ({
       lastRefreshMinutes: 21,
     },
   },
+  // A session the mod released whole after a probe and one more turn, both past all's ten-minute affinity window, so
+  // the router expired its pin and only the released line stays listed.
+  {
+    keyId: 'desktop',
+    accountId: 'primary',
+    model: 'claude-sonnet-5',
+    state: 'idle',
+    agents: 1,
+    companion: 'reporting',
+    released: true,
+    fixed: true,
+    idleMinutes: 25,
+    sessionId: '1f7c3a9e-5b24-4d86-9e10-7a3c6b8d2f59',
+    figures: {
+      agents: [{ agentId: 'main', lastProbeMinutes: 31, lastRequestMinutes: 25, nextProbeSeconds: null }],
+      burn: 0.05,
+      burnAtMinutes: 26,
+      cachedPrefixTokens: 8_000,
+      createdMinutes: 90,
+      lastInputTokens: 9_400,
+      lastRefreshMinutes: 26,
+    },
+  },
 ];
 
 /** How long the router lists a session after its last request, which the settings answer as well. */
 const SESSION_EXPIRE_SECONDS = 86_400;
+/**
+ * The router drops a session past `SESSION_EXPIRE_SECONDS`, so a ledger-only row is listed only while its last request
+ * is inside the span. Exported for the consistency test's two instants.
+ */
+export const insideSessionExpiry = (lastAt: string, now: number): boolean => Date.parse(lastAt) + SESSION_EXPIRE_SECONDS * 1000 > now;
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
@@ -354,11 +387,13 @@ const RECIPE_CAUSES: (RecipeCause | null)[] = [
   null,
   // One row for each session past the story's ids, so the modulo wraps none of them onto the first causes. The
   // finished row's main is written over its own, the row idle for two hours ran past the `all` pool's one-hour max
-  // idle as the 95-minute `laptop` row did, and the pin on the work pool's former member waits for its next probe.
+  // idle as the 95-minute `laptop` row did, the pin on the work pool's former member waits for its next probe, and the
+  // released row's main is written over its own.
   null,
   null,
   null,
   'idle_limit',
+  null,
   null,
 ];
 
@@ -463,7 +498,8 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const wakeAt = parkKind === 'scheduled' ? ahead(3 * 24 * 60 * MINUTE + 30_000) : null;
     // An agent whose request still awaits its evidence has not been probed since, a probe in flight was dispatched at
     // its due time, which the engine records as the last probe, and the rest were probed minutes ago.
-    const lastProbeAt = cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
+    const writtenProbe = fixedAgents?.[j].lastProbeMinutes;
+    const lastProbeAt = writtenProbe !== undefined ? ago(writtenProbe * MINUTE) : cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     // The written session's rows past its drawn pair are written, so a reader meets every lifecycle word. A session the
     // mod released whole keeps its draws, so the rows after it keep theirs.
@@ -603,6 +639,68 @@ for (const pin of SLOWED_PINS) {
   });
 }
 
+/**
+ * The contract seat's batch session on fleet, whose pool keeps no cache warm, so no recipe warms it. Its main agent
+ * holds one pin per model it sent, and a pin stands while its last turn is inside the pool's affinity window: the Opus
+ * pin of the newest turn, where the earlier Sonnet turns' pin has lapsed. Written after the recipes rather than rolled,
+ * so every drawn row and recipe keeps its rolls, the burn a figure of its own in dollars, as a usage-based seat's burn
+ * reads.
+ */
+const fleetRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'fleet' && r.sessionId === FLEET_SESSION_ID);
+const fleetPool = keyById.get('fleet')!.poolId;
+const fleetTtlMs = (poolById.get(fleetPool)?.affinityTtlSeconds ?? 0) * 1_000;
+// The rows run newest first, so each model's first row is its pin's last turn.
+const FLEET_PINS = [...new Set(fleetRows.map((r) => r.canonicalModel))]
+  .map((model) => fleetRows.find((r) => r.canonicalModel === model)!)
+  .filter((last) => NOW - Date.parse(last.attempts[last.attempts.length - 1].startedAt) <= fleetTtlMs);
+// The newest model's pin is the one the route lists the session's main agent under.
+if (FLEET_PINS.length > 0) {
+  const last = FLEET_PINS[0];
+  const lastAttempt = last.attempts[last.attempts.length - 1];
+  const lastInputTokens = last.usage.input + last.usage.cacheRead + last.usage.cacheWrite5m + last.usage.cacheWrite1h;
+  const keyGeneration = Date.parse(keyById.get('fleet')!.createdAt);
+  const seen = ledgered.get(activityOf('fleet', keyGeneration, FLEET_SESSION_ID)) ?? null;
+  SESSIONS.push({
+    ...SESSION_SAMPLE,
+    accountId: lastAttempt.accountId,
+    agentContexts: null,
+    agentId: 'main',
+    agents: 1,
+    burn: 0.36,
+    burnAt: lastAttempt.startedAt,
+    burnEquivalent: null,
+    burnUnit: 'usd',
+    cacheTtlMs: 5 * MINUTE,
+    companion: 'none',
+    companionSince: null,
+    createdAt: last.at,
+    cycleMs: null,
+    epoch: 1,
+    estimated: false,
+    forkDepth: null,
+    forkedFrom: null,
+    historical: false,
+    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+    keyGeneration,
+    keyId: 'fleet',
+    lastInputTokens,
+    ...pinContext(lastInputTokens, seen?.model ?? null),
+    lastRefreshAt: lastAttempt.startedAt,
+    lastRequestAt: seen?.last ?? null,
+    lastUsedAt: lastAttempt.startedAt,
+    model: last.canonicalModel,
+    pinned: true,
+    presenceAgeSeconds: null,
+    requests: seen?.requests ?? 0,
+    runwayBounded: null,
+    runwayMs: null,
+    sessionId: FLEET_SESSION_ID,
+    shedFrom: null,
+    shedReason: null,
+    speed: null,
+  });
+}
+
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
 // with the creation minute in the viewer's zone: the router lists a holder's session while its last request is inside
 // the session expiry, with that holder's own requests and no pin or recipe. The holder's last request ran on the
@@ -610,7 +708,7 @@ for (const pin of SLOWED_PINS) {
 // in, which would otherwise hand it that session's next probe.
 const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
 const holderLast = holderRows[0];
-if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NOW) {
+if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
   SESSIONS.push({
     ...SESSION_SAMPLE,
     accountId: holderLast.accountId,
@@ -651,12 +749,15 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
 
 // The desktop session whose every request the key's own guardrail refused before any account was asked. The router
 // lists it off the ledger's rows with no pin and no recipe, so a drifting or blocked client stays visible, and the
-// activity fold gives it a count of none and the newest refusal as its last request.
+// activity fold gives it a count of none and the newest refusal as its last request, and only while that refusal is
+// inside the router's session expiry. The row is built at an instant since the mock's now is fixed at load, so the
+// consistency test reads it inside the expiry and past it.
 const blockedGeneration = Date.parse(keyById.get('desktop')!.createdAt);
 const blocked = ledgered.get(activityOf('desktop', blockedGeneration, BLOCKED_SESSION_ID));
 const blockedLast = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === blockedGeneration && r.sessionId === BLOCKED_SESSION_ID);
-if (blocked && blockedLast) {
-  SESSIONS.push({
+export function refusalOnlyRows(now: number): Session[] {
+  if (!blocked || !blockedLast || !insideSessionExpiry(blockedLast.at, now)) return [];
+  const row: Session = {
     ...SESSION_SAMPLE,
     accountId: null,
     agentContexts: null,
@@ -691,8 +792,10 @@ if (blocked && blockedLast) {
     sessionId: BLOCKED_SESSION_ID,
     shedFrom: null,
     shedReason: null,
-  });
+  };
+  return [row];
 }
+SESSIONS.push(...refusalOnlyRows(NOW));
 
 // A pin is the engine's: one per key, session, agent and model, so a session's subagents hold pins of their own, on
 // another account where they run there. The router renews a pin on each request and each keepalive probe, and the
@@ -704,25 +807,27 @@ const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => {
   const lastUse = Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((at) => (at === null ? [] : [Date.parse(at)])));
   return NOW - lastUse <= (poolById.get(poolId)?.affinityTtlSeconds ?? 0) * 1_000;
 };
-const PINS = new Map<string, Set<string>>();
+/** The pins by the account each sits on, each written `key|session|agent|model`. */
+const PINS = new Map<string | null, Set<string>>();
+const pinOn = (accountId: string | null, pin: string) => PINS.set(accountId, (PINS.get(accountId) ?? new Set()).add(pin));
 for (const r of RECIPES) {
   const poolId = keyById.get(r.keyId)?.poolId;
-  const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`;
   if (poolId === undefined || (r.agentState === 'released' && !pinKept(r, poolId))) continue;
-  const member = `${poolId}|${r.accountId}`;
-  PINS.set(member, (PINS.get(member) ?? new Set()).add(pin));
+  pinOn(r.accountId, `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`);
 }
-for (const pin of SLOWED_PINS) {
-  const member = `${keyById.get('notebook')!.poolId}|studio`;
-  for (const a of pin.agents) PINS.set(member, (PINS.get(member) ?? new Set()).add(`notebook|${pin.sessionId}|${a.agentId}|${a.model}`));
-}
-/** The pins under a pool's keys on one member's account. */
-export const memberPins = (poolId: string, accountId: string): number => PINS.get(`${poolId}|${accountId}`)?.size ?? 0;
+for (const pin of SLOWED_PINS) for (const a of pin.agents) pinOn('studio', `notebook|${pin.sessionId}|${a.agentId}|${a.model}`);
+for (const last of FLEET_PINS) pinOn(last.attempts[last.attempts.length - 1].accountId, `fleet|${FLEET_SESSION_ID}|main|${last.canonicalModel}`);
+const underKeys = (pins: Iterable<string>, keyIds: ReadonlySet<string>) => [...pins].filter((pin) => keyIds.has(pin.slice(0, pin.indexOf('|'))));
 /**
- * Every pin under a pool's keys, one per key, session, agent and model as the route counts them, on a member's account
- * or not. A pin on an account that left the pool counts here and in no member's figure.
+ * The pins under a pool's current keys on one member's account, the one membership `pinsUnderPool` reads too, so a
+ * key that moved pools counts its pins on the member cells of the pool that holds it now.
  */
-export const pinsUnderPool = (poolId: string): number => new Set([...PINS].flatMap(([member, pins]) => (member.startsWith(`${poolId}|`) ? [...pins] : []))).size;
+export const memberPins = (keyIds: ReadonlySet<string>, accountId: string): number => underKeys(PINS.get(accountId) ?? [], keyIds).length;
+/**
+ * Every pin under a pool's current keys, one per key, session, agent and model as the route counts them, on a member's
+ * account or not. A pin on an account that left the pool counts here and in no member's figure.
+ */
+export const pinsUnderPool = (keyIds: ReadonlySet<string>): number => [...PINS.values()].reduce((n, pins) => n + underKeys(pins, keyIds).length, 0);
 
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.

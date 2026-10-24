@@ -226,14 +226,17 @@ export const revisionAt = <T extends { effective: string; effectiveDate: string 
   return found ?? revisions[0] ?? null;
 };
 
-/** Who paid for an attempt: the subscription's window, its overage, a fast answer's usage credits, or an API key. */
-export type Funding = 'api_key' | 'fast' | 'overage' | 'plan';
+/** Who paid for an attempt: the subscription's window, its overage, a fast answer's usage credits, an API key, or a
+ *  usage-based seat's dollars. */
+export type Funding = 'api_key' | 'fast' | 'overage' | 'plan' | 'usage_based';
 
 /** Who paid for an attempt, in the ledger's order: the account's kind first (an API-key account's answer is billed in
- *  dollars whatever its speed or overage flag), then a fast answer, then overage, else the subscription's window. A
- *  request with no attempt is billed in dollars (its cost is zero). */
-export const fundingOf = (attempt: Pick<Attempt, 'accountKind' | 'overageInUse' | 'response'> | null): Funding => {
+ *  dollars whatever its speed or overage flag), then the usage-based class (a seat has no plan window to fund either),
+ *  then a fast answer, then overage, else the subscription's window. A request with no attempt is billed in dollars
+ *  (its cost is zero). */
+export const fundingOf = (attempt: Pick<Attempt, 'accountKind' | 'overageInUse' | 'response' | 'usageBased'> | null): Funding => {
   if (attempt === null || attempt.accountKind === 'api_key') return 'api_key';
+  if (attempt.usageBased) return 'usage_based';
   if (attempt.response.speed === 'fast') return 'fast';
   if (attempt.overageInUse === true) return 'overage';
   return 'plan';

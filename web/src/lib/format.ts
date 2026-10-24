@@ -64,19 +64,19 @@ export const pct = (v: number | null | undefined, signed = false) => {
 export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
 /** A share with its window named ("0.42% of 5-hour", "0.12% of 7-day Fable"), a window the pages do not know under its key. */
 export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${WINDOW_LABEL[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
-const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': 'Fable week' };
+const WINDOW_SHORT: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7-day Fable' };
 /**
- * A share with its window's short word ("0.42% 5h", "0.12% 7d", "0.12% Fable week"), for a cell too narrow for the
+ * A share with its window's short word ("0.42% 5h", "0.12% 7d", "0.12% 7-day Fable"), for a cell too narrow for the
  * full form. A window the pages do not know reads under its key, and `shareLabel` stays the full form.
  */
 export const shareShort = (windowKey: string, share: number): string => `${fmtShare(share)} ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
-const EQUIVALENT_WINDOW: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': 'Fable week' };
-/** A 20x equivalent's window word: "5-hour", "7-day", "Fable week", a window the pages do not know under its key. */
+const EQUIVALENT_WINDOW: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };
+/** A 20x equivalent's window word: "5-hour", "7-day", "7-day Fable", a window the pages do not know under its key. */
 export const equivalentWord = (windowKey: string): string => EQUIVALENT_WINDOW[windowKeyId(windowKey) ?? ''] ?? windowKey;
-/** The 20x window equivalent with its window named: "1.47% of 20x 5-hour", "2.22% of 20x Fable week", zero as "0%". */
+/** The 20x window equivalent with its window named: "1.47% of 20x 5-hour", "2.22% of 20x 7-day Fable", zero as "0%". */
 export const fmtEquivalent = (windowKey: string, share: number): string =>
   share === 0 ? '0%' : `${fmtShare(share)} of 20x ${equivalentWord(windowKey)}`;
-/** The short form for a cell: "1.47% 20x 5h", "0.244% 20x 7d", "2.22% 20x Fable week". */
+/** The short form for a cell: "1.47% 20x 5h", "0.244% 20x 7d", "2.22% 20x 7-day Fable". */
 export const equivalentShort = (windowKey: string, share: number): string => `${fmtShare(share)} 20x ${WINDOW_SHORT[windowKeyId(windowKey) ?? ''] ?? windowKey}`;
 /**
  * The hover text of every estimated figure, the one sentence the console says about an estimate: the routes answer
@@ -89,7 +89,19 @@ export const ESTIMATED_TITLE = "Estimated at the model tier's latest weighted mo
  */
 export const withEstimate = (title: string, estimated: boolean): string => (!estimated ? title : title === '' ? `${ESTIMATED_TITLE}.` : `${title}. ${ESTIMATED_TITLE}.`);
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
-export const fmtCredits = (credits: number) => usd.format(credits / 100);
+export const fmtCredits = (credits: number, exponent = 2) => usd.format(credits / 10 ** exponent);
+const minorDecimal = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** A spend amount in minor units, printed in its own currency at its exponent, since a seat may be billed in any. */
+export const fmtMinor = (minor: number, currency: string, exponent: number) => {
+  const amount = minor / 10 ** exponent;
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
+  } catch (e) {
+    // The router passes the provider's code on unchecked, and a throw in render would blank the view drawing it.
+    if (!(e instanceof RangeError)) throw e;
+    return currency === '' ? minorDecimal.format(amount) : `${minorDecimal.format(amount)} ${currency}`;
+  }
+};
 export const fmtMiB = (bytes: number) => {
   const mib = bytes / 1_048_576;
   return `${Number.isInteger(mib) ? mib : mib.toFixed(1)} MiB`;
@@ -198,10 +210,12 @@ export function fmtShortHour(isoTime: string): string {
  * The narrowest timeline cell that holds a label, per hour cycle: `short` the short hour ("06", "12 AM") and `full` the
  * full label ("Sep 13" under 24h, "12:00 AM" under 12h). A cell has no inline padding, so each figure is its label's
  * width in the sub's mono face, measured in the mock pass's Chromium and rounded up: "06" 12.6 px, "12 AM" 31.5 px and
- * "12:00 AM" 50.4 px, with the 24-hour `full` at 40 px, a margin over the 37.8 px of "Sep 13".
+ * "12:00 AM" 50.4 px. Each `full` keeps a margin past its label, so two labels side by side stay apart: the 24-hour
+ * 40 px stands 2.2 px over the 37.8 px of "Sep 13", and the 12-hour takes the same 2.2 px over "12:00 AM", 52.6 px
+ * rounded up to 53.
  */
 export const CELL_MIN_PX: Record<TimeFormat, { full: number; short: number }> = {
-  '12h': { full: 51, short: 32 },
+  '12h': { full: 53, short: 32 },
   '24h': { full: 40, short: 13 },
 };
 

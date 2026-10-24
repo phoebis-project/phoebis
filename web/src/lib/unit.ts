@@ -20,9 +20,9 @@ export const UNIT_FUNDING: Record<UnitPosition, FundingFilter | undefined> = { a
 export const UNIT_LEGEND: Record<UnitPosition, string> = {
   all: 'Every request in dollars at the API price list, a subscription request at its dollar equivalent.',
   equivalent: 'The subscription requests alone at the API price list.',
-  native: 'Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, overage or fast-mode request in dollars.',
+  native: 'Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, fast-mode, overage or usage-based request in dollars.',
   share: "A subscription account's requests as shares of its own 5-hour, 7-day and model-week windows. Reads where one account is named, since shares of different accounts' windows do not add.",
-  usd: 'The overage, fast-mode and API key requests alone, the dollars the account holder is charged.',
+  usd: 'The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
 };
 /**
  * The legend's closing paragraph. It names the account tiers the equivalent compares across apart from the model tier

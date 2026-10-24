@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 // Every clock time below is read in UTC whatever the host's zone; `node --test` gives each file a process of its own.
@@ -62,7 +62,7 @@ const DECISIONS = [
   ['renewed, cold', decision({ kind: 'renewed', fact: [fact('cause', 'compacted', 'text')], warmth: { cause: 'compacted', verdict: 'cold' } }), 'no rule fired', ['cause compacted']],
   ['renewed on a hot account', decision({ kind: 'renewed', fact: [fact('five_hour', 0.98, 'percent')] }), 'no rule fired', ['5h 98%']],
   ['renewed on a hot 7-day window', decision({ kind: 'renewed', fact: [fact('seven_day', 0.91, 'percent')] }), 'no rule fired', ['7d 91%']],
-  ['renewed on a hot Fable week', decision({ kind: 'renewed', fact: [fact('seven_day_fable', 0.9, 'percent')] }), 'no rule fired', ['Fable 90%']],
+  ['renewed on a hot 7-day Fable window', decision({ kind: 'renewed', fact: [fact('seven_day_fable', 0.9, 'percent')] }), 'no rule fired', ['Fable 90%']],
   ['placed by the strategy', decision({ by: strategy('pace', [0, 0, 0]), fact: [fact('gap', 0.0134, 'percent_per_hour'), fact('over', 'secondary', null, { id: 'secondary', kind: 'account' })], tier: [0, 0, 0] }), 'Pace P0', ['gap 1.34 %/h', 'over secondary']],
   ['placed by round robin', decision({ by: strategy('round_robin', [0, 0, 0]), fact: [fact('turn', '2 of 4', 'text')], strategy: 'round_robin' }), 'round robin P0', ['turn 2 of 4']],
   ['placed by priority', decision({ by: strategy('priority', [0, 0, 0]), fact: [fact('rank', '1 of 2', 'text')], strategy: 'priority' }), 'priority P0', ['rank 1 of 2']],
@@ -275,12 +275,12 @@ test('every label of the table is used at least once and no fact key lacks a lab
 test('every event kind has its words and its tone', () => {
   const kinds = [
     'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
-    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed', 'refresh_failed',
-    'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started', 'stream_interrupted', 'warm_prefix_expired',
-    'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
+    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
+    'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
+    'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
   ];
   assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
-  assert.equal(kinds.length, 35);
+  assert.equal(kinds.length, 37);
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
@@ -335,6 +335,37 @@ test('the walk words name every key the slow-down, the return rule, the pick, th
   assert.equal(d.WALK_KEY.demand_seven_day, undefined, 'no line writes a weekly demand');
   // A window's word follows the noun as the horizon's does.
   assert.deepEqual(['horizon', 'over_since', 'wait'].map((k) => d.keyWord(`${k}_seven_day_fable`)), ['horizon Fable', 'over since Fable', 'wait Fable']);
+});
+
+/** Every key the routing crate writes on a walk line under a name of its own, with the fixtures' walk keys. */
+const ROUTER_WALK_KEYS = [
+  'account_id', 'age_five_hour', 'at_cap', 'attempt', 'binding', 'bound_ms', 'burn', 'by_runway', 'cause', 'ceiling', 'cold', 'cooldown', 'deadline', 'demand_five_hour', 'depth', 'destinations',
+  'drawn', 'dwell_age_ms', 'dwell_ms', 'end', 'ending', 'epoch', 'excess', 'expires_at', 'factor', 'fast', 'fired_by', 'found', 'grace_ms', 'hash', 'hashes_stamped', 'hold_five_hour',
+  'holds_allowance', 'idle_ms', 'in_flight', 'in_overage', 'kind', 'ladder', 'lane', 'marked', 'marks', 'migrate_when_spent', 'mode', 'no_destination', 'no_fit', 'obstacle', 'obstacles',
+  'over_ms', 'over_since', 'overage_policy', 'place', 'prefix_tokens', 'ramp', 'reason', 'refresh_age_ms', 'refresh_stamped', 'reset', 'reset_in_grace', 'round', 'runway_ms', 'score',
+  'skipped', 'slow_down', 'speed', 'spent', 'standing', 'strategy', 'stretch_ms', 'target', 'threshold_ms', 'tier', 'ties', 'tried', 'trigger', 'turn', 'verdict', 'wait_ms', 'warmth',
+  'winding_down', 'window', 'window_share_fast',
+];
+
+test("every walk key the router writes reads words of its own, the pick's ties as tied and its draw as drawn", () => {
+  assert.deepEqual([d.keyWord('ties'), d.keyWord('drawn')], ['tied', 'drawn']);
+  // The list is read again off the crate's source and the fixtures, so a key the router gains fails here rather than
+  // reading through the underscore fallback. A key written over two lines counts, and so does a partition's name.
+  const src = new URL('../../crates/routing/src/', import.meta.url);
+  const written = new Set();
+  for (const file of readdirSync(src).filter((f) => f.endsWith('.rs'))) {
+    const text = readFileSync(new URL(file, src), 'utf8');
+    for (const m of text.matchAll(/Fact::[a-z_]+\(\s*"([a-z_0-9]+)"/g)) written.add(m[1]);
+    for (const m of text.matchAll(/narrow\(\s*[^)]*?"([a-z_0-9]+)"/g)) written.add(m[1]);
+  }
+  const fixtures = new URL('./fixtures/', import.meta.url);
+  const walked = (o) => (Array.isArray(o) ? o.flatMap(walked) : o !== null && typeof o === 'object' ? [...(Array.isArray(o.walk) ? o.walk.flatMap((s) => (s.facts ?? []).map((f) => f.key)) : []), ...Object.values(o).flatMap(walked)] : []);
+  for (const file of readdirSync(fixtures).filter((f) => f.endsWith('.json'))) for (const key of walked(JSON.parse(readFileSync(new URL(file, fixtures), 'utf8')))) written.add(key);
+  assert.deepEqual([...written].sort(), ROUTER_WALK_KEYS);
+  // The account a fact names is its chip, a rung's hash is drawn from the candidate table, and a score or a standing
+  // names itself.
+  const drawnOtherwise = new Set(['account_id', 'hash', 'score', 'standing']);
+  assert.deepEqual(ROUTER_WALK_KEYS.filter((key) => !drawnOtherwise.has(key) && !d.own(d.WALK_KEY, key)), []);
 });
 
 test('a fact value is drawn by its unit', () => {
@@ -636,6 +667,35 @@ test("a refusal's walk is two lines, the admission's reason and the rest of the 
   ]);
   assert.equal(d.verdictWord('not_run'), 'not run');
   assert.equal(d.verdictWord('dropped'), 'all at cap');
+});
+
+test('the pick line and the Pick station name the tied accounts, the one the runway kept and whether a draw was left', () => {
+  const tied = { pace: { burn: 0, deadline: null, end: null, hours: 120, remaining: 0.91, reset: null, score: 0.0076, window: 'seven_day' }, rank: 1, score: 0.0076 };
+  const r = record({
+    candidates: [candidate({ ...tied, runwayMs: 3_600_000 }), candidate({ ...tied, accountId: 'secondary', rank: 2, runwayMs: 1_800_000 })],
+    walk: [
+      wstep('pin', 'none', [wfact('found', 'none')]),
+      wstep('eligible', 'match', [wfact('standing', 'eligible', null, 'primary'), wfact('standing', 'eligible', null, 'secondary')]),
+      wstep('partitions', 'match', [wfact('spent', 'off'), wfact('at_cap', 0), wfact('no_fit', 0), wfact('winding_down', 0)]),
+      wstep('rung:content', 'none', [wfact('reason', 'no_entry')]),
+      wstep('rung:with_main', 'none', [wfact('reason', 'class')]),
+      wstep('rung:static', 'none', [wfact('reason', 'no_entry')]),
+      wstep('pick', 'chosen', [
+        wfact('strategy', 'pace'), wfact('tier', '0/0/0'),
+        wfact('score', 0.0076, 'percent_per_hour', 'primary'), wfact('burn', 0, 'percent_per_hour', 'primary'),
+        wfact('score', 0.0076, 'percent_per_hour', 'secondary'), wfact('burn', 0, 'percent_per_hour', 'secondary'),
+        wfact('ties', ['primary', 'secondary']), wfact('by_runway', ['primary']), wfact('drawn', false),
+      ]),
+      wstep('reserve', 'none', [wfact('account_id', 'primary', null, 'primary')]),
+    ],
+  });
+  const line = d.walkLines(r).find((l) => l.step === 'Pick');
+  // Each tied id is a chip of its own under the label, an account entity as every account a line names.
+  assert.deepEqual(texts(line.chips).slice(-4), ['tied primary', 'tied secondary', 'by runway primary', 'drawn no']);
+  assert.deepEqual(line.chips.slice(-4, -1).map((c) => c.entity), [{ id: 'primary', kind: 'account' }, { id: 'secondary', kind: 'account' }, { id: 'primary', kind: 'account' }]);
+  const plan = d.anchorPlan({ id: 'pick', kind: 'station' }, d.stationModel(r, NOW), r, undefined, NOW);
+  const rows = Object.fromEntries(plan.block.table.loose.map((row) => [row.label, row.chips.map(chipText)]));
+  assert.deepEqual([rows.tied, rows['by runway'], rows.drawn], [['tied primary', 'tied secondary'], ['by runway primary'], ['drawn no']]);
 });
 
 test('the candidate cells word every verdict and its chip', () => {
@@ -958,6 +1018,8 @@ const DETAIL_EVENTS = {
     ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Destination fit', 'Runway', 'Key', 'Session', 'Agent', 'Model'],
   ],
   pin_released: [{ agent_id: 'main' }, ['Actor', 'Key', 'Session', 'Agent', 'Model']],
+  plan_ended: [{ organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'usage_403', subscription_status: 'canceled' }, ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status']],
+  plan_restored: [{ organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_5x', source: 'profile', subscription_status: 'active' }, ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status']],
   poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
   poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
   poll_failed: [{ endpoint: 'usage', error: 'usage request rejected with status 503', status: 503, transport: false }, ['Endpoint', 'Status', 'Error']],
@@ -1014,7 +1076,7 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Pins');
   assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark']);
   assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [
-    ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x Fable week', 'secondary', 'marked'],
+    ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x 7-day Fable', 'secondary', 'marked'],
     ['s2', 'd93b', 'warm', '-', '48K', '-', '-', 'off window'],
   ]);
   const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, []).find((p) => p.label === 'Survive a restart');
@@ -1027,8 +1089,8 @@ test("a round's off-window pin reads its word and the rewrite cell names its uni
     const pairs = d.detailPairs(event('shedding_round', body), NOW, []);
     return { rows: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => [chipText(r[5]), chipText(r[7])]), skipped: texts(pairs.find((p) => p.label === 'Skipped')?.chips ?? []) };
   };
-  // The Fable pin's rewrite is the 20x equivalent of its week, and the Opus pin, which draws no Fable week, sat out.
-  assert.deepEqual(drawn(detail), { rows: [['0.5% of 20x Fable week', 'marked'], ['-', 'off window']], skipped: ['s2: off window'] });
+  // The Fable pin's rewrite is its week's 20x equivalent, and the Opus pin, which draws no 7-day Fable window, sat out.
+  assert.deepEqual(drawn(detail), { rows: [['0.5% of 20x 7-day Fable', 'marked'], ['-', 'off window']], skipped: ['s2: off window'] });
   assert.deepEqual(read(event('shedding_round', detail)).facts, ['pins 1 of 2'], 'the count reads every listed pin, the one left out included');
   // On a 5-hour round every pin is on the window, and a model with no week of its own prices its rewrite on the 7-day.
   const fiveHour = (pin) => drawn({ ...detail, pins: [pin], window: 'five_hour' }).rows[0][0];
@@ -1132,7 +1194,7 @@ test('a failed usage poll and a stream cut after its head read their words, thei
   assert.deepEqual([d.EVENT_KIND_LABEL.poll_failed, d.EVENT_KIND_LABEL.stream_interrupted], ['poll failed', 'stream interrupted']);
   const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
   assert.deepEqual([presetOf('poll_failed'), presetOf('stream_interrupted')], ['account state and windows', 'exhaustion and refusals']);
-  assert.equal(d.ALL_KINDS.length, 42, 'the six decision kinds, probe and the 35 event kinds');
+  assert.equal(d.ALL_KINDS.length, 44, 'the six decision kinds, probe and the 37 event kinds');
   const pairs = (kind, detail, o) => d.detailPairs(event(kind, detail, o), NOW, []).map((p) => [p.label, texts(p.chips)]);
   // A transport failure answered no status, so the pair says what failed in its place.
   assert.deepEqual(pairs('poll_failed', { endpoint: 'profile', error: 'transport: connection refused (os error 111)', status: null, transport: true }).slice(1), [
@@ -1160,6 +1222,41 @@ test('a failed usage poll and a stream cut after its head read their words, thei
   const request = d.detailPairs(event('stream_interrupted', cut, own), NOW, []).find((p) => p.label === 'Request').chips[0];
   assert.equal(request.href, '/requests/req_5e2f7a19-b03');
   assert.deepEqual(pairs('stream_interrupted', { ...cut, upstream_request_id: null }, own).map(([label]) => label).slice(2), ['Request', 'Code', 'Text', 'Bytes relayed', 'Attempt'], 'a head with no request id draws no Upstream request');
+});
+
+test("a stream cut's code prints in the mono face, as the request drawer's Error row prints it", () => {
+  const cut = { attempt: 2, bytes_relayed: 18_432, code: 'stream_stalled', text: 'no chunk for 30 s', upstream_request_id: 'req_011CUcut_7a' };
+  const code = d.detailPairs(event('stream_interrupted', cut, { requestId: 'req_5e2f7a19-b03' }), NOW, []).find((p) => p.label === 'Code').chips;
+  assert.deepEqual(code.map((c) => [c.value, c.mono === true]), [['stream_stalled', true]]);
+});
+
+test("an ended plan and its return read their words, their preset and the read's source with the profile's three members", () => {
+  assert.deepEqual([d.EVENT_KIND_LABEL.plan_ended, d.EVENT_KIND_LABEL.plan_restored], ['plan ended', 'plan restored']);
+  const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
+  assert.deepEqual([presetOf('plan_ended'), presetOf('plan_restored')], ['account state and windows', 'account state and windows']);
+  // Neither reports trouble the tones name, so both read neutral.
+  assert.deepEqual([d.eventTone('plan_ended'), d.eventTone('plan_restored')], ['neutral', 'neutral']);
+  // The router's two rows on the fixture's account, as the routing log route answers them.
+  const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
+  const rowOf = (kind) => fixture.rows.find((r) => r.type === 'event' && r.kind === kind);
+  const pairs = (row) => d.detailPairs(row, NOW, []).map((p) => [p.label, texts(p.chips)]);
+  assert.deepEqual(pairs(rowOf('plan_ended')).slice(1), [
+    ['Account', ['business']],
+    ['Source', ['usage 403']],
+    ['Organization type', ['claude free']],
+    ['Rate-limit tier', ['default claude ai']],
+    ['Subscription status', ['canceled']],
+  ]);
+  assert.deepEqual(pairs(rowOf('plan_restored')).slice(2), [
+    ['Source', ['profile read']],
+    ['Organization type', ['claude max']],
+    ['Rate-limit tier', ['default claude max 5x']],
+    ['Subscription status', ['active']],
+  ]);
+  // A pairing's confirm restores the plan too, and a row lacking a member draws no pair for it.
+  const restored = rowOf('plan_restored');
+  const { rate_limit_tier: _, ...partial } = restored.detail;
+  assert.deepEqual(pairs({ ...restored, detail: { ...partial, source: 'pairing' } }).slice(2).map(([label, chips]) => `${label}: ${chips.join(' ')}`), ['Source: pairing confirm', 'Organization type: claude max', 'Subscription status: active']);
 });
 
 test("a round that walked no pin and left one out off the window that fired reads off window as its reason", () => {
@@ -1349,8 +1446,8 @@ test("an account edit's drawer reads each pair and the replaced secret beside th
   // A decision record carries the pool's settings it was decided under, so a pool's edit alone reads one.
   const key = pairs({ enabled: { from: true, to: false }, expires_at: { from: null, to: MIDNIGHT + 9 * 24 * HOUR } }, 'key_updated', 'ci');
   assert.deepEqual(key.slice(1), [['Change', ['key edited', 'ci']], ['enabled', ['from on', 'to off']], ['expires at', ['from none', 'to Sep 26 00:00']], ['Actor', ['admin']]]);
-  const end = pairs({ cancelled: { from: false, to: true }, subscription_ends_at: { from: null, to: ms(18, 0) } }, 'account_updated', 'secondary');
-  assert.deepEqual(end.slice(2), [['cancelled', ['from off', 'to on']], ['subscription ends at', ['from none', 'to 18:00']], ['Actor', ['admin']]]);
+  const end = pairs({ canceled: { from: false, to: true }, subscription_ends_at: { from: null, to: ms(18, 0) } }, 'account_updated', 'secondary');
+  assert.deepEqual(end.slice(2), [['canceled', ['from off', 'to on']], ['subscription ends at', ['from none', 'to 18:00']], ['Actor', ['admin']]]);
   const pool = pairs({ window_ceiling: { from: 0.95, to: 0.75 } }, 'pool_updated', 'all');
   assert.deepEqual(pool.slice(-1), [['Reading it', ['decisions before 09:08 carry window ceiling 95%']]], 'a pool edit keeps its reading');
   const listed = pairs({ guardrails: { from: [], to: ['no-secrets', 'size-cap'] } }, 'pool_updated', 'all');
@@ -1446,7 +1543,7 @@ test("the Pace cell's title names the share, the hours, the deadline, the burn a
   const tail = '. Inside its tier, the highest spare rate wins.';
   assert.equal(title(read), `66% of the 7-day window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   const end = ms(16, 44);
-  assert.equal(title({ burn: 0.05, deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23 - 0.05, window: 'seven_day_fable' }), `45% of the Fable week left over 2 h to its subscription's end at 16:44, less 5.00 %/h of burn: 15.18 %/h${tail}`);
+  assert.equal(title({ burn: 0.05, deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23 - 0.05, window: 'seven_day_fable' }), `45% of the 7-day Fable window left over 2 h to its subscription's end at 16:44, less 5.00 %/h of burn: 15.18 %/h${tail}`);
   assert.equal(title({ burn: 0, deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }), `100% of the 7-day window left over 168 h with no reset read, less 0.00 %/h of burn: 0.60 %/h${tail}`);
   assert.equal(title({ ...read, window: null }), `66% of its window left over 66 h to its reset at Sep 19 08:30, less 0.40 %/h of burn: 0.60 %/h${tail}`);
   // Under an hour the span reads in minutes, and from an hour on in whole hours.
@@ -1462,7 +1559,7 @@ test("the Pace cell's title names the share, the hours, the deadline, the burn a
   assert.equal(title(null), null);
 
   const header = (window, pace = read) => d.paceHeader(record({ candidates: [key, candidate({ pace: { ...pace, window } })] }));
-  assert.equal(header('seven_day_fable'), 'Spare rate, Fable week per hour', 'the first subscription member names it, past a key');
+  assert.equal(header('seven_day_fable'), 'Spare rate, 7-day Fable per hour', 'the first subscription member names it, past a key');
   assert.equal(header('seven_day'), 'Spare rate, 7-day per hour');
   assert.equal(header('seven_day_opus'), 'Spare rate, seven day opus per hour');
   assert.equal(header(null), 'Pace');
@@ -1481,4 +1578,33 @@ test("a Pace row's By chip carries the strategy's hint and a rung row's none", (
   assert.deepEqual([held.value, held.title], ['Pace P0', d.PACE_HINT]);
   assert.deepEqual(d.byOf(decision({ by: strategy('priority', [0, 1, 0]), strategy: 'priority' })), { value: 'priority P1' });
   assert.deepEqual(d.byOf(decision({ by: by('rung', 'static') })), { value: 'static rung' });
+});
+
+test("a usage-based candidate's one window cell reads its spend share over the reset, marked where the reset is estimated, at any tier", () => {
+  // The engine writes the spend entry for a paid source whatever its tier, and files it in group 2 only while the pool
+  // prefers subscriptions, so the entry marks the class and the tier does not.
+  const seat = (windows, tier = [2, 1, 0]) => d.candidateCells(candidate({ accountId: 'seat', planTier: 'default_claude_zero', priority: 1, tier, windows }), record(), NOW);
+  const reset = Date.UTC(2026, 9, 1);
+  const estimated = seat({ spend: window5h(0.41, reset, 'estimated', 300_000) });
+  assert.deepEqual([estimated.tier, estimated.windows], ['keys P1', [['spend 41%', 'Oct 1 00:00', 'estimated']]], "the tier word is the engine's, the cell the spend window");
+  assert.deepEqual(seat({ spend: window5h(0.41, reset, 'head') }).windows, [['spend 41%', 'Oct 1 00:00']], "a reset a head named reads as a plan window's");
+  assert.deepEqual(seat({ spend: window5h(0.41, null, 'estimated') }).windows, [['spend 41%', 'no reset', 'estimated']]);
+  assert.deepEqual(seat({ spend: window5h(0.41, reset, 'estimated') }, [0, 1, 0]).windows, [['spend 41%', 'Oct 1 00:00', 'estimated']], 'a pool that does not prefer subscriptions files the seat in group 0');
+  assert.deepEqual(seat({}).windows, [['not reported'], ['not reported'], ['not reported']], 'a share expired at its reset leaves no entry, so the record reads an oauth candidate with no window');
+  assert.equal(d.WALK_KEY.spend, 'spend', "the candidate leaf's windows table labels the entry");
+  assert.deepEqual(d.candidateCells(candidate({}), record(), NOW).windows.length, 3, 'a plan candidate keeps its three window cells');
+});
+
+test("a usage-based candidate's Pace cell reads its remaining allowance, and the header passes over it to a subscription candidate", () => {
+  // The engine's paid-source pace: no hours, no window, no burn, and the remaining allowance as the score.
+  const paid = { burn: 0, deadline: null, end: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
+  const seat = candidate({ accountId: 'seat', pace: paid, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: { spend: window5h(0.41, Date.UTC(2026, 9, 1), 'estimated') } });
+  const cells = d.candidateCells(seat, record(), NOW);
+  assert.deepEqual(
+    [cells.windows, cells.pace, cells.paceTitle],
+    [[['spend 41%', 'Oct 1 00:00', 'estimated']], '100% left', '100% of its allowance left. Scored by the remaining share alone, with no division by hours.'],
+    'the one spend cell and the paid-source pace at tier [0, 1, 0]',
+  );
+  const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
+  assert.equal(d.paceHeader(record({ candidates: [seat, plan] })), 'Spare rate, 7-day per hour', 'the seat listed first names no window, so the next subscription candidate heads the column');
 });

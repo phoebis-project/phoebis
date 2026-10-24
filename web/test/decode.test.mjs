@@ -48,7 +48,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['canceled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pool', 'requests', 'revision', 'routingEnabled', 'slowDown', 'status', 'subscription', 'usage', 'windows'],
+    ['canceled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'planEndedAt', 'pool', 'requests', 'revision', 'routingEnabled', 'slowDown', 'spend', 'status', 'subscription', 'usage', 'usageBased', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
@@ -77,12 +77,58 @@ test("an account decodes its slow-down and each window's demand, and an api_key 
   assert.deepEqual([older.slowDown, older.windows[0].demand], [null, null], 'a row without the members reads null');
 });
 
-test('an account decodes its cancelled flag and its saved end', () => {
+test('an account decodes its canceled flag and its saved end', () => {
   const body = fixture('account');
   const canceled = d.decodeAccount({ ...body, canceled: true, subscription: { ...body.subscription, ends_at: 5_000 } });
   assert.deepEqual([canceled.canceled, canceled.subscription.endsAt], [true, d.iso(5_000)]);
   const { canceled: _c, ...unflagged } = body;
   assert.equal(d.decodeAccount(unflagged).canceled, false, 'a row the wire answers no flag for reads uncanceled');
+});
+
+test('a usage-based seat decodes its class and its spend window, and every other row reads neither', () => {
+  const rows = fixture('accounts').accounts;
+  const wire = rows.find((r) => r.id === 'usage-seat');
+  const seat = d.decodeAccount(wire);
+  assert.equal(seat.usageBased, true);
+  assert.deepEqual(seat.spend, {
+    amounts: { currency: 'USD', exponent: 2, limitMinor: 250_000, polledAt: d.iso(wire.spend.amounts.polled_at), usedMinor: 102_500 },
+    observedAt: d.iso(wire.spend.observed_at),
+    resetSource: 'estimated',
+    resetsAt: d.iso(wire.spend.resets_at),
+    utilization: 0.4,
+  });
+  for (const id of ['business', 'direct']) {
+    const other = d.decodeAccount(rows.find((r) => r.id === id));
+    assert.deepEqual([other.usageBased, other.spend], [false, null], `${id} is no usage-based seat`);
+  }
+  const { spend: _s, usage_based: _u, ...older } = wire;
+  const unread = d.decodeAccount(older);
+  assert.deepEqual([unread.usageBased, unread.spend], [false, null], 'a row from a router without the members reads neither');
+});
+
+test('a spend window decodes no limit, a reset a head named, and no amounts or share where the reading carries none', () => {
+  const wire = fixture('accounts').accounts.find((r) => r.id === 'usage-seat');
+  const spend = (patch) => d.decodeAccount({ ...wire, spend: { ...wire.spend, ...patch } }).spend;
+  assert.equal(spend({ amounts: { ...wire.spend.amounts, limit_minor: null } }).amounts.limitMinor, null, 'a body that sets no limit');
+  assert.equal(spend({ reset_source: 'head' }).resetSource, 'head', "the newest head's reset, ahead of now");
+  assert.equal(spend({ reset_source: 'later_word' }).resetSource, 'estimated', 'a source the console does not know reads as the estimate, which marks the reset as unconfirmed');
+  assert.deepEqual([spend({ amounts: null }).amounts, spend({ utilization: null }).utilization], [null, null], 'no polled row of the day, and no share');
+});
+
+test('an extra usage reading a head wrote decodes its amounts null rather than zero', () => {
+  const body = fixture('account');
+  const headed = d.decodeAccount({ ...body, extra_usage: { ...body.extra_usage, in_use: true, monthly_limit: null, used_credits: null } }).extraUsage;
+  assert.deepEqual([headed.enabled, headed.inUse, headed.monthlyLimitCredits, headed.usedCredits], [true, true, null, null]);
+  const polled = d.decodeAccount(body).extraUsage;
+  assert.deepEqual([polled.monthlyLimitCredits, polled.usedCredits], [body.extra_usage.monthly_limit, body.extra_usage.used_credits], 'a polled reading keeps its amounts');
+});
+
+test('an account decodes the instant its plan ended, and null while a plan stands', () => {
+  const body = fixture('account');
+  assert.equal(d.decodeAccount({ ...body, plan_ended_at: 1_700_000_000_000 }).planEndedAt, d.iso(1_700_000_000_000));
+  assert.equal(d.decodeAccount({ ...body, plan_ended_at: null }).planEndedAt, null, 'a plan that stands reads null');
+  const { plan_ended_at: _p, ...older } = body;
+  assert.equal(d.decodeAccount(older).planEndedAt, null, 'a row from a router without the member reads null');
 });
 
 test("a routing log candidate's term decodes its canceled flag", () => {
@@ -99,7 +145,7 @@ test("an account's windows read the router's lead over pace, null while the util
   const wire = (id) => body.windows.find((w) => w.id === id);
   assert.ok(typeof wire('five_hour').lead === 'number', 'the capture answers a lead on a sampled window');
   assert.equal(a.windows[0].lead, wire('five_hour').lead, 'the 5-hour window reads the lead the route answered');
-  assert.equal(a.fableWindow.lead, wire('seven_day_fable').lead, 'and so does the Fable week');
+  assert.equal(a.fableWindow.lead, wire('seven_day_fable').lead, 'and so does the 7-day Fable window');
   assert.ok(body.windows.every((w) => typeof w.lead === 'number'), 'every captured window carries one');
   const unread = d.decodeAccount({ ...body, windows: [{ ...wire('five_hour'), lead: null, utilization: null }] });
   assert.equal(unread.windows[0].lead, null, 'a window without a utilization reads no lead');
@@ -185,7 +231,7 @@ test('extra usage the provider switched off keeps the reason it gave', () => {
 
 test('the account list folds state, enabled, and cooldowns onto one status', () => {
   const list = fixture('accounts').accounts.map(d.decodeAccount);
-  assert.deepEqual(list.map((a) => a.id), ['business', 'direct'], 'sorted by label');
+  assert.deepEqual(list.map((a) => a.id), ['business', 'direct', 'usage-seat'], 'sorted by label');
   const direct = list.find((a) => a.id === 'direct');
   assert.equal(direct.kind, 'api_key');
   assert.equal(direct.subscription, null);
@@ -244,22 +290,23 @@ test("an account decodes its fast lane's two readings, a missing one as null, an
   assert.equal(d.decodeAccount({ ...body, fast_lane: null }).fastLane, null, 'no answer to a fast request yet');
 });
 
-test('a window both samplers wrote folds to one entry carrying the newer reading', () => {
+test("an account's windows read in page order with no fold, and the 7-day Fable window is the first seven_day_fable row", () => {
   const base = fixture('account');
-  const older = { id: '5h', observed_at: 1_000_000, resets_at: 4_600_000, utilization: 0.11 };
   const newer = { id: 'five_hour', observed_at: 1_900_000, resets_at: 4_600_000, utilization: 0.77 };
-  for (const windows of [[older, newer], [newer, older]]) {
-    const a = d.decodeAccount({ ...base, windows });
-    assert.deepEqual(a.windows.map((w) => w.id), ['5h'], 'the header and the poll spelling are one window');
-    assert.equal(a.windows[0].utilization, 0.77, 'the newer reading wins, whichever order the route sent the two in');
-    assert.equal(a.windows[0].observedAt, new Date(1_900_000).toISOString());
-  }
   const all = d.decodeAccount({
     ...base,
     windows: [{ id: 'fable', observed_at: 1_000_000, resets_at: 9, utilization: 0.1 }, newer, { id: 'seven_day', observed_at: 1_000_000, resets_at: 9, utilization: 0.4 }],
   });
-  assert.deepEqual(all.windows.map((w) => w.id), ['5h', '7d'], 'the fold draws in page order, not in the order the route sent');
+  assert.deepEqual(all.windows.map((w) => w.id), ['5h', '7d'], 'the windows draw in page order, not in the order the route sent');
   assert.equal(all.fableWindow.id, '7d_fable');
+  // The route answers one row per week, the newest reading of every source, so the console picks no newest of its own.
+  const twice = d.decodeAccount({
+    ...base,
+    windows: [{ id: 'seven_day_fable', observed_at: 1_000_000, resets_at: 9, utilization: 0.3 }, { id: 'seven_day_fable', observed_at: 1_900_000, resets_at: 9, utilization: 0.6 }],
+  });
+  assert.equal(twice.fableWindow.utilization, 0.3, 'the first in the drawn order, whatever its instant');
+  const included = d.decodeAccount({ ...base, windows: [{ id: 'seven_day_overage_included', observed_at: 1_000_000, resets_at: 9, utilization: 0.2 }] });
+  assert.deepEqual([included.windows.map((w) => w.id), included.fableWindow], [['seven_day_overage_included'], null], 'the overage-included key reads under its own key');
 });
 
 test('a quota history both samplers wrote merges into one series in time order', () => {
@@ -276,9 +323,25 @@ test('a quota history both samplers wrote merges into one series in time order',
   assert.equal(history[0].accountId, 'business');
 });
 
+test("a quota history reads the head's stored Fable key as the one 7-day Fable series, in time order", () => {
+  const history = d.decodeQuotaHistory({
+    account_id: 'business',
+    windows: [
+      { id: 'seven_day_overage_included', samples: [{ at: 2_000_000, utilization: 0.8 }] },
+      { id: 'seven_day_fable', samples: [{ at: 1_000_000, utilization: 0.2 }] },
+    ],
+  });
+  assert.deepEqual(history.map((h) => h.windowId), ['7d_fable'], "the ledger stores a head's Fable reading under seven_day_overage_included, and the trend reads one Fable series");
+  assert.deepEqual(history[0].samples.map((s) => [s.at, s.utilization]), [[d.iso(1_000_000), 0.2], [d.iso(2_000_000), 0.8]], 'the poll sample, then the later head sample');
+});
+
 test('the window key helper names the three known windows and keeps any other key as its own window', () => {
-  const keys = ['five_hour', '5h', 'seven_day', '7d', 'seven_day_fable', 'seven_day_overage_included', '7d_oi', 'fable', 'seven_day_opus'];
-  assert.deepEqual(keys.map(d.windowId), ['5h', '5h', '7d', '7d', '7d_fable', '7d_fable', '7d_fable', '7d_fable', 'seven_day_opus']);
+  const keys = ['five_hour', '5h', 'seven_day', '7d', 'seven_day_fable', '7d_oi', 'fable', 'seven_day_overage_included', 'seven_day_opus'];
+  assert.deepEqual(
+    keys.map(d.windowId),
+    ['5h', '5h', '7d', '7d', '7d_fable', '7d_fable', '7d_fable', 'seven_day_overage_included', 'seven_day_opus'],
+    'the route answers the 7-day Fable window under seven_day_fable alone, so the overage-included key is a window of its own',
+  );
 });
 
 test('an unknown weekly window decodes under its key after the known ones, in the account, its history and its cooldowns', () => {
@@ -301,7 +364,7 @@ test('an unknown weekly window decodes under its key after the known ones, in th
   });
   assert.deepEqual(history.map((h) => h.windowId), ['5h', 'seven_day_opus']);
   const captured = d.decodeAccount(base);
-  assert.deepEqual(captured.windows.map((w) => w.id), ['5h', '7d', 'seven_day_opus'], 'the captured account carries the opus week after the two shared ones; the Fable week sits apart');
+  assert.deepEqual(captured.windows.map((w) => w.id), ['5h', '7d', 'seven_day_opus'], 'the captured account carries the opus week after the two shared ones, the 7-day Fable window apart');
   const captive = captured.windows.find((w) => w.id === 'seven_day_opus');
   assert.deepEqual([captive.label, captive.periodHours], ['seven_day_opus', 168]);
 });
@@ -445,8 +508,8 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   );
   const marked = d.decodePool({ ...wire, estimated_24h: true, traffic_24h: [{ ...bucket, estimated: true }] });
   assert.deepEqual([marked.estimated24h, marked.traffic24h[0].estimated], [true, true], 'a fallback-priced day and bucket read estimated');
-  assert.deepEqual(p.members.map((m) => m.accountId), ['business', 'direct']);
-  assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible'], 'both members are servable in the captured pool');
+  assert.deepEqual(p.members.map((m) => m.accountId), ['business', 'direct', 'usage-seat']);
+  assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible', 'eligible'], 'every member is servable in the captured pool');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0, eligible: 'overage' }] }).members[0].eligible, 'overage');
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
 });
@@ -993,6 +1056,16 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   );
 });
 
+test("an attempt decodes its account's usage-based class, and an attempt from before the member reads false", () => {
+  const attempts = d.decodeRequestPage(fixture('requests')).requests.flatMap((r) => r.attempts);
+  const seat = attempts.filter((a) => a.accountId === 'usage-seat');
+  assert.ok(seat.length > 0 && seat.every((a) => a.usageBased === true), "the seat's attempts read the class");
+  assert.ok(attempts.filter((a) => a.accountId !== 'usage-seat').every((a) => a.usageBased === false), 'every other attempt reads none');
+  const wire = fixture('request').request;
+  const { usage_based: _u, ...older } = wire.attempts[0];
+  assert.equal(d.decodeRequest({ ...wire, attempts: [older] }).attempts[0].usageBased, false);
+});
+
 test('a request page carries the trail with zero-based attempt indexes and the cursor', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   assert.equal(page.nextCursor, null);
@@ -1357,11 +1430,20 @@ test('the burn series decodes each point with its instant, both token sides, and
   assert.ok(body.points.every((p) => 'model_week_share' in p && 'model_week_equivalent' in p), 'every point carries the model week beside the two shared windows');
   const week = d.decodeBurnPoint({ ...wire, model_week_equivalent: 0.25, model_week_share: 0.125 });
   assert.deepEqual([week.modelWeekEquivalent, week.modelWeekShare], [0.25, 0.125], "a bucket on a model with a week of its own reads that week's share and equivalent");
-  const direct = burn.points[burn.points.length - 1];
+  // The account grouping lists each account's points in turn, so a point is found by its group.
+  const directAt = body.points.findLastIndex((p) => p.group === 'direct');
+  const direct = burn.points[directAt];
   assert.deepEqual(
     [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.fiveHourEquivalent, direct.sevenDayEquivalent, direct.unit, direct.usd],
-    ['direct', null, null, 0, 0, 'usd', body.points.at(-1).usd],
+    ['direct', null, null, 0, 0, 'usd', body.points[directAt].usd],
     'an API-key point spends dollars, reads no window share and a zero 20x equivalent',
+  );
+  const seatAt = body.points.findIndex((p) => p.group === 'usage-seat' && p.usd > 0);
+  const seat = burn.points[seatAt];
+  assert.deepEqual(
+    [seat.group, seat.fiveHourShare, seat.sevenDayShare, seat.fiveHourEquivalent, seat.sevenDayEquivalent, seat.unit, seat.usd],
+    ['usage-seat', null, null, 0, 0, 'usd', body.points[seatAt].usd],
+    'a usage-based seat spends dollars as an API-key account does',
   );
   assert.ok(burn.points.every((p) => isIso(p.at)));
   // Every grouping but the account one answers the shares and the unit as null, and the equivalents under every one.
@@ -1393,7 +1475,7 @@ test('an attempt carries the selection trace with its skipped members as named o
   const [bare] = d.decodeRequest({ attempts: [{ index: 1, selection: null }] }).attempts;
   assert.equal(bare.selection, null, 'an attempt stored without a trace reads as none');
   // The fixture's trace has not had its cache read folded in, so the member reads as absent.
-  assert.deepEqual(detail.attempts[1].selection, { cacheRead: null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [{ accountId: 'direct', obstacle: 'ranked' }], strategy: 'pace', tier: [0, 0, 0] });
+  assert.deepEqual(detail.attempts[1].selection, { cacheRead: null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [{ accountId: 'direct', obstacle: 'ranked' }, { accountId: 'usage-seat', obstacle: 'ranked' }], strategy: 'pace', tier: [0, 0, 0] });
   assert.equal(detail.requestClass, null, 'the fixture request sent no class header');
   // No captured request carries a folded cache read, a move, a renewal or a class yet, so this row is built from
   // the backend's serde names: `SelectionTrace` and `Skipped` in the routing crate, `cache_read` from the ledger.
@@ -1575,19 +1657,19 @@ test("a refusal's record decodes its pin reason as not looked up", () => {
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 7, 'the two requests the route flagged refused leave the count');
+  assert.equal(all.requests, 8, 'the two requests the route flagged refused leave the count');
   assert.equal(all.refused, 2, 'the fold counts them under refused');
   assert.deepEqual({ ...all.refusals }, { client_contract: 1, guardrail_blocked: 1 }, 'and under their codes');
   assert.equal(all.rejected, 0, 'and under no outcome');
   assert.ok(!('client_contract' in all.errors) && !('guardrail_blocked' in all.errors), JSON.stringify({ ...all.errors }));
-  assert.equal(all.succeeded, 5);
+  assert.equal(all.succeeded, 6);
   assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
   assert.equal(all.incomplete, 1);
-  assert.equal(all.attempts, 8);
+  assert.equal(all.attempts, 9);
   assert.equal(all.failovers, 1);
-  assert.equal(all.tokens.cacheRead, 3500);
-  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 7);
-  assert.equal(all.cacheMissReasons.none, 6);
+  assert.equal(all.tokens.cacheRead, 4000);
+  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 8);
+  assert.equal(all.cacheMissReasons.none, 7);
   assert.equal(all.cacheMissReasons.pending, 1, 'a comparison still running counts under its own word');
   assert.equal(all.probes.ok, 0);
   assert.equal(all.probes.held, 0, 'a group folded from request rows counts no held probe');
@@ -2012,7 +2094,7 @@ test('a session fold groups on the classifier standing, a request the marker doe
   const captured = rows.find((r) => r.id === 'r-captured');
   const groups = d.foldGroups([call, captured, { ...captured, id: 'r-captured-2' }], 'classifier');
   assert.deepEqual(groups.map((g) => [g.key, g.requests]).sort(), [['-', 2], ['client', 1]], 'the keys the Classifier facet filters on');
-  assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'the label every route answers for the reserved value');
+  assert.equal(groups.find((g) => g.key === '-').label, 'none', 'the label the breakdown route answers for the reserved value under the classifier grouping, as the facet names it');
 });
 
 test('a folded bucket carries one group per key the page groups on', () => {
@@ -2058,7 +2140,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = inZone('UTC', () => d.foldGroups(rows, 'key'));
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 6], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 7], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created Oct 11, 2026, 12:15)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -2097,12 +2179,12 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 9, 'both pages folded');
+    assert.equal(requests.length, 10, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 18);
+    assert.equal(requests.length, 20);
   });
 });
 
@@ -2537,10 +2619,10 @@ test("a table's effective date reads as the calendar date the file names in ever
   }
 });
 
-test('an account patch encodes the cancelled flag and its end', () => {
+test('an account patch encodes the canceled flag and its end', () => {
   const end = '2026-10-19T09:15:00.000Z';
-  assert.deepEqual(d.encodeAccountPatch({ cancelled: true, subscriptionEndsAt: end }), { canceled: true, subscription_ends_at: Date.parse(end) }, 'the route takes milliseconds');
-  assert.deepEqual(d.encodeAccountPatch({ cancelled: false, subscriptionEndsAt: null }), { canceled: false, subscription_ends_at: null }, 'a cleared end is sent as null, not left out');
+  assert.deepEqual(d.encodeAccountPatch({ canceled: true, subscriptionEndsAt: end }), { canceled: true, subscription_ends_at: Date.parse(end) }, 'the route takes milliseconds');
+  assert.deepEqual(d.encodeAccountPatch({ canceled: false, subscriptionEndsAt: null }), { canceled: false, subscription_ends_at: null }, 'a cleared end is sent as null, not left out');
 });
 
 test('settings, pricing, pairing, quota, and usage decode', () => {

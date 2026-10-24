@@ -7,7 +7,7 @@ import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 
-/** The windows the router projects, the 5-hour, the 7-day and the Fable week, as the route serves them. */
+/** The windows the router projects, the 5-hour, the 7-day and the 7-day Fable window, as the route serves them. */
 const PROJECTED: readonly string[] = ['5h', '7d', '7d_fable'];
 
 /**
@@ -41,8 +41,26 @@ function fastLane(input: number, output: number, resetsInMs: number): Account['f
   return { input: reading(input), output: reading(output) };
 }
 
-/** How long before now spare's last poll read its windows, an instant its row, its snapshot and its samples share. */
-const SPARE_READ_AGO = 4 * DAY + 2 * HOUR;
+/**
+ * How long before now spare's last poll read its windows, an instant its row, its snapshot and its samples share. It
+ * lies an hour into the period each window stood in then, so the samples end inside it and every reset follows it.
+ */
+const SPARE_READ_AGO = 3 * DAY + 19 * HOUR;
+
+/** How long before now legacy's last clean poll read its windows. */
+const LEGACY_CLEAN_AGO = 2 * DAY + 3 * HOUR;
+/** When legacy's refresh was refused, at the poll slot whose acquisition ran it, which lapsed the credential. */
+export const LEGACY_LAPSED_AT = NOW - (2 * DAY + 2 * HOUR);
+/** The poll that read legacy's 5-hour window at its limit, an hour and twenty minutes before its last clean poll. */
+export const LEGACY_FIVE_HOUR_SPENT_AT = NOW - LEGACY_CLEAN_AGO - HOUR - 20 * MINUTE;
+
+/** How long before now reserve's last clean poll read its windows, before its 5-hour window reset. */
+const RESERVE_CLEAN_AGO = 35 * MINUTE;
+/** Reserve's last poll, the sixth 503 at the poll's five-minute cadence since the clean one. */
+const RESERVE_POLLED_AGO = 5 * MINUTE;
+
+/** The reset the router estimates while no head has named the spend window's: 00:00 UTC on the first of next month. */
+const SPEND_RESET_ESTIMATE = Date.UTC(new Date(NOW).getUTCFullYear(), new Date(NOW).getUTCMonth() + 1, 1);
 
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
@@ -103,7 +121,7 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+second@example.com',
     status: 'cooldown',
     routingEnabled: true,
-    // Cancelled, with the end the operator saved before the trial's own, so the pace reads the saved one.
+    // Canceled, with the end the operator saved before the trial's own, so the pace reads the saved one.
     canceled: true,
     // The 7-day reading crosses 80% between the story's 14:01:45 and 14:03 placements, so Pace takes secondary over
     // primary for the hour's sessions before the crossing and primary over it after.
@@ -149,9 +167,10 @@ export const ACCOUNTS: Account[] = ([
     routingEnabled: true,
     // Past every pool's ceiling at its reset, 104%.
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE, 40_000, 0.019), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
-    // The Fable week reads under all's ceiling, near enough for the morning's Fable session to project it past.
+    // The 7-day Fable window reads under all's ceiling, near enough for the morning's Fable session to project it past.
     fableWindow: win('7d_fable', 0.66, 1 * DAY + 18 * HOUR + 12 * MINUTE),
-    extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
+    // No polled row of the day carried the amounts, so the reading the heads wrote names its state alone.
+    extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: null, usedCredits: null },
     fastLane: null,
     // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
     // the day's requests are drawn. The raise stands in until then.
@@ -286,12 +305,73 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+spare@example.com',
     status: 'unpaired',
     routingEnabled: true,
-    windows: [win('5h', 0.4, -(3 * DAY + 20 * HOUR), SPARE_READ_AGO, null), win('7d', 0.02, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null)],
+    windows: [win('5h', 0.4, -(3 * DAY + 15 * HOUR), SPARE_READ_AGO, null), win('7d', 0.02, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null)],
     fableWindow: win('7d_fable', 0, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null),
     extraUsage: null,
     fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
+    cooldowns: [],
+  },
+  // A stand-by login in no pool, so no request reaches it, whose usage polls have failed on the endpoint's 503 since
+  // its last clean read. Its windows are that read's: the 5-hour one reset after it with no reading since, and the
+  // 7-day one still runs.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'reserve',
+    kind: 'oauth',
+    label: 'reserve',
+    email: 'operator+reserve@example.com',
+    status: 'ready',
+    routingEnabled: true,
+    windows: [win('5h', 0.71, -(20 * MINUTE), RESERVE_CLEAN_AGO, null), win('7d', 0.33, 2 * DAY + 6 * HOUR, RESERVE_CLEAN_AGO)],
+    fableWindow: null,
+    extraUsage: null,
+    fastLane: null,
+    credential: {
+      accessTokenExpiresAt: ahead(5 * HOUR + 10 * MINUTE),
+      lastError: null,
+      lastRefreshAt: ago(2 * HOUR + 50 * MINUTE),
+      quarantined: false,
+      refreshTokenExpiresAt: ahead(44 * DAY),
+    },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(90 * DAY), trialEndsAt: null, endsAt: null },
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
+    cooldowns: [],
+  },
+  // An Enterprise contract seat, which the router classes usage-based from its tier: no plan window, and its spend
+  // billed in dollars at API rates against the monthly limit. The poll read the amounts ten minutes ago and a head
+  // moved the share since, and with no head naming the reset yet the router estimates it.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'contract',
+    kind: 'oauth',
+    label: 'contract',
+    email: 'operator+contract@example.com',
+    status: 'ready',
+    routingEnabled: true,
+    usageBased: true,
+    windows: [],
+    fableWindow: null,
+    spend: {
+      amounts: { currency: 'USD', exponent: 2, limitMinor: 250_000, polledAt: ago(10 * MINUTE), usedMinor: 102_500 },
+      observedAt: ago(5 * MINUTE),
+      resetSource: 'estimated',
+      resetsAt: iso(SPEND_RESET_ESTIMATE),
+      utilization: 0.41,
+    },
+    extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 250_000, usedCredits: 102_500 },
+    overage: null,
+    fastLane: null,
+    credential: {
+      accessTokenExpiresAt: ahead(6 * HOUR + 40 * MINUTE),
+      lastError: null,
+      lastRefreshAt: ago(1 * HOUR + 20 * MINUTE),
+      quarantined: false,
+      refreshTokenExpiresAt: ahead(80 * DAY),
+    },
+    subscription: { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', plan: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
@@ -310,15 +390,30 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
   // The polls stop with the credential, so the snapshot keeps the reading from before the disconnect and no poll.
   if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(SPARE_READ_AGO), heldUntil: null, poll: null, status: 'success' };
   if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account, so pair it to load quota', fetchedAt: null, heldUntil: null, poll: null, status: 'error' };
-  // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
+  // The polls after the last clean read failed on the endpoint's 503 until the slot whose acquisition ran the refresh
+  // the provider refused, and the poll asks a lapsed account nothing, so that attempt stands as the last, under the
+  // words the usage service records for a failed acquisition, while the windows of the last clean read still answer.
   if (a.id === 'legacy') {
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,
       error: null,
-      fetchedAt: ago(2 * DAY + 3 * HOUR),
+      fetchedAt: ago(LEGACY_CLEAN_AGO),
       heldUntil: null,
-      poll: { backoffSince: null, lastAttemptAt: ago(3 * MINUTE), lastCleanAt: ago(2 * DAY + 3 * HOUR), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+      poll: { backoffSince: null, lastAttemptAt: iso(LEGACY_LAPSED_AT), lastCleanAt: ago(LEGACY_CLEAN_AGO), lastError: 'acquire: account has to be paired again', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+      status: 'success',
+    };
+  }
+  // A 503 is a passing fault, neither a 429 nor a 401, so the poll holds nothing back and asks again at its next slot,
+  // while the windows of the last clean read still answer.
+  if (a.id === 'reserve') {
+    return {
+      ...QUOTA_SNAPSHOT_SAMPLE,
+      accountId: a.id,
+      error: null,
+      fetchedAt: ago(RESERVE_CLEAN_AGO),
+      heldUntil: null,
+      poll: { backoffSince: null, lastAttemptAt: ago(RESERVE_POLLED_AGO), lastCleanAt: ago(RESERVE_CLEAN_AGO), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
       status: 'success',
     };
   }
@@ -379,18 +474,31 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
 const HISTORY_SEED: Partial<Record<WindowId, number>> = { '5h': 1, '7d': 2, '7d_fable': 3 };
 
 /**
- * Where an account's samples end: at its last reading, legacy's last clean poll, since every poll after it failed,
- * spare's reading before its disconnect, and the rest now.
+ * Where an account's samples end: at its last reading, the last clean poll where every poll after it failed (legacy's
+ * and reserve's), spare's reading before its disconnect, and the rest now.
  */
 const samplesEndOf = (account: (typeof ACCOUNTS)[number]): number => {
-  const last = account.id === 'legacy' ? account.usage?.poll?.lastCleanAt : account.id === 'spare' ? account.usage?.fetchedAt : null;
+  const last = account.usage?.poll?.lastOutcome === 'failed' ? account.usage.poll.lastCleanAt : account.id === 'spare' ? account.usage?.fetchedAt : null;
   return last ? Date.parse(last) : NOW;
 };
+
+/**
+ * Legacy's 5-hour samples carry the readings its spent and cleared rows name: the poll at the limit, the polls after it
+ * at the limit too, and the last clean poll back under it at the reading its account answers.
+ */
+function carryLegacyEdges(account: (typeof ACCOUNTS)[number], w: RateLimitWindow, samples: QuotaSample[]): QuotaSample[] {
+  if (account.id !== 'legacy' || w.id !== '5h') return samples;
+  const clean = samplesEndOf(account);
+  return samples.map((x) => {
+    const at = Date.parse(x.at);
+    return at === clean ? { ...x, utilization: w.utilization } : at >= LEGACY_FIVE_HOUR_SPENT_AT && at < clean ? { ...x, utilization: 1 } : x;
+  });
+}
 
 export const QUOTA_HISTORY: QuotaHistory[] = ACCOUNTS.flatMap((account, i) =>
   [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => ({
     accountId: account.id,
     windowId: w.id,
-    samples: sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(account)),
+    samples: carryLegacyEdges(account, w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(account))),
   })),
 );

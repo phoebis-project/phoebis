@@ -119,6 +119,10 @@ const SHOT_MS = 1_500;
 const failures = [];
 /** Printed at the end: the numbers behind the geometry checks, so a run can be read as a measurement. */
 const measurements = [];
+/** Per page, the login screens the pass loads on purpose, each of which asks /admin/session without a cookie first. */
+const loginLoads = new WeakMap();
+/** The pages whose clock a login paused at the origin, where a later login sets the time back instead. */
+const clocked = new WeakSet();
 // A tile repainted in part can anti-alias a rounded corner a shade apart from one painted whole, and which
 // happens depends on when the paints land, so every raster is a whole one.
 const RASTER = ['--disable-partial-raster'];
@@ -147,14 +151,15 @@ async function openPage(on) {
   const opened = await context.newPage();
   // The first load asks /admin/session without a cookie and gets the 401 that shows the login screen; Chromium
   // logs that answer as a failed resource, and it is the one console error a page expects. Chromium puts the
-  // path in the message or in the location depending on how it reports the failure, so both are searched. Only
-  // the first such line is excused: a session lost mid-pass would log the same one, and that is a failure.
+  // path in the message or in the location depending on how it reports the failure, so both are searched. One such
+  // line is excused per login screen the pass loads on purpose: a session lost mid-pass would log the same one, and
+  // that is a failure.
   let anonymous = 0;
   const expectedAnonymous = (message) => {
     const reported = `${message.text()} ${message.location()?.url ?? ''}`;
     if (!/\/admin\/session\b/.test(reported) || !/\b401\b/.test(reported)) return false;
     anonymous += 1;
-    return anonymous === 1;
+    return anonymous <= (loginLoads.get(opened) ?? 0);
   };
   opened.on('console', (m) => {
     if (m.type() === 'error' && !expectedAnonymous(m)) failures.push(`console error on ${opened.url()}: ${m.text()}`);
@@ -562,13 +567,13 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
  * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
- * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's sixteen
- * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to sixteen, the fold
- * badge draws its dashed border, and its list opens under it inside the window with all sixteen, closing on Escape with
- * the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool serves
- * later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first, requires
- * that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line, never
- * the unavailable one.
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's seventeen
+ * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to seventeen, the fold
+ * badge draws its dashed border, and its list opens under it inside the window with all seventeen, closing on Escape
+ * with the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool
+ * serves later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first,
+ * requires that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line,
+ * never the unavailable one.
  */
 async function attentionLine(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line ${what}`);
@@ -610,7 +615,7 @@ async function attentionLine(theme) {
   const texts = read.badges.map((b) => b.text);
   const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '16 need attention' || texts.length + folded !== 16 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's sixteen items folded behind a dashed "+N more" at 1280 by 800`);
+    if (read.lead !== '17 need attention' || texts.length + folded !== 17 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's seventeen items folded behind a dashed "+N more" at 1280 by 800`);
     else {
       await attentionList(theme);
       await attentionLineNarrow(theme);
@@ -659,7 +664,7 @@ async function attentionList(theme) {
   measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
   if (!read) say('did not open');
   else {
-    if (read.badges !== 16 || read.rows !== 16 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's sixteen items one per row`);
+    if (read.badges !== 17 || read.rows !== 17 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's seventeen items one per row`);
     if (!read.inside) say('draws a badge past its box');
     if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
     if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
@@ -736,9 +741,11 @@ async function attentionLineNarrow(theme) {
 }
 
 /**
- * The dashboard's stat grid at the pass's viewport and at 400 by 900: all five tiles drawn, wrapping as the grid's
- * columns let them, and none past the grid's right edge. The tiles and the rows they fill go to the measurements at
- * both widths, and the viewport is the pass's again after.
+ * The dashboard's stat grid at the pass's viewport, at 1024 by 768 inside its two-column band and at 400 by 900: all
+ * five tiles drawn, wrapping as the grid's columns let them, none past the grid's right edge, no tile's figure wider
+ * than the tile's content box, since the cost tile's figure keeps its window's name on one line, and the fifth tile
+ * across the grid's whole width. The tiles, the rows they fill, the fifth tile's width against the grid's and any
+ * figure past its tile go to the measurements at each width, and the viewport is the pass's again after.
  */
 async function statGrid(theme) {
   const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
@@ -747,28 +754,131 @@ async function statGrid(theme) {
       const grid = document.querySelector('.stat-grid');
       if (!grid) return null;
       const right = grid.getBoundingClientRect().right;
-      const tiles = [...grid.querySelectorAll(':scope > .stat')].map((t) => t.getBoundingClientRect());
-      return { past: tiles.filter((t) => t.right > right + 0.5).length, rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length };
+      const cells = [...grid.querySelectorAll(':scope > .stat')];
+      const tiles = cells.map((t) => t.getBoundingClientRect());
+      // A figure's runs are read off a range over the value, since a nowrap figure wider than its tile spills past the
+      // value's own box rather than widening it.
+      const wide = cells.flatMap((t) => {
+        const value = t.querySelector('.stat__value');
+        if (!value) return [];
+        const s = getComputedStyle(t);
+        const inner = t.getBoundingClientRect().right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth);
+        const range = document.createRange();
+        range.selectNodeContents(value);
+        const figure = range.getBoundingClientRect().right;
+        return figure > inner + 0.5 ? [{ figure: Math.round(figure * 10) / 10, inner: Math.round(inner * 10) / 10, label: t.querySelector('.stat__label')?.textContent ?? '' }] : [];
+      });
+      const round = (n) => Math.round(n * 10) / 10;
+      return { fifth: tiles[4] ? round(tiles[4].width) : null, past: tiles.filter((t) => t.right > right + 0.5).length, row: round(grid.clientWidth), rows: new Set(tiles.map((t) => Math.round(t.top))).size, tiles: tiles.length, wide };
     });
   try {
-    for (const width of [viewport.width, 400]) {
+    for (const size of [viewport, { height: 768, width: 1024 }, { height: 900, width: 400 }]) {
+      const { width } = size;
       if (width !== viewport.width) {
-        await page.setViewportSize({ height: 900, width });
+        await page.setViewportSize(size);
         await settle();
       }
       const grid = await read();
-      measurements.push(`${theme} / stat grid at ${width} px: ${grid?.tiles ?? 0} tiles over ${grid?.rows ?? 0} rows`);
+      measurements.push(`${theme} / stat grid at ${width} px: ${grid?.tiles ?? 0} tiles over ${grid?.rows ?? 0} rows, the fifth ${grid?.fifth ?? 'absent'} of ${grid?.row ?? 0} px, figures past their tile ${JSON.stringify(grid?.wide ?? [])}`);
       const say = (what) => failures.push(`${theme} /: at ${width} px the stat grid ${what}`);
       if (!grid) say('is not drawn');
       else {
         if (grid.tiles < 5) say(`draws ${grid.tiles} tiles, not five`);
         if (grid.past > 0) say(`draws ${grid.past} tiles past its right edge`);
+        if (grid.fifth === null || Math.abs(grid.fifth - grid.row) > 1) say(`draws the fifth tile ${grid.fifth} px wide, not across its ${grid.row} px row`);
+        for (const w of grid.wide) say(`draws the ${w.label} tile's figure to ${w.figure} px, past its content's right edge at ${w.inner} px`);
       }
     }
   } finally {
     await page.setViewportSize(viewport);
     await settle();
   }
+}
+
+/**
+ * The Dashboard's five tiles at 1280 by 800 and 1440 by 900: four to a row, the fourth a quarter of the row (the row's
+ * width less its three gaps, over four, within 1 px) on the first tile's top edge, and the fifth opening a row of its
+ * own at the first tile's left edge across the row's whole width, so no tile sits alone at a quarter width. Both widths
+ * go to the measurements, and the viewport is the pass's again after.
+ */
+async function dashboardTiles(theme) {
+  const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
+  const read = () =>
+    page.evaluate(() => {
+      const grid = document.querySelector('.stat-grid');
+      if (!grid) return null;
+      const s = getComputedStyle(grid);
+      const row = grid.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+      const box = (t) => (t ? { left: Math.round(t.getBoundingClientRect().left * 10) / 10, top: Math.round(t.getBoundingClientRect().top), width: Math.round(t.getBoundingClientRect().width * 10) / 10 } : null);
+      const tiles = [...grid.querySelectorAll(':scope > .stat')];
+      return { first: box(tiles[0]), fifth: box(tiles[4]), fourth: box(tiles[3]), gap: parseFloat(s.columnGap) || 0, modifier: grid.classList.contains('stat-grid--day'), row: Math.round(row * 10) / 10, tiles: tiles.length };
+    });
+  try {
+    for (const size of [
+      { height: 800, width: 1280 },
+      { height: 900, width: 1440 },
+    ]) {
+      await page.setViewportSize(size);
+      await settle();
+      const grid = await read();
+      measurements.push(`${theme} / Dashboard tiles at ${size.width} by ${size.height} ${JSON.stringify(grid)}`);
+      const say = (what) => failures.push(`${theme} /: at ${size.width} by ${size.height} the Dashboard tiles ${what}`);
+      if (!grid || grid.tiles !== 5 || !grid.fourth || !grid.fifth) {
+        say(`draw ${JSON.stringify(grid)}, not five tiles`);
+        continue;
+      }
+      const quarter = (grid.row - 3 * grid.gap) / 4;
+      if (Math.abs(grid.fourth.width - quarter) > 1) say(`draw the fourth tile ${grid.fourth.width} px wide, not a quarter of the ${grid.row} px row (${Math.round(quarter * 10) / 10} px)`);
+      if (Math.abs(grid.fifth.width - grid.row) > 1) say(`draw the fifth tile ${grid.fifth.width} px wide, not the ${grid.row} px row`);
+      for (const what of compare(grid.fourth, grid.first, ['top'], 'the fourth tile against the first')) say(what);
+      for (const what of compare(grid.fifth, grid.first, ['left'], 'the fifth tile against the first')) say(what);
+    }
+  } finally {
+    await page.setViewportSize(viewport);
+    await settle();
+  }
+}
+
+/** The Refused tile's hover. The pass reads no module of the console, so it spells the page's sentence here. */
+const REFUSED_TITLE =
+  "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
+/** The Requests tile's hover, the neighbor the Refused tile's is read beside. */
+const REQUESTS_TITLE = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
+
+/**
+ * The Dashboard's tile words beside their neighbors: the Estimated cost, 24h tile's figure and note under native, its
+ * subscription line reading the 7-day window (`{share} of 20x 7-day`, or `0%` with no window named on a day without
+ * subscription cost, as `fmtEquivalent` draws a zero share) over its word and its note a figure per hour, and the
+ * Refused, 24h tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two labels in
+ * one type.
+ */
+async function dashboardTileWords(theme) {
+  const say = (what) => failures.push(`${theme} /: ${what}`);
+  const read = await page.evaluate(() => {
+    const tiles = [...document.querySelectorAll('.stat-grid > .stat')];
+    const tile = (label) => tiles.find((t) => t.querySelector('.stat__label')?.textContent === label) ?? null;
+    const label = (t) => {
+      const el = t?.querySelector('.stat__label');
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { color: s.color, family: s.fontFamily, size: s.fontSize, weight: s.fontWeight };
+    };
+    const cost = tile('Estimated cost, 24h');
+    const refused = tile('Refused, 24h');
+    const requests = tile('Requests, 24h');
+    return {
+      cost: { lines: [...(cost?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), note: cost?.querySelector('.stat__note')?.textContent ?? null },
+      refused: { label: label(refused), title: refused?.getAttribute('title') ?? null },
+      requests: { label: label(requests), title: requests?.getAttribute('title') ?? null },
+    };
+  });
+  measurements.push(`${theme} / Dashboard tile words ${JSON.stringify(read)}`);
+  const subscription = read.cost.lines.find(([, word]) => word === 'subscription');
+  if (!/^~?(\d[\d.]*% of 20x 7-day|0%)$/.test(subscription?.[0] ?? '')) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription ?? null)}, not a share of the 20x 7-day window or 0%`);
+  if (!/^(~?(\d[\d.]*% of 20x 7-day|0%)|\$[\d,.]+ billed) per hour$/.test(read.cost.note ?? '')) say(`the Estimated cost, 24h tile's note reads ${JSON.stringify(read.cost.note)}`);
+  if (read.refused.title !== REFUSED_TITLE) say(`the Refused, 24h tile's hover reads ${JSON.stringify(read.refused.title)}`);
+  if (read.requests.title !== REQUESTS_TITLE) say(`the Requests, 24h tile's hover reads ${JSON.stringify(read.requests.title)}`);
+  for (const what of compare(read.refused.label, read.requests.label, ['color', 'family', 'size', 'weight'], "the Refused, 24h tile's label against the Requests, 24h tile's")) say(what);
 }
 
 /** The top bar's controls under the one control height: "Log out" and the theme control at 32 px, one top edge. */
@@ -1599,6 +1709,61 @@ async function poolBurnAverageHint(theme) {
 }
 
 /**
+ * Two hints of the pool dialog that name a value set elsewhere: the Wind down hint in the expert view's Overage and
+ * plan end group reads the canceled subscription it acts before, and the Retention hint in the Body capture group names
+ * the limit with the Settings page's About card that shows it. Each holds the type, the ink and the left edge of the
+ * field hint beside it in its group, the Return dwell hint and the capture switch's hint.
+ */
+async function poolEngineHints(theme) {
+  const say = (what) => failures.push(`${theme} /pools: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const read = (group, labels) =>
+    dialog.evaluate(
+      (el, [name, wanted]) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === name);
+        const hintOf = (text) => {
+          const field = [...(section?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
+          const hint = field?.querySelector(':scope > .field__hint');
+          if (!field || !hint || section.hidden) return null;
+          const s = getComputedStyle(hint);
+          // The words a sighted reader sees, without a page link's note to a screen reader that it opens a new tab.
+          const shown = hint.cloneNode(true);
+          for (const note of shown.querySelectorAll('.sr-only')) note.remove();
+          return { color: s.color, font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, left: Math.round(hint.getBoundingClientRect().left - field.getBoundingClientRect().left), text: shown.textContent ?? '' };
+        };
+        return Object.fromEntries(Object.entries(wanted).map(([key, text]) => [key, hintOf(text)]));
+      },
+      [group, labels],
+    );
+  try {
+    await expertView(true);
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await railEntry(dialog, 'Overage and plan end').click();
+  } catch (error) {
+    say(`the pool dialog never reached its Overage and plan end group (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
+    return;
+  }
+  await settle();
+  const windDown = await read('Overage and plan end', { dwell: 'Return dwell (s)', windDown: 'Wind down (min)' });
+  await railEntry(dialog, 'Body capture').click();
+  await settle();
+  const retention = await read('Body capture', { capture: 'Capture request and response bodies', retention: 'Retention (hours)' });
+  measurements.push(`${theme} /pools engine hints ${JSON.stringify({ ...windDown, ...retention })}`);
+  if (!windDown.windDown?.text.startsWith('This long before a canceled subscription ends, ')) say(`the Wind down hint reads ${JSON.stringify(windDown.windDown?.text ?? null)}, not naming the canceled subscription`);
+  if (!/^At most the bootstrap's body capture limit, \d+ hours here, shown on the Settings page's About card\.$/.test(retention.retention?.text ?? '')) say(`the Retention hint reads ${JSON.stringify(retention.retention?.text ?? null)}, not naming the limit and the About card`);
+  for (const finding of [
+    ...compare(windDown.windDown, windDown.dwell, ['color', 'font', 'left'], 'the Wind down hint against the Return dwell hint beside it'),
+    ...compare(retention.retention, retention.capture, ['color', 'font', 'left'], "the Retention hint against the capture switch's hint beside it"),
+  ]) say(finding);
+  await closeByEscape(dialog, `${theme} /pools engine hints dialog`, say);
+  await expertView(false).catch(() => {});
+  await atRest();
+}
+
+/**
  * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
  * pill against a session-affinity pill, the overage grace field against the window ceiling field, and a warm-sessions
  * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding and slow-down preview
@@ -1813,6 +1978,28 @@ async function poolFormerPins(theme) {
     for (const what of compare(c.line, c.label, ['color'], `the ${c.name} card's line against its labels`)) say(what);
     for (const what of compare(c.line, read.tableSub, ['color', 'fontSize'], `the ${c.name} card's line against the serving table's sub line`)) say(what);
   }
+}
+
+/**
+ * The contract pool's one member reads `metered P1` in its serving table's Tier cell, the word and the type of the all
+ * pool's API-key member beside it in the same tier, read in the cell's text, face, size, weight and ink. Only the
+ * mock's story holds the contract pool.
+ */
+async function servingTierWord(theme) {
+  if (!mock) return;
+  const read = await page.evaluate(() => {
+    const cellOf = (pool, account) => {
+      const row = [...document.querySelectorAll(`[id="${pool}"] .serving tbody tr`)].find((tr) => tr.querySelector('a')?.textContent?.trim() === account);
+      const cell = row?.querySelector('td.pool__prio');
+      if (!cell) return null;
+      const s = getComputedStyle(cell);
+      return { color: s.color, family: s.fontFamily, size: s.fontSize, text: cell.textContent?.trim() ?? '', weight: s.fontWeight };
+    };
+    return { contract: cellOf('contract', 'contract'), neighbor: cellOf('all', 'Overflow workspace') };
+  });
+  measurements.push(`${theme} /pools serving tier word ${JSON.stringify(read)}`);
+  failures.push(...compare(read.contract, read.neighbor, ['color', 'family', 'size', 'text', 'weight'], `${theme} /pools: the contract member's Tier cell against the all pool's API-key member's`));
+  if (read.contract && read.contract.text !== 'metered P1') failures.push(`${theme} /pools: the contract member's Tier cell reads ${JSON.stringify(read.contract.text)}, not metered P1`);
 }
 
 /**
@@ -2827,7 +3014,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
-  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Admin secret'];
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Admin secret'];
   if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
   const storage = about.types[about.labels.indexOf('Storage path')];
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
@@ -2840,7 +3027,7 @@ async function settingsOrder(theme) {
 }
 
 /**
- * About's two retention lines drawn in the style of the lines around them: the label's type and ink, the value's ink
+ * About's three retention lines drawn in the style of the lines around them: the label's type and ink, the value's ink
  * and the row's height of the Storage path line above, and the label's and the value's type and ink of the Admin secret
  * line below. A path line draws its value in the mono face, so the value's type is compared with the Admin secret
  * line's, whose value is not a path. In the 720 px strip and at 400 px the types and inks are read again, with the
@@ -2869,6 +3056,7 @@ async function settingsRetentionLines(theme) {
     const round = (px) => Math.round(px * 10) / 10;
     return {
       admin: at('Admin secret'),
+      bodyCapture: at('Body capture'),
       labelColumn: round(Math.max(0, ...[...(list?.querySelectorAll('dt') ?? [])].map((dt) => dt.getBoundingClientRect().width))),
       list: list ? round(list.getBoundingClientRect().width) : null,
       requests: at('Requests, samples and the routing log'),
@@ -2878,7 +3066,7 @@ async function settingsRetentionLines(theme) {
   });
   const read = await reading();
   measurements.push(`${theme} /settings retention lines ${JSON.stringify(read)}`);
-  for (const [name, row] of [['requests', read.requests], ['rollups', read.rollups]]) {
+  for (const [name, row] of [['requests', read.requests], ['rollups', read.rollups], ['body capture', read.bodyCapture]]) {
     failures.push(...compare(row, read.storage, ['height', 'labelInk', 'labelType', 'valueInk'], `${theme} /settings: About's ${name} retention line against Storage path`));
     failures.push(...compare(row, read.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings: About's ${name} retention line against Admin secret`));
   }
@@ -2889,7 +3077,7 @@ async function settingsRetentionLines(theme) {
     await settle();
     const narrow = await reading();
     measurements.push(`${theme} /settings retention lines at ${width} px ${JSON.stringify(narrow)}`);
-    for (const [name, row] of [['requests', narrow.requests], ['rollups', narrow.rollups]]) {
+    for (const [name, row] of [['requests', narrow.requests], ['rollups', narrow.rollups], ['body capture', narrow.bodyCapture]]) {
       failures.push(...compare(row, narrow.admin, ['labelInk', 'labelType', 'valueInk', 'valueType'], `${theme} /settings at ${width} px: About's ${name} retention line against Admin secret`));
     }
     if (narrow.list === null || narrow.labelColumn > narrow.list / 2 + 0.5) {
@@ -3039,6 +3227,68 @@ async function windowBarLines(theme, path) {
     if (c.chip.right > c.share.left) say(`${kind} ends at ${c.chip.right}px, past the share starting at ${c.share.left}px`);
     if (c.share.right > c.bar.right + 0.5) say(`${kind} pushes the share to ${c.share.right}px, past the bar's ${c.bar.right}px`);
     if (c.neighbors.some((top) => Math.abs(top - c.meter) > 0.5)) say(`${kind} drops its bar's meter to ${c.meter}px, where its neighbors' stand at ${c.neighbors.join(', ')}px`);
+  }
+}
+
+/**
+ * The usage-based seat's spend bar in the window triple's place on the dashboard's account cards and the Accounts list,
+ * at 1280 by 800 and at 400 by 800: its row as wide as a window triple's row beside it, from the same left edge where
+ * the two share a column, its head reading the dollars spent of the limit, and its reset on one line inside the bar
+ * with the estimate's word in the muted ink and the estimate's sentence on hover. The viewport returns to the pass's
+ * 1280 by 800. Only the mock's story holds a usage-based seat.
+ */
+async function spendBarLines(theme, path) {
+  if (!mock) return;
+  try {
+    for (const width of [1280, 400]) {
+      const say = (what) => failures.push(`${theme} ${path}: at ${width} by 800 ${what}`);
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      const read = await page.evaluate(() => {
+        const box = (el) => {
+          const r = el.getBoundingClientRect();
+          return { left: Math.round(r.left * 10) / 10, width: Math.round(r.width * 10) / 10 };
+        };
+        const lines = (el) => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
+        };
+        const row = document.querySelector('.wbars--1');
+        const bar = row?.querySelector('.wbar--spend');
+        const reset = bar?.querySelector('.wbar__reset');
+        if (!row || !bar || !reset) return null;
+        const spend = box(row);
+        const triples = [...document.querySelectorAll('.wbars--3')].map(box);
+        const triple = triples.find((t) => Math.abs(t.left - spend.left) < 0.5) ?? triples[0] ?? null;
+        return {
+          bar: Math.round(bar.getBoundingClientRect().width * 10) / 10,
+          column: triple !== null && Math.abs(triple.left - spend.left) < 0.5,
+          head: bar.querySelector('.wbar__head')?.textContent?.trim() ?? '',
+          lines: lines(reset),
+          muted: reset.querySelector('.muted')?.textContent?.trim() ?? null,
+          reset: reset.textContent?.trim() ?? '',
+          resetWidth: Math.round(reset.scrollWidth),
+          spend,
+          title: reset.getAttribute('title') ?? '',
+          triple,
+        };
+      });
+      measurements.push(`${theme} ${path} spend bar at ${width} by 800 ${JSON.stringify(read)}`);
+      if (read === null) {
+        say("the story's usage-based seat draws no spend bar");
+        continue;
+      }
+      failures.push(...compare(read.spend, read.triple, read.column ? ['left', 'width'] : ['width'], `${theme} ${path}: at ${width} by 800 the spend bar's row against a window triple's`));
+      if (read.head !== 'Spend$1,025.00 of $2,500.00') say(`the spend bar's head reads ${JSON.stringify(read.head)}, not the seat's $1,025.00 of $2,500.00`);
+      if (!/^resets in .+, estimated$/.test(read.reset) || read.muted !== 'estimated') say(`the spend bar's reset reads ${JSON.stringify(read.reset)} with ${JSON.stringify(read.muted)} muted, not the estimated reset`);
+      if (!read.title.endsWith('(estimated: no reset header has been seen for this window yet)')) say(`the spend bar's reset hover reads ${JSON.stringify(read.title)}`);
+      if (read.lines !== 1) say(`the spend bar's reset wraps over ${read.lines} lines`);
+      if (read.resetWidth > read.bar + 0.5) say(`the spend bar's reset needs ${read.resetWidth}px of its ${read.bar}px bar`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
   }
 }
 
@@ -3372,6 +3622,27 @@ async function quotaLaneChips(theme) {
   if (mock && share === null) say('the current period draws no now line');
   else if (share !== null && !Number.isFinite(share)) say(`the now line's calc carries no finite share, reading ${share}`);
   else if (line !== null && Math.abs(line.at - line.want) > 1) say(`the now line stands at ${line.at}px, not at ${line.want}px where the chart's now share ${share} of primary's track lies`);
+  // The contract seat's lane carries one chip, its dollars left of the limit, from primary's chips' left edge, of their
+  // height and at least their column's width.
+  const spendChip = await page.evaluate(() => {
+    const chipOf = (name) => {
+      const lane = [...document.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === name);
+      const chips = [...(lane?.querySelectorAll('.tl-chip') ?? [])];
+      const el = chips[0];
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { chips: chips.length, height: Math.round(r.height * 10) / 10, left: Math.round(r.left * 10) / 10, text: el.textContent?.trim() ?? '', title: el.getAttribute('title') ?? '', width: Math.round(r.width * 10) / 10 };
+    };
+    return { contract: chipOf('contract'), primary: chipOf('primary') };
+  });
+  measurements.push(`${theme} /quota#quota-windows contract lane chip ${JSON.stringify(spendChip)}`);
+  if (mock) {
+    failures.push(...compare(spendChip.contract, spendChip.primary, ['height', 'left'], `${theme} /quota#quota-windows: the contract lane's chip against primary's`));
+    const c = spendChip.contract;
+    if (c && (c.chips !== 1 || c.text !== 'Spend limit $1,475.00 of $2,500.00 left')) say(`the contract lane draws ${c.chips} chips, the first reading ${JSON.stringify(c.text)}, not its one Spend limit chip`);
+    if (c && !c.title.endsWith('(estimated: no reset header has been seen for this window yet)')) say(`the contract lane's chip hover reads ${JSON.stringify(c.title)}, not the estimate's sentence`);
+    if (c && spendChip.primary && c.width < spendChip.primary.width - 0.5) say(`the contract lane's chip is ${c.width}px, narrower than primary's ${spendChip.primary.width}px column`);
+  }
 }
 
 /** The phone windows the timeline is read at: the 340 px nothing may scroll sideways from, and a common phone. */
@@ -3448,6 +3719,7 @@ async function timelinePhone(theme) {
           const chips = [...lane.querySelectorAll('.tl-chip')];
           return {
             chipRows: new Set(chips.map((chip) => Math.round(box(chip).top))).size,
+            chips: chips.length,
             chipsCut: chips.filter((chip) => chip.scrollWidth > chip.clientWidth).map((chip) => chip.textContent?.trim() ?? ''),
             chipsOut: chips.filter((chip) => !inside(box(chip), outer)).map((chip) => chip.textContent?.trim() ?? ''),
             columns: getComputedStyle(lane).gridTemplateColumns,
@@ -3500,7 +3772,9 @@ async function timelinePhone(theme) {
       if (lane.headBottom === null || lane.trackTop === null || lane.headBottom > lane.trackTop + 0.5) say(`${where} ${lane.name}'s head ends at ${lane.headBottom}px, below its track's top ${lane.trackTop}px, so the lane does not stack`);
       if (lane.chipsOut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsOut)} stand outside its lane`);
       if (lane.chipsCut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsCut)} are cut`);
-      if (where.startsWith('at 400 ') && lane.chipRows !== 2) say(`${where} ${lane.name}'s three chips take ${lane.chipRows} rows, where two share the first`);
+      // A usage-based seat's lane carries its one Spend limit chip, on one row.
+      if (where.startsWith('at 400 ') && lane.chips === 3 && lane.chipRows !== 2) say(`${where} ${lane.name}'s three chips take ${lane.chipRows} rows, where two share the first`);
+      if (lane.chips === 1 && lane.chipRows !== 1) say(`${where} ${lane.name}'s one chip takes ${lane.chipRows} rows`);
       if (lane.nowOnHead) say(`${where} the now line crosses ${lane.name}'s head`);
       if (lane.rasterOnHead) say(`${where} the day grid crosses ${lane.name}'s head`);
       if (got.now !== null && (lane.nowAt.length !== 1 || Math.abs(lane.nowAt[0] - lane.nowWant) > 1)) say(`${where} the now line crosses ${lane.name}'s track at ${JSON.stringify(lane.nowAt)}, not once at ${lane.nowWant}px where the chart's now share ${got.now.share} of the track lies`);
@@ -4012,7 +4286,7 @@ async function recentUnderShares(theme) {
   const read = await page.evaluate(() => {
     const wrap = document.querySelector('.dash-bottom .table-wrap');
     const costs = [...document.querySelectorAll('.dash__recent tbody tr')].map((tr) => tr.lastElementChild?.textContent?.trim() ?? '');
-    return wrap === null ? null : { client: wrap.clientWidth, scroll: wrap.scrollWidth, shares: costs.filter((text) => /\d% (5h|7d|Fable week)/.test(text)).length };
+    return wrap === null ? null : { client: wrap.clientWidth, scroll: wrap.scrollWidth, shares: costs.filter((text) => /\d% (5h|7d|7-day Fable)/.test(text)).length };
   });
   await unit.selectOption('native');
   await settle();
@@ -4365,7 +4639,7 @@ async function costUnpricedNote(theme) {
       say('under the unpriced switch no Cost by card draws the unpriced note');
       return;
     }
-    if (!/^\d+ groups? unpriced in \d+ buckets?, drawn as (a gap|gaps)$/.test(read.note.text)) say(`the ${read.card} card's note reads ${JSON.stringify(read.note.text)}`);
+    if (!/^(\d+ groups|[^,]+(, [^,]+){0,2}) unpriced in \d+ buckets?, drawn as (a gap|gaps)$/.test(read.note.text)) say(`the ${read.card} card's note reads ${JSON.stringify(read.note.text)}`);
     if (read.note.below !== true) say(`the ${read.card} card's note does not sit on a line under its subtitle's text`);
     for (const what of compare(read.note, read.subtitle, ['color', 'family', 'left', 'size', 'weight'], `the ${read.card} card's note against its subtitle`)) say(what);
   } finally {
@@ -4602,7 +4876,7 @@ async function analyticsColumns(theme) {
       ['History', 'History edited'],
       ['No previous', 'Previous message not found'],
       ['Unavailable', 'Unavailable'],
-      ['Not asked', 'Not requested'],
+      ['Not requested', 'Not requested'],
       ['Pending', 'Pending'],
     ];
     if (JSON.stringify(heads.slice(1, 10)) !== JSON.stringify(known)) failures.push(`${theme} /analytics: the misses headers read ${JSON.stringify(heads.slice(1, 10))}, not the short words over their full labels`);
@@ -4762,7 +5036,7 @@ async function readRequestsTable() {
     const held = [...table.querySelectorAll('tbody .requests__attempts > .badge')].map((b) => ({ lines: lines(b), text: b.textContent?.trim() ?? '' }));
     // The main line or the `.sub` line, whichever the row's figures fill, each in its window's short word: a share
     // under the share position, a 20x equivalent under native, the default.
-    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (20x )?(5h|7d|Fable week)/.test(td.textContent ?? '')).length;
+    const shares = cellsOf(columnAt('Cost')).filter((td) => /\d+% (20x )?(5h|7d|7-day Fable)/.test(td.textContent ?? '')).length;
     return {
       classes: { cut: cutOf(classes), ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length },
       client: wrap.clientWidth,
@@ -4979,6 +5253,30 @@ async function requestsTableWide(theme) {
 }
 
 /**
+ * The Cost cell of a usage-based seat's request on the request log under Native: its dollars over the funding word
+ * `usage-based`, the word in the type and the ink of a billed row's funding word in the same table, and the cell's
+ * hover naming it as billed in dollars. Only the mock's story holds a usage-based seat.
+ */
+async function requestsFundingWord(theme) {
+  if (!mock) return;
+  const read = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('.requests__table tbody td[title^="Billed in dollars: "]')];
+    const wordOf = (td) => {
+      const word = td?.querySelector('.sub');
+      if (!word) return null;
+      const s = getComputedStyle(word);
+      return { color: s.color, size: s.fontSize, tag: word.tagName, text: word.textContent?.trim() ?? '', title: td.getAttribute('title')?.split('. ')[0] ?? '', weight: s.fontWeight };
+    };
+    const seat = cells.find((td) => td.getAttribute('title')?.startsWith('Billed in dollars: usage-based'));
+    const billed = cells.find((td) => !td.getAttribute('title')?.startsWith('Billed in dollars: usage-based'));
+    return { billed: wordOf(billed), seat: wordOf(seat) };
+  });
+  measurements.push(`${theme} /requests funding word ${JSON.stringify(read)}`);
+  failures.push(...compare(read.seat, read.billed, ['color', 'size', 'tag', 'weight'], `${theme} /requests: the usage-based Cost cell's funding word against a billed row's`));
+  if (read.seat && (read.seat.text !== 'usage-based' || read.seat.title !== 'Billed in dollars: usage-based')) failures.push(`${theme} /requests: the usage-based Cost cell reads ${JSON.stringify(read.seat.text)} with the hover ${JSON.stringify(read.seat.title)}`);
+}
+
+/**
  * The request table with Time, its fill, hidden through the Columns control, so no drawn column fills: the table
  * carries `table--no-fill` and takes its content width up to its wrap's, read at the pass's 1280 by 800 and at 1920
  * by 1080, where the content leaves the card's rest empty. The viewport and the column return afterwards.
@@ -5090,6 +5388,114 @@ async function warmingLoneCard(theme) {
     for (const what of compare(read.last, read.before, ['type'], `the ${read.last.title} title against the ${read.before?.title} title`)) say(what);
   } finally {
     await tabTo(theme, 'Traffic');
+    await atRest();
+  }
+}
+
+/**
+ * The Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900: on the Cost tab's tiles row and
+ * the Cache warming tab's, the Wasted probes card's row among them, no tile's figure (each `.cost-figure`, the nowrap
+ * run that keeps a window's name whole) is wider than its tile's content box, and in the Cache warming grid a card
+ * alone on its row spans the grid's width, while a last card that shares its row stands on its neighbor's top edge.
+ * Every figure's width against its tile's and every card's box go to the measurements, and the viewport and the Traffic
+ * tab are the pass's again after.
+ */
+async function analyticsTiles(theme) {
+  const viewport = page.viewportSize() ?? { height: 800, width: 1280 };
+  const figures = (section) =>
+    page.evaluate((id) => {
+      // The section's own row and the Wasted probes card's panel row, whose Wasted cost tile is the narrowest.
+      const tiles = [...document.querySelectorAll(`#${id} .tiles-row > .stat`)];
+      return tiles.flatMap((t) => {
+        const s = getComputedStyle(t);
+        const inner = t.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight) - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth);
+        const label = t.querySelector('.stat__label')?.textContent?.trim() ?? '';
+        return [...t.querySelectorAll('.cost-figure')].map((f) => ({ figure: Math.round(f.getBoundingClientRect().width * 10) / 10, label, text: f.textContent ?? '', tile: Math.round(inner * 10) / 10 }));
+      });
+    }, section);
+  try {
+    for (const size of [
+      { height: 800, width: 1280 },
+      { height: 900, width: 1440 },
+    ]) {
+      await page.setViewportSize(size);
+      await settle();
+      const say = (what) => failures.push(`${theme} /analytics: at ${size.width} by ${size.height} ${what}`);
+      if (!(await tabTo(theme, 'Cost'))) return;
+      const cost = await figures('cost');
+      if (!(await tabTo(theme, 'Cache warming'))) return;
+      const warming = await figures('cache-warming');
+      const grid = await page.evaluate(() => {
+        const el = document.querySelector('#cache-warming > .warming-grid');
+        if (!el) return null;
+        const box = (c) => ({ left: Math.round(c.getBoundingClientRect().left), title: c.querySelector('.card__title')?.textContent?.trim() ?? '', top: Math.round(c.getBoundingClientRect().top), width: Math.round(c.getBoundingClientRect().width) });
+        return { cards: [...el.children].map(box), width: Math.round(el.getBoundingClientRect().width) };
+      });
+      measurements.push(`${theme} /analytics tiles at ${size.width} by ${size.height} ${JSON.stringify({ cost, grid, warming })}`);
+      for (const f of [...cost, ...warming]) if (f.figure > f.tile + 0.5) say(`the ${f.label} tile's figure ${JSON.stringify(f.text)} is ${f.figure} px wide in a ${f.tile} px tile`);
+      if (cost.length === 0) say('the Cost tiles row draws no figure to measure');
+      if (warming.length === 0) say('the Cache warming tiles row draws no figure to measure');
+      if (grid === null || grid.cards.length < 2) {
+        say(`the Cache warming grid draws ${JSON.stringify(grid)}`);
+        continue;
+      }
+      const rows = Object.values(Object.groupBy(grid.cards, (c) => c.top));
+      for (const row of rows) if (row.length === 1 && Math.abs(row[0].width - grid.width) > 1) say(`the Cache warming grid leaves ${row[0].title} alone on its row, ${row[0].width} px of ${grid.width} px`);
+      const last = grid.cards.at(-1);
+      const before = grid.cards.at(-2);
+      if (rows.at(-1).length > 1) for (const what of compare(last, before, ['top'], `the Cache warming grid's ${last.title} card against ${before.title} beside it`)) say(what);
+    }
+  } finally {
+    await page.setViewportSize(viewport);
+    await settle();
+    await tabTo(theme, 'Traffic');
+    await atRest();
+  }
+}
+
+/**
+ * The Traffic table grouped by model: the group the story's refusal before a model resolved files under, `no model`,
+ * holds no request, so its Error rate cell reads a dash in the muted ink, in the type of the rate cell of the row
+ * beside it, which reads a percent. The Error rate column is required on both passes and the row on the mock pass
+ * alone, since the router's seed holds no request without a model, so the router pass reads the row where drawn and
+ * records whether it was. The page's grouping returns to the key one, its default, afterwards.
+ */
+async function analyticsEmptyRate(theme) {
+  const say = (what) => failures.push(`${theme} /analytics Traffic by model: ${what}`);
+  const group = page.locator('.filter-bar select[aria-label="Group by"]').filter({ has: page.locator('option[value="session"]') });
+  try {
+    await group.selectOption('model');
+    await advance(LOAD_MS);
+    const read = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by model');
+      const heads = [...(card?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+      const at = heads.indexOf('Error rate');
+      const rows = [...(card?.querySelectorAll('tbody tr') ?? [])];
+      const empty = rows.findIndex((tr) => tr.children[0]?.textContent?.trim() === 'no model');
+      if (at < 0 || empty < 0) return { column: at >= 0, row: empty >= 0 };
+      const ink = (td) => {
+        const inner = td.querySelector('.muted') ?? td;
+        const s = getComputedStyle(inner);
+        return { color: s.color, family: s.fontFamily, size: s.fontSize, text: td.textContent?.trim() ?? '' };
+      };
+      // A computed color holds the value, never the token's name, so the muted ink is read off a probe of its own.
+      const probe = document.body.appendChild(document.createElement('span'));
+      probe.className = 'muted';
+      const muted = getComputedStyle(probe).color;
+      probe.remove();
+      return { column: true, empty: ink(rows[empty].children[at]), muted, neighbour: ink(rows[empty === 0 ? 1 : empty - 1].children[at]), row: true };
+    });
+    measurements.push(`${theme} /analytics Traffic by model empty rate ${JSON.stringify(read)}`);
+    if (!read.column) say('draws no Error rate column');
+    if (mock && !read.row) say("draws no no model row, the group the story's refusal before a model resolved files under");
+    if (!read.column || !read.row) return;
+    if (read.empty.text !== '-') say(`the no model row's Error rate reads ${JSON.stringify(read.empty.text)}, not a dash`);
+    if (read.empty.color !== read.muted) say(`the no model row's dash is in ${read.empty.color}, not the muted ${read.muted}`);
+    if (!/^\d[\d.]*%$/.test(read.neighbour.text)) say(`the row beside it reads ${JSON.stringify(read.neighbour.text)}, not a percent`);
+    for (const what of compare(read.empty, read.neighbour, ['family', 'size'], "the no model row's Error rate against the row beside it")) say(what);
+  } finally {
+    await group.selectOption('key');
+    await advance(LOAD_MS);
     await atRest();
   }
 }
@@ -5437,7 +5843,7 @@ async function barRow(theme, view) {
 }
 
 /**
- * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 42 kinds:
+ * The Kinds list through Add filter on the routing log at 1280 by 800, Select all, the eight presets and the 44 kinds:
  * its popover keeps 8 px inside the window above and below, where the list scrolls. Records the box.
  */
 async function kindsPopoverInside(theme) {
@@ -5456,7 +5862,7 @@ async function kindsPopoverInside(theme) {
   measurements.push(`${theme} /routing-log kinds popover inside ${JSON.stringify(read)}`);
   if (read === null) say('did not open');
   else {
-    if (read.rows !== 51) say(`lists ${read.rows} rows, not Select all, the eight presets and the 42 kinds`);
+    if (read.rows !== 53) say(`lists ${read.rows} rows, not Select all, the eight presets and the 44 kinds`);
     if (read.top < 8 || read.bottom > read.view - 8) say(`spans ${read.top} to ${read.bottom} px, outside the ${read.view} px window less 8 px above and below`);
   }
   await page.keyboard.press('Escape');
@@ -5961,6 +6367,45 @@ async function topBarFits(theme, path) {
 }
 
 /**
+ * The unit legend's lines in the top bar's popover at 1280 by 800: Native's and Billed dollars' lines name the four
+ * billed fundings, each line in the face, size and ink of the line after it, the label in the weight of that line's
+ * label. Escape closes the popover again.
+ */
+async function unitLegendLines(theme) {
+  const LEGEND = 'What the units mean';
+  const WANT = {
+    'Billed dollars': 'Billed dollars The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
+    Native: 'Native Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, fast-mode, overage or usage-based request in dollars.',
+  };
+  const button = page.locator('.topbar').getByRole('button', { name: LEGEND, exact: true });
+  if ((await button.count()) === 0) {
+    failures.push(`${theme} /analytics: the top bar draws no legend button to read the legend's lines by`);
+    return;
+  }
+  await button.click();
+  await settle();
+  const lines = await page.evaluate((legend) =>
+    [...document.querySelectorAll(`.topbar [role="dialog"][aria-label="${legend}"] .unit-legend__line`)].map((p) => {
+      const s = getComputedStyle(p);
+      const label = p.querySelector('b');
+      return { color: s.color, family: s.fontFamily, label: label?.textContent?.trim() ?? null, labelWeight: label ? getComputedStyle(label).fontWeight : null, size: s.fontSize, text: p.textContent?.replace(/\s+/g, ' ').trim() ?? '' };
+    }),
+  LEGEND);
+  await page.keyboard.press('Escape');
+  await settle();
+  measurements.push(`${theme} /analytics unit legend lines ${JSON.stringify(lines.map((l) => [l.label, l.size, l.color, l.labelWeight]))}`);
+  for (const [label, want] of Object.entries(WANT)) {
+    const at = lines.findIndex((l) => l.label === label);
+    if (at < 0) {
+      failures.push(`${theme} /analytics: the unit legend draws no ${label} line`);
+      continue;
+    }
+    if (lines[at].text !== want) failures.push(`${theme} /analytics: the legend's ${label} line reads ${JSON.stringify(lines[at].text)}`);
+    failures.push(...compare(lines[at], lines[at + 1], ['color', 'family', 'size', 'labelWeight'], `${theme} /analytics: the legend's ${label} line against the line after it`));
+  }
+}
+
+/**
  * The unit switch in the top bar at 1280 and 400 px: the Unit select inside the bar and the viewport, clear of Log
  * out and the theme switch, and nothing scrolling the bar sideways. At 1280 px the legend's button sits inside the bar
  * too, and its popover opens over the Analytics filter bar, which sticks under the top bar, with no point of it
@@ -6064,6 +6509,93 @@ async function unitControl(theme) {
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
+    await atRest();
+  }
+}
+
+/** The mock's switch that answers from another router build, so the shell draws its reload banner. */
+const BUILD_MISMATCH_SWITCH = 'phoebis.mockBuildMismatch';
+
+/**
+ * The reload banner and the top bar in the shell's one sticky block, under the mock's build switch, at 1280 by 800 and
+ * 400 by 800. Scrolled 600 px down the Analytics view, the banner's top edge sits at the window's top, where the bar's
+ * sits with the switch off, the bar's top edge on the banner's bottom, and the banner paints an opaque color under its
+ * tint, so the page scrolled under it does not read through. The block paints one too while the banner draws, since the
+ * banner's rounded corners leave it bare, and stays transparent with the switch off, so the bar's tint and blur read
+ * the page scrolled under it. The view's sticky filter bar docks on the block's bottom and its section bar on the
+ * filter bar's bottom, and at 1280 by 800, the one width where the Accounts list sticks, the list scrolled the same
+ * docks 20 px under the block. Each edge within 1 px. The Analytics view loads again without the switch at 1280 by 800,
+ * so the measures after it read the view as it first drew.
+ */
+async function shellBanner(theme) {
+  const say = (what) => failures.push(`${theme} shell banner: ${what}`);
+  const SCROLL = 600;
+  const scrolled = async (path, wait) => {
+    await loadAtOrigin(path, wait);
+    await page.evaluate((y) => window.scrollTo(0, y), SCROLL);
+    await settle();
+    return page.evaluate(() => {
+      const edges = (selector) => {
+        const el = document.querySelector(selector);
+        if (!el) return null;
+        const { bottom, top } = el.getBoundingClientRect();
+        return { bottom: Math.round(bottom * 10) / 10, top: Math.round(top * 10) / 10 };
+      };
+      const banner = document.querySelector('.main__top > .callout[role="status"]');
+      const paint = banner ? getComputedStyle(banner) : null;
+      const top = document.querySelector('.main__top');
+      return {
+        bar: edges('.topbar'),
+        banner: edges('.main__top > .callout[role="status"]'),
+        block: edges('.main__top'),
+        blockPaint: top ? getComputedStyle(top).backgroundColor : null,
+        filters: edges('.filter-bar--sticky'),
+        list: edges('.accounts__list'),
+        paint: paint ? { color: paint.backgroundColor, image: paint.backgroundImage } : null,
+        scrolled: Math.round(document.scrollingElement.scrollTop),
+        sections: edges('.section-bar'),
+        token: document.querySelector('.main') ? getComputedStyle(document.querySelector('.main')).getPropertyValue('--main-top').trim() : null,
+      };
+    });
+  };
+  const near = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= 1;
+  try {
+    for (const size of [
+      { height: 800, width: 1280 },
+      { height: 800, width: 400 },
+    ]) {
+      const where = `at ${size.width} by ${size.height}`;
+      await page.setViewportSize(size);
+      await page.evaluate((key) => localStorage.removeItem(key), BUILD_MISMATCH_SWITCH);
+      const off = await scrolled('/analytics', '.section-bar');
+      await page.evaluate((key) => localStorage.setItem(key, '1'), BUILD_MISMATCH_SWITCH);
+      const on = await scrolled('/analytics', '.main__top > .callout');
+      measurements.push(`${theme} shell banner /analytics ${where} scrolled ${SCROLL} px ${JSON.stringify({ off, on })}`);
+      if (off.banner !== null) say(`${where} the switch off draws a banner`);
+      if (on.banner === null) {
+        say(`${where} the switch on draws no banner`);
+        continue;
+      }
+      if (off.scrolled !== SCROLL || on.scrolled !== SCROLL) say(`${where} the Analytics view scrolls ${off.scrolled} px with the switch off and ${on.scrolled} px with it on, not ${SCROLL}`);
+      if (off.bar?.top !== 0) say(`${where} with the switch off the bar's top edge sits at ${off.bar?.top} px, not the window's top`);
+      for (const what of compare({ top: Math.round(on.banner.top) }, { top: Math.round(off.bar?.top ?? NaN) }, ['top'], `${where} the banner's top edge against the bar's with the switch off`)) say(what);
+      if (!near(on.bar?.top, on.banner.bottom)) say(`${where} the bar's top edge sits at ${on.bar?.top} px, not on the banner's bottom at ${on.banner.bottom} px`);
+      if (!/^rgb\(/.test(on.paint?.color ?? '')) say(`${where} the banner paints ${JSON.stringify(on.paint?.color)} under its tint, not an opaque color`);
+      if (off.blockPaint !== 'rgba(0, 0, 0, 0)') say(`${where} with the switch off the sticky block paints ${JSON.stringify(off.blockPaint)}, not transparent`);
+      if (!/^rgb\(/.test(on.blockPaint ?? '')) say(`${where} with the switch on the sticky block paints ${JSON.stringify(on.blockPaint)}, not an opaque color`);
+      if (!near(on.filters?.top, on.block?.bottom)) say(`${where} the sticky filter bar's top edge sits at ${on.filters?.top} px, not on the block's bottom at ${on.block?.bottom} px`);
+      if (!near(on.sections?.top, on.filters?.bottom)) say(`${where} the section bar's top edge sits at ${on.sections?.top} px, not on the filter bar's bottom at ${on.filters?.bottom} px`);
+      // Under 1100 px the list stacks above the detail and scrolls with the page.
+      if (size.width < 1100) continue;
+      const accounts = await scrolled('/accounts', '.accounts__list');
+      measurements.push(`${theme} shell banner /accounts ${where} scrolled ${SCROLL} px ${JSON.stringify(accounts)}`);
+      if (accounts.scrolled !== SCROLL) say(`${where} the Accounts view scrolls ${accounts.scrolled} px, not ${SCROLL}`);
+      if (!near(accounts.list?.top, (accounts.block?.bottom ?? NaN) + 20)) say(`${where} the Accounts list's top edge sits at ${accounts.list?.top} px, not 20 px under the block's bottom at ${accounts.block?.bottom} px`);
+    }
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), BUILD_MISMATCH_SWITCH);
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
     await atRest();
   }
 }
@@ -6331,7 +6863,7 @@ async function requestDrawerCompact(theme) {
       measurements.push(`${theme} /requests ${where} cost row ${JSON.stringify(got.cost)}`);
       costRow(where, got);
       const windows = (got.cost?.chips ?? []).map((c) => c.text.replace(/^\S+ of /, ''));
-      if (JSON.stringify(windows) !== JSON.stringify(['20x 5-hour', '20x 7-day', '20x Fable week'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 20x 5-hour, a 20x 7-day and a 20x Fable week equivalent in that order`);
+      if (JSON.stringify(windows) !== JSON.stringify(['20x 5-hour', '20x 7-day', '20x 7-day Fable'])) say(`${where}: the cost row's chips read ${JSON.stringify((got.cost?.chips ?? []).map((c) => c.text))}, not a 20x 5-hour, a 20x 7-day and a 20x 7-day Fable equivalent in that order`);
     }
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
@@ -7764,12 +8296,76 @@ const compare = (mine, neighbour, keys, what) => {
 };
 
 /**
+ * The story's tie, the failover that tied primary and nightly on Pace at 08:16:21: its Pick station's rows name the
+ * tied accounts, the one the runway kept and that no draw was left, each in the type of the strategy row above them
+ * and from the same left edge. The measure loads the tie's request on its own range and leaves the bare log.
+ */
+async function routingLogPickLine(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const id = 'req_8c41f2d7-a93';
+  const at = clockOrigin - (6 * 3_600 + 13 * 60 + 39) * 1_000;
+  const quarter = 15 * 60_000;
+  const rowAt = `.routing-log__table tbody tr[data-row="${id}/2"]`;
+  try {
+    await loadAtOrigin(`/routing-log?request=${id}&from=${new Date(at - quarter).toISOString()}&to=${new Date(at + quarter).toISOString()}`, rowAt);
+    const row = page.locator(rowAt);
+    if ((await row.count()) === 0 || !(await openDecision(row))) {
+      say(`the tie's failover ${id}/2 opened to no card on its request's page`);
+      return;
+    }
+    await page.locator('.routing-log__panel .decision-card').last().locator('.strip-station[data-station="pick"]').click();
+    await advance(CLOCK_STEP_MS);
+    const read = await page.evaluate(() => {
+      const popover = document.querySelector('.strip-popover');
+      const rows = [...(popover?.querySelectorAll('.kv__row') ?? [])].map((r) => {
+        const dt = r.querySelector('dt');
+        const chips = [...r.querySelectorAll('dd .chip')];
+        const style = getComputedStyle(dt);
+        // A chip's label and its value read as the card's chip text, `label value`.
+        const text = (c) => {
+          const label = c.querySelector('.chip__label')?.textContent ?? '';
+          return label ? `${label} ${(c.textContent ?? '').slice(label.length)}` : c.textContent;
+        };
+        return {
+          chips: chips.map(text),
+          chipFont: chips[0] ? getComputedStyle(chips[0]).font : null,
+          font: style.font,
+          label: dt.textContent,
+          left: Math.round(dt.getBoundingClientRect().left),
+          lineHeight: style.lineHeight,
+        };
+      });
+      return { open: document.querySelectorAll('.strip-popover').length, rows };
+    });
+    const byLabel = (label) => read.rows.find((r) => r.label === label) ?? null;
+    const strategy = byLabel('strategy');
+    measurements.push(`${theme} /routing-log the tie's pick line ${JSON.stringify({ byRunway: byLabel('by runway'), drawn: byLabel('drawn'), strategy, tied: byLabel('tied') })}`);
+    if (read.open !== 1) say(`the tie's Pick station opened ${read.open} popovers`);
+    for (const [label, chips] of [
+      ['tied', ['tied primary', 'tied nightly']],
+      ['by runway', ['by runway primary']],
+      ['drawn', ['drawn no']],
+    ]) {
+      const line = byLabel(label);
+      if (JSON.stringify(line?.chips ?? null) !== JSON.stringify(chips)) say(`the tie's pick line ${label} reads ${JSON.stringify(line?.chips ?? null)}, not ${JSON.stringify(chips)}`);
+      for (const what of compare(line, strategy, ['font', 'left', 'lineHeight'], `the tie's ${label} row against the strategy row above it`)) say(what);
+    }
+    await page.keyboard.press('Escape');
+    await advance(CLOCK_STEP_MS);
+  } finally {
+    await atRest();
+    await loadAtOrigin('/routing-log', '.routing-log__table');
+  }
+}
+
+/**
  * The identity card's subscription end editor on an OAuth account: its date field is the box of the Sort select in
  * the bar (the page's other plain control, where the label editor's field takes the heading's type), its checkbox
- * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
- * of the card. Ticking the box leaves the date field empty for the operator to type, the refusal callout names the
- * date and holds the Save, and the hint reads the billing page's words. The router's seed has only an API-key account,
- * which has no editor, so there the check stands down, and the mock's first account is an OAuth one.
+ * label reads Canceled in the type of the Ends label beside it, its Save the size of the Edit end button it opened
+ * from, and opening it moves no row of the card. Ticking the box leaves the date field empty for the operator to type,
+ * the refusal callout names the date and holds the Save, and the hint reads the billing page's words. The router's seed
+ * has only an API-key account, which has no editor, so there the check stands down, and the mock's first account is an
+ * OAuth one.
  */
 async function subscriptionEndForm(theme) {
   const say = (what) => failures.push(`${theme} /accounts: ${what}`);
@@ -7809,9 +8405,11 @@ async function subscriptionEndForm(theme) {
       end: ends?.value ?? null,
       ends: box(ends),
       fieldLabel: type(card?.querySelector('.field .field__label')),
+      fieldText: card?.querySelector('.field .field__label')?.textContent?.trim() ?? null,
       hint: card?.querySelector('.field .field__hint')?.textContent?.trim() ?? null,
       sort: box(document.querySelector('.filter-bar select[aria-label="Sort"]')),
       tickLabel: type(card?.querySelector('label.row .field__label')),
+      tickText: card?.querySelector('label.row .field__label')?.textContent?.trim() ?? null,
     };
   });
   const saveButton = identity.getByRole('button', { name: 'Save', exact: true });
@@ -7819,15 +8417,16 @@ async function subscriptionEndForm(theme) {
   const held = await saveButton.isDisabled();
   const rowAfter = await firstRow();
   measurements.push(`${theme} /accounts subscription end ${JSON.stringify({ ...read, held, save })}`);
-  if (read.end !== '') say(`ticking Cancelled filled the end with ${JSON.stringify(read.end)}, where the operator types it`);
-  if (!(read.callout ?? '').includes('A cancelled plan needs the date it ends.') || !held) say(`ticking Cancelled with no end drew ${JSON.stringify(read.callout)} with Save ${held ? 'held' : 'open'}, not the refusal that names the date`);
+  if (read.end !== '') say(`ticking Canceled filled the end with ${JSON.stringify(read.end)}, where the operator types it`);
+  if (!(read.callout ?? '').includes('A canceled plan needs the date it ends.') || !held) say(`ticking Canceled with no end drew ${JSON.stringify(read.callout)} with Save ${held ? 'held' : 'open'}, not the refusal that names the date`);
   if (read.hint !== "The date the plan's billing settings show as its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.") say(`the Ends hint reads ${JSON.stringify(read.hint)}`);
   for (const finding of [
     // A select keeps room for its chevron, so the padding is left out.
     ...compare(read.ends, read.sort, ['background', 'border', 'font', 'height', 'radius'], 'the Ends field against the Sort select'),
     ...compare(save, editButton, ['font', 'height', 'padding', 'radius'], "the editor's Save against the Edit end button"),
   ]) say(finding);
-  if (read.tickLabel !== read.fieldLabel) say(`the Cancelled label reads ${read.tickLabel} against the Ends label's ${read.fieldLabel}`);
+  if (read.tickLabel !== read.fieldLabel) say(`the Canceled label reads ${read.tickLabel} against the Ends label's ${read.fieldLabel}`);
+  if (read.tickText !== 'Canceled' || !(read.fieldText ?? '').startsWith('Ends (')) say(`the checkbox label reads ${JSON.stringify(read.tickText)} beside the Ends label's ${JSON.stringify(read.fieldText)}, not Canceled`);
   if (rowAfter !== rowBefore) say(`opening the editor moved the card's first row from ${rowBefore}px to ${rowAfter}px`);
   // Closed again, so the view's shot is the card as it loaded.
   await identity.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -7877,10 +8476,11 @@ async function addAccountDialog(theme) {
 
 /**
  * The line a confirmed pairing draws in the Usage card while the account's first reading is in flight fills the slot
- * of the note an account without windows reads, so it takes that note's type, ink and place: the mock pass pairs a new
- * account through Add account and reads the hint against the note on the story's API-key account annex. The mock lands
- * the reading on a list read 2 s after the confirm on the page's clock, which the reads here stay short of. The pairing
- * adds a row, so this runs after the view's shot.
+ * of the note an account without windows reads, so it takes that note's type, ink and place and ends on a period as the
+ * note does: the mock pass pairs a new account through Add account and reads the hint, found by its whole sentence,
+ * against the note on the story's API-key account annex. The mock lands the reading on a list read 2 s after the
+ * confirm on the page's clock, which the reads here stay short of. The pairing adds a row, so this runs after the
+ * view's shot.
  */
 async function firstReadingHint(theme) {
   const say = (what) => failures.push(`${theme} /accounts first reading: ${what}`);
@@ -7893,7 +8493,7 @@ async function firstReadingHint(theme) {
       const s = getComputedStyle(p);
       const box = p.getBoundingClientRect();
       const frame = card.getBoundingClientRect();
-      return { color: s.color, font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, left: Math.round(box.left - frame.left), lineHeight: s.lineHeight, margin: s.margin, top: Math.round(box.top - frame.top) };
+      return { color: s.color, font: `${s.fontFamily} ${s.fontSize} ${s.fontWeight}`, left: Math.round(box.left - frame.left), lineHeight: s.lineHeight, margin: s.margin, text: p.textContent.trim(), top: Math.round(box.top - frame.top) };
     }, text);
   await page.clock.setSystemTime(clockOrigin);
   await page.goto(`${base}/accounts/annex`);
@@ -7919,7 +8519,7 @@ async function firstReadingHint(theme) {
     say(`the pairing never confirmed (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
-  const hint = await line('The first quota reading is in flight');
+  const hint = await line('The first quota reading is in flight.');
   measurements.push(`${theme} /accounts first reading ${JSON.stringify({ hint, note })}`);
   for (const finding of compare(hint, note, ['color', 'font', 'left', 'lineHeight', 'margin', 'top'], 'the first reading hint against the note of an account without windows')) say(finding);
   await atRest();
@@ -8252,6 +8852,52 @@ async function keysPoolSelect(theme) {
   }
   await load('');
   await atRest();
+}
+
+/**
+ * The lifetime cost card under the mock's unpriced switch, which flags the key its unpriced request lands on: that
+ * key's bar reads a dash beside its billed dollars under the unpriced title, fills none of its track and sorts last,
+ * its figure in the type and ink of a neighbor's that reads a number and its track as wide. The neighbor's fill goes
+ * unread, since a key billed behind an API-key account draws its dollars over an empty fill too. The page loads again
+ * without the switch, so the measures after it read the story whole.
+ */
+async function keysBars(theme) {
+  const say = (what) => failures.push(`${theme} /keys: ${what}`);
+  try {
+    await page.evaluate((key) => localStorage.setItem(key, '1'), UNPRICED_SWITCH);
+    await loadAtOrigin('/keys', '.hbars li');
+    const bars = await page.evaluate(() =>
+      [...document.querySelectorAll('.hbars li')].map((li) => {
+        const width = (el) => (el ? Math.round(el.getBoundingClientRect().width * 10) / 10 : null);
+        const figure = li.querySelector('.hbars__head .num')?.firstElementChild ?? null;
+        const s = figure ? getComputedStyle(figure) : null;
+        return {
+          color: s?.color ?? null,
+          family: s?.fontFamily ?? null,
+          fill: width(li.querySelector('.hbars__fill')),
+          name: li.querySelector('.hbars__head > span')?.firstChild?.textContent?.trim() ?? '',
+          size: s?.fontSize ?? null,
+          text: figure?.textContent?.trim() ?? '',
+          title: figure?.getAttribute('title') ?? null,
+          track: width(li.querySelector('.hbars__track')),
+          weight: s?.fontWeight ?? null,
+        };
+      }),
+    );
+    const flagged = bars.filter((bar) => bar.title === UNPRICED_TITLE);
+    const neighbor = bars.find((bar) => bar.title !== UNPRICED_TITLE && !bar.text.startsWith('-') && /\d/.test(bar.text)) ?? null;
+    measurements.push(`${theme} /keys unpriced bar ${JSON.stringify({ flagged, last: bars.at(-1)?.name ?? null, neighbor })}`);
+    if (flagged.length !== 1) say(`under the unpriced switch ${flagged.length} bars read the unpriced title, not one`);
+    const bar = flagged[0];
+    if (bar === undefined) return;
+    if (!/^-(, \$[\d,.]+ billed)?$/.test(bar.text)) say(`the flagged key's bar reads ${JSON.stringify(bar.text)}, not a dash beside its billed dollars`);
+    if (bar.fill !== 0) say(`the flagged key's bar fills ${bar.fill} px of its track, not none`);
+    if (bars.at(-1)?.name !== bar.name) say(`the flagged key ${bar.name} sorts before ${bars.at(-1)?.name}, not last`);
+    for (const what of compare(bar, neighbor, ['color', 'family', 'size', 'track', 'weight'], "the flagged key's figure and track against a neighbor's that reads a number")) say(what);
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), UNPRICED_SWITCH);
+    await loadAtOrigin('/keys', '.card--table tbody tr');
+  }
 }
 
 /**
@@ -9387,6 +10033,59 @@ async function probeBarSlots(theme) {
   for (const r of read) if (r.drawn !== r.slot) say(`draws ${r.outcome} in ${r.drawn}, not the ${r.slot} the chart draws it in`);
 }
 
+/** The mock's switch that fails every sessions read, as a store that refuses the list, and the message it answers. */
+const SESSIONS_FAIL_SWITCH = 'phoebis.mockSessionsFail';
+const SESSIONS_FAIL_MESSAGE = 'store busy';
+
+/**
+ * The Sessions view under the mock's sessions failure switch: the Sessions and Agents tiles, whose figures count the
+ * rows the sessions read builds, read a dash over "could not load" titled with the read's message, in the box, the
+ * value's line and the note's line of the Retained tile beside them, which reads the overview alone and keeps its
+ * figure, and the notice under the tiles names the sessions. The page loads again without the switch, so the shot and
+ * the measures after it read the story whole.
+ */
+async function sessionsTilesError(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  try {
+    await page.evaluate((key) => localStorage.setItem(key, '1'), SESSIONS_FAIL_SWITCH);
+    // The table never draws while the sessions read fails, so the load waits on the notice under the tiles.
+    await loadAtOrigin('/sessions', '.stat-grid + .sessions__notice');
+    const read = await page.evaluate(() => {
+      const tile = (label) => {
+        const t = [...document.querySelectorAll('.stat-grid > .stat')].find((s) => s.querySelector('.stat__label')?.textContent?.trim() === label);
+        if (!t) return null;
+        const box = t.getBoundingClientRect();
+        const value = t.querySelector('.stat__value');
+        const note = t.querySelector(':scope > .stat__note');
+        return {
+          height: Math.round(box.height),
+          note: note?.textContent?.trim() ?? null,
+          noteHeight: note ? Math.round(note.getBoundingClientRect().height) : null,
+          title: t.getAttribute('title'),
+          top: Math.round(box.top),
+          value: value?.textContent?.trim() ?? null,
+          valueHeight: value ? Math.round(value.getBoundingClientRect().height) : null,
+          width: Math.round(box.width),
+        };
+      };
+      return { agents: tile('Agents'), notice: document.querySelector('.stat-grid + .sessions__notice')?.textContent?.trim() ?? null, retained: tile('Retained'), sessions: tile('Sessions') };
+    });
+    measurements.push(`${theme} /sessions tiles in error ${JSON.stringify(read)}`);
+    for (const [label, t] of [
+      ['Sessions', read.sessions],
+      ['Agents', read.agents],
+    ]) {
+      if (t?.value !== '-' || t.note !== 'could not load' || t.title !== SESSIONS_FAIL_MESSAGE) say(`under the sessions failure switch the ${label} tile reads ${JSON.stringify(t)}, not a dash over could not load titled ${SESSIONS_FAIL_MESSAGE}`);
+      for (const what of compare(t, read.retained, ['height', 'noteHeight', 'top', 'valueHeight', 'width'], `the ${label} tile in error against the Retained tile beside it`)) say(what);
+    }
+    if (!read.retained || read.retained.value === '-' || read.retained.note === 'could not load') say(`under the sessions failure switch the Retained tile reads ${JSON.stringify(read.retained)}, not its figure`);
+    if (!read.notice?.startsWith(`Could not load the sessions: ${SESSIONS_FAIL_MESSAGE}`)) say(`the notice under the tiles reads ${JSON.stringify(read.notice)}`);
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), SESSIONS_FAIL_SWITCH);
+    await loadAtOrigin('/sessions', '.sessions-table');
+  }
+}
+
 /**
  * Following the fork badge scrolls its base's row into view and marks it current. It runs after the view's shot, so
  * that shot shows the list at rest.
@@ -9493,16 +10192,76 @@ async function copyFallbackModal(theme) {
 }
 
 /**
- * Signs `page` in with the pass's secret. The same pin the jsdom smoke run applies, over the timers as well as the
- * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin. From there `advance`
- * moves it forward, and each view of the pass sets it back to the origin before its load.
+ * The login screen's Stay logged in row under the secret field, in the theme the screen drew: the field's, the row's,
+ * its box's, its label's and its hint's edges inside the card's, recorded and asserting nothing, since no view of the
+ * pass draws the screen.
  */
-async function logIn() {
-  await page.clock.install({ time: clockOrigin });
-  await page.clock.pauseAt(clockOrigin);
+async function loginStayRow(theme) {
+  const drawn = await page.waitForSelector('.login__card .field--beside', { timeout: 15_000 }).then(
+    () => true,
+    () => false,
+  );
+  if (!drawn) {
+    measurements.push(`${theme} /login Stay logged in row not drawn`);
+    return;
+  }
+  const read = await page.evaluate(() => {
+    const edges = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top) };
+    };
+    const card = document.querySelector('.login__card');
+    const row = [...(card?.querySelectorAll('.field--beside') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Stay logged in');
+    return {
+      box: edges(row?.querySelector('input[type="checkbox"]')),
+      card: edges(card),
+      field: edges(card?.querySelector('input[type="password"]')),
+      hint: edges(row?.querySelector('.field__hint')),
+      label: edges(row?.querySelector('.field__label')),
+      row: edges(row),
+      theme: document.documentElement.getAttribute('data-theme'),
+    };
+  });
+  measurements.push(`${theme} /login Stay logged in row ${JSON.stringify(read)}`);
+}
+
+/** Ends the session through the top bar's Log out control, so the next load draws the login screen again. */
+async function logOut() {
+  await page.clock.setSystemTime(clockOrigin);
   await page.goto(`${base}/`);
   await booted();
   await advance(LOAD_MS);
+  await page.waitForSelector('.stat-grid', { timeout: 15_000 });
+  await page.getByRole('button', { name: 'Log out' }).click();
+  await advance(LOAD_MS);
+  await page.waitForSelector('.login__card', { timeout: 15_000 });
+}
+
+/**
+ * Signs `page` in with the pass's secret on a login screen drawn under `theme`, measuring its Stay logged in row first
+ * unless `measured` is false. The same pin the jsdom smoke run applies, over the timers as well as the date: `install`
+ * alone keeps the clock running at the wall's pace, so a page's first login pauses it at the origin and a later one
+ * sets it back there. From there `advance` moves it forward, and each view of the pass sets it back to the origin
+ * before its load.
+ */
+async function logIn(theme, measured = true) {
+  if (clocked.has(page)) {
+    await page.clock.setSystemTime(clockOrigin);
+  } else {
+    await page.clock.install({ time: clockOrigin });
+    await page.clock.pauseAt(clockOrigin);
+    clocked.add(page);
+    // A blank page reaches no origin's storage, so the first login reaches the origin through the theme script, a
+    // static file every page loads, which the browser draws as a text document with the head the pass's styles go into.
+    await page.goto(`${base}/theme.js`);
+  }
+  await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+  loginLoads.set(page, (loginLoads.get(page) ?? 0) + 1);
+  await page.goto(`${base}/`);
+  await booted();
+  await advance(LOAD_MS);
+  if (measured) await loginStayRow(theme);
   await page.getByLabel('Admin secret').fill(secret);
   await page.getByRole('button', { name: 'Log in' }).click();
   await advance(LOAD_MS);
@@ -9512,9 +10271,15 @@ async function logIn() {
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
-  await logIn();
+  await logIn('light');
 
   for (const theme of ['light', 'dark']) {
+    // The login screen draws on no view, so the session ends before the second theme and the screen draws again in it.
+    if (theme !== 'light') {
+      at = `${theme} the login`;
+      await logOut();
+      await logIn(theme);
+    }
     mkdirSync(join(shots, theme), { recursive: true });
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     for (const view of VIEWS) {
@@ -9543,6 +10308,8 @@ try {
         await sidebarBrand(theme);
         await attentionLine(theme);
         await statGrid(theme);
+        await dashboardTiles(theme);
+        await dashboardTileWords(theme);
         await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {
@@ -9550,7 +10317,18 @@ try {
       }
       if (view.path === '/') {
         await recentRowsOneLine(theme);
-        await tableColumns(theme, '', '.dash__recent', ['Key'], 0, { overflowRecorded: mock });
+        // Time is the fill at both sizes, and the mock story's values still run past the card at 1280 by 800, which the
+        // read records.
+        for (const size of [
+          { height: 800, width: 1280 },
+          { height: 900, width: 1440 },
+        ]) {
+          await page.setViewportSize(size);
+          await settle();
+          await tableColumns(theme, size.width === 1280 ? '' : ' at 1440 by 900', '.dash__recent', ['Time'], 0, { overflowRecorded: mock });
+        }
+        await page.setViewportSize({ height: 800, width: 1280 });
+        await settle();
         if (mock) await recentUnderShares(theme);
         if (mock) await recentDollarCosts(theme);
         await remainingCards(theme);
@@ -9560,7 +10338,10 @@ try {
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
       if (['/', '/accounts'].includes(view.path)) await windowBarLines(theme, view.path);
+      if (['/', '/accounts'].includes(view.path)) await spendBarLines(theme, view.path);
       if (view.path === '/sessions') {
+        // Its loads end on the bare view, so the measures after it read the view as it first drew.
+        if (mock) await sessionsTilesError(theme);
         await sessionsLead(theme);
         await costReference(theme);
         await sessionsTableFits(theme);
@@ -9580,10 +10361,12 @@ try {
         await poolCachingControls(theme);
         await poolSheddingSwitch(theme);
         await poolBurnAverageHint(theme);
+        await poolEngineHints(theme);
         await poolRoutingCards(theme);
         await poolCardLayout(theme);
         await poolMemberPins(theme);
         await poolFormerPins(theme);
+        await servingTierWord(theme);
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
         await poolRailFit(theme);
@@ -9601,6 +10384,7 @@ try {
         await analyticsTabs(theme);
         await stickyStrip(theme);
         await unitControl(theme);
+        await unitLegendLines(theme);
         if (mock) await accountsCardToggles(theme);
         // These two last: their loads set the page's clock back to the origin, and the Burn shot above reads the clock
         // its earlier measures stepped.
@@ -9643,6 +10427,7 @@ try {
         // is empty.
         await tableColumns(theme, 'requests', '.requests__table', ['Time'], 0, { wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
+        await requestsFundingWord(theme);
         await pagerControls(theme, view.path);
       }
       if (view.path === '/routing-log') {
@@ -9690,9 +10475,12 @@ try {
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
       if (view.path === '/analytics') await warmingLoneCard(theme);
+      if (view.path === '/analytics') await analyticsTiles(theme);
+      if (view.path === '/analytics') await analyticsEmptyRate(theme);
       // The chip line's dock and the bar's measure load their addresses themselves and leave the bare page.
       if (view.path === '/analytics') await stickyStrip(theme, true);
       if (view.path === '/analytics') await barRow(theme, view.path);
+      if (view.path === '/analytics' && mock) await shellBanner(theme);
       if (view.path === '/requests') await rangePills(theme);
       // The chip measures, the bar's and the split button's each load what they read and leave the bare log at 1280 by
       // 800, so the shot above stays the bare log and the measures after them read it.
@@ -9712,10 +10500,12 @@ try {
       if (view.path === '/routing-log') await barRow(theme, view.path);
       if (view.path === '/routing-log') await kindsPopoverInside(theme);
       if (view.path === '/routing-log') await freshRowTint(theme, view.path);
+      if (view.path === '/routing-log' && mock) await routingLogPickLine(theme);
       if (view.path === '/sessions') await forkLink(theme);
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
       if (view.path === '/keys') await keysPoolSelect(theme);
+      if (view.path === '/keys' && mock) await keysBars(theme);
       if (view.path === '/accounts' && mock) await firstReadingHint(theme);
       if (view.path === '/accounts' && mock) await slowedUsageBar(theme);
       if (CARD_VIEWS.includes(view.path)) await barRow(theme, view.path);
@@ -9765,7 +10555,7 @@ try {
   const shown = await chromium.launch({ args: RASTER, ignoreDefaultArgs: ['--hide-scrollbars'] });
   try {
     page = await openPage(shown);
-    await logIn();
+    await logIn('light', false);
     await page.evaluate(() => localStorage.setItem('phoebis.theme', 'light'));
     await page.goto(`${base}/keys`);
     await booted();

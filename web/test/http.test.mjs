@@ -172,14 +172,20 @@ test('the accounts list carries the poll standing and no usage route is read', a
   const calls = stub(() => answer(200, body));
   const accounts = await new HttpApi().listAccounts();
   assert.deepEqual(calls.map((c) => [c.init.method ?? 'GET', c.url]), [['GET', '/admin/accounts']], 'one read of the list, no usage read per account');
-  assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [['business', 'clean'], ['direct', null]]);
+  // The seat's poll has not read it yet, so its row carries the sentence standing in for a snapshot.
+  const seat = body.accounts.find((a) => a.id === 'usage-seat').usage;
+  assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [
+    ['business', 'clean'],
+    ['direct', null],
+    ['usage-seat', { accountId: 'usage-seat', error: seat.error, fetchedAt: null, heldUntil: null, poll: null, status: 'error' }],
+  ]);
 });
 
-test('updateAccount is one PATCH that carries the cancelled flag and the end in milliseconds', async () => {
+test('updateAccount is one PATCH that carries the canceled flag and the end in milliseconds', async () => {
   const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
   const calls = stub(() => answer(200, { ...body, canceled: true }));
   const end = '2026-10-19T09:15:00.000Z';
-  const account = await new HttpApi().updateAccount('business', { cancelled: true, subscriptionEndsAt: end });
+  const account = await new HttpApi().updateAccount('business', { canceled: true, subscriptionEndsAt: end });
   assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['PATCH', '/admin/accounts/business', { canceled: true, subscription_ends_at: Date.parse(end) }]);
   assert.equal(account.canceled, true, 'the answer decodes as the account');
 });
@@ -189,7 +195,7 @@ test('an account edit sends the revision it read as expected_revision, and none 
   const calls = stub(() => answer(200, body));
   const api = new HttpApi();
   const end = '2026-10-19T09:15:00.000Z';
-  const patch = { cancelled: true, subscriptionEndsAt: end };
+  const patch = { canceled: true, subscriptionEndsAt: end };
   await api.updateAccount('business', patch, 3);
   await api.renameAccount('business', 'x', 3);
   await api.updateAccount('business', patch);
@@ -560,7 +566,7 @@ test("a dialog's write reaches no toast when refused, since the dialog draws the
     () => api.createKey({ ...keyEdit, expiresInDays: null }),
     () => api.createPool(poolSave('Spare')),
     () => api.renameAccount('work', 'Work', 1),
-    () => api.updateAccount('work', { cancelled: false, subscriptionEndsAt: null }, 1),
+    () => api.updateAccount('work', { canceled: false, subscriptionEndsAt: null }, 1),
     () => api.updateKey('desktop', keyEdit, 1),
     () => api.updatePool('main', poolSave('Main'), 1),
   ];

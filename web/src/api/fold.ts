@@ -143,13 +143,15 @@ function latestGenerations(rows: RequestLog[]): Map<string, number> {
 }
 
 /**
- * The breakdown route's labels: `unattributed` for a row no key or client was read for, and under `key` the id
- * alone for its newest generation and `<id> (deleted, created Sep 14, 2026, 09:31)` for an earlier one
- * (`<id> (deleted)` at generation 0). The rows stand in for the router's registry here, so the newest generation
- * among them reads as the live one. The model grouping's empty key reads `no model`, the route's label for it.
+ * The breakdown route's labels: `unattributed` for a row no key or client was read for, `none` for the reserved id
+ * under the classifier grouping, as the Requests facet names it, and under `key` the id alone for its newest generation
+ * and `<id> (deleted, created Sep 14, 2026, 09:31)` for an earlier one (`<id> (deleted)` at generation 0). The rows
+ * stand in for the router's registry here, so the newest generation among them reads as the live one. The model
+ * grouping's empty key reads `no model`, the route's label for it.
  */
 function labelOf(r: RequestLog, key: string, by: AnalyticsGroupBy, latest: Map<string, number>): string {
   if (by === 'model' && key === '') return 'no model';
+  if (by === 'classifier' && key === '-') return 'none';
   if (by !== 'key') return key === '-' ? 'unattributed' : key;
   if (r.keyId === null) return 'unattributed';
   return latest.get(r.keyId) === r.keyGeneration ? r.keyId : earlierHolderLabel(r.keyId, r.keyGeneration);

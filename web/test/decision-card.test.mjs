@@ -611,3 +611,22 @@ test("a long cache-map row's control lists every entry on a click and folds them
   assert.deepEqual(mapRow(card).chips, compact);
   assert.equal(mapRow(card).word, 'All 14 entries');
 });
+
+test("a usage-based candidate's one window cell spans the three window columns and draws every line of its spend window", async () => {
+  const { record, row } = await storyRecord('req_ef099b34-453', 1);
+  const now = Date.parse(row.at);
+  const reset = new Date(Date.UTC(2026, 9, 1)).toISOString();
+  const [first] = record.candidates;
+  const spend = { ageMs: 300_000, ahead: null, demand: null, horizon: null, observedAt: record.request.at, projection: null, reserved: 0, reset, source: 'estimated', utilization: 0.41 };
+  const seat = { ...first, accountId: 'seat', kind: 'oauth', planTier: 'default_claude_zero', priority: 1, tier: [2, 1, 0], verdict: 'eligible', windows: { spend } };
+  const key = { ...first, accountId: 'annex', kind: 'api_key', planTier: null, priority: 1, tier: [2, 1, 0], verdict: 'eligible', windows: { worst_bucket: { ...spend, reset: null, source: 'head', utilization: 0.02 } } };
+  const container = await cardOf({ ...record, candidates: [first, seat, key] }, row);
+  const rows = [...container.querySelectorAll('.decision-card__candidates tbody tr')];
+  const cellOf = (id) => rows.find((tr) => tr.querySelector('td a')?.textContent === id)?.children[2];
+  const seatCell = cellOf('seat');
+  assert.equal(seatCell?.getAttribute('colspan'), '3', 'one cell across 5h, 7d and Fable');
+  assert.equal(seatCell?.firstChild?.textContent, 'spend 41%', 'the share leads as the value');
+  assert.deepEqual([...seatCell.querySelectorAll('.sub')].map((s) => s.textContent), [formatFact(reset, 'time', now), 'estimated'], 'the reset and the estimate under it');
+  const keyCell = cellOf('annex');
+  assert.deepEqual([keyCell?.getAttribute('colspan'), keyCell?.textContent, keyCell?.querySelectorAll('.sub').length], ['3', 'worst bucket 2%', 0], "an API-key candidate's one-line cell reads as before");
+});

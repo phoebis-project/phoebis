@@ -945,7 +945,7 @@ test("the pick's score column reads the Pace cell under the Pace header", async 
       assert.deepEqual(r.cells.score, { text: cells.pace, title: cells.paceTitle }, `${id} ${r.account.value}`);
       rows += 1;
     }
-    assert.deepEqual(table.loose.map((r) => r.label), ['strategy', 'tier'], id);
+    assert.deepEqual(table.loose.map((r) => r.label), ['strategy', 'tier', 'tied', 'drawn'], id);
     assert.deepEqual(table.loose[0].chips.map(chipText), ['strategy Pace'], id);
   }
   assert.ok(rows > 2, `${rows} scores read`);
@@ -996,7 +996,7 @@ test("the pin's three groups and the shed's three groups hold their keys", async
   // A pin the round passed over reads one chip, its session and the reason.
   const skipped = (await recordOf('req_6e1f3b98-a24/1'));
   const rows = stationPlan(skipped, 'move:shed').block.groups.find((g) => g.label === 'Round').rows.find((r) => r.label === 'skipped');
-  assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [['bcc805b6: no runway', '/sessions'], ['d7167642: no runway', '/sessions']]);
+  assert.deepEqual(rows.chips.map((c) => [c.value, c.href]), [['bcc805b6: no runway', '/sessions'], ['d7167642: no runway', '/sessions'], ['d7167642: fast lane', '/sessions']]);
 });
 
 test("a held 5-hour window's age and its hold read as durations in the Round group after the wait", async () => {

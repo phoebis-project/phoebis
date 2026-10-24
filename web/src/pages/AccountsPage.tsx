@@ -18,7 +18,7 @@ import { ACCOUNTS_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
-import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
+import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -247,8 +247,9 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
         <WindowTriple account={account} now={now} compact />
         <div className="account-row__foot">
           <span className="muted">{account.pool ? `pool ${account.pool.poolId}` : 'no pool'}</span>
-          {account.extraUsage?.inUse && <Badge tone="serious">Overage</Badge>}
-          {account.extraUsage?.enabled && !account.extraUsage.inUse && <span className="muted">extra usage on</span>}
+          {/* A usage-based seat always pays in dollars, which is no overage, whatever its flags read. */}
+          {!account.usageBased && account.extraUsage?.inUse && <Badge tone="serious">Overage</Badge>}
+          {!account.usageBased && account.extraUsage?.enabled && !account.extraUsage.inUse && <span className="muted">extra usage on</span>}
         </div>
       </Link>
     </li>
@@ -442,11 +443,11 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
                 cooldown ends {fmtRelative(cooldown.until, now)}
               </Badge>
             )}
-            {extra?.inUse && <Badge tone="serious">Overage active</Badge>}
+            {!account.usageBased && extra?.inUse && <Badge tone="serious">Overage active</Badge>}
             {!account.routingEnabled && account.status !== 'paused' && <Badge tone="neutral">Routing paused</Badge>}
           </div>
           {/* A usage sample reports overage without a start, and a line counting from nothing would say nothing. */}
-          {overage?.inUse && overage.since && (
+          {!account.usageBased && overage?.inUse && overage.since && (
             <p className="detail__sub" title={fmtAbsolute(overage.since)}>
               Overage since {fmtRelative(overage.since, now)}
             </p>
@@ -587,8 +588,9 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
                       title: account.subscription?.rateLimitTier || undefined,
                       value: account.subscription ? `${account.plan ?? '-'}${account.subscription.since ? ` since ${fmtDate(account.subscription.since)}` : ''}` : 'unknown until paired',
                     },
-                    { label: 'Rate-limit tier', value: account.subscription?.rateLimitTier ?? '-', mono: account.subscription !== null },
+                    { label: 'Rate-limit tier', value: account.subscription ? `${account.subscription.rateLimitTier}${account.usageBased ? ', usage-based' : ''}` : '-', mono: account.subscription !== null },
                     ...(endsAt ? [{ label: 'Ends', title: fmtAbsolute(endsAt), value: fmtEndsIn(endsAt, now) }] : []),
+                    ...(account.planEndedAt ? [{ label: 'Plan ended', title: fmtAbsolute(account.planEndedAt), value: fmtRelative(account.planEndedAt, now) }] : []),
                     ...(trialEndsAt ? [{ label: 'Trial ends', title: fmtAbsolute(trialEndsAt), value: fmtEndsIn(trialEndsAt, now) }] : []),
                     { label: 'Organization', value: account.subscription?.organizationType ?? '-' },
                     { label: 'Billing type', value: account.subscription?.billingType ?? '-' },
@@ -602,8 +604,8 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
           {endForm && (
             <div className="capture" style={{ marginTop: 12 }}>
               <label className="row">
-                <input type="checkbox" checked={endForm.cancelled} disabled={busy} onChange={(e) => setEndForm(tickCancelled(endForm, e.target.checked))} />
-                <span className="field__label">Cancelled</span>
+                <input type="checkbox" checked={endForm.canceled} disabled={busy} onChange={(e) => setEndForm(tickCanceled(endForm, e.target.checked))} />
+                <span className="field__label">Canceled</span>
               </label>
               <Field label={endsLabel} hint={END_HINT}>
                 <Input type="datetime-local" value={endForm.endsAt} disabled={busy} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label={endsLabel} />
@@ -648,14 +650,15 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
         </Card>
 
         <Card title="Usage" subtitle="Remaining share of each window" className="card--fill">
-          {account.windows.length === 0 && !account.fableWindow ? (
-            awaitingReading ? <p className="muted">The first quota reading is in flight</p> : <p className="muted">This account does not report quota windows.</p>
+          {!account.usageBased && account.windows.length === 0 && !account.fableWindow ? (
+            awaitingReading ? <p className="muted">The first quota reading is in flight.</p> : <p className="muted">This account does not report quota windows.</p>
           ) : (
             <WindowTriple account={account} now={now} others />
           )}
-          {extra && (extra.enabled || extra.disabledReason) && (
+          {/* A usage-based seat's spend bar above is that reading, so its extra usage line would draw one figure twice. */}
+          {extra && ((extra.enabled && !account.usageBased) || extra.disabledReason) && (
             <div className="extra-usage">
-              {extra.enabled && (
+              {extra.enabled && !account.usageBased && (
                 <>
                   <div className="wbar__head">
                     <span className="wbar__label">
@@ -666,11 +669,14 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
                         </Badge>
                       )}
                     </span>
-                    <span className="num">
-                      {fmtCredits(extra.usedCredits)} of {fmtCredits(extra.monthlyLimitCredits)}
-                    </span>
+                    {/* A reading a head wrote carries no amounts, which would read as $0.00 of $0.00. */}
+                    {extra.usedCredits !== null && extra.monthlyLimitCredits !== null && (
+                      <span className="num">
+                        {fmtCredits(extra.usedCredits)} of {fmtCredits(extra.monthlyLimitCredits)}
+                      </span>
+                    )}
                   </div>
-                  <Meter value={extra.usedCredits / extra.monthlyLimitCredits} tone="accent" label="Extra usage spend" />
+                  {extra.usedCredits !== null && extra.monthlyLimitCredits !== null && <Meter value={extra.usedCredits / extra.monthlyLimitCredits} tone="accent" label="Extra usage spend" />}
                 </>
               )}
               {extra.disabledReason && (
@@ -987,9 +993,9 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
   }
   // The start effect's run while the dialog stays open, which the Disconnect's fresh start reads as its close guard.
   const live = useRef({ alive: false });
-  // The pairing whose confirm the router refused. A refusal past its claim fails the session, which answers a cancel
-  // 409, so the close gives back only a session no confirm was refused for, such as the fresh one a Disconnect starts.
-  const refused = useRef<string | null>(null);
+  // The route consumes the session once its claim lands, so the Cancel after a confirm sends nothing, and a session the
+  // claim or the transport left standing expires on its own.
+  const consumed = useRef<string | null>(null);
   useEffect(() => {
     if (!open) return;
     // Read back from the key the effect runs on, so the start it pairs is the one that key names.
@@ -1014,7 +1020,7 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
 
   const dismiss = () => {
     // The router keeps the account busy until the pairing expires, so leaving unconfirmed gives the session back.
-    if (session && session.id !== refused.current) void api.cancelPairing(session.id).catch(() => undefined);
+    if (session && session.id !== consumed.current) void api.cancelPairing(session.id).catch(() => undefined);
     onClose();
   };
 
@@ -1042,12 +1048,11 @@ function PairingDialog({ open, start, label, repair, onClose, onPaired }: { labe
     if (!session || !preview) return;
     setBusy(true);
     setError(null);
+    consumed.current = session.id;
     try {
       const confirmed = await api.confirmPairing(session.id);
       onPaired(preview, confirmed);
     } catch (e) {
-      // A confirm the transport never delivered leaves the session where it may still stand.
-      if (e instanceof ApiError && e.status !== 0) refused.current = session.id;
       setError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.code === 'sealed_under_another_key') setSealed(true);
     } finally {

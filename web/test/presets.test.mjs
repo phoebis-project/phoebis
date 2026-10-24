@@ -67,7 +67,7 @@ const win = (id, projection, horizonIn = 2 * HOUR, burn = 0.01) => ({
   resetsAt: at(NOW + horizonIn),
   utilization: projection === null ? 0.5 : Math.max(0, projection - 0.1),
 });
-/** A subscription account with its 5-hour and 7-day projections, and its Fable week's where one is named. */
+/** A subscription account with its 5-hour and 7-day projections, and its 7-day Fable window's where one is named. */
 const oauth = (id, five, seven, fable = null) => ({ fableWindow: fable === null ? null : win('7d_fable', fable, 5 * HOUR), id, kind: 'oauth', label: id, windows: [win('5h', five), win('7d', seven, 5 * HOUR)] });
 /** A pin as the Sessions route serves it: its 5-hour burn decayed to `burnAt`, the instant of the read. */
 const pin = (accountId, sessionId, burn, warm, over = {}) => ({
@@ -175,7 +175,7 @@ test('the preview names the member closest to the ceiling when none projects ove
   const weekly = oauth('weekly', 0.4, 0.884);
   assert.equal(line([cool, weekly], []), 'No member projects over the ceiling on any window: the closest is weekly, 7d 88 % in 5h.', 'a weekly horizon reads the span to it');
   const fable = oauth('fable', 0.4, 0.5, 0.87);
-  assert.equal(line([fable], [pin('fable', 'f', 0.01, false, { model: 'claude-fable-5-1' })]), 'No member projects over the ceiling on any window: the closest is fable, Fable week 87 % in 5h.', "the Fable week reads where a pin's model draws it");
+  assert.equal(line([fable], [pin('fable', 'f', 0.01, false, { model: 'claude-fable-5-1' })]), 'No member projects over the ceiling on any window: the closest is fable, 7-day Fable 87 % in 5h.', "the 7-day Fable window reads where a pin's model draws it");
   assert.equal(line([fable], [pin('fable', 's', 0.01, false)]), 'No member projects over the ceiling on any window: the closest is fable, 7d 50 % in 5h.', 'and only there');
   assert.equal(line([{ id: 'key', kind: 'api_key', label: 'key', windows: [], fableWindow: null }], []), 'No member projects over the ceiling on any window.', 'a pool of API-key members alone has no window to read');
 });
@@ -235,18 +235,19 @@ test("the preview reads a sibling's runway on every window the pin's model draws
   const fableFull = oauth('busy', 0.3, 0.2, 0.92);
   const fable = (id, burn) => pin('hot', id, burn, false, { model: 'claude-fable-5-1' });
   const pins = [fable('fable-a', 0.04), pin('hot', 'sonnet-b', 0.03, false), pin('hot', 'sonnet-c', 0.01, false)];
-  // The Fable pin draws the Fable week, where busy sits over the ceiling, so the round passes over it and marks the two
-  // Sonnet pins in its place, 3 then 1 points an hour, which reach the cap's 4. The Fable pin stays the last unmarked.
+  // The Fable pin draws the 7-day Fable window, where busy sits over the ceiling, so the round passes over it and marks
+  // the two Sonnet pins in its place, 3 then 1 points an hour, which reach the cap's 4. The Fable pin stays the last
+  // unmarked.
   const preview = d.shedPreview(pool([hot, fableFull]), [hot, fableFull], pins, NOW);
-  assert.deepEqual([preview.hot.map((h) => h.label), preview.sessions, preview.covered.toFixed(3)], [['hot'], 2, '0.040'], 'busy draws no Fable pin of its own, so its Fable week fires no round there');
+  assert.deepEqual([preview.hot.map((h) => h.label), preview.sessions, preview.covered.toFixed(3)], [['hot'], 2, '0.040'], 'busy draws no Fable pin of its own, so its 7-day Fable window fires no round there');
   assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (0 warm), 4.0 %/h of the excess, to move to a sibling with runway.');
 });
 
-test('a round fired by the Fable week counts the pins whose model draws it alone, so it plans no Sonnet move', () => {
-  // fable-hot crosses on its Fable week alone: 99 % five hours out under the ceiling of 90, an excess of 1.8 points an
-  // hour, while its shared windows sit under it. The Sonnet pin burns five points an hour and the two Fable pins one
-  // and a half between them, but only the Fable pins draw the week that fired, so the Sonnet pin sits the round out and
-  // the cap's 0.75 points an hour are reached by the heavier Fable pin alone.
+test('a round fired by the 7-day Fable window counts the pins whose model draws it alone, so it plans no Sonnet move', () => {
+  // fable-hot crosses on its 7-day Fable window alone: 99 % five hours out under the ceiling of 90, an excess of 1.8
+  // points an hour, while its shared windows sit under it. The Sonnet pin burns five points an hour and the two Fable
+  // pins one and a half between them, but only the Fable pins draw the week that fired, so the Sonnet pin sits the
+  // round out and the cap's 0.75 points an hour are reached by the heavier Fable pin alone.
   const fableHot = oauth('fable-hot', 0.5, 0.4, 0.99);
   const sibling = oauth('cool', 0.3, 0.2, 0.3);
   const fable = (id, burn) => pin('fable-hot', id, burn, false, { model: 'claude-fable-5-1' });
@@ -258,8 +259,9 @@ test('a round fired by the Fable week counts the pins whose model draws it alone
 });
 
 test("a pin whose model does not draw the fired window is out of the preview's round", () => {
-  // hot crosses on its Fable week alone. The Sonnet pins draw no Fable week, so the round walks the Fable pin by
-  // itself, and a member's last pin is never marked, however much the Sonnet pins burn on the shared windows.
+  // hot crosses on its 7-day Fable window alone. The Sonnet pins draw no 7-day Fable window, so the round walks the
+  // Fable pin by itself, and a member's last pin is never marked, however much the Sonnet pins burn on the shared
+  // windows.
   const fableHot = oauth('hot', 0.3, 0.2, 0.97);
   const sibling = oauth('cool', 0.3, 0.2, 0.3);
   const pins = [pin('hot', 'fable-a', 0.01, false, { model: 'claude-fable-5-1' }), pin('hot', 'sonnet-b', 0.05, false), pin('hot', 'sonnet-c', 0.03, false)];

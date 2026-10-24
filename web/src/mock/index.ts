@@ -3,7 +3,7 @@ import type { GuardrailInput, GuardrailRange, GuardrailTestInput } from '@/api/c
 import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeSettings } from '@/api/decode';
 import { GUARDRAIL_MODE_VALUES } from '@/api/decode';
 import { decodeStreamCut } from '@/api/decode';
-import { ApiError, catalogUnion, slug } from '@/api/http';
+import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
   ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestEvent, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
@@ -52,14 +52,24 @@ let pending = 0;
 // a harness settles on the mock's own signal rather than on a fixed wait.
 const latency = <T,>(value: T, ms = 120): Promise<T> => {
   pending += 1;
-  return new Promise((resolve) => mockClock.setTimeout(() => { pending -= 1; resolve(value); }, ms));
+  return new Promise((resolve) =>
+    mockClock.setTimeout(() => {
+      pending -= 1;
+      // On each answer, as the transport reads each one's header, since the shell's hook may register after the first.
+      if (buildMismatch()) noteBuild(OTHER_BUILD);
+      resolve(value);
+    }, ms),
+  );
 };
 /** How many mock answers are still on their timer. */
 export const inFlight = (): number => pending;
 
 /** How long a confirm's first usage poll takes to land, on the mock's clock: the few seconds its answer names. */
 const FIRST_POLL_MS = 2_000;
-/** The windows a paired account's first poll reads: the shape the story gives primary's plan windows. */
+/**
+ * The windows a paired account's first poll reads: the shape the story gives primary's plan windows, each stamped at
+ * the read that lands it, as the router stamps a reading when it reads it, so none predates the confirm.
+ */
 const FIRST_READING = ACCOUNTS.find((a) => a.id === 'primary')?.windows ?? [];
 
 // The routes' own wording, so a page draws the text the router would have sent.
@@ -184,7 +194,10 @@ const memberRefusal = (members: PoolInput['members']): string | null => {
   return null;
 };
 
-/** The affinity floor, the rule list, the keepalive policy's and the engine's refusals, first one first, as the pool routes answer them. */
+/**
+ * The affinity floor, the rule list, the keepalive policy's and the engine's refusals, first one first, as the pool
+ * routes answer them.
+ */
 const poolRefusal = (input: PoolInput): string | null => {
   // The route reads the threshold as an unsigned whole number while it parses the body, before any other check.
   const tokens = input.minSharedPrefixTokens;
@@ -220,16 +233,29 @@ const MODEL_SCOPE_PREFIX = 'model:';
  */
 const SEEDED_SESSION_KEY = 'phoebis.mockSession';
 const MOCK_SESSION: SessionInfo = { persistent: false, sessionId: 'mock-admin' };
-const seededSession = (): boolean => {
+/**
+ * A login's mark carries the Stay logged in choice, so a reload reads it, and the bare `admin` the smoke's own writers
+ * store reads as a login left unchecked.
+ */
+const persistentOf = (mark: string): boolean => {
   try {
-    return localStorage.getItem(SEEDED_SESSION_KEY) !== null;
+    return (JSON.parse(mark) as { persistent?: unknown } | null)?.persistent === true;
   } catch {
     return false;
   }
 };
-const seedSession = (signedIn: boolean) => {
+const seededSession = (): SessionInfo | null => {
   try {
-    if (signedIn) localStorage.setItem(SEEDED_SESSION_KEY, 'admin');
+    const mark = localStorage.getItem(SEEDED_SESSION_KEY);
+    return mark === null ? null : { ...MOCK_SESSION, persistent: persistentOf(mark) };
+  } catch {
+    return null;
+  }
+};
+/** `null` signs out. */
+const seedSession = (persistent: boolean | null) => {
+  try {
+    if (persistent !== null) localStorage.setItem(SEEDED_SESSION_KEY, JSON.stringify({ persistent, user: 'admin' }));
     else localStorage.removeItem(SEEDED_SESSION_KEY);
   } catch {
     // No storage (the Node tests): the session lives on the instance alone.
@@ -262,6 +288,32 @@ const heldWriter = (): boolean => {
   }
 };
 
+/** Set to stand in for a sessions read the store refuses: the list answers a `503` and draws nothing. */
+export const SESSIONS_FAIL_KEY = 'phoebis.mockSessionsFail';
+const sessionsFail = (): boolean => {
+  try {
+    return localStorage.getItem(SESSIONS_FAIL_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Set to stand in for a router that runs another build: each answer names a build other than the bundle's, as an
+ * answer's header names it to the transport's `call`, which the mock never goes through, so the shell draws its reload
+ * banner.
+ */
+export const BUILD_MISMATCH_KEY = 'phoebis.mockBuildMismatch';
+const buildMismatch = (): boolean => {
+  try {
+    return localStorage.getItem(BUILD_MISMATCH_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+/** A build no bundle is made from. */
+const OTHER_BUILD = '0'.repeat(40);
+
 /**
  * Set to add the one plan request on a model the cost model lists in no tier: the dashboard's day and the analytics'
  * folds read it beside the story, so the figures it moves read a window priced nothing, while without the switch the
@@ -278,6 +330,16 @@ const unpricedStory = (): boolean => {
 /** The rollups the analytics routes fold: none for a fresh installation, the unpriced request's beside the story's
  *  under its switch. */
 const ledgerRollups = () => (emptyStore() ? [] : unpricedStory() ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS);
+/**
+ * The key the unpriced request lands on, its lifetime and its week flagged on both windows under the switch, since the
+ * request prices neither and falls inside the week. The keys' fold runs once at load, so the flag lands at the read,
+ * and the key's figures stay the story's.
+ */
+const unpricedKey = (k: ApiKey): ApiKey => {
+  if (!unpricedStory() || k.id !== UNPRICED_REQUEST.keyId || Date.parse(k.createdAt) !== UNPRICED_REQUEST.keyGeneration) return k;
+  const flagged = <S extends Pick<ApiKey['lifetime'], 'equivalent'>>(s: S): S => ({ ...s, equivalent: { ...s.equivalent, unpriced: { fiveHour: true, sevenDay: true } } });
+  return { ...k, lifetime: flagged(k.lifetime), usage7d: flagged(k.usage7d) };
+};
 /** The detail's cut as the route lifts it, off the newest `stream_interrupted` row that names the request. */
 const streamCutOf = (requestId: string) => {
   const cuts = ROUTING_EVENTS.filter((e) => e.kind === 'stream_interrupted' && e.requestId === requestId);
@@ -310,7 +372,9 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
   return code && state ? { code, state } : null;
 }
 
-/** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
+/**
+ * A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one.
+ */
 const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
 /** A fast-lane row holds fast-mode requests alone, so the account cools only under another scope's row. */
 const cooling = (cooldowns: Account['cooldowns']) => cooldowns.some((c) => !isFastScope(c.scope));
@@ -359,10 +423,10 @@ const writtenMember = (m: PoolInput['members'][number], account: Account | undef
 };
 
 /**
- * A pool's pins are every pin under its keys. A pin on a member that left the pool counts here and in no member's
- * cell.
+ * A pool's pins are every pin under the keys it holds at the read, so a pool created again under a deleted one's id
+ * reads none of the old keys' pins. A pin on a member that left the pool counts here and in no member's cell.
  */
-const poolPins = (p: Pick<Pool, 'id'>): number => pinsUnderPool(p.id);
+const poolPins = (p: Pick<Pool, 'id'>, keys: readonly Pick<ApiKey, 'id' | 'poolId'>[]): number => pinsUnderPool(new Set(keys.filter((k) => k.poolId === p.id).map((k) => k.id)));
 
 /**
  * The route's `keys=` rule: `<id>@<generation>` names one lifetime and a bare id the live key's, so an earlier
@@ -462,7 +526,7 @@ export class MockApi implements Api {
     revision: stampToken(1, p.updatedAt),
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
-      return { ...m, activePins: memberPins(p.id, m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
+      return { ...m, activePins: memberPins(new Set(this.keys.filter((k) => k.poolId === p.id).map((k) => k.id)), m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
     }),
   }));
   private secretRng = createRng(MOCK_SEED);
@@ -484,10 +548,16 @@ export class MockApi implements Api {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
     const ids = new Set(keys.map((k) => k.id));
     const cohort = Math.max(0, ...this.sessions.filter((s) => s.pinned && ids.has(s.keyId)).map((s) => s.agents));
-    return { ...p, activePins: poolPins(p), guardrails: this.guardrailRefs('pools', p.id), keys, warnings: poolWarnings(p, cohort) };
+    // A member's pins are read under the keys the pool holds at the read, as its figure is, so a key that moved here
+    // counts its pins on the member cells too.
+    const members = p.members.map((m) => ({ ...m, activePins: memberPins(ids, m.accountId) }));
+    return { ...p, activePins: poolPins(p, this.keys), guardrails: this.guardrailRefs('pools', p.id), keys, members, warnings: poolWarnings(p, cohort) };
   }
 
-  /** The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the read. */
+  /**
+   * The key as the route answers it, its own guardrails and its pool's read from the attachments at the time of the
+   * read.
+   */
   private keyView(k: ApiKey): ApiKey {
     return { ...k, guardrails: this.guardrailRefs('keys', k.id), poolGuardrails: this.guardrailRefs('pools', k.poolId) };
   }
@@ -541,7 +611,9 @@ export class MockApi implements Api {
     return null;
   }
 
-  /** From the guardrail's side: a subject newly named joins the end of its list, one already attached keeps its place. */
+  /**
+   * From the guardrail's side: a subject newly named joins the end of its list, one already attached keeps its place.
+   */
   private attached(g: Guardrail, kind: 'keys' | 'pools', ids: string[] | undefined): GuardrailAttachment[] {
     if (ids === undefined) return g[kind];
     const kept = g[kind].filter((a) => ids.includes(a.id));
@@ -574,7 +646,10 @@ export class MockApi implements Api {
     return key === undefined ? null : `key ${key} not found`;
   }
 
-  /** The stamp as the route reads it against the shipped presets: customized where the conditions left the stamped version's. */
+  /**
+   * The stamp as the route reads it against the shipped presets: customized where the conditions left the stamped
+   * version's.
+   */
   private presetStateOf(preset: Guardrail['preset'], conditions: Guardrail['conditions']): Guardrail['preset'] {
     if (preset === null) return null;
     const stamped = PRESETS.find((p) => p.id === preset.id && p.version === preset.version);
@@ -603,7 +678,7 @@ export class MockApi implements Api {
       if (at - confirmedAt < FIRST_POLL_MS) continue;
       this.firstPolls.delete(id);
       const a = this.accounts.find((x) => x.id === id);
-      if (a && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w })) });
+      if (a && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w, observedAt: iso(at) })) });
     }
   }
 
@@ -779,6 +854,7 @@ export class MockApi implements Api {
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
     const id = slug(input.name);
     if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
+    if (!this.pools.some((p) => p.id === input.poolId)) throw new ApiError(404, 'pool not found', null);
     const refusal = keyRulesRefusal(input);
     if (refusal) throw new ApiError(400, refusal, null);
     const body = this.token(40);
@@ -959,7 +1035,9 @@ export class MockApi implements Api {
     return latency(seriesOf(ledgerRollups(), query));
   }
 
-  /** The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them. */
+  /**
+   * The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them.
+   */
   getAttention() {
     if (emptyStore()) return latency([]);
     return latency(this.parkedLanded ? ATTENTION.filter((i) => i.kind !== 'ledger_record_parked') : ATTENTION);
@@ -1043,7 +1121,8 @@ export class MockApi implements Api {
         bucket.requests += 1;
         bucket.tokens += total;
         bucket.cost += r.costUsd;
-        if (r.status !== 200) bucket.errors += 1;
+        // The ledger's rate: a request that did not succeed is an error, a canceled one answered with a 200 among them.
+        if (r.outcome !== 'succeeded') bucket.errors += 1;
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -1051,11 +1130,11 @@ export class MockApi implements Api {
     const day = requestSidesOf(last24h);
     return latency({
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
-      activePins: empty ? 0 : this.pools.reduce((n, p) => n + poolPins(p), 0),
+      activePins: empty ? 0 : this.pools.reduce((n, p) => n + poolPins(p, this.keys), 0),
       billed24h: day.billedUsd,
       cost24h: cost,
       equivalent24h: day.equivalent,
-      errorRate24h: rated.length ? rated.filter((r) => r.status !== 200).length / rated.length : null,
+      errorRate24h: rated.length ? rated.filter((r) => r.outcome !== 'succeeded').length / rated.length : null,
       estimated24h: day.estimated,
       hourly: [...hourlyMap.values()],
       refused24h: last24h.length - rated.length,
@@ -1084,7 +1163,7 @@ export class MockApi implements Api {
 
   getSession(): Promise<SessionInfo | null> {
     if (this.session) return latency(this.session, 60);
-    return latency(seededSession() ? MOCK_SESSION : null, 60);
+    return latency(seededSession(), 60);
   }
 
   getSettings() {
@@ -1093,9 +1172,10 @@ export class MockApi implements Api {
 
   listAccountRollups(from: string, to: string) {
     if (emptyStore()) return latency([]);
-    const fromMs = Date.parse(from);
-    const toMs = Date.parse(to);
-    return latency(ACCOUNT_ROLLUPS.filter((r) => Date.parse(r.hour) >= fromMs && Date.parse(r.hour) <= toMs));
+    // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
+    const fromHour = Math.floor(Date.parse(from) / HOUR) * HOUR;
+    const toCeiling = Math.ceil(Date.parse(to) / HOUR) * HOUR;
+    return latency(ACCOUNT_ROLLUPS.filter((r) => Date.parse(r.hour) >= fromHour && Date.parse(r.hour) < toCeiling));
   }
 
   listAccounts() {
@@ -1135,7 +1215,7 @@ export class MockApi implements Api {
   }
 
   listKeys() {
-    return latency(emptyStore() ? [] : this.keys.map((k) => this.keyView(k)));
+    return latency(emptyStore() ? [] : this.keys.map((k) => this.keyView(unpricedKey(k))));
   }
 
   listPools() {
@@ -1172,19 +1252,20 @@ export class MockApi implements Api {
   }
 
   listSessions() {
+    if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
     return latency(emptyStore() ? [] : this.sessions);
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
     if (secret !== 'admin') return Promise.reject(new ApiError(401, 'that secret does not match', null));
     this.session = { ...MOCK_SESSION, persistent: stayLoggedIn };
-    seedSession(true);
+    seedSession(stayLoggedIn);
     return latency(this.session, 200);
   }
 
   logout() {
     this.session = null;
-    seedSession(false);
+    seedSession(null);
     return latency(undefined, 150);
   }
 
@@ -1297,17 +1378,17 @@ export class MockApi implements Api {
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
   async updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account> {
     const a = this.account(accountId);
-    if (patch.cancelled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is canceled', null);
-    if (!patch.cancelled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs canceled', null);
-    if (patch.cancelled && patch.subscriptionEndsAt === null) throw new ApiError(400, 'canceled needs subscription_ends_at', null);
+    if (patch.canceled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is canceled', null);
+    if (!patch.canceled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs canceled', null);
+    if (patch.canceled && patch.subscriptionEndsAt === null) throw new ApiError(400, 'canceled needs subscription_ends_at', null);
     if (revision !== undefined && revision !== a.revision) {
       return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
     }
-    // The route answers a subscription block for a cancelled OAuth row even before it pairs, so its end has a place.
+    // The route answers a subscription block for a canceled OAuth row even before it pairs, so its end has a place.
     const blank: Subscription = { billingType: '', endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
-    const base = a.subscription ?? (patch.cancelled ? blank : null);
-    const subscription = base ? { ...base, endsAt: patch.cancelled ? patch.subscriptionEndsAt : null } : null;
-    return latency(this.withPool(this.putAccount(revised({ ...a, canceled: patch.cancelled, subscription }))), 250);
+    const base = a.subscription ?? (patch.canceled ? blank : null);
+    const subscription = base ? { ...base, endsAt: patch.canceled ? patch.subscriptionEndsAt : null } : null;
+    return latency(this.withPool(this.putAccount(revised({ ...a, canceled: patch.canceled, subscription }))), 250);
   }
 
   /**
@@ -1368,6 +1449,7 @@ export class MockApi implements Api {
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
     const current = this.keys[idx];
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
+    if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
     // The pool the key lands in, a new one on a move, with the key's own list as the edit leaves it.
     const own = ownIds ?? this.guardrailRefs('keys', id).map((r) => r.id);
     const bound = boundRefusal(rest.poolId, this.guardrailRefs('pools', rest.poolId).map((r) => r.id), [[id, own]]);

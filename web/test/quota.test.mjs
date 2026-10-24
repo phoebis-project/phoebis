@@ -122,7 +122,7 @@ test("the pace words run to the account's end when it comes before the window's 
   assert.equal(d.remainingTimeShare(week), null, 'a window the answer carries no lead for draws no mark');
 });
 
-test('the end a pace reads is the saved end while cancelled, else a trial end still ahead, as the router reads it', () => {
+test('the end a pace reads is the saved end while canceled, else a trial end still ahead, as the router reads it', () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const iso = (ms) => new Date(ms).toISOString();
   const saved = now + 5 * 86_400_000;
@@ -250,15 +250,54 @@ test("a short timeline cell's hour drops its leading zero and carries its period
 
 test('the 5-hour timeline draws fewer cells at one width under the 12-hour setting, so each cell holds its short hour', () => {
   assert.equal(d.cellsFit(316, '24h'), 12, 'twelve cells of 26 px hold "06"');
-  assert.equal(d.cellsFit(316, '12h'), 6, 'twelve cells of 26 px cut "12 AM", six of 53 px hold it');
+  assert.equal(d.cellsFit(316, '12h'), 6, 'twelve cells of 26 px cut "12 AM", six of 52.67 px hold it');
   assert.equal(d.cellsFit(876, '24h'), 12);
   assert.equal(d.cellsFit(876, '12h'), 12, 'twelve cells of 73 px hold "12 AM"');
   assert.ok(d.CELL_MIN_PX['12h'].short > d.CELL_MIN_PX['24h'].short, `the short "12 AM" needs ${d.CELL_MIN_PX['12h'].short} px against ${d.CELL_MIN_PX['24h'].short} px for "06"`);
   assert.ok(d.CELL_MIN_PX['12h'].full > d.CELL_MIN_PX['24h'].full, `the full "12:00 AM" needs ${d.CELL_MIN_PX['12h'].full} px against ${d.CELL_MIN_PX['24h'].full} px for "Sep 13"`);
+  assert.equal(d.CELL_MIN_PX['12h'].full, 53, 'two 12:00 AM labels keep the 24-hour spacing');
 });
 
 test('the Quota page lists a subscription account that is paired and not awaiting re-authentication, and no API-key account', () => {
   for (const status of ['cooldown', 'funding_required', 'paused', 'ready']) assert.equal(d.isQuotaListed({ kind: 'oauth', status }), true, `a subscription account reading ${status}`);
   for (const status of ['reauth_required', 'unpaired']) assert.equal(d.isQuotaListed({ kind: 'oauth', status }), false, `a subscription account reading ${status}`);
   assert.equal(d.isQuotaListed({ kind: 'api_key', status: 'ready' }), false, 'an API-key account');
+});
+
+const SPEND_NOW = Date.UTC(2026, 8, 16, 14, 30);
+/** A usage-based seat's spend reading, its estimated reset at 00:00 UTC on the first of the next month. */
+const spendReading = (over = {}) => ({
+  amounts: { currency: 'USD', exponent: 2, limitMinor: 250_000, polledAt: new Date(SPEND_NOW - 600_000).toISOString(), usedMinor: 102_500 },
+  observedAt: new Date(SPEND_NOW - 300_000).toISOString(),
+  resetSource: 'estimated',
+  resetsAt: new Date(Date.UTC(2026, 9, 1)).toISOString(),
+  utilization: 0.41,
+  ...over,
+});
+const planWindow = (id, resetsInMs, lead = 0.1) => ({ id, label: id, lead, observedAt: new Date(SPEND_NOW - 40_000).toISOString(), periodHours: id === '5h' ? 5 : 168, resetsAt: new Date(SPEND_NOW + resetsInMs).toISOString(), utilization: 0.5 });
+const seatAccount = (spend = spendReading()) => ({ fableWindow: null, id: 'seat', label: 'seat', spend, usageBased: true, windows: [] });
+const planAccount = (id, windows) => ({ fableWindow: null, id, label: id, spend: null, usageBased: false, windows });
+
+test("the soonest reset of a usage-based seat is its spend window's, while that reset is ahead", () => {
+  assert.equal(d.soonestReset(seatAccount(), SPEND_NOW), 'spend', 'the one reset the seat carries');
+  assert.equal(d.soonestReset(seatAccount(spendReading({ resetsAt: new Date(SPEND_NOW - 60_000).toISOString() })), SPEND_NOW), null, 'a reset already passed recovers nothing');
+  assert.equal(d.soonestReset(seatAccount(null), SPEND_NOW), null, 'a seat with no spend reading yet');
+  assert.equal(d.soonestReset(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW), '5h', 'a plan account reads its windows as before');
+});
+
+test('the pace orders put a usage-based seat last, with the accounts that carry no such window', () => {
+  const accounts = [seatAccount(), planAccount('behind', [planWindow('5h', 3_600_000, -0.3), planWindow('7d', 86_400_000, -0.2)])];
+  for (const id of ['5h', '7d', '7d_fable']) assert.deepEqual(d.sortByPace(accounts, id, SPEND_NOW).map((a) => a.id).slice(-1), ['seat'], id);
+});
+
+test("the timeline's input and its lanes take an account with a spend reading beside the plan accounts, under both zooms", () => {
+  const plan = planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]);
+  const seat = seatAccount();
+  const none = planAccount('none', []);
+  const input = [plan, seat, none].filter(d.onTimeline);
+  assert.deepEqual(input.map((a) => a.id), ['plan', 'seat'], 'an account with neither a plan window nor a spend reading draws no lane');
+  for (const id of ['5h', '7d']) {
+    const lanes = d.timelineLanes(input, id);
+    assert.deepEqual(lanes.map((l) => [l.account.id, l.window?.id ?? null, l.spend === null ? null : l.spend.utilization]), [['plan', id, null], ['seat', null, 0.41]], `the ${id} zoom`);
+  }
 });
