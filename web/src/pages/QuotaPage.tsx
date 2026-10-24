@@ -9,7 +9,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
-import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtMinor, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
+import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
@@ -377,7 +377,8 @@ function QuotaWindow({ end, name, window: w, now, slowDown = null, soon }: { end
 /**
  * A usage-based seat's spend window as one row of the card grid, in a window row's shape: the chip with the share left,
  * the meter, and the reset label with the estimate's word where the router estimated it. It reads no pace, since the
- * router projects no burn on the seat. With no limit set the chip reads the dollars spent and no meter draws.
+ * router projects no burn on the seat. With no limit set the chip reads the amount spent in its currency and no meter
+ * draws.
  */
 function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: Spend }) {
   const { amounts, utilization } = spend;
@@ -466,8 +467,8 @@ function LaneChip({ label, window: w, now }: { label: string; now: number; windo
 }
 
 /**
- * A spend window's chip on its lane: the dollars left of the limit, the dollars spent alone with no limit set, toned by
- * the share left as a window's chip is, with the reset and the estimate's word on hover.
+ * A spend window's chip on its lane: the amount left of the limit in its currency, the amount spent alone with no limit
+ * set, toned by the share left as a window's chip is, with the reset and the estimate's word on hover.
  */
 function SpendChip({ spend }: { spend: Spend }) {
   const { amounts, utilization } = spend;

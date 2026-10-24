@@ -44,7 +44,7 @@ export interface ExtraUsage {
   usedCredits: number | null;
 }
 
-/** A usage-based seat's one window: what it has spent of its monthly limit, in dollars at API rates. */
+/** A usage-based seat's one window: what it has spent of its monthly limit, in its currency at API rates. */
 export interface Spend {
   /**
    * The newest polled row's amounts in minor units, null while no polled row of the last day carries them, with
