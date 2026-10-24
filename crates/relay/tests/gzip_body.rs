@@ -428,6 +428,9 @@ async fn an_unsupported_request_encoding_is_refused_415_before_its_body_is_read(
     let request = Request::post("/v1/messages")
         .header("authorization", format!("Bearer {KEY}"))
         .header("content-type", "application/json")
+        .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", fresh_session())
+        .header("x-claude-code-request-class", "main")
         .header("content-encoding", "br")
         .body(Body::from_stream(
             tokio_stream::wrappers::ReceiverStream::new(rx),

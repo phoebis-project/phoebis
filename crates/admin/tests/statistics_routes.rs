@@ -4316,10 +4316,12 @@ async fn one_held_probe() -> (common::Full, String) {
         .uri("/v1/messages")
         .header("x-api-key", &secret)
         .header("content-type", "application/json")
+        .header("user-agent", "claude-cli/2.1.269 (external, sdk-cli)")
         .header("x-claude-code-session-id", "s1")
         .header("x-claude-code-agent-id", "main")
+        .header("x-claude-code-request-class", "main")
         .body(axum::body::Body::from(
-            r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"#,
+            r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}"}}"#,
         ))
         .unwrap();
     let resp = phoebis_relay::router(parts.relay.clone())

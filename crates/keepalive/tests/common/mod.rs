@@ -566,7 +566,8 @@ impl Rig {
     }
 
     /// The model is the body's, as the relay would report it, so a test observes a request on another model by
-    /// changing the body alone.
+    /// changing the body alone. The headers are the ones a probe replays, so they carry the user agent and the
+    /// session the router requires of a Claude Code client.
     pub fn observed(&self, id: &str, agent: &str, body: &str) -> BusEvent {
         let model = serde_json::from_str::<serde_json::Value>(body)
             .ok()
@@ -589,6 +590,10 @@ impl Rig {
             stream: true,
             headers: vec![
                 ("anthropic-beta".into(), "test-beta".into()),
+                (
+                    "user-agent".into(),
+                    "claude-cli/2.1.269 (external, cli)".into(),
+                ),
                 ("x-claude-code-agent-id".into(), agent.into()),
                 ("x-claude-code-session-id".into(), "session".into()),
             ],
@@ -638,6 +643,10 @@ impl Rig {
             stream: true,
             headers: vec![
                 ("anthropic-beta".into(), "test-beta".into()),
+                (
+                    "user-agent".into(),
+                    "claude-cli/2.1.269 (external, cli)".into(),
+                ),
                 ("x-claude-code-agent-id".into(), agent.into()),
                 ("x-claude-code-session-id".into(), "session".into()),
             ],

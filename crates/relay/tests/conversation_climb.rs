@@ -23,6 +23,11 @@ fn req(value: &Value) -> Request<Body> {
     req_under(value, KEY)
 }
 
+/// A Claude Code request carrying `value` under `session`, as the client sends one.
+fn cli_req(value: &Value, session: &str) -> Request<Body> {
+    claude_code_request(KEY, session, value)
+}
+
 fn req_under(value: &Value, key: &str) -> Request<Body> {
     use phoebis_profile::fixtures::{inference_head, FixtureKind};
     let bytes = serde_json::to_vec(value).unwrap();
@@ -146,11 +151,12 @@ async fn a_one_hour_static_tier_and_a_five_minute_tail_record_both_lifetimes() {
     ]);
     value["messages"][1]["content"] =
         json!([{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}]);
+    let value = with_attribution_line(&value);
     let chains = phoebis_relay::Chains::read(&value).unwrap();
     let static_hash = chains.static_hash().unwrap().to_string();
     let tail_hash = chains.tail_hash().unwrap().to_string();
 
-    send(&h, req(&value)).await;
+    send(&h, cli_req(&value, &fresh_session())).await;
     identified(&mut sub).await;
     settle(&h).await;
     {
@@ -185,7 +191,7 @@ async fn a_one_hour_marker_answered_with_a_five_minute_write_records_five_minute
         .tail_hash()
         .unwrap()
         .to_string();
-    send(&h, req(&value)).await;
+    send(&h, cli_req(&value, &fresh_session())).await;
     identified(&mut sub).await;
     settle(&h).await;
     let map = h.router.affinity();
@@ -215,12 +221,13 @@ async fn a_mixed_marker_request_with_equal_deepest_ttls_keeps_its_markers_lifeti
         json!([{"type": "text", "text": "be helpful", "cache_control": {"type": "ephemeral"}}]);
     value["messages"][1]["content"] =
         json!([{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}]);
+    let value = with_attribution_line(&value);
     let tail_hash = phoebis_relay::Chains::read(&value)
         .unwrap()
         .tail_hash()
         .unwrap()
         .to_string();
-    send(&h, req(&value)).await;
+    send(&h, cli_req(&value, &fresh_session())).await;
     identified(&mut sub).await;
     settle(&h).await;
     let map = h.router.affinity();
@@ -251,7 +258,7 @@ async fn a_marker_on_the_tail_alone_records_the_static_boundaries_as_links_witho
     let static_hash = chains.static_hash().unwrap().to_string();
     let tail_hash = chains.tail_hash().unwrap().to_string();
 
-    send(&h, req(&value)).await;
+    send(&h, cli_req(&value, &fresh_session())).await;
     identified(&mut sub).await;
     settle(&h).await;
     {
@@ -294,11 +301,12 @@ async fn a_completed_response_lands_its_boundaries_in_the_affinity_map() {
         json!([{"type": "text", "text": "be helpful", "cache_control": {"type": "ephemeral"}}]);
     value["messages"][1]["content"] =
         json!([{"type": "text", "text": "second", "cache_control": {"type": "ephemeral"}}]);
+    let value = with_attribution_line(&value);
     let chains = phoebis_relay::Chains::read(&value).unwrap();
     let static_hash = chains.static_hash().unwrap().to_string();
     let message_boundaries = chains.message_boundaries.clone();
 
-    send(&h, req(&value)).await;
+    send(&h, cli_req(&value, &fresh_session())).await;
     identified(&mut sub).await;
     settle(&h).await;
 
@@ -348,7 +356,7 @@ async fn a_rejected_answer_and_a_token_count_record_no_affinity_entry() {
     let rejected = body(vec![user("a request the account rejects")]);
     let chains = phoebis_relay::Chains::read(&rejected).unwrap();
     let rejected_boundary = chains.message_boundaries[0].clone();
-    send(&h, req(&rejected)).await;
+    send(&h, cli_req(&rejected, &fresh_session())).await;
     identified(&mut sub).await;
     settle(&h).await;
     {
@@ -397,13 +405,13 @@ async fn a_subagents_first_request_identifies_by_its_session_under_its_own_agent
         "text": "the subagent's own static prefix",
         "cache_control": {"type": "ephemeral"},
     }]);
+    let value = with_attribution_line(&value);
     let static_hash = phoebis_relay::Chains::read(&value)
         .unwrap()
         .static_hash()
         .unwrap()
         .to_string();
-    let mut request = req(&value);
-    set_header(&mut request, "x-claude-code-session-id", "s1");
+    let mut request = cli_req(&value, "s1");
     set_header(&mut request, "x-claude-code-agent-id", "sub-1");
     set_header(&mut request, "x-claude-code-parent-agent-id", "main");
     send(&h, request).await;
@@ -449,8 +457,7 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
         .set_pool_members("main", &[member("b", 1)], "test")
         .unwrap();
     h.router.reload().await.unwrap();
-    let mut s1_req = req(&body(four.clone()));
-    set_header(&mut s1_req, "x-claude-code-session-id", "s1");
+    let s1_req = cli_req(&body(four.clone()), "s1");
     send(&h, s1_req).await;
     assert_eq!(identified(&mut sub).await, Fork::default());
     settle(&h).await;
@@ -461,8 +468,7 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
     h.router.reload().await.unwrap();
     let mut s2_messages = four[..3].to_vec();
     s2_messages.push(assistant("a different fourth"));
-    let mut s2_req = req(&body(s2_messages.clone()));
-    set_header(&mut s2_req, "x-claude-code-session-id", "s2");
+    let s2_req = cli_req(&body(s2_messages.clone()), "s2");
     send(&h, s2_req).await;
     assert_eq!(
         identified(&mut sub).await,
@@ -484,8 +490,7 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
 
     let mut s2_extended = s2_messages;
     s2_extended.push(user("continuing s2's own branch"));
-    let mut s2_req2 = req(&body(s2_extended));
-    set_header(&mut s2_req2, "x-claude-code-session-id", "s2");
+    let s2_req2 = cli_req(&body(s2_extended), "s2");
     send(&h, s2_req2).await;
     assert_eq!(
         identified(&mut sub).await,
@@ -504,13 +509,13 @@ async fn a_quota_probe_names_no_fork_and_leaves_no_content_entry_and_a_fork_need
     .await;
     let (h, mut sub) = setup(&up, &one()).await;
 
-    // The client's quota probe: one message every probe of the key shares, sent under the session id at a
-    // session's start, so the second session's probe matches the first's at depth 1.
+    // The client's quota probe: one message every probe of the key shares, sent as Claude Code sends it at a
+    // session's start, under the session id and the class `auxiliary`, so the second session's probe matches the
+    // first's at depth 1.
     let probe = json!({"model": MODEL, "max_tokens": 1, "messages": [user("quota")]});
     let probe_chains = phoebis_relay::Chains::read(&probe).unwrap();
     let classed = |value: &Value, session: &str, class: &str| {
-        let mut request = req(value);
-        set_header(&mut request, "x-claude-code-session-id", session);
+        let mut request = cli_req(value, session);
         set_header(&mut request, "x-claude-code-request-class", class);
         request
     };
@@ -592,8 +597,7 @@ async fn an_auxiliary_request_with_a_session_files_a_static_entry() {
             .entry(MODEL, &probe_chains.static_boundaries[0])
             .map(|entry| entry.root.clone())
     };
-    let mut rooted = req(&probe);
-    set_header(&mut rooted, "x-claude-code-session-id", "s1");
+    let mut rooted = cli_req(&probe, "s1");
     set_header(&mut rooted, "x-claude-code-request-class", "auxiliary");
     send(&h, rooted).await;
     identified(&mut sub).await;
@@ -621,16 +625,14 @@ async fn the_base_sessions_own_retry_after_a_fork_reads_no_fork_and_its_own_root
         user("three"),
         assistant("four"),
     ];
-    let mut s1_req = req(&body(four.clone()));
-    set_header(&mut s1_req, "x-claude-code-session-id", "s1");
+    let s1_req = cli_req(&body(four.clone()), "s1");
     send(&h, s1_req).await;
     identified(&mut sub).await;
     settle(&h).await;
 
     let mut s2_messages = four[..3].to_vec();
     s2_messages.push(assistant("a different fourth"));
-    let mut s2_req = req(&body(s2_messages));
-    set_header(&mut s2_req, "x-claude-code-session-id", "s2");
+    let s2_req = cli_req(&body(s2_messages), "s2");
     send(&h, s2_req).await;
     identified(&mut sub).await;
     settle(&h).await;
@@ -639,8 +641,7 @@ async fn the_base_sessions_own_retry_after_a_fork_reads_no_fork_and_its_own_root
     // harness has): the shared boundary must keep s1's own root, not the latest writer's.
     let mut s1_retry = four[..3].to_vec();
     s1_retry.push(assistant("a retried fourth"));
-    let mut s1_retry_req = req(&body(s1_retry));
-    set_header(&mut s1_retry_req, "x-claude-code-session-id", "s1");
+    let s1_retry_req = cli_req(&body(s1_retry), "s1");
     send(&h, s1_retry_req).await;
     assert_eq!(
         identified(&mut sub).await,
@@ -669,8 +670,7 @@ async fn a_fork_that_lands_on_another_account_still_leaves_the_base_its_own_root
         .set_pool_members("main", &[member("a", 0)], "test")
         .unwrap();
     h.router.reload().await.unwrap();
-    let mut s1_req = req(&body(four.clone()));
-    set_header(&mut s1_req, "x-claude-code-session-id", "s1");
+    let s1_req = cli_req(&body(four.clone()), "s1");
     send(&h, s1_req).await;
     identified(&mut sub).await;
     settle(&h).await;
@@ -683,8 +683,7 @@ async fn a_fork_that_lands_on_another_account_still_leaves_the_base_its_own_root
     h.router.reload().await.unwrap();
     let mut s2_messages = four[..3].to_vec();
     s2_messages.push(assistant("a different fourth"));
-    let mut s2_req = req(&body(s2_messages));
-    set_header(&mut s2_req, "x-claude-code-session-id", "s2");
+    let s2_req = cli_req(&body(s2_messages), "s2");
     send(&h, s2_req).await;
     identified(&mut sub).await;
     settle(&h).await;
@@ -695,8 +694,7 @@ async fn a_fork_that_lands_on_another_account_still_leaves_the_base_its_own_root
     h.router.reload().await.unwrap();
     let mut s1_retry = four[..3].to_vec();
     s1_retry.push(assistant("a retried fourth"));
-    let mut s1_retry_req = req(&body(s1_retry));
-    set_header(&mut s1_retry_req, "x-claude-code-session-id", "s1");
+    let s1_retry_req = cli_req(&body(s1_retry), "s1");
     send(&h, s1_retry_req).await;
     assert_eq!(
         identified(&mut sub).await,

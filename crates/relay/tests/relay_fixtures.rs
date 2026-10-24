@@ -103,26 +103,41 @@ async fn api_key_request_emits_the_measured_api_key_shape() {
     let app = relay_with(AccountKind::ApiKey, &up).await;
     let head = inference_head(FixtureKind::ApiKey);
     let native = body(BodyFixture::ApiKey);
-    let mut req = request_from_fixture(head, native, "phoebis-testkey");
-    // An SDK caller, so restoration never applies: this test is about the measured API-key shape, not about
-    // the fields a `claude-cli/` agent gets restored, which the restoration suite covers on its own.
-    set_header(&mut req, "user-agent", "anthropic-sdk-python/0.40.0");
+    // The fixture's own Claude Code head with its session header, so the relay restores what the client's reduced
+    let req = request_from_fixture(head, native, "phoebis-testkey");
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let got = wire_of(&up.requests()[0]);
-    let mut expected_head = String::from_utf8(head.to_vec()).unwrap().replace(
-        "User-Agent: claude-cli/2.1.269 (external, sdk-cli)",
-        "User-Agent: anthropic-sdk-python/0.40.0",
+    let client_request_id = up.requests()[0]
+        .headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("x-client-request-id"))
+        .map(|(_, v)| v.clone())
+        .expect("the restoration sends a client request id");
+    let restored = String::from_utf8(native.to_vec()).unwrap().replacen(
+        "cc_entrypoint=sdk-cli;",
+        "cc_entrypoint=sdk-cli; cch=00000;",
+        1,
     );
+    let mut expected_head = String::from_utf8(head.to_vec())
+        .unwrap()
+        .replace(
+            &format!("Content-Length: {}", native.len()),
+            &format!("Content-Length: {}", restored.len()),
+        )
+        .replace(
+            "x-app: cli\r\n",
+            &format!("x-app: cli\r\nx-client-request-id: {client_request_id}\r\n"),
+        );
     // The request was built from the client's head, which the harness ends with the class header the recorded
-    // head predates, and swapping the user agent afterward leaves that line where it was.
+    // head predates.
     let end = expected_head.rfind("\r\n\r\n").unwrap();
     expected_head.insert_str(end + 2, "x-claude-code-request-class: main\r\n");
     let mut expected = expected_head.into_bytes();
-    expected.extend_from_slice(native);
+    expected.extend_from_slice(restored.as_bytes());
     assert_eq!(
         got, expected,
-        "an API-key fixture round-trips byte-identical: no uuid, no cch, key in its slot"
+        "an API-key fixture round-trips byte-identical but for what the restoration adds: no uuid, key in its slot"
     );
     up.shutdown().await;
 }
@@ -669,6 +684,9 @@ async fn a_body_nested_past_the_scanner_bound_is_refused() {
         .method("POST")
         .uri("/v1/messages")
         .header("Authorization", "Bearer phoebis-testkey")
+        .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", fresh_session())
+        .header("x-claude-code-request-class", "main")
         .body(Body::from(body))
         .unwrap();
     let resp = app.oneshot(request).await.unwrap();

@@ -1029,6 +1029,9 @@ async fn stalled_body(
     let request = Request::post("/v1/messages")
         .header("authorization", format!("Bearer {}", common::KEY))
         .header("content-type", "application/json")
+        .header("user-agent", common::CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", common::fresh_session())
+        .header("x-claude-code-request-class", "main")
         .body(body)
         .unwrap();
     (up, h, request, tx)

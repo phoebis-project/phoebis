@@ -498,8 +498,11 @@ async fn the_key_list_counts_live_sessions_still_on_the_secret_a_rotation_retire
         .uri("/v1/messages")
         .header("x-api-key", &old_secret)
         .header("content-type", "application/json")
+        .header("user-agent", "claude-cli/2.1.269 (external, sdk-cli)")
+        .header("x-claude-code-session-id", "s1")
+        .header("x-claude-code-request-class", "main")
         .body(axum::body::Body::from(
-            r#"{"model":"claude-sonnet-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"#,
+            r#"{"model":"claude-sonnet-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}"}}"#,
         ))
         .unwrap();
     let _ = proxy.oneshot(request).await.unwrap();

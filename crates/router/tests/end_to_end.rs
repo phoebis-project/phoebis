@@ -372,6 +372,9 @@ usage:
     let secret = key["secret"].as_str().unwrap().to_string();
     assert!(secret.starts_with("phoebis-"));
 
+    // The fixture's own Claude Code head travels as captured: this test is about the binary routing through the
+    // admin API, and the relay restores the placeholder stamp the fixture's reduced attribution line lacks, so the
+    // relayed body is the fixture with that one field inserted.
     let send = |secret: String| fixture_request(&client, proxy_port, &secret, "e2e-1").send();
     let resp = send(secret.clone()).await.unwrap();
     assert_eq!(resp.status(), 200);
@@ -386,7 +389,14 @@ usage:
         .headers
         .iter()
         .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-PLACEHOLDER"));
-    assert_eq!(relayed.body, body(BodyFixture::ApiKey));
+    let restored = String::from_utf8(body(BodyFixture::ApiKey).to_vec())
+        .unwrap()
+        .replacen(
+            "cc_entrypoint=sdk-cli;",
+            "cc_entrypoint=sdk-cli; cch=00000;",
+            1,
+        );
+    assert_eq!(relayed.body, restored.as_bytes());
     let sessions: serde_json::Value = client
         .get(admin("/sessions"))
         .send()

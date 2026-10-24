@@ -4,7 +4,7 @@
 //! the other.
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -65,6 +65,64 @@ pub fn user_with_marker(text: &str) -> serde_json::Value {
 
 pub fn assistant(text: &str) -> serde_json::Value {
     serde_json::json!({"role": "assistant", "content": text})
+}
+
+/// The `metadata.user_id` string Claude Code sends behind the router: a device id, an empty `account_uuid` (the
+/// client holds no OAuth account behind a router key) and the session, escaped as the client escapes it.
+pub fn user_id_for(session: &str) -> String {
+    serde_json::json!({"device_id": "test-device", "account_uuid": "", "session_id": session})
+        .to_string()
+}
+
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(0);
+
+/// A session id no other call in this process answered: `test-session-<n>` from a process-wide counter, so two
+/// cases of one suite never share a pin.
+pub fn fresh_session() -> String {
+    format!(
+        "test-session-{}",
+        NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// `body` with `BARE_PLACEHOLDER_LINE` as `system[0]` where `system` is an array whose first block carries no
+/// attribution line, and `body` as it is otherwise (no `system`, a string `system`, or a line already in front):
+/// the contract requires the line of every inference body whose `system` is an array. The line names the agent's
+/// version bare, so the suffix check has no suffix to judge, and its placeholder stamp is the one the hash check
+/// exempts. A case whose subject is the hash of its `system` array computes the hash over this value, which is
+/// the body `claude_code_request` sends.
+pub fn with_attribution_line(body: &serde_json::Value) -> serde_json::Value {
+    let mut value = body.clone();
+    if let Some(blocks) = value.get_mut("system").and_then(|s| s.as_array_mut()) {
+        let carries_line = blocks
+            .first()
+            .and_then(|b| b.get("text"))
+            .and_then(|t| t.as_str())
+            .is_some_and(|t| t.starts_with("x-anthropic-billing-header: "));
+        if !carries_line {
+            blocks.insert(
+                0,
+                serde_json::json!({"type": "text", "text": BARE_PLACEHOLDER_LINE}),
+            );
+        }
+    }
+    value
+}
+
+/// A Claude Code request on the API-key fixture head carrying `body` under `key` and `session`: the head's
+/// `claude-cli/` user agent and the class header `main` that `request_from_fixture` adds, the session header set
+/// to `session`, `metadata.user_id` from `user_id_for` where the body carries no `metadata.user_id` of its own,
+/// and the attribution line in front of a `system` array through `with_attribution_line`. A case whose subject
+/// is not the client's class meets the contract as the client does.
+pub fn claude_code_request(key: &str, session: &str, body: &serde_json::Value) -> Request<Body> {
+    let mut value = with_attribution_line(body);
+    if value.pointer("/metadata/user_id").is_none() {
+        value["metadata"]["user_id"] = serde_json::Value::from(user_id_for(session));
+    }
+    let bytes = serde_json::to_vec(&value).expect("a Value always encodes");
+    let mut req = request_from_fixture(inference_head(FixtureKind::ApiKey), &bytes, key);
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
 }
 
 #[derive(Clone)]
@@ -1182,18 +1240,26 @@ pub fn conversation_request(
 /// A billing line in the client's placeholder spelling, which the drift check exempts from the hash it verifies.
 pub const PLACEHOLDER_LINE: &str =
     "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=00000;";
+pub const BARE_PLACEHOLDER_LINE: &str =
+    "x-anthropic-billing-header: cc_version=2.1.269; cc_entrypoint=cli; cch=00000;";
 /// A billing line stamping a hash this build never computed over the body.
 pub const UNCHECKED_LINE: &str =
     "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=abcde;";
 
-/// A JSON `POST` of `body` to `path` under the router key and no user agent, answered with its status, its
-/// adapter error code (empty for none) and its body text.
+/// A JSON `POST` of `body` to `path` under the router key as Claude Code sends it: the `claude-cli/` user agent
+/// `CLAUDE_CLI_USER_AGENT`, a fresh session header, and the class header `main` on `/v1/messages`. The body
+/// travels as given, so a case whose subject is the body's own shape writes that shape itself, answered with the
+/// status, the adapter error code (empty for none) and the body text.
 pub async fn send(h: &Harness, path: &str, body: &str) -> (u16, String, String) {
-    let request = Request::post(path)
+    let mut request = Request::post(path)
         .header("authorization", format!("Bearer {KEY}"))
         .header("content-type", "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap();
+        .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", fresh_session());
+    if path == "/v1/messages" {
+        request = request.header("x-claude-code-request-class", "main");
+    }
+    let request = request.body(Body::from(body.to_string())).unwrap();
     let response = h.app.clone().oneshot(request).await.unwrap();
     let status = response.status().as_u16();
     let code = response

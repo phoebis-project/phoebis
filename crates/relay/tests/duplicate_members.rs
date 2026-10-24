@@ -73,7 +73,10 @@ async fn a_repeated_metadata_or_stream_member_is_refused_and_a_nested_repeat_is_
     assert!(up.requests().is_empty());
     // A repeat of a `metadata` member the relay never reads is the upstream's to judge, and the wire is unchanged
     // for it.
-    let nested = r#"{"model":"claude-sonnet-4-5","metadata":{"model":"x","model":"y"},"messages":[],"max_tokens":8}"#;
+    let nested = concat!(
+        r#"{"model":"claude-sonnet-4-5","metadata":{"model":"x","model":"y","#,
+        r#""user_id":"{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}"},"messages":[],"max_tokens":8}"#
+    );
     let (status, _, _) = send(&h, "/v1/messages", nested).await;
     assert_eq!(status, 200);
     let received: serde_json::Value = serde_json::from_slice(&up.requests()[0].body).unwrap();
@@ -109,7 +112,8 @@ async fn a_repeated_metadata_user_id_is_refused_raw_or_escaped_and_a_repeat_insi
     // The same object inside a tool call's input is the client's data, relayed as sent.
     let tool_input = concat!(
         r#"{"model":"claude-sonnet-4-5","messages":[{"role":"assistant","content":[{"type":"tool_use","#,
-        r#""id":"t1","name":"x","input":{"metadata":{"user_id":"a","user_id":"b"}}}]}],"max_tokens":8}"#
+        r#""id":"t1","name":"x","input":{"metadata":{"user_id":"a","user_id":"b"}}}]}],"max_tokens":8,"#,
+        r#""metadata":{"user_id":"{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}"}}"#
     );
     let (status, _, text) = send(&h, "/v1/messages", tool_input).await;
     assert_eq!(status, 200, "{text}");
@@ -153,7 +157,7 @@ async fn a_scan_that_cannot_finish_refuses_the_body_and_a_deep_single_member_is_
     // One spelling and a value nested past anything a client sends, inside the scanner's depth: admitted, and
     // the guard bodies nest under ten levels, so the regression guard is untouched.
     let within = format!(
-        r#"{{"model":"claude-sonnet-4-5","padding":{},"messages":[],"max_tokens":8}}"#,
+        r#"{{"model":"claude-sonnet-4-5","padding":{},"messages":[],"max_tokens":8,"metadata":{{"user_id":"{{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}}"}}}}"#,
         deep(100)
     );
     let (status, _, _) = send(&h, "/v1/messages", &within).await;
@@ -202,7 +206,7 @@ async fn a_billing_block_repeating_its_text_is_refused_before_the_placeholder_ex
     assert!(up.requests().is_empty(), "nothing reached the upstream");
     // A repeat in a later block is off the billing line's path and stays the upstream's to judge.
     let later = format!(
-        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{PLACEHOLDER_LINE}"}},{{"type":"text","text":"a","text":"b"}}],"messages":[],"max_tokens":8}}"#
+        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{BARE_PLACEHOLDER_LINE}"}},{{"type":"text","text":"a","text":"b"}}],"messages":[],"max_tokens":8,"metadata":{{"user_id":"{{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}}"}}}}"#
     );
     let (status, _, text) = send(&h, "/v1/messages", &later).await;
     assert_eq!(status, 200, "{text}");
@@ -239,7 +243,7 @@ async fn a_stamp_bearing_member_spelled_with_an_escape_is_refused_as_a_repeat_is
     // Refused whether or not an edit would touch the body, so the hash never travels unverified.
     for (system, text) in [("\\u0073ystem", "text"), ("system", "\\u0074ext")] {
         let body = format!(
-            r#"{{"model":"claude-sonnet-4-5","{system}":[{{"type":"text","{text}":"{UNCHECKED_LINE}"}}],"messages":[],"max_tokens":8}}"#
+            r#"{{"model":"claude-sonnet-4-5","{system}":[{{"type":"text","{text}":"{UNCHECKED_LINE}"}}],"messages":[],"max_tokens":8,"metadata":{{"user_id":"{{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}}"}}}}"#
         );
         let (status, code, text) = send(&h, "/v1/messages", &body).await;
         assert_eq!(status, 400, "{body}");
@@ -252,7 +256,7 @@ async fn a_stamp_bearing_member_spelled_with_an_escape_is_refused_as_a_repeat_is
     assert!(up.requests().is_empty(), "nothing reached the upstream");
     // The raw spelling with the placeholder still travels: the placeholder claims no hash.
     let plain = format!(
-        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{PLACEHOLDER_LINE}"}}],"messages":[],"max_tokens":8}}"#
+        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{BARE_PLACEHOLDER_LINE}"}}],"messages":[],"max_tokens":8,"metadata":{{"user_id":"{{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}}"}}}}"#
     );
     let (status, _, text) = send(&h, "/v1/messages", &plain).await;
     assert_eq!(status, 200, "{text}");
@@ -270,7 +274,7 @@ async fn a_lone_surrogate_beside_an_escaped_stamp_token_is_refused_before_anythi
         r"x-anthropic-billing-header\u003a v=1 \udc00 cch=01234;",
     ] {
         let body = format!(
-            r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{line}"}}],"messages":[],"max_tokens":8}}"#
+            r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{line}"}}],"messages":[],"max_tokens":8,"metadata":{{"user_id":"{{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"s1\"}}"}}}}"#
         );
         let (status, code, text) = send(&h, "/v1/messages", &body).await;
         assert_eq!(status, 400, "{body}");

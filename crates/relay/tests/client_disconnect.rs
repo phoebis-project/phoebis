@@ -46,6 +46,9 @@ async fn a_body_stream_that_errors_mid_read_is_answered_as_incomplete_not_too_la
     let request = Request::post("/v1/messages")
         .header("authorization", format!("Bearer {KEY}"))
         .header("content-type", "application/json")
+        .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", fresh_session())
+        .header("x-claude-code-request-class", "main")
         .body(Body::from_stream(chunks))
         .unwrap();
     let response = h.app.clone().oneshot(request).await.unwrap();

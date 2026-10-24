@@ -100,7 +100,10 @@ fn channel_request(declared: Option<usize>) -> (Request<Body>, BodySender) {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let mut request = Request::post("/v1/messages")
         .header("authorization", format!("Bearer {KEY}"))
-        .header("content-type", "application/json");
+        .header("content-type", "application/json")
+        .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .header("x-claude-code-session-id", fresh_session())
+        .header("x-claude-code-request-class", "main");
     if let Some(length) = declared {
         request = request.header("content-length", length);
     }
