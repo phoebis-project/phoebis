@@ -1596,10 +1596,7 @@ impl Relay {
         // published, so no probe is paid for and no request is accepted that the ledger cannot record while its
         // writer is behind. The refusal's own facts go best-effort: the bus queue fills behind a writer that
         // stopped draining, and a 503 that waited for it would hold the very client it is meant to release.
-        let behind = matches!(
-            trace.kind,
-            Kind::Inference | Kind::CountTokens | Kind::Probe
-        ) && self.ledger_standing(&trace, true);
+        let behind = self.ledger_standing(&trace, true);
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
         // the wire untouched and a last-wins parser upstream would act on it instead. The billing line's path
         // counts as well: the drift check and its placeholder exemption read the first `system` and the first

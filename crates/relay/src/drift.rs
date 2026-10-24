@@ -29,7 +29,7 @@ mod tests {
     }
 
     #[test]
-    fn every_claude_cli_version_is_read_and_none_is_judged() {
+    fn every_claude_cli_version_is_read_and_any_other_caller_reads_none() {
         let guard = DriftGuard;
         assert_eq!(
             guard
