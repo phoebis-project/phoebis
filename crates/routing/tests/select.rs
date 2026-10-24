@@ -21306,7 +21306,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     );
     assert!(matches!(fresh.result, SelectResult::Selected(_)));
 
-    // What the records write: version 2, the request's body estimate, a reserve station on every walk, and the
+    // What the records write: version 3, the request's body estimate, a reserve station on every walk, and the
     // booking the fresh subagent finds on birch.
     for (record, body_tokens) in [
         (&at_70.record, 0),
