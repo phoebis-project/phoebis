@@ -1,7 +1,7 @@
 use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, PoolMember, PoolRow,
-    RegistryLoad, RulesMode, StateCause, Strategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, PoolMember, PoolRow, RegistryLoad,
+    RulesMode, StateCause, Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];

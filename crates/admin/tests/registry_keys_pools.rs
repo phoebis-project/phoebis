@@ -1457,6 +1457,50 @@ async fn an_overage_whose_reset_has_passed_no_longer_marks_the_pool() {
     );
 }
 
+/// An unknown member of a key body is accepted and ignored, at the creation and at the edit alike, and the answer
+/// never echoes it.
+#[tokio::test]
+async fn a_key_body_with_an_unknown_member_is_accepted_with_the_member_ignored() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let created = json(
+        post(
+            &app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main","nickname":"desk"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(created["id"].as_str(), Some("desktop"));
+    let unknown = created.get("nickname");
+    assert!(
+        unknown.is_none(),
+        "the created key echoes the unknown member: {unknown:?}"
+    );
+    let patched = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"nickname":"bench"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        patched.status(),
+        200,
+        "a member the input does not read refuses nothing"
+    );
+    assert!(json(patched).await.get("nickname").is_none());
+}
+
 #[tokio::test]
 async fn the_account_list_answers_from_one_router_ask_for_the_whole_list() {
     let parts = common::admin_parts_full().await;

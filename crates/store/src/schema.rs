@@ -91,11 +91,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (59, V59),
     (60, V60),
     (61, V61),
+    (62, V62),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 61;
+pub const SCHEMA_VERSION: u32 = 62;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 47;
@@ -860,3 +861,5 @@ const V60: &str = "ALTER TABLE accounts RENAME COLUMN cancelled TO canceled;";
 // When a profile read found the account's organization holding no plan, beside the operator's end it is read like.
 // Nullable with no backfill, since a row from before had no read that flagged it.
 const V61: &str = "ALTER TABLE accounts ADD COLUMN plan_ended_at INTEGER;";
+
+const V62: &str = "";

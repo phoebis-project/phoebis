@@ -512,8 +512,8 @@ fn a_preparation_that_fails_says_nothing_was_discarded_and_leaves_the_sealed_row
     let old = key(OLD_KEY);
     seed(&registry(dir.path()), &old);
     std::fs::write(key_file(dir.path()), NEW_KEY).unwrap();
-    // The marker one step behind a registry that holds every step's columns: the open admits it, and the last
-    // step's column is a duplicate the preparation's migration refuses.
+    // The marker one step behind a registry that ran every step: the open admits it, and the last step drops a
+    // column that is already gone, which the preparation's migration refuses.
     set_schema_marker(&registry(dir.path()), phoebis_store::SCHEMA_VERSION - 1);
     let out = recover_key(&config, &["--yes"], b"");
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
@@ -1018,7 +1018,9 @@ fn a_registry_whose_only_sealed_rows_are_recipe_bodies_is_judged_by_them() {
     assert!(agents.iter().all(|agent| agent.body.is_none()));
 }
 
-/// The reverse of the registry's newest migration, the plan-ended column gone, as `crates/store/tests` replays it.
+const UNDO_V62: &str = "";
+
+/// The reverse of the step before it, the plan-ended column gone.
 const UNDO_V61: &str = "ALTER TABLE accounts DROP COLUMN plan_ended_at; \
      UPDATE meta SET value = '60' WHERE key = 'schema_version';";
 
@@ -1067,7 +1069,7 @@ fn a_run_that_stops_short_of_the_discard_leaves_the_registry_at_the_version_it_f
     rusqlite::Connection::open(registry(dir.path()))
         .unwrap()
         .execute_batch(&format!(
-            "{UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55}"
+            "{UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55}"
         ))
         .unwrap();
     std::fs::write(key_file(dir.path()), OLD_KEY).unwrap();

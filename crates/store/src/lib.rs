@@ -44,10 +44,10 @@ pub use keepalive::{
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{
     canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject,
-    BudgetPeriod, Failover, GuardrailAttachment, GuardrailRow, MemberWrite,
-    ModelRule, OveragePolicy, PoolMember, PoolRow, RegistryChange, RegistryLoad, RetiredSecret,
-    ReturnToPlan, RulesMode, SessionPlacement, Shedding, SlowDown, Strategy, SubagentPlacement,
-    SubscriptionTerm, WarmSessions, GUARDRAIL_BOUND, ROTATION_GRACE_MS,
+    BudgetPeriod, Failover, GuardrailAttachment, GuardrailRow, MemberWrite, ModelRule,
+    OveragePolicy, PoolMember, PoolRow, RegistryChange, RegistryLoad, RetiredSecret, ReturnToPlan,
+    RulesMode, SessionPlacement, Shedding, SlowDown, Strategy, SubagentPlacement, SubscriptionTerm,
+    WarmSessions, GUARDRAIL_BOUND, ROTATION_GRACE_MS,
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
