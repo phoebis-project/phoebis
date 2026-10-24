@@ -9,7 +9,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
-import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
+import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtMinor, fmtEndsIn, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, getTimeFormat, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestReset, sortByPace, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
@@ -382,7 +382,12 @@ function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: 
   const { amounts, utilization } = spend;
   const unlimited = amounts !== null && amounts.limitMinor === null;
   const left = utilization === null || unlimited ? null : Math.max(0, Math.min(1, 1 - utilization));
-  const figures = amounts === null ? null : amounts.limitMinor === null ? `${fmtCredits(amounts.usedMinor, amounts.exponent)} spent` : `${fmtCredits(amounts.usedMinor, amounts.exponent)} of ${fmtCredits(amounts.limitMinor, amounts.exponent)}`;
+  const figures =
+    amounts === null
+      ? null
+      : amounts.limitMinor === null
+        ? `${fmtMinor(amounts.usedMinor, amounts.currency, amounts.exponent)} spent`
+        : `${fmtMinor(amounts.usedMinor, amounts.currency, amounts.exponent)} of ${fmtMinor(amounts.limitMinor, amounts.currency, amounts.exponent)}`;
   const parts = [...(left === null ? [] : [`${fmtPct(left)} left`]), ...(figures === null ? [] : [figures])];
   const reading = parts.length === 0 ? 'Spend limit' : `Spend limit: ${parts.join(', ')}`;
   return (
@@ -469,8 +474,8 @@ function SpendChip({ spend }: { spend: Spend }) {
         ? 'n/a'
         : `${fmtPct(left)} left`
       : amounts.limitMinor === null
-        ? `${fmtCredits(amounts.usedMinor, amounts.exponent)} spent`
-        : `${fmtCredits(Math.max(0, amounts.limitMinor - amounts.usedMinor), amounts.exponent)} of ${fmtCredits(amounts.limitMinor, amounts.exponent)} left`;
+        ? `${fmtMinor(amounts.usedMinor, amounts.currency, amounts.exponent)} spent`
+        : `${fmtMinor(Math.max(0, amounts.limitMinor - amounts.usedMinor), amounts.currency, amounts.exponent)} of ${fmtMinor(amounts.limitMinor, amounts.currency, amounts.exponent)} left`;
   return (
     <span className={`tl-chip lane__spend ${left === null ? '' : `tl-chip--${meterTone(left)}`}`} title={`${figure}, ${spendResetTitle(spend)}`}>
       Spend limit <b className="tl-chip__pct num">{figure}</b>

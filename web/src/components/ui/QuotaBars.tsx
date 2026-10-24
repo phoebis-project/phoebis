@@ -1,5 +1,5 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
-import { fmtAbsolute, fmtCredits, fmtPct, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
 import { hasSpendReading, isExpired, meterTone, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { WINDOW_ORDER } from '@/lib/windows';
@@ -52,9 +52,9 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
 export function SpendBar({ spend, now, compact = false }: { compact?: boolean; now: number; spend: Spend }) {
   const { amounts, utilization } = spend;
   const label = compact ? 'Spend' : 'Spend limit';
-  const used = amounts === null ? null : fmtCredits(amounts.usedMinor, amounts.exponent);
+  const used = amounts === null ? null : fmtMinor(amounts.usedMinor, amounts.currency, amounts.exponent);
   const limited = amounts !== null && amounts.limitMinor !== null;
-  const head = amounts === null ? (utilization === null ? null : `${fmtPct(utilization)} spent`) : limited ? `${used} of ${fmtCredits(amounts.limitMinor ?? 0, amounts.exponent)}` : `${used} spent`;
+  const head = amounts === null ? (utilization === null ? null : `${fmtPct(utilization)} spent`) : limited ? `${used} of ${fmtMinor(amounts.limitMinor ?? 0, amounts.currency, amounts.exponent)}` : `${used} spent`;
   return (
     <div className="wbar wbar--spend">
       <div className="wbar__head">

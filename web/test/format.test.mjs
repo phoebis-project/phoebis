@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -161,6 +161,12 @@ test('an amount in minor units reads in dollars at its exponent, two digits wher
   assert.equal(fmtCredits(102_500, 2), '$1,025.00');
   assert.equal(fmtCredits(102_500), '$1,025.00', 'cents unless the reading says otherwise');
   assert.equal(fmtCredits(102_500, 0), '$102,500.00', 'an exponent of 0 counts whole dollars');
+});
+
+test('a spend amount in minor units reads in its own currency at its exponent', () => {
+  assert.equal(fmtMinor(12_500, 'EUR', 2), '€125.00', 'a euro amount reads in euros');
+  assert.equal(fmtMinor(102_500, 'USD', 2), '$1,025.00');
+  assert.equal(fmtMinor(1_250, 'EUR', 1), '€125.00', 'the exponent places the point');
 });
 
 test('a 20x window equivalent reads as a percent of the named 20x window to three significant digits, and zero as 0%', () => {

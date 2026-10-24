@@ -90,6 +90,8 @@ export const ESTIMATED_TITLE = "Estimated at the model tier's latest weighted mo
 export const withEstimate = (title: string, estimated: boolean): string => (!estimated ? title : title === '' ? `${ESTIMATED_TITLE}.` : `${title}. ${ESTIMATED_TITLE}.`);
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number, exponent = 2) => usd.format(credits / 10 ** exponent);
+/** A spend amount in minor units, printed in its own currency at its exponent, since a seat may be billed in any. */
+export const fmtMinor = (minor: number, currency: string, exponent: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(minor / 10 ** exponent);
 export const fmtMiB = (bytes: number) => {
   const mib = bytes / 1_048_576;
   return `${Number.isInteger(mib) ? mib : mib.toFixed(1)} MiB`;
