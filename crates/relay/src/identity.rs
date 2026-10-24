@@ -44,6 +44,9 @@ const PENDING_REPORTS_SWEEP: usize = 4_096;
 
 #[derive(Debug)]
 pub struct RequestIdentity {
+    /// The client's own session id from `x-claude-code-session-id`, which the pin, the session memory, the
+    /// report wait and the record key hang on. `None` for a request the contract refuses before an account is
+    /// chosen.
     pub session_id: Option<String>,
     pub agent_id: String,
     pub parent_agent_id: Option<String>,
@@ -88,7 +91,7 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
     if !is_valid_model(&folded_model) {
         return Err(RelayError::InvalidModel);
     }
-    // The header is the client's own statement of the session.
+    // The header is the client's own statement of the session, and the climb starts from it.
     let session_id = header_id(headers, "x-claude-code-session-id");
     let entrypoint = user_agent_of(headers)
         .filter(|agent| agent.starts_with("claude-cli/"))
@@ -142,16 +145,17 @@ pub fn climb(
         })
     };
 
+    let Some(session_id) = identity.session_id.clone() else {
+        return;
+    };
     // A session that has no pin of its own is new to the map, so its deepest own-key match names the
     // conversation it branched from, and the session id keeps the identity. Depth 1 is the first user message
     // alone, which a template, a slash command's output or a repeated prompt shares across sessions, while depth
     // 2 includes the model's first answer and is a shared conversation. An auxiliary request names none: the
     // client's quota probe has one message every probe of the key shares.
-    if identity.session_id.is_some() && !is_auxiliary(request_class) {
+    if !is_auxiliary(request_class) {
         if let Some(m) = ask(message_boundaries) {
-            if identity.session_id.as_deref() != Some(m.root.as_str())
-                && m.depth.is_some_and(|d| d >= 2)
-            {
+            if session_id != m.root && m.depth.is_some_and(|d| d >= 2) {
                 identity.forked_from = Some(m.root);
                 identity.fork_depth = m.depth;
             }
@@ -227,7 +231,7 @@ impl PendingReports {
 }
 
 /// The identifier a request's wait consults: `session:<id>` for its own session id, nothing without one.
-pub(crate) fn waits_on(identity: &RequestIdentity, message_boundaries: &[String]) -> Vec<String> {
+pub(crate) fn waits_on(identity: &RequestIdentity) -> Vec<String> {
     identity
         .session_id
         .iter()
@@ -1054,23 +1058,16 @@ mod tests {
     }
 
     #[test]
-    fn a_request_waits_on_its_strongest_identifier_alone() {
-        let boundaries = vec!["x".to_string(), "y".to_string()];
+    fn a_request_waits_on_its_session_alone() {
         assert_eq!(
-            waits_on(&identity_of(Some("a")), &boundaries),
+            waits_on(&identity_of(Some("a"))),
             vec!["session:a".to_string()]
         );
-        assert!(waits_on(&identity_of(None), &[]).is_empty());
+        assert!(waits_on(&identity_of(None)).is_empty());
 
         let pending = PendingReports::default();
-        pending.record(
-            "k",
-            0,
-            &["session:a".to_string()],
-            5,
-            0,
-        );
-        let other_session = waits_on(&identity_of(Some("b")), &boundaries);
+        pending.record("k", 0, &["session:a".to_string()], 5, 0);
+        let other_session = waits_on(&identity_of(Some("b")));
         assert_eq!(
             pending.pending("k", 0, &other_session, 0),
             None,

@@ -676,6 +676,8 @@ impl Trace {
                 .probe_generation
                 .unwrap_or_else(|| key.map_or(0, |k| k.created_at)),
             pool_id: key.map(|k| k.pool_id.clone()),
+            // The client's own session, which a companion's keepalive recipe is registered under, so the recipe
+            // keeps matching and arming.
             session_id: identity.and_then(|i| i.session_id.clone()),
             agent_id: identity.map(|i| i.agent_id.clone()),
             parent_agent_id: identity.and_then(|i| i.parent_agent_id.clone()),
@@ -1708,7 +1710,7 @@ impl Relay {
             .chains
             .as_ref()
             .map_or(&[][..], |c| &c.message_boundaries[..]);
-        let ids = waits_on(&identity, boundaries);
+        let ids = waits_on(&identity);
         let applied = self.router.applied_report();
         if let Some((id, seq)) =
             self.pending_reports
@@ -1883,15 +1885,15 @@ impl Relay {
                 )
                 .await;
         }
-        // A separate field from `restore`: every client inference request of a conversation gets one,
-        // because the diagnostics member the option forces names the previous answer in
-        // that conversation whoever sent it. A probe reads under the same key, since it replays the session's own
-        // headers and the diagnostics report should name the turn it keeps warm; what a probe is answered is
-        // never remembered, which the response half enforces by reading no key for it. A count_tokens request
-        // has no slot for either, so it is neither read nor remembered. Dispatch reads the key to look up the
-        // previous request id per account, and the response half writes the upstream's `request-id` and
-        // message id back under it; what lands on the billing line stays gated on `restore` being `Some`.
-        // Keyed on the conversation: the client's own session id when it sent one (Claude Code).
+        // A separate field from `restore`: every client inference request of a conversation gets one, because the
+        // diagnostics member the option forces names the previous answer in that conversation whoever sent it.
+        // Keyed on the client's own session id, which the contract guarantees of an inference request and a probe.
+        // A probe reads under the same key, since it replays the session's own headers and the diagnostics report
+        // should name the turn it keeps warm. What a probe is answered is never remembered, which the response half
+        // enforces by reading no key for it. A count_tokens request has no slot for either, so it is neither read
+        // nor remembered. Dispatch reads the key to look up the previous request id per account, and the response
+        // half writes the upstream's `request-id` and message id back under it. What lands on the billing line stays
+        // gated on `restore` being `Some`.
         let memory_key = match trace.kind {
             Kind::Inference | Kind::Probe => identity.session_id.as_deref().map(|session| {
                 MemoryKey::for_session(&key.id, key.created_at, session, &identity.agent_id)

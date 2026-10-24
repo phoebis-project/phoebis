@@ -140,6 +140,7 @@ pub struct PredecessorQuery<'a> {
     pub incarnation_of: &'a dyn Fn(&str) -> Option<u64>,
 }
 
+/// The deepest own-key match of a request's message boundaries: the matched conversation's root and the depth.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationMatch {
     pub root: String,

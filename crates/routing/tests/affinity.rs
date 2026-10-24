@@ -90,8 +90,9 @@ fn query<'a>(key_id: &'a str, message_boundaries: &'a [String]) -> ConversationQ
     }
 }
 
-fn content_match(m: Option<ConversationMatch>, depth: u32) {
+fn match_at(m: Option<ConversationMatch>, depth: u32) {
     let m = m.expect("a match at this depth");
+    assert!(!m.root.is_empty());
     assert_eq!(m.depth, Some(depth));
 }
 
@@ -100,7 +101,7 @@ fn the_lookup_answers_a_continuation_by_one_message_at_the_previous_tails_depth(
     let mut map = AffinityMap::default();
     map.record(&report("k", "a", &["b1", "b2", "b3"], 1_000));
     let q = boundaries(&["b1", "b2", "b3", "b4"]);
-    content_match(map.conversation(&query("k", &q)), 3);
+    match_at(map.conversation(&query("k", &q)), 3);
 }
 
 #[test]
@@ -108,7 +109,7 @@ fn a_fork_matches_at_the_last_shared_boundary() {
     let mut map = AffinityMap::default();
     map.record(&report("k", "a", &["b1", "b2", "b3", "bA4"], 1_000));
     let q = boundaries(&["b1", "b2", "b3", "bB4"]);
-    content_match(map.conversation(&query("k", &q)), 3);
+    match_at(map.conversation(&query("k", &q)), 3);
 }
 
 #[test]
@@ -116,7 +117,7 @@ fn the_lookup_answers_a_replaced_last_message_one_boundary_shallower() {
     let mut map = AffinityMap::default();
     map.record(&report("k", "a", &["b1", "b2", "b3", "b4"], 1_000));
     let q = boundaries(&["b1", "b2", "b3", "b4-edited"]);
-    content_match(map.conversation(&query("k", &q)), 3);
+    match_at(map.conversation(&query("k", &q)), 3);
 }
 
 #[test]
@@ -149,7 +150,7 @@ fn the_lookup_follows_the_message_chain_across_a_tools_change() {
         ..report("k", "a", &["b1", "b2", "b3"], 1_000)
     });
     let q = boundaries(&["b1", "b2", "b3", "b4"]);
-    content_match(map.conversation(&query("k", &q)), 3);
+    match_at(map.conversation(&query("k", &q)), 3);
     let s2 = boundaries(&["s2"]);
     assert_eq!(map.deepest("claude-sonnet-5", &s2, |_| true), None);
 }
@@ -162,7 +163,7 @@ fn a_compacted_body_names_no_conversation_and_its_continuation_matches_the_compa
     assert_eq!(map.conversation(&query("k", &compacted)), None);
     map.record(&report("k", "a", &["c1"], 2_000));
     let continuation = boundaries(&["c1", "c2"]);
-    content_match(map.conversation(&query("k", &continuation)), 1);
+    match_at(map.conversation(&query("k", &continuation)), 1);
 }
 
 #[test]
@@ -284,7 +285,7 @@ fn the_conversation_lookup_finds_a_root_across_lanes() {
     // A speed switch hashes the same message bytes, so the identity must find the conversation whatever lane
     // its entries were written under; the lane only filters where the cache is warm.
     let q = boundaries(&["b1", "b2", "b3", "b4"]);
-    content_match(map.conversation(&query("k", &q)), 3);
+    match_at(map.conversation(&query("k", &q)), 3);
 }
 
 #[test]
