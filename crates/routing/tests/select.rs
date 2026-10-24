@@ -10192,7 +10192,7 @@ fn a_resolution_between_two_turns_keeps_the_pin_warm_on_the_dated_id() {
 }
 
 /// A state whose session "s1" already holds a pin on "a", made by a real selection with static prefix "s0" and
-/// tail "old-tail": the fixture the warmth tests below build on.
+/// tail "old-tail": the fixture every warmth test below builds on.
 fn pinned_state(s: &RegistrySnapshot, now: i64) -> RoutingState {
     let mut st = RoutingState::from_load(RoutingLoad::default());
     let first = placement_req(

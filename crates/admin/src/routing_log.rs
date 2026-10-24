@@ -330,16 +330,15 @@ pub(crate) struct DecisionRecord {
     pub version: u32,
     /// `request_id`, `attempt`, `seq`, `at`, `received_at` (when the relay received the request, the same on every
     /// selection of it, a refusal's `at`), `key_id`, `key_generation`, `pool_id`, `routing_session_id`, `agent_id`,
-    /// `parent_agent_id`, `client_class`, `request_class`, `canonical_model`, `lane` (`speed`, `thinking`,
-    /// `effort`), `flags` (`fast`, `count`, `probe`, `portable`, `marker`, `context_compacted`), `chain`
-    /// (`static_boundaries` and `boundaries`, the chains' lengths, and `static_hash`), `attempted` (the accounts
-    /// already tried), `holds` (each `account_id`, `cohort`, `held_ms`,
-    /// `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran out with no slot freed), `reason`
-    /// (`cap` for a slot, `reset` for a spent window about to reset, `slow_down` for a slowed pin's wait before its
-    /// head, `rewrite` for a moved pin's wait for the head of the request that carried the move), `until` (the
-    /// instant the wait ends: a reset's, the pin's slow-down deadline, the rewrite's bound, or under `cap` the
-    /// admission once a slot freed, null where the wait ran out), `waits_for` (the request whose head a `rewrite`
-    /// hold waited for, absent under the other reasons)),
+    /// `parent_agent_id`, `client_class`, `request_class`, `canonical_model`, `lane` (`speed`, `thinking`, `effort`),
+    /// `flags` (`fast`, `count`, `probe`, `portable`, `marker`, `context_compacted`), `chain` (`static_boundaries` and
+    /// `boundaries`, the chains' lengths, and `static_hash`), `attempted` (the accounts already tried), `holds` (each
+    /// `account_id`, `cohort`, `held_ms`, `attempt`, `seq` (the decision that held), `ran_out` (the wait's bound ran
+    /// out with no slot freed), `reason` (`cap` for a slot, `reset` for a spent window about to reset, `slow_down` for
+    /// a slowed pin's wait before its head, `rewrite` for a moved pin's wait for the head of the request that carried
+    /// the move), `until` (the instant the wait ends: a reset's, the pin's slow-down deadline, the rewrite's bound, or
+    /// under `cap` the admission once a slot freed, null where the wait ran out), `waits_for` (the request whose head a
+    /// `rewrite` hold waited for, absent under the other reasons)),
     /// `registry_revision`, `body_tokens` (the relay's estimate of the body's prompt tokens, which a fresh session's
     /// rewrite reads, null on a refusal).
     ///

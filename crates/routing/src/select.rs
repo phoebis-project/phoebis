@@ -343,11 +343,11 @@ impl WarmthCause {
 /// request whose boundaries contain the pin's tail or name an entry the pin's key and generation wrote on the pin's
 /// account and incarnation continues the conversation (so where one session holds several conversations, a
 /// continuation of any of them refreshes the pin), one that matches the static prefix without such a boundary
-/// restarted it, and one matching neither is foreign. A body
-/// without a chain refreshes, the fallback for a request that carries no fact. A keepalive probe replays the
-/// recipe's headers and body verbatim, the re-arming request's rather than its own, so it is judged by none of
-/// this: its renewal report stamps the refresh instead. A token count is judged by none of it either, since it
-/// creates no cache entry to be warm about. The cause beside the verdict names the branch that decided it.
+/// restarted it, and one matching neither is foreign. A body without a chain refreshes, the fallback for a request
+/// that carries no fact. A keepalive probe replays the recipe's headers and body verbatim, the re-arming request's
+/// rather than its own, so it is judged by none of this: its renewal report stamps the refresh instead. A token count
+/// is judged by none of it either, since it creates no cache entry to be warm about. The cause beside the verdict
+/// names the branch that decided it.
 pub fn warmth_of(
     current: &PinRow,
     request: &SelectRequest,

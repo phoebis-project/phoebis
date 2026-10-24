@@ -602,15 +602,15 @@ test('a session decodes its runway and whether it is bounded', () => {
 
 test("both record versions decode their settings, a version 1 record's three removed ones under legacy", () => {
   const body = fixture('decision');
-  const v2 = d.decodeDecisionRecord(body);
+  const v3 = d.decodeDecisionRecord(body);
   const s = body.settings;
-  assert.equal(v2.version, 3);
+  assert.equal(v3.version, 3);
   assert.equal(Object.keys(s).length, 25, 'the route answers twenty-five settings');
-  assert.deepEqual(Object.keys(v2.settings).filter((k) => k !== 'legacy').length, 25);
-  assert.deepEqual(shedding(v2.settings), SHEDDING_FIELDS.map((f) => s[f]), 'a version 2 record reads the new names');
-  assert.equal(v2.settings.legacy, null);
+  assert.deepEqual(Object.keys(v3.settings).filter((k) => k !== 'legacy').length, 25);
+  assert.deepEqual(shedding(v3.settings), SHEDDING_FIELDS.map((f) => s[f]), 'a version 3 record reads the new names');
+  assert.equal(v3.settings.legacy, null);
   assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, load_shedding: false } }).settings.loadShedding, false, 'the switch reads off');
-  assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, shed_share: 0.9 } }).settings.shedCap, s.shed_cap, 'a version 2 record reads no old name');
+  assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, shed_share: 0.9 } }).settings.shedCap, s.shed_cap, 'a version 3 record reads no old name');
   const { burn_average_seconds: _a, load_shedding: _l, shed_cap: _c, shed_dwell_seconds: _d, window_ceiling: _w, ...shared } = s;
   const old = { ...shared, burn_window_seconds: 600, migrate_band: 0.05, pace_floor: 0.05, select_below_utilization: 0.8, shed_ahead_of_pace: 0.2, shed_share: 0.5, source_dwell_seconds: 900 };
   const v1 = d.decodeDecisionRecord({ ...body, settings: old, version: 1 });
