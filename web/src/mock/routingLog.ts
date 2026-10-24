@@ -926,7 +926,7 @@ const tierKey = (t: [number, number, number]) => t.join('/');
 function pickOf(candidates: RecordCandidate[], kept: RecordCandidate[], chosen: string | null, strategy: string, source: string | undefined): { runnerUp: Score | null; score: Score | null; tierSize: number } {
   const winner = candidates.find((c) => c.accountId === chosen);
   if (!winner) return { runnerUp: null, score: null, tierSize: 0 };
-  const unit = (c: RecordCandidate) => (c.kind === 'api_key' ? 'percent' : 'percent_per_hour');
+  const unit = (c: RecordCandidate) => (isPaidSource(accountOf.get(c.accountId)!) ? 'percent' : 'percent_per_hour');
   const scoreOf = (c: RecordCandidate) => c.pace?.score ?? 0;
   const rest = kept.filter((c) => c !== winner && c.accountId !== source && tierKey(c.tier) === tierKey(winner.tier)).sort((x, y) => scoreOf(y) - scoreOf(x));
   winner.rank = 1;
@@ -1252,7 +1252,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       tierSize = ranked.tierSize;
       const tier = member(spec.accountId)?.tier ?? [0, 0, 0];
       // A burn fact follows each score, the burn the spare rate took off.
-      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, c.kind === 'api_key' ? 'percent' : 'percent_per_hour', c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
+      const scores = candidates.filter((c) => c.score !== null).flatMap((c) => [fact('score', c.score, isPaidSource(accountOf.get(c.accountId)!) ? 'percent' : 'percent_per_hour', c.accountId), fact('burn', c.pace?.burn ?? 0, 'percent_per_hour', c.accountId)]);
       // The strategy's ties are the ranked tier's best scores under Pace and the whole tier under Priority. The runway
       // breaks them for a move whose gate answered the fitting order and for a failover by its fitting members' reads,
       // and round robin's cursor picks alone.

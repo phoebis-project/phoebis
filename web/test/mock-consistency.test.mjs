@@ -473,9 +473,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The engine scores a paid source by its remaining allowance with no hours, no window and no burn, and the seat
     // reads no plan window, so all of its allowance is left.
     const paid = { burn: 0, deadline: null, end: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
+    const rows = (await logOf(s)).filter((x) => x.type === 'decision' && fleetIds.has(x.requestId));
     for (const r of records) {
       const seat = r.candidates.find((c) => c.accountId === 'contract');
       assert.deepEqual(seat?.pace, paid, `${r.requestId}/${r.seq}'s pace`);
+      // A score of the remaining share carries no hours, so the engine writes its unit as a share.
+      const row = rows.find((x) => x.requestId === r.requestId && x.seq === r.seq);
+      const scored = r.walk.find((w) => w.step === 'pick')?.facts.filter((f) => f.key === 'score' && f.accountId === 'contract').map((f) => f.unit);
+      assert.deepEqual([scored, [row?.score, row?.runnerUp].filter((x) => x?.accountId === 'contract').map((x) => x.unit)], [['percent'], ['percent']], `${r.requestId}/${r.seq}'s score unit`);
       if (r.outcome.accountId !== 'contract') continue;
       // A source with no plan capacity books nothing, so its placement reaches the reserve station with no booking.
       assert.deepEqual([r.outcome.reservation, r.walk.find((w) => w.step === 'reserve')?.verdict], [null, 'none'], `${r.requestId}/${r.seq}'s reservation`);
