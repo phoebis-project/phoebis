@@ -1364,12 +1364,18 @@ const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day
 const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the 7-day Fable window' };
 
 /**
+ * A usage-based seat: the engine writes the spend entry for a paid source whatever its tier, and files it in group 2
+ * only while the pool prefers subscriptions, so the entry marks the class and the tier does not.
+ */
+const isSpendSeat = (c: RecordCandidate): boolean => c.kind === 'oauth' && own(c.windows, 'spend');
+
+/**
  * The Pace column's header: the window the first subscription candidate's score read. It reads "Pace" when that
  * candidate names no window or the record holds no subscription candidate. A version 1 record read no burn, so its
  * score was the share left per hour.
  */
 export function paceHeader(record: DecisionRecord): string {
-  const pace = record.candidates.find((c) => c.kind === 'oauth')?.pace;
+  const pace = record.candidates.find((c) => c.kind === 'oauth' && !isSpendSeat(c))?.pace;
   const id = pace?.window ?? null;
   if (id === null) return 'Pace';
   return (pace?.burn ?? null) === null ? `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour` : `Spare rate, ${wordOf(PACE_WINDOW_WORD, id)} per hour`;
@@ -1380,6 +1386,7 @@ function paceTitle(c: RecordCandidate, now: number): string | null {
   const p = c.pace;
   if (p === null) return null;
   if (c.kind === 'api_key') return `${fmtPct(p.remaining)} of its worst live bucket left. Scored by the remaining share alone, with no division by hours.`;
+  if (isSpendSeat(c)) return `${fmtPct(p.remaining)} of its allowance left. Scored by the remaining share alone, with no division by hours.`;
   // A pace built by hand without the key names no window, as a null one does.
   const id = p.window ?? null;
   const share = id === null ? 'its window' : own(PACE_WINDOW_PHRASE, id) ? PACE_WINDOW_PHRASE[id] : `the ${words(id)} window`;
@@ -1438,14 +1445,13 @@ const spendLines = (w: RecordCandidate['windows'][string], now: number): string[
 export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; projection: string[]; projectionTitle: string | null; runway: string; tier: string; verdict: { badge: string; chip: Chip | null; tone: VerdictTone | null }; windows: string[][] } {
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
   const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
-  // An OAuth candidate the record files with the API keys is a usage-based seat, whose one window is its spend, an entry
-  // the record carries only while a share is held.
-  const spend = c.kind === 'oauth' && c.tier[0] === 2;
+  // A seat whose share lapsed carries no spend entry, so it reads as an OAuth candidate with no window at any tier.
+  const spend = isSpendSeat(c);
   const windows =
     c.kind === 'api_key'
       ? [[own(c.windows, 'worst_bucket') ? `worst bucket ${fmtPct(c.windows.worst_bucket.utilization)}` : 'not reported']]
       : spend
-        ? [own(c.windows, 'spend') ? spendLines(c.windows.spend, now) : ['not reported']]
+        ? [spendLines(c.windows.spend, now)]
         : WINDOWS.map((name) => {
             if (!own(c.windows, name)) return ['not reported'];
             const w = c.windows[name];
@@ -1455,7 +1461,7 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
   return {
     account: accountChip(c.accountId),
     inFlight: `${c.inFlight} of ${c.inFlightCap}`,
-    pace: c.pace === null ? '-' : c.kind === 'api_key' ? `${fmtPct(c.pace.remaining)} left` : formatFact(c.pace.score, 'percent_per_hour', now),
+    pace: c.pace === null ? '-' : c.kind === 'api_key' || spend ? `${fmtPct(c.pace.remaining)} left` : formatFact(c.pace.score, 'percent_per_hour', now),
     paceTitle: paceTitle(c, now),
     plan: planWord(c),
     prefix: { hash: entry, until: entry === null ? null : warmUntil(entry, now) },
