@@ -165,7 +165,7 @@ const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNo
  * the billed dollars per billed request and per 1k billed output tokens under it, a side with no rows left out and a
  * figure with no count a dash. An estimated group marks every equivalent it shows and names the estimate on its label.
  */
-function nativeRowOf(g: AnalyticsGroup, groupBy: GroupBy): { cells: ReactNode[]; key: string; label: string; title: string } {
+function nativeRowOf(g: AnalyticsGroup): { cells: ReactNode[]; key: string; label: string; title: string } {
   const sides = sidesOf(g, 'seven_day');
   const priced = (key: string | undefined) => (sides.equivalent === undefined || key === undefined || !own(g.costEquivalent, key) ? null : g.costEquivalent[key]);
   const sevenDay = priced('seven_day');
@@ -175,7 +175,7 @@ function nativeRowOf(g: AnalyticsGroup, groupBy: GroupBy): { cells: ReactNode[];
   const ratio = (planCount: number | null, whole: number, scale: number) => both(per(sevenDay, planCount, scale), per(sides.billed ?? null, planCount === null ? null : whole - planCount, scale));
   const windowCell = (key: string | undefined) => nativeCell(nativeCellOf(key ?? '', priced(key), g.estimated));
   const week = weekKeyOf(g.costEquivalent);
-  const label = modelGroupLabel(g, groupBy);
+  const label = modelGroupLabel(g);
   return {
     cells: [
       fmtInt(g.requests),
@@ -705,7 +705,7 @@ export function AnalyticsPage() {
             columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', <span key="refused" title={REFUSED_TITLE}>Refused</span>, <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
             rows={groups.map((g) => ({
               key: g.key,
-              label: modelGroupLabel(g, groupBy),
+              label: modelGroupLabel(g),
               // Search and Fetch count the server-tool calls the group's answers made, not tokens.
               cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
             }))}
@@ -757,7 +757,7 @@ export function AnalyticsPage() {
             ]}
             rows={groups.map((g) => ({
               key: g.key,
-              label: modelGroupLabel(g, groupBy),
+              label: modelGroupLabel(g),
               cells: [
                 fmtInt(g.requests),
                 fmtMs(g.percentiles.ttfbMs.p50),
@@ -980,7 +980,7 @@ export function AnalyticsPage() {
               columns={['Plan requests', '5-hour', '7-day', weekColumnOf(costGroups), 'Per request', 'Per 1k output']}
               rows={costGroups.map((g) => {
                 const r = shareRow(g);
-                return { key: g.key, label: modelGroupLabel(g, groupBy), cells: [g.planRequests === null ? '-' : fmtInt(g.planRequests), r.fiveHour ?? '-', r.sevenDay ?? '-', r.week ?? '-', r.perRequest ?? '-', r.perThousand ?? '-'] };
+                return { key: g.key, label: modelGroupLabel(g), cells: [g.planRequests === null ? '-' : fmtInt(g.planRequests), r.fiveHour ?? '-', r.sevenDay ?? '-', r.week ?? '-', r.perRequest ?? '-', r.perThousand ?? '-'] };
               })}
             />
           )}
@@ -993,7 +993,7 @@ export function AnalyticsPage() {
               loading={costLoading}
               groupLabel={groupLabel}
               columns={nativeColumns(costGroups)}
-              rows={costGroups.map((g) => nativeRowOf(g, groupBy))}
+              rows={costGroups.map((g) => nativeRowOf(g))}
             />
           )}
           {sessionId === null && unit !== 'share' && unit !== 'native' && (
@@ -1006,7 +1006,7 @@ export function AnalyticsPage() {
               columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
               rows={costGroups.map((g) => ({
                 key: g.key,
-                label: modelGroupLabel(g, groupBy),
+                label: modelGroupLabel(g),
                 cells: [
                   fmtInt(g.requests),
                   fmtUsd(g.costUsd),
@@ -1749,7 +1749,7 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading }: { gr
       ]}
       rows={groups.map((g) => ({
         key: g.key,
-        label: modelGroupLabel(g, groupBy),
+        label: modelGroupLabel(g),
         // Expired between turns is no reason the Requests page filters by, so it stays plain.
         cells: [...order.map((reason) => cell(g, reason)), fmtInt(g.expiredBetweenTurns)],
       }))}
@@ -1985,7 +1985,7 @@ type Stack = { data: Record<string, number | null>[]; estimated: Map<number, Set
  * `flagged` reads unpriced in a bucket, a group folded into Other among them, by their labels in the chart's order, and
  * counts the buckets holding one.
  */
-function stackOf(points: AnalyticsPoint[], groupBy: GroupBy, value: (g: AnalyticsGroup) => number | null, drawn = false, flagged: (g: AnalyticsGroup) => boolean = () => false): Stack {
+function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number | null, drawn = false, flagged: (g: AnalyticsGroup) => boolean = () => false): Stack {
   const totals = new Map<string, number>();
   const unpriced = new Set<string>();
   const labels = new Map<string, string>();
@@ -1994,7 +1994,7 @@ function stackOf(points: AnalyticsPoint[], groupBy: GroupBy, value: (g: Analytic
       const v = value(g);
       totals.set(g.key, (totals.get(g.key) ?? 0) + (v ?? 0));
       if (v === null) unpriced.add(g.key);
-      labels.set(g.key, modelGroupLabel(g, groupBy));
+      labels.set(g.key, modelGroupLabel(g));
     }
   }
   const ranked = [...totals.entries()]
@@ -2039,10 +2039,10 @@ const sevenDayEquivalentOf = (g: AnalyticsGroup) => (own(g.costEquivalent, 'seve
  */
 function CostByGroup({ axis, error, points, groupBy, groupSlot, loading, shared, unit }: { axis: TimeAxis; error: string | null; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; shared: boolean; unit: UnitPosition }) {
   const ink = useChartInk();
-  const lines = useMemo(() => shareLines(points, groupBy), [points, groupBy]);
+  const lines = useMemo(() => shareLines(points), [points]);
   // Native stacks the plan rows' equivalent and draws the billed rows' dollars on a card of their own.
-  const stack = useMemo(() => (unit === 'native' ? stackOf(points, groupBy, sevenDayEquivalentOf, true, (g) => g.unpriced.seven_day === true) : stackOf(points, groupBy, (g) => g.costUsd)), [points, groupBy, unit]);
-  const billed = useMemo(() => (unit === 'native' ? stackOf(points, groupBy, (g) => g.billedUsd, true) : null), [points, groupBy, unit]);
+  const stack = useMemo(() => (unit === 'native' ? stackOf(points, sevenDayEquivalentOf, true, (g) => g.unpriced.seven_day === true) : stackOf(points, (g) => g.costUsd)), [points, unit]);
+  const billed = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.billedUsd, true) : null), [points, unit]);
   const { keys, labels, data } = stack;
   const color = (k: string) => (k === 'Other' ? ink.muted : groupSlot(k));
   const label = (k: string) => labels.get(k) ?? k;

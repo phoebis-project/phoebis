@@ -208,7 +208,7 @@ export async function readBurn(
  * A group's label: the route's under every grouping, the model grouping's empty key included, since the ledger labels
  * that key itself.
  */
-export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>, _groupBy: BurnGroup): string => g.label;
+export const modelGroupLabel = (g: Pick<AnalyticsGroup, 'key' | 'label'>): string => g.label;
 
 /** An earlier holder of a key id groups under `<id>@<generation>`, which the breakdown labels by its creation. */
 const EARLIER_HOLDER = /^(.+)@(\d+)$/;
@@ -508,15 +508,15 @@ export function slotIndex(keys: readonly string[], key: string): number {
 /**
  * Per group the 7-day share (solid) and the model week's (dashed) per bucket as `<group>:7d` and `<group>:week`, the
  * 5-hour share beside them as `<group>:5h` for the tooltip, a gap (null) where a bucket has none, per group the key its
- * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label under `groupBy`,
- * which names the line under the page's grouping. The groups are the ones carrying a share map: each account under the
- * account grouping, an API key account drawing no line, or each group of the one account the Accounts filter names.
+ * model week is charted under (`weeks`), undefined where no bucket names one, and the group's label, which names the
+ * line. The groups are the ones carrying a share map: each account under the account grouping, an API key account
+ * drawing no line, or each group of the one account the Accounts filter names.
  */
-export function shareLines(points: AnalyticsPoint[], groupBy: BurnGroup): { accounts: string[]; data: Record<string, number | null>[]; labels: Record<string, string>; weeks: Record<string, string | undefined> } {
+export function shareLines(points: AnalyticsPoint[]): { accounts: string[]; data: Record<string, number | null>[]; labels: Record<string, string>; weeks: Record<string, string | undefined> } {
   const accounts = [...new Set(points.flatMap((p) => p.groups.filter((g) => g.costShares !== null).map((g) => g.key)))].sort((a, b) => a.localeCompare(b));
   const weeks: Record<string, string | undefined> = Object.fromEntries(accounts.map((a) => [a, undefined]));
   const labels: Record<string, string> = {};
-  for (const p of points) for (const g of p.groups) if (g.costShares !== null) labels[g.key] ??= modelGroupLabel(g, groupBy);
+  for (const p of points) for (const g of p.groups) if (g.costShares !== null) labels[g.key] ??= modelGroupLabel(g);
   const data = points.map((p) => {
     const row: Record<string, number | null> = { at: Date.parse(p.at) };
     for (const a of accounts) for (const w of ['5h', '7d', 'week']) row[`${a}:${w}`] = null;

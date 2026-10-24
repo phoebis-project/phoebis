@@ -119,6 +119,10 @@ const SHOT_MS = 1_500;
 const failures = [];
 /** Printed at the end: the numbers behind the geometry checks, so a run can be read as a measurement. */
 const measurements = [];
+/** Per page, the login screens the pass loads on purpose, each of which asks /admin/session without a cookie first. */
+const loginLoads = new WeakMap();
+/** The pages whose clock a login paused at the origin, where a later login sets the time back instead. */
+const clocked = new WeakSet();
 // A tile repainted in part can anti-alias a rounded corner a shade apart from one painted whole, and which
 // happens depends on when the paints land, so every raster is a whole one.
 const RASTER = ['--disable-partial-raster'];
@@ -147,14 +151,15 @@ async function openPage(on) {
   const opened = await context.newPage();
   // The first load asks /admin/session without a cookie and gets the 401 that shows the login screen; Chromium
   // logs that answer as a failed resource, and it is the one console error a page expects. Chromium puts the
-  // path in the message or in the location depending on how it reports the failure, so both are searched. Only
-  // the first such line is excused: a session lost mid-pass would log the same one, and that is a failure.
+  // path in the message or in the location depending on how it reports the failure, so both are searched. One such
+  // line is excused per login screen the pass loads on purpose: a session lost mid-pass would log the same one, and
+  // that is a failure.
   let anonymous = 0;
   const expectedAnonymous = (message) => {
     const reported = `${message.text()} ${message.location()?.url ?? ''}`;
     if (!/\/admin\/session\b/.test(reported) || !/\b401\b/.test(reported)) return false;
     anonymous += 1;
-    return anonymous === 1;
+    return anonymous <= (loginLoads.get(opened) ?? 0);
   };
   opened.on('console', (m) => {
     if (m.type() === 'error' && !expectedAnonymous(m)) failures.push(`console error on ${opened.url()}: ${m.text()}`);
@@ -10014,16 +10019,76 @@ async function copyFallbackModal(theme) {
 }
 
 /**
- * Signs `page` in with the pass's secret. The same pin the jsdom smoke run applies, over the timers as well as the
- * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin. From there `advance`
- * moves it forward, and each view of the pass sets it back to the origin before its load.
+ * The login screen's Stay logged in row under the secret field, in the theme the screen drew: the field's, the row's,
+ * its box's, its label's and its hint's edges inside the card's, recorded and asserting nothing, since no view of the
+ * pass draws the screen.
  */
-async function logIn() {
-  await page.clock.install({ time: clockOrigin });
-  await page.clock.pauseAt(clockOrigin);
+async function loginStayRow(theme) {
+  const drawn = await page.waitForSelector('.login__card .field--beside', { timeout: 15_000 }).then(
+    () => true,
+    () => false,
+  );
+  if (!drawn) {
+    measurements.push(`${theme} /login Stay logged in row not drawn`);
+    return;
+  }
+  const read = await page.evaluate(() => {
+    const edges = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top) };
+    };
+    const card = document.querySelector('.login__card');
+    const row = [...(card?.querySelectorAll('.field--beside') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Stay logged in');
+    return {
+      box: edges(row?.querySelector('input[type="checkbox"]')),
+      card: edges(card),
+      field: edges(card?.querySelector('input[type="password"]')),
+      hint: edges(row?.querySelector('.field__hint')),
+      label: edges(row?.querySelector('.field__label')),
+      row: edges(row),
+      theme: document.documentElement.getAttribute('data-theme'),
+    };
+  });
+  measurements.push(`${theme} /login Stay logged in row ${JSON.stringify(read)}`);
+}
+
+/** Ends the session through the top bar's Log out control, so the next load draws the login screen again. */
+async function logOut() {
+  await page.clock.setSystemTime(clockOrigin);
   await page.goto(`${base}/`);
   await booted();
   await advance(LOAD_MS);
+  await page.waitForSelector('.stat-grid', { timeout: 15_000 });
+  await page.getByRole('button', { name: 'Log out' }).click();
+  await advance(LOAD_MS);
+  await page.waitForSelector('.login__card', { timeout: 15_000 });
+}
+
+/**
+ * Signs `page` in with the pass's secret on a login screen drawn under `theme`, measuring its Stay logged in row first
+ * unless `measured` is false. The same pin the jsdom smoke run applies, over the timers as well as the date: `install`
+ * alone keeps the clock running at the wall's pace, so a page's first login pauses it at the origin and a later one
+ * sets it back there. From there `advance` moves it forward, and each view of the pass sets it back to the origin
+ * before its load.
+ */
+async function logIn(theme, measured = true) {
+  if (clocked.has(page)) {
+    await page.clock.setSystemTime(clockOrigin);
+  } else {
+    await page.clock.install({ time: clockOrigin });
+    await page.clock.pauseAt(clockOrigin);
+    clocked.add(page);
+    // A blank page reaches no origin's storage, so the first login reaches the origin through the theme script, a
+    // static file every page loads, which the browser draws as a text document with the head the pass's styles go into.
+    await page.goto(`${base}/theme.js`);
+  }
+  await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+  loginLoads.set(page, (loginLoads.get(page) ?? 0) + 1);
+  await page.goto(`${base}/`);
+  await booted();
+  await advance(LOAD_MS);
+  if (measured) await loginStayRow(theme);
   await page.getByLabel('Admin secret').fill(secret);
   await page.getByRole('button', { name: 'Log in' }).click();
   await advance(LOAD_MS);
@@ -10033,9 +10098,15 @@ async function logIn() {
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
-  await logIn();
+  await logIn('light');
 
   for (const theme of ['light', 'dark']) {
+    // The login screen draws on no view, so the session ends before the second theme and the screen draws again in it.
+    if (theme !== 'light') {
+      at = `${theme} the login`;
+      await logOut();
+      await logIn(theme);
+    }
     mkdirSync(join(shots, theme), { recursive: true });
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     for (const view of VIEWS) {
@@ -10307,7 +10378,7 @@ try {
   const shown = await chromium.launch({ args: RASTER, ignoreDefaultArgs: ['--hide-scrollbars'] });
   try {
     page = await openPage(shown);
-    await logIn();
+    await logIn('light', false);
     await page.evaluate(() => localStorage.setItem('phoebis.theme', 'light'));
     await page.goto(`${base}/keys`);
     await booted();

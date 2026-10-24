@@ -87,6 +87,7 @@ test('a new pool reads each member the way the pool route does', async () => {
   };
   assert.deepEqual(await verdicts('first', 'never'), {
     annex: 'eligible',
+    backup: 'eligible',
     legacy: 'unavailable',
     nightly: 'overage',
     overflow: 'unavailable',
@@ -300,6 +301,20 @@ test('an editor opened before its pool or key was deleted and created again is r
   const landedPool = await api.updatePool('fresh', { ...poolInputOf(pool), name: 'landed' }, pool.revision);
   const landedKey = await api.updateKey('spare', { ...spare, expiresAt: undefined, name: 'landed' }, key.revision);
   assert.deepEqual([landedPool.name, landedKey.name], ['landed', 'landed'], "the replacement's own token lands");
+});
+
+test("a pool deleted and created again under its id counts the pins of the keys it holds now, so it reads no former member's pin", async () => {
+  const api = await signedIn();
+  const poolOf = async (id) => (await api.listPools()).find((p) => p.id === id);
+  const formerPins = (p) => Math.max(0, p.activePins - p.members.reduce((n, m) => n + m.activePins, 0));
+  const [work, all] = [await poolOf('work'), await poolOf('all')];
+  assert.ok(work.activePins > 0 && formerPins(work) > 0, "the story's work pool holds pins, one of them on a former member");
+  // A pool leaves once no key points at it, so its keys move first and take their pins along.
+  for (const k of (await api.listKeys()).filter((x) => x.poolId === 'work')) await api.updateKey(k.id, { ...keyInput, expiresAt: undefined, name: k.name, poolId: 'all' });
+  await api.deletePool('work');
+  const again = await api.createPool({ ...poolInputOf(work), members: [] });
+  assert.deepEqual([again.id, again.activePins, formerPins(again)], ['work', 0, 0], 'the pool created again holds no key, so no pin');
+  assert.equal((await poolOf('all')).activePins, all.activePins + work.activePins, "the pool the keys moved to counts their pins");
 });
 
 test('a rotation or a revocation moves the key\'s stamp, so an edit read before it is refused as stale', async () => {
@@ -741,4 +756,20 @@ test('a_guardrail_is_created_edited_attached_and_deleted_on_the_mock_with_the_ro
   await assert.rejects(() => api.getGuardrail('fresh'), refusedAs(404, 'guardrail not found'));
   const keys = await api.listKeys();
   assert.ok(keys.every((k) => k.guardrails.every((r) => r.id !== 'fresh')), 'the delete detaches the guardrail from every key');
+});
+
+test("a login with Stay logged in checked keeps the flag in the signed-in mark for a reload, and the smoke's bare mark reads a login left unchecked", async () => {
+  // The mark lives in the browser's storage, which the case lends the mock as a stand-in it can read back.
+  const stored = new Map();
+  globalThis.localStorage = { getItem: (key) => stored.get(key) ?? null, removeItem: (key) => stored.delete(key), setItem: (key, value) => stored.set(key, String(value)) };
+  try {
+    await new d.MockApi().login('admin', true);
+    assert.equal(stored.get('phoebis.mockSession'), JSON.stringify({ persistent: true, user: 'admin' }));
+    // A reload builds the mock anew, whose session reads the mark alone.
+    assert.deepEqual(await new d.MockApi().getSession(), { persistent: true, sessionId: 'mock-admin' }, 'a reload after a checked login');
+    stored.set('phoebis.mockSession', 'admin');
+    assert.deepEqual(await new d.MockApi().getSession(), { persistent: false, sessionId: 'mock-admin' }, 'the bare mark the smoke writes');
+  } finally {
+    delete globalThis.localStorage;
+  }
 });

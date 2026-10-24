@@ -41,8 +41,11 @@ function fastLane(input: number, output: number, resetsInMs: number): Account['f
   return { input: reading(input), output: reading(output) };
 }
 
-/** How long before now spare's last poll read its windows, an instant its row, its snapshot and its samples share. */
-const SPARE_READ_AGO = 4 * DAY + 2 * HOUR;
+/**
+ * How long before now spare's last poll read its windows, an instant its row, its snapshot and its samples share. It
+ * lies an hour into the period each window stood in then, so the samples end inside it and every reset follows it.
+ */
+const SPARE_READ_AGO = 3 * DAY + 19 * HOUR;
 
 /** How long before now legacy's last clean poll read its windows. */
 const LEGACY_CLEAN_AGO = 2 * DAY + 3 * HOUR;
@@ -50,6 +53,11 @@ const LEGACY_CLEAN_AGO = 2 * DAY + 3 * HOUR;
 export const LEGACY_LAPSED_AT = NOW - (2 * DAY + 2 * HOUR);
 /** The poll that read legacy's 5-hour window at its limit, an hour and twenty minutes before its last clean poll. */
 export const LEGACY_FIVE_HOUR_SPENT_AT = NOW - LEGACY_CLEAN_AGO - HOUR - 20 * MINUTE;
+
+/** How long before now backup's last clean poll read its windows, before its 5-hour window reset. */
+const BACKUP_CLEAN_AGO = 35 * MINUTE;
+/** Backup's last poll, the sixth 503 at the poll's five-minute cadence since the clean one. */
+const BACKUP_POLLED_AGO = 5 * MINUTE;
 
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
@@ -293,12 +301,38 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+spare@example.com',
     status: 'unpaired',
     routingEnabled: true,
-    windows: [win('5h', 0.4, -(3 * DAY + 20 * HOUR), SPARE_READ_AGO, null), win('7d', 0.02, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null)],
+    windows: [win('5h', 0.4, -(3 * DAY + 15 * HOUR), SPARE_READ_AGO, null), win('7d', 0.02, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null)],
     fableWindow: win('7d_fable', 0, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null),
     extraUsage: null,
     fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
+    cooldowns: [],
+  },
+  // A stand-by login in no pool, so no request reaches it, whose usage polls have failed on the endpoint's 503 since
+  // its last clean read. Its windows are that read's: the 5-hour one reset after it with no reading since, and the
+  // 7-day one still runs.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'backup',
+    kind: 'oauth',
+    label: 'backup',
+    email: 'operator+backup@example.com',
+    status: 'ready',
+    routingEnabled: true,
+    windows: [win('5h', 0.71, -(20 * MINUTE), BACKUP_CLEAN_AGO, null), win('7d', 0.33, 2 * DAY + 6 * HOUR, BACKUP_CLEAN_AGO)],
+    fableWindow: null,
+    extraUsage: null,
+    fastLane: null,
+    credential: {
+      accessTokenExpiresAt: ahead(5 * HOUR + 10 * MINUTE),
+      lastError: null,
+      lastRefreshAt: ago(2 * HOUR + 50 * MINUTE),
+      quarantined: false,
+      refreshTokenExpiresAt: ahead(44 * DAY),
+    },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(90 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
@@ -328,6 +362,19 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
       fetchedAt: ago(LEGACY_CLEAN_AGO),
       heldUntil: null,
       poll: { backoffSince: null, lastAttemptAt: iso(LEGACY_LAPSED_AT), lastCleanAt: ago(LEGACY_CLEAN_AGO), lastError: 'acquire: account has to be paired again', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+      status: 'success',
+    };
+  }
+  // A 503 is a passing fault, neither a 429 nor a 401, so the poll holds nothing back and asks again at its next slot,
+  // while the windows of the last clean read still answer.
+  if (a.id === 'backup') {
+    return {
+      ...QUOTA_SNAPSHOT_SAMPLE,
+      accountId: a.id,
+      error: null,
+      fetchedAt: ago(BACKUP_CLEAN_AGO),
+      heldUntil: null,
+      poll: { backoffSince: null, lastAttemptAt: ago(BACKUP_POLLED_AGO), lastCleanAt: ago(BACKUP_CLEAN_AGO), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
       status: 'success',
     };
   }
@@ -388,11 +435,11 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
 const HISTORY_SEED: Partial<Record<WindowId, number>> = { '5h': 1, '7d': 2, '7d_fable': 3 };
 
 /**
- * Where an account's samples end: at its last reading, legacy's last clean poll, since every poll after it failed,
- * spare's reading before its disconnect, and the rest now.
+ * Where an account's samples end: at its last reading, the last clean poll where every poll after it failed (legacy's
+ * and backup's), spare's reading before its disconnect, and the rest now.
  */
 const samplesEndOf = (account: (typeof ACCOUNTS)[number]): number => {
-  const last = account.id === 'legacy' ? account.usage?.poll?.lastCleanAt : account.id === 'spare' ? account.usage?.fetchedAt : null;
+  const last = account.usage?.poll?.lastOutcome === 'failed' ? account.usage.poll.lastCleanAt : account.id === 'spare' ? account.usage?.fetchedAt : null;
   return last ? Date.parse(last) : NOW;
 };
 

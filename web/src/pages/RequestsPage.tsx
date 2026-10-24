@@ -865,18 +865,18 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
   // The dialog leaves the tree while it is open, so the browser's close steps never hand the focus back to the control
   // that opened it. The link takes it as the dialog goes, or the drawer's field where a step opened the dialog.
   const link = useRef<HTMLButtonElement>(null);
-  const drawerFind = useRef<HTMLDivElement>(null);
-  const dialogFind = useRef<HTMLDivElement>(null);
+  const drawerFind = useRef<HTMLInputElement>(null);
+  const dialogFind = useRef<HTMLInputElement>(null);
   const fromField = useRef(false);
   const wasWide = useRef(false);
   // A child's effects run before its parent's, so the dialog's showModal has run and its own focus is taken over here.
   useEffect(() => {
     if (wide) {
       wasWide.current = true;
-      if (fromField.current) dialogFind.current?.querySelector('input')?.focus();
+      if (fromField.current) dialogFind.current?.focus();
     } else if (wasWide.current) {
       wasWide.current = false;
-      (fromField.current ? drawerFind.current?.querySelector('input') : link.current)?.focus();
+      (fromField.current ? drawerFind.current : link.current)?.focus();
       fromField.current = false;
     }
   }, [wide]);
@@ -891,8 +891,9 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
     setFind((f) => ({ ...f, index: (Math.min(f.index, hits.length - 1) + by + hits.length) % hits.length, step: f.step + 1 }));
   };
   const findGroup = (at: typeof drawerFind, inDialog: boolean) => (
-    <div ref={at} className="body-block__find">
+    <div className="body-block__find">
       <Input
+        ref={at}
         placeholder="Find"
         aria-label={`Find in the ${label} body`}
         value={find.term}
@@ -920,7 +921,7 @@ function BodyBlock({ dropped, label, requestId, value }: { dropped?: number; lab
             aria-label="Clear find"
             onClick={() => {
               setFind({ index: 0, step: 0, term: '' });
-              at.current?.querySelector('input')?.focus();
+              at.current?.focus();
             }}
           />
         )}

@@ -233,16 +233,29 @@ const MODEL_SCOPE_PREFIX = 'model:';
  */
 const SEEDED_SESSION_KEY = 'phoebis.mockSession';
 const MOCK_SESSION: SessionInfo = { persistent: false, sessionId: 'mock-admin' };
-const seededSession = (): boolean => {
+/**
+ * A login's mark carries the Stay logged in choice, so a reload reads it, and the bare `admin` the smoke's own writers
+ * store reads as a login left unchecked.
+ */
+const persistentOf = (mark: string): boolean => {
   try {
-    return localStorage.getItem(SEEDED_SESSION_KEY) !== null;
+    return (JSON.parse(mark) as { persistent?: unknown } | null)?.persistent === true;
   } catch {
     return false;
   }
 };
-const seedSession = (signedIn: boolean) => {
+const seededSession = (): SessionInfo | null => {
   try {
-    if (signedIn) localStorage.setItem(SEEDED_SESSION_KEY, 'admin');
+    const mark = localStorage.getItem(SEEDED_SESSION_KEY);
+    return mark === null ? null : { ...MOCK_SESSION, persistent: persistentOf(mark) };
+  } catch {
+    return null;
+  }
+};
+/** `null` signs out. */
+const seedSession = (persistent: boolean | null) => {
+  try {
+    if (persistent !== null) localStorage.setItem(SEEDED_SESSION_KEY, JSON.stringify({ persistent, user: 'admin' }));
     else localStorage.removeItem(SEEDED_SESSION_KEY);
   } catch {
     // No storage (the Node tests): the session lives on the instance alone.
@@ -410,10 +423,10 @@ const writtenMember = (m: PoolInput['members'][number], account: Account | undef
 };
 
 /**
- * A pool's pins are every pin under its keys. A pin on a member that left the pool counts here and in no member's
- * cell.
+ * A pool's pins are every pin under the keys it holds at the read, so a pool created again under a deleted one's id
+ * reads none of the old keys' pins. A pin on a member that left the pool counts here and in no member's cell.
  */
-const poolPins = (p: Pick<Pool, 'id'>): number => pinsUnderPool(p.id);
+const poolPins = (p: Pick<Pool, 'id'>, keys: readonly Pick<ApiKey, 'id' | 'poolId'>[]): number => pinsUnderPool(new Set(keys.filter((k) => k.poolId === p.id).map((k) => k.id)));
 
 /**
  * The route's `keys=` rule: `<id>@<generation>` names one lifetime and a bare id the live key's, so an earlier
@@ -535,7 +548,7 @@ export class MockApi implements Api {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
     const ids = new Set(keys.map((k) => k.id));
     const cohort = Math.max(0, ...this.sessions.filter((s) => s.pinned && ids.has(s.keyId)).map((s) => s.agents));
-    return { ...p, activePins: poolPins(p), guardrails: this.guardrailRefs('pools', p.id), keys, warnings: poolWarnings(p, cohort) };
+    return { ...p, activePins: poolPins(p, this.keys), guardrails: this.guardrailRefs('pools', p.id), keys, warnings: poolWarnings(p, cohort) };
   }
 
   /**
@@ -1114,7 +1127,7 @@ export class MockApi implements Api {
     const day = requestSidesOf(last24h);
     return latency({
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
-      activePins: empty ? 0 : this.pools.reduce((n, p) => n + poolPins(p), 0),
+      activePins: empty ? 0 : this.pools.reduce((n, p) => n + poolPins(p, this.keys), 0),
       billed24h: day.billedUsd,
       cost24h: cost,
       equivalent24h: day.equivalent,
@@ -1147,7 +1160,7 @@ export class MockApi implements Api {
 
   getSession(): Promise<SessionInfo | null> {
     if (this.session) return latency(this.session, 60);
-    return latency(seededSession() ? MOCK_SESSION : null, 60);
+    return latency(seededSession(), 60);
   }
 
   getSettings() {
@@ -1156,9 +1169,10 @@ export class MockApi implements Api {
 
   listAccountRollups(from: string, to: string) {
     if (emptyStore()) return latency([]);
-    const fromMs = Date.parse(from);
-    const toMs = Date.parse(to);
-    return latency(ACCOUNT_ROLLUPS.filter((r) => Date.parse(r.hour) >= fromMs && Date.parse(r.hour) <= toMs));
+    // As the route reads a range: from the hour holding the start up to the hour ceiling of the end, exclusive.
+    const fromHour = Math.floor(Date.parse(from) / HOUR) * HOUR;
+    const toCeiling = Math.ceil(Date.parse(to) / HOUR) * HOUR;
+    return latency(ACCOUNT_ROLLUPS.filter((r) => Date.parse(r.hour) >= fromHour && Date.parse(r.hour) < toCeiling));
   }
 
   listAccounts() {
@@ -1242,13 +1256,13 @@ export class MockApi implements Api {
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
     if (secret !== 'admin') return Promise.reject(new ApiError(401, 'that secret does not match', null));
     this.session = { ...MOCK_SESSION, persistent: stayLoggedIn };
-    seedSession(true);
+    seedSession(stayLoggedIn);
     return latency(this.session, 200);
   }
 
   logout() {
     this.session = null;
-    seedSession(false);
+    seedSession(null);
     return latency(undefined, 150);
   }
 

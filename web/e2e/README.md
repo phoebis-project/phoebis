@@ -4,7 +4,8 @@
 through the login screen, then for each theme visits the dashboard, quota, accounts (which lands on the first account
 through a client-side redirect, since `/accounts` carries no account id), pools, keys, guardrails, request logs,
 analytics (on its Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once
-more on its Cache warming tab and the Quota page once more on its Quota windows section. Per view it waits for one
+more on its Cache warming tab and the Quota page once more on its Quota windows section. Before the dark theme it logs
+out through the top bar's Log out control and logs in again on the screen drawn in that theme. Per view it waits for one
 element, asserts the document title, records every console error and page error, and writes a full-page screenshot to
 `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one function each in `views.mjs`, in
 the order the file defines them (the rail's two levels (the indent, the gaps, the hairlines, a parent's color at rest
@@ -228,7 +229,9 @@ mock's sessions failure switch: the Sessions and Agents tiles a dash over "could
 message, in the box, the value's line and the note's line of the Retained tile beside them, which keeps its figure, and
 the notice under the tiles naming the sessions), the fork link, which is followed once the session list's shot is taken,
 the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own load, and
-on a Key created dialog's secret in the mock pass, on a load of its own)). A check that opens an editor, a dialog or a
+on a Key created dialog's secret in the mock pass, on a load of its own), the login screen's Stay logged in row (on both
+logins, the light theme's and the dark one's after the Log out: the secret field's, the row's, its box's, its label's
+and its hint's edges inside the card recorded, asserting nothing)). A check that opens an editor, a dialog or a
 row closes it again before the view's shot, and one that turns a column on turns it off again. The recent requests'
 table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their 5-hour
 equivalent in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there, and

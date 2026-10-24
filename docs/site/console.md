@@ -795,15 +795,15 @@ disabled, while a link whose range ends at the moment it was made reads on.
 Filtered to one session the view sums the request log instead of the hourly rollups and says so, over the first 10,000
 requests of the range, and a session with more reads "Partial: the first 10,000 requests of the range" on a line under
 the bar. On a custom range the view walks the session's pages once, and each auto reload re-reads the first page alone,
-with the later pages standing as loaded. Grouped by key, a deleted key's group reads `<id> (deleted, created <time>)`,
-its creation instant in the viewer's zone. Under that filter the Cost split reads "Cost split is not available for a
+with the later pages standing as loaded. Under that filter the Cost split reads "Cost split is not available for a
 session view.", the Write cost vs read cost legend reads a dash for each cost, and Cache warming reads "Cache warming
 figures are not available for a session view." with "not in the request log" under its probe tiles, since a request row
-carries one cost total and no probe or kept-warm fact. The range, the grouping, every filter, the client groups and the
-probes switch live in the page's address. A link that carries `unit` sets the top bar's Unit switch to that position and
-leaves the address, so a shared link opens on its unit. The section bar under it shows one section at a time, Traffic,
-Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No traffic in this range." What
-each figure means is on [Statistics](statistics.md).
+carries one cost total and no probe or kept-warm fact. Grouped by key, a deleted key's group reads
+`<id> (deleted, created <time>)`, its creation instant in the viewer's zone. The range, the grouping, every filter, the
+client groups and the probes switch live in the page's address. A link that carries `unit` sets the top bar's Unit
+switch to that position and leaves the address, so a shared link opens on its unit. The section bar under it shows one
+section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No
+traffic in this range." What each figure means is on [Statistics](statistics.md).
 
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
 Exhausted), Errors by code ("Non-200 responses in range, the refused requests left out"), Refusals by code ("Requests

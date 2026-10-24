@@ -760,10 +760,10 @@ for (const pin of SLOWED_PINS) {
 /** The pins under a pool's keys on one member's account. */
 export const memberPins = (poolId: string, accountId: string): number => PINS.get(`${poolId}|${accountId}`)?.size ?? 0;
 /**
- * Every pin under a pool's keys, one per key, session, agent and model as the route counts them, on a member's account
- * or not. A pin on an account that left the pool counts here and in no member's figure.
+ * Every pin under a pool's current keys, one per key, session, agent and model as the route counts them, on a member's
+ * account or not. A pin on an account that left the pool counts here and in no member's figure.
  */
-export const pinsUnderPool = (poolId: string): number => new Set([...PINS].flatMap(([member, pins]) => (member.startsWith(`${poolId}|`) ? [...pins] : []))).size;
+export const pinsUnderPool = (keyIds: ReadonlySet<string>): number => new Set([...PINS.values()].flatMap((pins) => [...pins].filter((pin) => keyIds.has(pin.slice(0, pin.indexOf('|')))))).size;
 
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.

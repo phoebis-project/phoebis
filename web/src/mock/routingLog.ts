@@ -1311,6 +1311,8 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
         ...spec.cacheMap.staticSizes.map((size, i) => ({ depth: i + 1, prefixTokens: size, tier: 'static' })),
       ]
     : [{ depth: (spec.rung?.depth ?? 0) + 1, prefixTokens, tier: 'message' }];
+  // Each message row is a boundary new to the account, so the chain holds at least as many boundaries as rows.
+  const messageRows = written.filter((e) => e.tier === 'message').length;
   const completion: RecordCompletion | null = dispatched
     ? {
         cacheMapWritten: answered && usage.cacheWrite5m + usage.cacheWrite1h > 0 ? written.map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs })) : null,
@@ -1378,7 +1380,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     raw: null,
     request: {
       agentId: r.agentId ?? 'main', at: iso(spec.at), attempt: spec.attempt, attempted: spec.attempted, bodyTokens: spec.kind === 'refused' ? null : bodyTokensOf(r), canonicalModel: r.canonicalModel,
-      chain: { boundaries: r.kind === 'inference' ? Math.max(1, Math.round(r.shape.messageCount / 4)) : 0, staticBoundaries: r.kind === 'inference' ? 2 : 0, staticHash: r.kind === 'inference' },
+      chain: { boundaries: r.kind === 'inference' ? Math.max(1, messageRows, Math.round(r.shape.messageCount / 4)) : 0, staticBoundaries: r.kind === 'inference' ? 2 : 0, staticHash: r.kind === 'inference' },
       clientClass: r.client === 'other' ? 'other' : 'claude_code',
       flags: { contextCompacted: r.contextCompacted !== null, count: r.kind === 'count_tokens', fast, marker: r.kind === 'inference' && spec.pin !== 'pinning_off', portable, probe: r.kind === 'probe' },
       holds: spec.holds ?? [],
@@ -2470,6 +2472,7 @@ function buildEvents(): RoutingEvent[] {
       accountId: cutAttempt.accountId,
       at: iso(Date.parse(cutAttempt.startedAt) + (cutAttempt.durationMs ?? 0)),
       detail: { attempt: cutAttempt.index + 1, bytes_relayed: 846, code: undecodable.errorCode, text: 'error decoding response body', upstream_request_id: cutAttempt.upstreamRequestId },
+      keyId: undecodable.keyId,
       kind: 'stream_interrupted',
       model: undecodable.canonicalModel,
       requestId: undecodable.id,

@@ -966,6 +966,9 @@ function storyRow(seed: StorySeed): RequestLog {
   // A canceled seed was cut by the router's own stop or the client's leaving, so its attempts end canceled with no stop
   // reason.
   const cut = seed.outcome === 'canceled';
+  // An incomplete stream never reached the message_delta that carries the stop reason either, while the ledger still
+  // files its attempt as an upstream error, so the stop reason reads a predicate of its own beside the outcome's.
+  const stopless = cut || seed.outcome === 'incomplete';
   const attempts = seed.attempts.map((a, index): Attempt => {
     const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
     const oauth = ACCOUNTS.find((x) => x.id === a.accountId)?.kind === 'oauth';
@@ -981,7 +984,7 @@ function storyRow(seed: StorySeed): RequestLog {
       index,
       outcome: cut ? 'canceled' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
       overageInUse: oauth ? false : null,
-      response: { clearedInputTokens: null, inferenceGeo: answer ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: answer ? (fast ? 'fast' : 'standard') : null, stopReason: answer && !cut ? 'end_turn' : null, stopSequence: null },
+      response: { clearedInputTokens: null, inferenceGeo: answer ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: answer ? (fast ? 'fast' : 'standard') : null, stopReason: answer && !stopless ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
       // The tier is read off the answer's usage, which a token count's answer carries none of.

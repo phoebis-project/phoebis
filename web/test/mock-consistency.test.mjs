@@ -401,7 +401,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     assert.deepEqual(
       s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.email),
-      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com'],
+      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+backup@example.com'],
       'every subscription keeps the identity it last paired with',
     );
     const pairing = await s.api.startPairing({ accountId: 'legacy' });
@@ -485,6 +485,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const [all] = await s.api.getAnalyticsBreakdown({ from: iso(from), groupBy: 'all', to: iso(to) });
     const kept = s.asked(s.requests.filter((r) => r.kind !== 'probe' && inHours(Date.parse(r.at), from, to)));
     assert.equal(all.requests, kept.length, `the range leaves out the ${current.length} requests from ${iso(to)} on`);
+  });
+
+  test(`the account facts of a range keep the hour holding its start and leave out the hour its end starts on, at ${at}`, async () => {
+    const s = await story;
+    // A start inside an hour and an end on one, so each bound reads the hour the route's own bound reads.
+    const from = s.now - DAY;
+    const to = startOfHour(s.now) - HOUR;
+    const hourOf = (r) => Date.parse(r.hour);
+    const every = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now + DAY));
+    assert.ok(from > startOfHour(from) && every.some((r) => hourOf(r) === startOfHour(from)) && every.some((r) => hourOf(r) === to), 'both bounds fall on hours that hold account facts');
+    const key = (r) => `${r.accountId} ${r.hour}`;
+    const facts = await s.api.listAccountRollups(iso(from), iso(to));
+    assert.deepEqual(facts.map(key), every.filter((r) => inHours(hourOf(r), from, to)).map(key));
   });
 
   test(`the rollups file a request sent under an alias under the model it resolved to, so the model groups name resolved ids alone, at ${at}`, async () => {
@@ -955,6 +968,22 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     );
   });
 
+  test(`spare's reading lies inside every window's current period and before its reset, where its samples end, at ${at}`, async () => {
+    const s = await story;
+    const spare = s.accounts.find((a) => a.id === 'spare');
+    const read = Date.parse(spare.usage.fetchedAt);
+    const history = await s.api.getQuotaHistory('spare');
+    const windows = [...spare.windows, ...(spare.fableWindow ? [spare.fableWindow] : [])];
+    assert.equal(windows.length, 3, 'the 5-hour, the 7-day and the 7-day Fable window');
+    const off = windows.flatMap((w) => {
+      const reset = Date.parse(w.resetsAt);
+      const opened = reset - w.periodHours * HOUR;
+      const last = Date.parse(history.find((h) => h.windowId === w.id).samples.at(-1).at);
+      return opened <= last && last < reset && read < reset ? [] : [`${w.id}: the period ${iso(opened)} to ${iso(reset)}, the last sample ${iso(last)}, the reading ${iso(read)}`];
+    });
+    assert.deepEqual(off, []);
+  });
+
   test(`a Fable request's member without the model week's reading scores untouched on the model week, at ${at}`, async () => {
     const s = await story;
     const records = (await decisionsOf(s)).filter((r) => r.request.canonicalModel.includes('fable') && r.candidates.some((c) => c.pace !== null));
@@ -1210,6 +1239,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const row = s.lib.outcomeRows(r, s.now).find((x) => x.label === 'Cache-map entries');
     assert.deepEqual(row?.chips.at(-1), { label: 'prefix', value: s.lib.fmtCompact(prefix) });
     assert.equal(row?.more?.count, 13);
+  });
+
+  test(`an inference record's chain holds at least the message boundaries its answer writes rows for, the long session's all eleven, at ${at}`, async () => {
+    const s = await story;
+    // The router writes a row for each boundary new to the account, so an answer writes no more rows than its chain
+    // holds boundaries, and the long session's answer, where every boundary is new, writes one per boundary.
+    const written = (await decisionsOf(s)).filter((r) => !r.request.flags.probe && !r.request.flags.count && r.outcome.completion?.cacheMapWritten);
+    const counts = written.map((r) => [`${r.requestId}/${r.seq}`, r.request.chain.boundaries, r.outcome.completion.cacheMapWritten.filter((e) => e.tier === 'message').length]);
+    assert.deepEqual(counts.find(([id]) => id === 'req_1d9c3e55-0b2/2'), ['req_1d9c3e55-0b2/2', 11, 11]);
+    assert.deepEqual(counts.filter(([, boundaries, rows]) => boundaries < rows), []);
   });
 
   test(`every model rejection sets a cooldown row and every crossing a spent row, at ${at}`, async () => {
@@ -2046,6 +2085,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const words of [poll.detail.error, cut.detail.text]) assert.ok(!/[,;]/.test(words), words);
   });
 
+  test(`the stream cut's row names the key its request came in under, as the router writes the row's key, at ${at}`, async () => {
+    const s = await story;
+    const cuts = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'stream_interrupted');
+    assert.deepEqual(cuts.map((cut) => [cut.requestId, cut.keyId]), cuts.map((cut) => [cut.requestId, s.lib.requestById.get(cut.requestId)?.keyId]));
+    assert.deepEqual(cuts.map((cut) => cut.keyId), ['laptop']);
+  });
+
   test(`the story ends a subscribed account's plan and restores it a minute later with the profile's members, in a minute that places nothing on it and polls nothing there, at ${at}`, async () => {
     const s = await story;
     const log = await logOf(s);
@@ -2681,6 +2727,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const ended = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_incomplete').length;
     assert.ok(ended > 0, 'primary served a stream that closed without its end');
     assert.equal(primary.errors.stream_incomplete ?? 0, ended);
+  });
+
+  test(`an incomplete stream's attempt names no stop reason and files as an upstream error, while a completed answer ends its turn, at ${at}`, async () => {
+    const s = await story;
+    // Neither stream reached its message_delta, which carries the stop reason, and the ledger files an incomplete
+    // request's attempt as an upstream error.
+    const served = (id) => {
+      const a = s.lib.requestById.get(id).attempts.at(-1);
+      return [id, a.upstreamStatus, a.outcome, a.response.stopReason];
+    };
+    assert.deepEqual(['req_5e3c8a41-d27', 'req_31f0b7c2-6e1'].map(served), [
+      ['req_5e3c8a41-d27', 200, 'upstream_error', null],
+      ['req_31f0b7c2-6e1', 200, 'upstream_error', null],
+    ]);
+    const completed = s.requests.filter((r) => s.lib.STORY_IDS.has(r.id) && r.outcome === 'succeeded' && r.attempts.at(-1)?.upstreamStatus === 200);
+    assert.ok(completed.length > 0, 'the story completes answers');
+    assert.deepEqual(completed.filter((r) => r.attempts.at(-1).response.stopReason !== 'end_turn').map((r) => r.id), []);
   });
 
   test(`the first page under the default range holds a plan-funded Fable row with captured bodies, at ${at}`, async () => {

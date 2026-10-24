@@ -48,6 +48,20 @@ const tab = () => {
 const missing = () => Promise.reject(new TypeError('Failed to fetch dynamically imported module'));
 
 /**
+ * A render that throws to the error element, with `console.error` stubbed while it runs: React and React Router print
+ * the caught error with its stack, which would bury the run's own output. The stub goes whatever the render does.
+ */
+async function quietly(render) {
+  const error = console.error;
+  console.error = () => {};
+  try {
+    return await render();
+  } finally {
+    console.error = error;
+  }
+}
+
+/**
  * The console's routes in their shape: a page loaded through React's `lazy` over the chunk reload, inside its
  * Suspense, on a child route that carries the error element, under a parent that draws its outlet. The parent stands
  * in for the shell, which needs the session and the settings providers. The smoke run holds that the console's own
@@ -77,7 +91,7 @@ test('a page chunk that fails again after the reload draws its error inside the 
   const first = await load(env);
   assert.deepEqual([env.reloads, items.size, first.querySelector('[data-shell] .fallback')?.textContent ?? null], [1, 1, 'Loading'], 'the first failure reloads the tab once and leaves the page loading');
   // The reloaded tab builds its routes anew over the same storage, so the second failure throws to the element.
-  const second = await load(env);
+  const second = await quietly(() => load(env));
   const shell = second.querySelector('[data-shell]');
   const failed = shell?.querySelector('.empty--error[role="alert"]');
   assert.deepEqual(
@@ -102,7 +116,7 @@ test('a page that throws while drawing reads as an error of its own inside the s
   const Broken = () => {
     throw new Error('boom');
   };
-  const drawn = await load(env, lazy(reloadOnChunkFailure(() => Promise.resolve({ default: Broken }), env)));
+  const drawn = await quietly(() => load(env, lazy(reloadOnChunkFailure(() => Promise.resolve({ default: Broken }), env))));
   assert.deepEqual(
     outlet(drawn),
     ['Pools', 'This page hit an error', 'Something went wrong while drawing this page. Reload to try again, and if it comes back, note what you opened last.', 'Reload'],
@@ -118,7 +132,7 @@ test("a page chunk that fails with WebKit's import error reads as a failed chunk
   const { env } = tab();
   const webkit = () => Promise.reject(new TypeError('Importing a module script failed.'));
   await load(env, lazy(reloadOnChunkFailure(webkit, env)));
-  const second = await load(env, lazy(reloadOnChunkFailure(webkit, env)));
+  const second = await quietly(() => load(env, lazy(reloadOnChunkFailure(webkit, env))));
   assert.deepEqual(outlet(second), ['Pools', 'This page could not load', "The console's files changed under this tab, and a reload did not fetch the current ones. Reload to try again.", 'Reload']);
   assert.equal(env.reloads, 1, 'the first failure reloads the tab once and the second throws to the element');
 });
