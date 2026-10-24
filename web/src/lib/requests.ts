@@ -7,7 +7,7 @@ import { ageWord } from '@/lib/routingLog';
 import type { UnitPosition } from '@/lib/unit';
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
-export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage' };
+export const FUNDING_WORD: Record<Exclude<Funding, 'plan'>, string> = { api_key: 'API key', fast: 'fast mode', overage: 'overage', usage_based: 'usage-based' };
 export const NO_SHARE_TITLE = 'The cost model prices no share for this request';
 export const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
 export const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
@@ -56,11 +56,11 @@ export type CostUnit =
   | { kind: 'unserved'; estimated: boolean; usd: number };
 
 const COST_HEADER_TITLE: Record<UnitPosition, string> = {
-  all: 'Dollar equivalent for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an overage, fast mode or API key request',
-  native: '20x window equivalents for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  share: 'Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  usd: 'A dash for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+  all: 'Dollar equivalent for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an API key, fast mode, overage or usage-based request',
+  native: '20x window equivalents for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  share: 'Window shares for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  usd: 'A dash for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
 };
 
 /** The Cost header's title per position, naming what a subscription and a billed request read under it. */

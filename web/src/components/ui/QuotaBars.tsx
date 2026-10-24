@@ -1,6 +1,6 @@
-import type { Account, AccountSlowDown, RateLimitWindow } from '@/api/types';
-import { fmtAbsolute, fmtPct, fmtRelative } from '@/lib/format';
-import { isExpired, meterTone, projectionParts, remainingOf, slowedOf } from '@/lib/quota';
+import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
+import { fmtAbsolute, fmtCredits, fmtPct, fmtRelative } from '@/lib/format';
+import { isExpired, meterTone, projectionParts, remainingOf, slowedOf, spendResetTitle } from '@/lib/quota';
 import { speedHover } from '@/lib/selection';
 import { WINDOW_ORDER } from '@/lib/windows';
 import { Meter } from './primitives';
@@ -43,6 +43,37 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
   );
 }
 
+/**
+ * A usage-based seat's one window in the window bars' shape: the dollars spent of the monthly limit in the head, a meter
+ * of the share spent toned by the share left, and the reset line, `estimated` in the muted ink where no head has named
+ * the reset yet. With no limit set the head reads the dollars spent alone and no meter draws, and a reading without a
+ * share draws its amounts with no meter.
+ */
+export function SpendBar({ spend, now, compact = false }: { compact?: boolean; now: number; spend: Spend }) {
+  const { amounts, utilization } = spend;
+  const label = compact ? 'Spend' : 'Spend limit';
+  const used = amounts === null ? null : fmtCredits(amounts.usedMinor, amounts.exponent);
+  const limited = amounts !== null && amounts.limitMinor !== null;
+  const head = amounts === null ? (utilization === null ? null : `${fmtPct(utilization)} spent`) : limited ? `${used} of ${fmtCredits(amounts.limitMinor ?? 0, amounts.exponent)}` : `${used} spent`;
+  return (
+    <div className="wbar wbar--spend">
+      <div className="wbar__head">
+        <span className="wbar__label">{label}</span>
+        {head !== null && <span className="wbar__pct num">{head}</span>}
+      </div>
+      {utilization !== null && (amounts === null || limited) && <Meter value={Math.min(1, Math.max(0, utilization))} tone={meterTone(1 - utilization)} thin label={`${label} used`} />}
+      <div className="wbar__reset" title={spendResetTitle(spend)}>
+        resets {fmtRelative(spend.resetsAt, now)}
+        {spend.resetSource === 'estimated' && (
+          <>
+            , <span className="muted">estimated</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** Placeholder bar for a window the provider does not report on this plan. */
 export function WindowBarAbsent({ label }: { label: string }) {
   return (
@@ -67,6 +98,15 @@ export function WindowBarAbsent({ label }: { label: string }) {
  * draws them.
  */
 export function WindowTriple({ account, now, compact = false, others = false }: { account: Account; compact?: boolean; now: number; others?: boolean }) {
+  // A usage-based seat has no plan window, so its one spend window takes the triple's place, full width.
+  if (account.usageBased) {
+    if (account.spend === null) return <div className="wbar__none muted">No spend reading yet</div>;
+    return (
+      <div className={`wbars wbars--1 ${compact ? 'wbars--compact' : ''}`}>
+        <SpendBar spend={account.spend} now={now} compact={compact} />
+      </div>
+    );
+  }
   const w5 = account.windows.find((w) => w.id === '5h');
   const w7 = account.windows.find((w) => w.id === '7d');
   const known: readonly string[] = WINDOW_ORDER;

@@ -3,8 +3,9 @@ import { fmtAbsolute, fmtDuration, fmtPeriodEnd, fmtRelative, fmtShortTime, inst
 import { endOf, minuteSpan, slowedOf } from './quota';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
-/** The kind tiers, in the order selection walks them. */
-export const GROUP_LABEL = ['plan', 'overage', 'API keys'] as const;
+/** The kind tiers, in the order selection walks them. The third holds the API-key and the usage-based accounts, the
+ *  sources metered in dollars. */
+export const GROUP_LABEL = ['plan', 'overage', 'metered'] as const;
 
 /** Whether selection walks the kind tiers for this pool: the operator's answer alone. */
 export const kindOrdered = (pool: Pool) => pool.preferSubscription;
@@ -127,8 +128,11 @@ function resortOf(pool: Pool, account: Account, now: number): { lastResort: Last
   return { lastResort: windingDown ? 'winding_down' : null, order: windingDown ? 2 : 0 };
 }
 
-/** Which kind tier an account sits in; a member the accounts list does not carry has no kind, so it leads. */
-const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account?.kind === 'api_key' ? 2 : account?.extraUsage?.inUse ? 1 : 0);
+/**
+ * Which kind tier an account sits in. A member the accounts list does not carry has no kind, so it leads, and a
+ * usage-based seat is a paid source, so it files with the API keys whatever its extra usage flags read.
+ */
+const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account?.kind === 'api_key' || account?.usageBased ? 2 : account?.extraUsage?.inUse ? 1 : 0);
 
 /** The order the router walks for a fresh session of this pool, from the data the routes already serve. */
 export function selectionOrder(pool: Pool, accounts: Account[], now: number = Date.now()): Tier[] {
@@ -153,7 +157,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], now: number = Da
             account,
             // Under the kind order an account in overage already has a tier of its own, so deferring it inside
             // one would rank it behind its own siblings twice.
-            deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(account.extraUsage?.inUse),
+            deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(account.extraUsage?.inUse) && !account.usageBased,
             end: endOf(account, now),
             ineligible,
             lastResort: ineligible === null ? lastResort : null,
@@ -249,7 +253,8 @@ function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Acc
   } else if (member.eligible !== 'budget') {
     return null;
   }
-  if (ends.length > 0 && pool.overagePolicy === 'never' && account?.overage?.inUse) {
+  // The router records no overage evidence for a usage-based seat, so the policy never holds one.
+  if (ends.length > 0 && pool.overagePolicy === 'never' && account?.overage?.inUse && !account.usageBased) {
     const { reset } = account.overage;
     if (reset === null) return null;
     ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });

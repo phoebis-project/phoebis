@@ -372,7 +372,7 @@ export type DollarPosition = Exclude<UnitPosition, 'native' | 'share'>;
  */
 export const dollarsOf = (unit: UnitPosition): DollarPosition => (unit === 'native' || unit === 'share' ? 'all' : unit);
 /** A dollar position's requests, as the Cost chart's and table's subtitles and the first tile's note name them. */
-export const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription accounts' requests at the API price list", usd: 'the overage, fast mode and API key requests at the API price list' };
+export const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests', equivalent: "the subscription accounts' requests at the API price list", usd: 'the API key, fast mode, overage and usage-based requests at the API price list' };
 /**
  * Native's requests, each side in the unit its funding pays in, as the Cost table's subtitle and the first tile's note
  * name them.

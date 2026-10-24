@@ -7,7 +7,7 @@ import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT } from './account
 import { leadOf } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, clock, failsOver, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
@@ -492,6 +492,11 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
           projection: round3(w.utilization + ((burn[name] ?? 0) * (horizon - at)) / HOUR), reserved: 0, reset: w.resetsAt, source: head ? 'head' : 'poll', utilization: w.utilization,
         };
       }
+      // The engine writes a usage-based seat's spend window while a share is held, its source the reset's.
+      const spend = a.usageBased ? a.spend : null;
+      if (spend !== null && spend.utilization !== null) {
+        windows.spend = { ageMs, ahead: null, demand: null, horizon: null, observedAt: iso(at - ageMs), projection: null, reserved: 0, reset: spend.resetsAt, source: spend.resetSource, utilization: spend.utilization };
+      }
     } else {
       windows.worst_bucket = { ageMs: 4_000, ahead: null, demand: null, horizon: null, observedAt: iso(at - 4_000), projection: null, reserved: 0, reset: iso(at + 40_000), source: 'head', utilization: WORST_BUCKET[a.id] ?? 0.1 };
     }
@@ -502,8 +507,8 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const sub = a.subscription;
     const endsAt = sub?.endsAt ? Date.parse(sub.endsAt) : null;
     // Drawn for every member, so a count the story sets moves no later draw. A drawn count stands under the cap, so a
-    // member reads full only where the story's own pins hold it there.
-    const drawn = inFlightRng.int(0, 5);
+    // member reads full only where the story's own pins hold it there. A row outside the seeded streams draws none.
+    const drawn = UNSEEDED_IDS.has(r.id) ? 0 : inFlightRng.int(0, 5);
     const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
     // Pace reads one window as the engine does, chosen by the model alone: the 7-day Fable window for a Fable request,
@@ -547,7 +552,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       term: a.kind === 'api_key' || !sub
         ? { canceled: false, ended: false, endsAt: null, since: null, trialEndsAt: null, windingDown: false }
         : { canceled: a.canceled === true, ended: false, endsAt: sub.endsAt, since: sub.since, trialEndsAt: sub.trialEndsAt, windingDown: endsAt !== null && endsAt - at <= pool.windDownMinutes * MINUTE },
-      tier: [pool.preferSubscription ? (a.kind === 'api_key' ? 2 : overage ? 1 : 0) : 0, m.priority, overage ? 1 : 0],
+      tier: [pool.preferSubscription ? (a.kind === 'api_key' || a.usageBased ? 2 : overage ? 1 : 0) : 0, m.priority, overage ? 1 : 0],
       verdict: obstacle ? 'out' : 'eligible',
       windows,
     };

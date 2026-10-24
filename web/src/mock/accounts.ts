@@ -59,6 +59,9 @@ const RESERVE_CLEAN_AGO = 35 * MINUTE;
 /** Reserve's last poll, the sixth 503 at the poll's five-minute cadence since the clean one. */
 const RESERVE_POLLED_AGO = 5 * MINUTE;
 
+/** The reset the router estimates while no head has named the spend window's: 00:00 UTC on the first of next month. */
+const SPEND_RESET_ESTIMATE = Date.UTC(new Date(NOW).getUTCFullYear(), new Date(NOW).getUTCMonth() + 1, 1);
+
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
 // `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold. The
@@ -166,7 +169,8 @@ export const ACCOUNTS: Account[] = ([
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE, 40_000, 0.019), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     // The 7-day Fable window reads under all's ceiling, near enough for the morning's Fable session to project it past.
     fableWindow: win('7d_fable', 0.66, 1 * DAY + 18 * HOUR + 12 * MINUTE),
-    extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
+    // No polled row of the day carried the amounts, so the reading the heads wrote names its state alone.
+    extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: null, usedCredits: null },
     fastLane: null,
     // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
     // the day's requests are drawn. The raise stands in until then.
@@ -333,6 +337,41 @@ export const ACCOUNTS: Account[] = ([
       refreshTokenExpiresAt: ahead(44 * DAY),
     },
     subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(90 * DAY), trialEndsAt: null, endsAt: null },
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
+    cooldowns: [],
+  },
+  // An Enterprise contract seat, which the router classes usage-based from its tier: no plan window, and its spend
+  // billed in dollars at API rates against the monthly limit. The poll read the amounts ten minutes ago and a head
+  // moved the share since, and with no head naming the reset yet the router estimates it.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'contract',
+    kind: 'oauth',
+    label: 'contract',
+    email: 'operator+contract@example.com',
+    status: 'ready',
+    routingEnabled: true,
+    usageBased: true,
+    windows: [],
+    fableWindow: null,
+    spend: {
+      amounts: { currency: 'USD', exponent: 2, limitMinor: 250_000, polledAt: ago(10 * MINUTE), usedMinor: 102_500 },
+      observedAt: ago(5 * MINUTE),
+      resetSource: 'estimated',
+      resetsAt: iso(SPEND_RESET_ESTIMATE),
+      utilization: 0.41,
+    },
+    extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 250_000, usedCredits: 102_500 },
+    overage: null,
+    fastLane: null,
+    credential: {
+      accessTokenExpiresAt: ahead(6 * HOUR + 40 * MINUTE),
+      lastError: null,
+      lastRefreshAt: ago(1 * HOUR + 20 * MINUTE),
+      quarantined: false,
+      refreshTokenExpiresAt: ahead(80 * DAY),
+    },
+    subscription: { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', plan: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },

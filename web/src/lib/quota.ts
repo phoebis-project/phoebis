@@ -1,4 +1,4 @@
-import type { Account, AccountSlowDown, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, WindowId } from '@/api/types';
+import type { Account, AccountSlowDown, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, Spend, WindowId } from '@/api/types';
 import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
 
 export type MeterTone = 'good' | 'low' | 'warn';
@@ -149,6 +149,9 @@ export function soonestReset(account: Account, now: number): WindowId | null {
     best = w;
     bestAt = at;
   }
+  // A usage-based seat recovers at its spend window's reset, the one reset it carries.
+  const spendAt = account.spend?.resetsAt ? Date.parse(account.spend.resetsAt) : Number.NaN;
+  if (spendAt > now && spendAt < bestAt) return 'spend';
   return best ? best.id : null;
 }
 
@@ -164,6 +167,29 @@ export function sortByPace(accounts: Account[], windowId: '5h' | '7d' | '7d_fabl
     if (la === null || lb === null) return la === lb ? a.label.localeCompare(b.label) : la === null ? 1 : -1;
     return lb - la || a.label.localeCompare(b.label);
   });
+}
+
+/**
+ * A spend window's reset on hover: the instant, and where the router estimated it, why the line marks it, since no
+ * head has named the window's reset yet.
+ */
+export const spendResetTitle = (spend: Pick<Spend, 'resetSource' | 'resetsAt'>): string =>
+  `resets ${fmtAbsolute(spend.resetsAt)}${spend.resetSource === 'estimated' ? ' (estimated: no reset header has been seen for this window yet)' : ''}`;
+
+/**
+ * Whether the Quota windows timeline draws a lane for the account: a plan window, or a spend reading. The page's
+ * filter and the lane builder read this one rule, since the builder never sees an account the filter leaves out.
+ */
+export const onTimeline = (account: Pick<Account, 'spend' | 'windows'>): boolean => account.windows.length > 0 || account.spend !== null;
+
+/**
+ * The timeline's lanes under one zoom, in the order the accounts come: a plan account's by the zoom's window, and a
+ * usage-based seat's by its spend window, which stands in for every plan window it lacks.
+ */
+export function timelineLanes(accounts: readonly Account[], id: '5h' | '7d'): { account: Account; spend: Spend | null; window: RateLimitWindow | null }[] {
+  return accounts
+    .map((account) => (account.usageBased ? { account, spend: account.spend, window: null } : { account, spend: null, window: windowOf(account, id) }))
+    .filter((l) => l.window !== null || l.spend !== null);
 }
 
 export const STATUS_LABEL: Record<Account['status'], string> = {

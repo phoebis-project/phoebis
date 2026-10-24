@@ -1579,3 +1579,16 @@ test("a Pace row's By chip carries the strategy's hint and a rung row's none", (
   assert.deepEqual(d.byOf(decision({ by: strategy('priority', [0, 1, 0]), strategy: 'priority' })), { value: 'priority P1' });
   assert.deepEqual(d.byOf(decision({ by: by('rung', 'static') })), { value: 'static rung' });
 });
+
+test("a usage-based candidate's one window cell reads its spend share over the reset, marked where the reset is estimated, and not reported without the entry", () => {
+  // An oauth candidate the record files in the third tier is the class, with the entry or without it.
+  const seat = (windows) => d.candidateCells(candidate({ accountId: 'seat', planTier: 'default_claude_zero', priority: 1, tier: [2, 1, 0], windows }), record(), NOW);
+  const reset = Date.UTC(2026, 9, 1);
+  const estimated = seat({ spend: window5h(0.41, reset, 'estimated', 300_000) });
+  assert.deepEqual([estimated.tier, estimated.windows], ['keys P1', [['spend 41%', 'Oct 1 00:00', 'estimated']]], "the tier word is the engine's, the cell the spend window");
+  assert.deepEqual(seat({ spend: window5h(0.41, reset, 'head') }).windows, [['spend 41%', 'Oct 1 00:00']], "a reset a head named reads as a plan window's");
+  assert.deepEqual(seat({ spend: window5h(0.41, null, 'estimated') }).windows, [['spend 41%', 'no reset', 'estimated']]);
+  assert.deepEqual(seat({}).windows, [['not reported']], 'a share expired at its reset leaves no entry');
+  assert.equal(d.WALK_KEY.spend, 'spend', "the candidate leaf's windows table labels the entry");
+  assert.deepEqual(d.candidateCells(candidate({}), record(), NOW).windows.length, 3, 'a plan candidate keeps its three window cells');
+});

@@ -1,5 +1,5 @@
 import type {
-  AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
+  Account, AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
 } from '@/api/types';
 import type { GuardrailMatch } from '@/api/types';
@@ -15,7 +15,7 @@ import { ACCOUNTS, QUOTA_HISTORY, accountById } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor } from './catalog';
 import { leadOf } from './lead';
-import { keyById, poolById } from './pools';
+import { keyById, poolById, type PoolSeed } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
@@ -37,6 +37,8 @@ const kindOf = (accountId: string): AccountKind => {
 };
 /** The account tier an attempt lands under: the subscription's, none for an API key account. */
 const accountTier = (accountId: string): string | null => accountById.get(accountId)?.subscription?.rateLimitTier ?? null;
+/** The serving account's usage-based class, as the ledger stores it on the attempt. */
+const usageBasedOf = (accountId: string): boolean => accountById.get(accountId)?.usageBased ?? false;
 
 export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 
@@ -359,7 +361,7 @@ function countOrder(ids: string[], poolId: string, atMs: number, model: string, 
   if (!pool) return ids;
   const tierOf = (id: string): number[] => {
     const overage = id === 'nightly' && atMs >= NIGHTLY_CAP_RAISED ? 1 : 0;
-    return [pool.preferSubscription ? (kindOf(id) === 'api_key' ? 2 : overage) : 0, pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage];
+    return [pool.preferSubscription ? (kindOf(id) === 'api_key' || usageBasedOf(id) ? 2 : overage) : 0, pool.members.find((m) => m.accountId === id)?.priority ?? 0, overage];
   };
   const windowId = model.includes('fable') ? '7d_fable' : '7d';
   const scoreOf = (id: string): number => {
@@ -462,6 +464,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       upstreamMessageId: upstreamStatus === 200 ? upstreamId('msg_01') : null,
       upstreamRequestId: upstreamId('req_011C'),
       upstreamStatus,
+      usageBased: usageBasedOf(accountId),
       windows,
     };
     if (!ended) {
@@ -502,6 +505,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
         tier: accountTier(accountId),
         upstreamRequestId: upstreamId('req_011C'),
         upstreamStatus: refuses ? 404 : 429,
+        usageBased: usageBasedOf(accountId),
         windows,
       });
       added += 1;
@@ -649,6 +653,7 @@ function buildRequests(): RequestLog[] {
             index: 0,
             overageInUse: studio === 'oauth' ? false : null,
             tier: accountTier('studio'),
+            usageBased: usageBasedOf('studio'),
             windows: oauthWindows('studio', Date.parse(answered.startedAt), () => SERVED_FACTOR),
           },
         ],
@@ -952,6 +957,13 @@ const FAILED_OVER_SESSION_ID = 'd6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64';
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
 export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
+/** The contract seat's batch session on fleet. */
+const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
+/**
+ * The contract seat's rows on fleet: story rows the routing log derives its records for, as it does a drawn row's, that
+ * take no draw from the streams the drawn rows read, so every drawn figure stays where it was.
+ */
+export const UNSEEDED_IDS: ReadonlySet<string> = new Set(['req_3f6a9c21-d48', 'req_7b2e5d93-a16', 'req_c94d1e07-b35']);
 
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
 
@@ -972,6 +984,7 @@ function storyRow(seed: StorySeed): RequestLog {
   const attempts = seed.attempts.map((a, index): Attempt => {
     const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
     const oauth = ACCOUNTS.find((x) => x.id === a.accountId)?.kind === 'oauth';
+    const usageBased = usageBasedOf(a.accountId);
     // A headless cut read no head, so it carries none of an answer's facts, whatever status its seed's attempt names.
     const answer = a.status === 200 && !seed.headless;
     return {
@@ -983,7 +996,8 @@ function storyRow(seed: StorySeed): RequestLog {
       durationMs: a.ms,
       index,
       outcome: cut ? 'canceled' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
-      overageInUse: oauth ? false : null,
+      // A usage-based seat's head names no overage, so its attempt stores no flag, as an API key's does.
+      overageInUse: oauth && !usageBased ? false : null,
       response: { clearedInputTokens: null, inferenceGeo: answer ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: answer ? (fast ? 'fast' : 'standard') : null, stopReason: answer && !stopless ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
@@ -995,6 +1009,7 @@ function storyRow(seed: StorySeed): RequestLog {
       // The upstream's request id rides on its head.
       upstreamRequestId: seed.headless ? null : upstreamId('req_011C'),
       upstreamStatus: seed.headless ? null : a.status,
+      usageBased,
       // A head reads the windows as they stand, or the 5-hour reading the seed gives where the answer moved past it.
       windows: windows.map((w) => (w.id === '5h' && a.head5h !== undefined ? { ...w, utilization: a.head5h } : w)),
     };
@@ -1379,6 +1394,12 @@ function storyRequests(): RequestLog[] {
       session: TIED_SESSION_ID,
       usage: { cacheWrite1h: 36_200, input: 2_300, output: 980 },
     },
+    // The contract seat's batch workers on fleet, billed in dollars at API rates. Last, so every seed above keeps the
+    // upstream ids it draws. The first reads the workers' shared prefix, so no row of the seat counts as a miss
+    // between turns.
+    { agentId: 'main', at: t(14, 8, 20), attempts: [{ accountId: 'contract', at: t(14, 8, 20), ms: 7_400, status: 200 }], id: 'req_c94d1e07-b35', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 12_400, cacheWrite5m: 6_200, input: 2_900, output: 1_120 } },
+    { agentId: 'main', at: t(14, 19, 30), attempts: [{ accountId: 'contract', at: t(14, 19, 30), ms: 5_900, status: 200 }], id: 'req_7b2e5d93-a16', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 18_600, cacheWrite5m: 1_400, input: 1_700, output: 860 } },
+    { agentId: 'main', at: t(14, 25, 30), attempts: [{ accountId: 'contract', at: t(14, 25, 30), ms: 11_200, status: 200 }], id: 'req_3f6a9c21-d48', keyId: 'fleet', model: 'claude-opus-5-5', requestClass: 'main', session: FLEET_SESSION_ID, usage: { cacheRead: 20_000, cacheWrite5m: 2_200, input: 2_400, output: 1_540 } },
   ];
   return seeds.map(storyRow);
 }
@@ -1500,6 +1521,8 @@ keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.error
 // The notebook key's last use is its newest request, a turn of studio's story sessions after its one drawn row. Its
 // counts derive from the rollups with every other key's.
 keyById.get('notebook')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'notebook')?.at ?? null;
+// The fleet key's last use is its newest request, a turn of the contract seat's story session.
+keyById.get('fleet')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'fleet')?.at ?? null;
 
 /**
  * The head that first read nightly in plan overage: the first attempt the day sent it after its spend cap was raised
@@ -1755,6 +1778,19 @@ function addStoryEvents() {
   }
 }
 
+/** The kind tier the engine files an attempt's account in: the plan-funded subscriptions, the ones in overage, then the
+ *  metered sources, the API keys and the usage-based seats. */
+const kindGroupOf = (pool: PoolSeed | undefined, account: Account | undefined): number => (pool?.preferSubscription ? (account?.kind === 'api_key' || account?.usageBased ? 2 : account?.overage?.inUse === true ? 1 : 0) : 0);
+
+/** The trace of a row outside the seeded streams: the strategy's pick in its account's tier, with nobody passed over. */
+function undrawnTrace(r: RequestLog, a: Attempt, last: boolean): SelectionTrace {
+  const pool = poolById.get(r.poolId ?? '');
+  const account = accountById.get(a.accountId);
+  const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
+  const overage = account?.overage?.inUse === true ? 1 : 0;
+  return { cacheRead: last && r.status === 200 ? r.usage.cacheRead : null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [], strategy: pool?.strategy ?? 'pace', tier: [kindGroupOf(pool, account), priority, overage] };
+}
+
 /**
  * Every request its class and every attempt its trace, on a stream of their own so each row and event above keeps
  * its draws. A move the events record is the trace's `moved`; a first attempt no event moved either renewed its pin
@@ -1769,6 +1805,10 @@ function traceRequests() {
   for (const r of REQUESTS) {
     // The routing log's records write the story's traces, so no obstacle is drawn against what its cards show.
     if (STORY_IDS.has(r.id)) continue;
+    if (UNSEEDED_IDS.has(r.id)) {
+      r.attempts = r.attempts.map((a, i, all) => ({ ...a, selection: undrawnTrace(r, a, i === all.length - 1) }));
+      continue;
+    }
     const pool = poolById.get(r.poolId ?? '');
     const members = LANES.find((l) => l.keyId === r.keyId)?.accountIds ?? [];
     const events = REQUEST_EVENTS.get(r.id) ?? [];
@@ -1781,8 +1821,7 @@ function traceRequests() {
       const strategy = pool?.strategy ?? 'pace';
       const account = accountOf.get(a.accountId);
       const overage = account?.overage?.inUse === true ? 1 : 0;
-      // The kind order walks the plan-funded subscriptions, the ones in overage, then the API keys.
-      const group = pool?.preferSubscription ? (account?.kind === 'api_key' ? 2 : overage) : 0;
+      const group = kindGroupOf(pool, account);
       const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
       // A request renews the pin its first selection finds live on the account it went to, and only then. The renewal
       // draw is taken either way, so the stream stays where it was, and a drawn renewal with no live pin to renew is
@@ -1979,8 +2018,10 @@ function phaseRequests() {
     const atMs = Date.parse(r.at);
     const first = r.attempts[0] as Attempt | undefined;
     const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
-    const write = phaseRng.int(8, 40);
-    const tail = phaseRng.int(5, STREAM_TAIL);
+    // A row outside the seeded streams takes fixed instants, so every row after it keeps its draws.
+    const unseeded = UNSEEDED_IDS.has(r.id);
+    const write = unseeded ? 20 : phaseRng.int(8, 40);
+    const tail = unseeded ? 12 : phaseRng.int(5, STREAM_TAIL);
     // A stream that failed past its head errored before any content token reached the client.
     if (r.status === 200 && r.outcome === 'failed') r.ttftMs = null;
     const finishedMs = r.durationMs === null ? null : atMs + r.durationMs;
@@ -2079,12 +2120,13 @@ const heldRng = createRng(6_133);
 
 /**
  * Who paid for a request, as the ledger keys its rollups off the answer that served it: `billed` for an API key
- * account's answer before anything, then a fast answer's credits, then the head's overage flag, else the plan. A
- * request no attempt served files under `plan` whatever speed it asked for.
+ * account's answer before anything, then `usage_based` for a usage-based seat's, then a fast answer's credits, then the
+ * head's overage flag, else the plan. A request no attempt served files under `plan` whatever speed it asked for.
  */
 const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
   const last = r.attempts[r.attempts.length - 1] as Attempt | undefined;
   if (last?.accountKind === 'api_key') return 'billed';
+  if (last?.usageBased) return 'usage_based';
   if (last?.response.speed === 'fast') return 'fast';
   return last?.overageInUse === true ? 'overage' : 'plan';
 };

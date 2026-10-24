@@ -447,6 +447,22 @@ test("an overage member returns at its overage window's reset", () => {
   );
 });
 
+test('a usage-based member is a metered source: behind every plan account under the kind order, by priority otherwise, never deferred and never held for overage', () => {
+  assert.deepEqual([...d.GROUP_LABEL], ['plan', 'overage', 'metered'], 'the third tier holds the API-key and the usage-based accounts alike');
+  // The flags an older router answers on such an account read as overage, so the class has to win over them.
+  const flagged = { extraUsage: extraUsageOn, overage: { inUse: true, observedAt: hoursFromNow(-1), reset: hoursFromNow(3), since: hoursFromNow(-2) }, usageBased: true };
+  const trio = [account('seat', flagged), account('over', { extraUsage: extraUsageOn }), account('plan')];
+  const kind = selectionOrder(pool('priority', 'prefer_plan', [member('seat', 0), member('over', 0), member('plan', 1)], { preferSubscription: true }), trio, NOW);
+  assert.deepEqual(kind.map((t) => [t.group, t.priority, t.placements.map((p) => p.account.id)]), [[0, 1, ['plan']], [1, 0, ['over']], [2, 0, ['seat']]], 'the seat files in the third tier, behind the overage one');
+  for (const strategy of ['pace', 'priority', 'round_robin']) {
+    const flat = selectionOrder(pool(strategy, 'prefer_plan', [member('seat', 0), member('plan', 1)]), trio, NOW);
+    assert.deepEqual(flat.map((t) => [t.group, t.priority, t.placements.map((p) => [p.account.id, p.deferred])]), [[0, 0, [['seat', false]]], [0, 1, [['plan', false]]]], `${strategy}: by priority alone, never deferred`);
+    assert.deepEqual(flat[0].next, ['seat'], strategy);
+  }
+  const cooled = [account('seat', { ...flagged, cooldowns: [{ reason: 'rate_limited', scope: 'account', setAt: hoursFromNow(-1), until: hoursFromNow(1), windowId: null }] })];
+  assert.equal(read(at(pool('pace', 'never', [member('seat', 0, 'cooldown')]), 'exhausted'), cooled), `Exhausted: no member can take a request until seat's cooldown ends ${fmtRelative(hoursFromNow(1), NOW)}.`, 'the never policy reads no overage end on the seat');
+});
+
 test('while the accounts are unread the status sentence says only what the verdicts carry', () => {
   const degraded = at(pool('priority', 'allow', [member('plan', 0), member('over', 0, 'cooldown')]), 'degraded');
   const active = at(pool('priority', 'allow', [member('plan', 0), member('over', 1)]), 'active');

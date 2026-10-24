@@ -18,8 +18,8 @@ export function hoursOfKey(id: WindowId): number {
 /**
  * The ledger, the request log and the usage endpoint spell a window by the endpoint's key, while a request log
  * attempt's windows carry the head's short ids and the router's own windows name the 7-day Fable window `fable`. Each
- * spelling of a window is one window to the UI: `seven_day_fable`, `seven_day_overage_included`, `7d_oi` and `fable`
- * all mean the model-scoped week the UI draws third. Any other key is a window of its own, kept under its name.
+ * spelling of a window is one window to the UI: `seven_day_fable`, `7d_oi` and `fable` all mean the model-scoped week
+ * the UI draws third. Any other key is a window of its own, kept under its name.
  */
 const WINDOW_IDS = new Map<string, KnownWindowId>([
   ['5h', '5h'],
@@ -29,7 +29,6 @@ const WINDOW_IDS = new Map<string, KnownWindowId>([
   ['five_hour', '5h'],
   ['seven_day', '7d'],
   ['seven_day_fable', '7d_fable'],
-  ['seven_day_overage_included', '7d_fable'],
 ]);
 /** The UI's id for a window key: a known window's own id, any other key as it is, `null` for no key at all. */
 export const windowKeyId = (id: string): WindowId | null => WINDOW_IDS.get(id) ?? (id === '' ? null : id);

@@ -447,11 +447,11 @@ const changeSelect = async (page, select, value) => {
 const chooseUnit = (page, value) => changeSelect(page, shellUnit(page), value);
 /** The Cost header's title under each position and the Cost cell's two dashes, spelled as the console words them. */
 const COST_HEADER_TITLE = {
-  all: 'Dollar equivalent for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an overage, fast mode or API key request',
-  native: '20x window equivalents for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  share: 'Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-  usd: 'A dash for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+  all: 'Dollar equivalent for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an API key, fast mode, overage or usage-based request',
+  native: '20x window equivalents for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  share: 'Window shares for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+  usd: 'A dash for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
 };
 const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
 const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
@@ -492,7 +492,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   await p.settle(300);
   results.push({
     name: '/pools a first attention read that fails draws the unavailable line above the grid, while the pools load and over cards without a badge',
-    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0]',
+    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0,0]',
     missing: [JSON.stringify(loading), line()?.outerHTML.slice(0, 200) ?? 'no line', rows()],
   });
   api.getAttention = getAttention;
@@ -1101,7 +1101,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const accounts = await api.listAccounts();
   const read = [...page.container.querySelectorAll('a.account-mini')].flatMap((card) => {
     const a = accounts.find((x) => x.id === idOf(card));
-    return a ? barPhrases([...card.querySelectorAll('.wbar')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
+    // A usage-based seat's spend bar reads no projection, and the seat's own block reads it.
+    return a ? barPhrases([...card.querySelectorAll('.wbar:not(.wbar--spend)')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
   });
   const primary = read.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
   results.push({
@@ -1549,11 +1550,14 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
 }
 {
   // The counts come from the list, so an account the story adds moves no check: a card draws its windows when the
-  // account holds a 5-hour, 7-day or Fable window.
-  const windowed = (await api.listAccounts()).filter((a) => quotaListed(a) && (a.windows.length > 0 || a.fableWindow !== null)).length;
-  const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
+  // account holds a 5-hour, 7-day or Fable window. A usage-based seat's card draws its one Spend row instead, which
+  // the seat's own block reads.
+  const listedAccounts = await api.listAccounts();
+  const windowed = listedAccounts.filter((a) => quotaListed(a) && (a.windows.length > 0 || a.fableWindow !== null)).length;
+  const seatLabels = new Set(listedAccounts.filter((a) => a.usageBased).map((a) => a.label));
+  const chipRows = [...m.container.querySelectorAll('.qcard__windows')].filter((g) => !seatLabels.has(g.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? ''));
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
-  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === windowed && names.every((n) => n === '5h,7d,Fable'), missing: [`${chipRows.length} of ${windowed}`, ...new Set(names)] });
+  results.push({ name: '/quota every plan account\'s card chips 5h, 7d, Fable in that order', ok: chipRows.length === windowed && names.every((n) => n === '5h,7d,Fable'), missing: [`${chipRows.length} of ${windowed}`, ...new Set(names)] });
   const tones = [...m.container.querySelectorAll('.qcard__windows .qchip')].map((c) => [...c.classList].find((n) => n.startsWith('qchip--')) ?? 'none');
   results.push({ name: '/quota chips carry a meter tone', ok: tones.length > 0 && tones.every((t) => ['qchip--absent', 'qchip--good', 'qchip--low', 'qchip--warn'].includes(t)), missing: [...new Set(tones)] });
   results.push({ name: '/quota fixtures exercise all three meter tones', ok: ['qchip--good', 'qchip--low', 'qchip--warn'].every((t) => tones.includes(t)), missing: [...new Set(tones)] });
@@ -1566,7 +1570,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
   const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
-  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === windowed && aligned.every((n) => n === 3), missing: aligned.map(String) });
+  results.push({ name: "/quota every plan account's window row owns a cell in the aligned chip column", ok: aligned.length === windowed && aligned.every((n) => n === 3), missing: aligned.map(String) });
   const shares = [...m.container.querySelectorAll('.qcard__windows .qchip__pct')].map((e) => e.textContent?.trim() ?? '');
   const off = shares.filter((t) => t !== 'n/a' && !/\d+% left/.test(t));
   results.push({ name: '/quota every window share on the cards reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && off.length === 0, missing: [...new Set(off)] });
@@ -1643,32 +1647,36 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
   }
   {
     // The story draws the line in use on nightly, enabled and not in use on primary, and with no extra usage reported
-    // on secondary, and studio's block under the override is off.
+    // on secondary, and studio's block under the override is off. Nightly's reading a head wrote carries no amounts
+    // (the seed's extraUsage), so its line names its state alone. The contract seat's Spend row is that reading, so its
+    // card draws no line.
     const read = (label) => {
       const chip = cardOf(label)?.querySelector('.qcard__extra .chip');
       return [chip?.textContent?.trim() ?? 'no line', chip?.classList.contains('chip--serious') ? 'serious' : chip?.classList.contains('qcard__extra-quiet') ? 'quiet' : 'neither'];
     };
     const drawn = { nightly: read('nightly'), primary: read('primary'), secondary: read('secondary'), studio: read('studio') };
     const wanted = {
-      nightly: ['Extra usage$6.12 / $20.00in use', 'serious'],
+      nightly: ['Extra usagein use', 'serious'],
       primary: ['Extra usage$12.34 / $50.00not in use', 'quiet'],
       secondary: ['Extra usagenot reported', 'quiet'],
       studio: ['Extra usageoff', 'quiet'],
     };
-    const placed = cards.filter((c) => !(c.querySelectorAll('.qcard__extra').length === 1 && c.querySelector('.qcard__body')?.nextElementSibling?.classList.contains('qcard__extra')));
-    const fableLast = cards.filter((c) => c.querySelector('.qcard__windows')).every((c) => [...c.querySelectorAll('.qcard__windows .qchip__name')].pop()?.textContent === 'Fable');
+    const plans = cards.filter((c) => c !== cardOf('contract'));
+    const placed = plans.filter((c) => !(c.querySelectorAll('.qcard__extra').length === 1 && c.querySelector('.qcard__body')?.nextElementSibling?.classList.contains('qcard__extra')));
+    const fableLast = plans.filter((c) => c.querySelector('.qcard__windows')).every((c) => [...c.querySelectorAll('.qcard__windows .qchip__name')].pop()?.textContent === 'Fable');
+    const seatLines = cardOf('contract')?.querySelectorAll('.qcard__extra').length ?? -1;
     results.push({
-      name: '/quota every card draws one Extra usage line directly after the Fable row, in use in the serious tone and each quiet state in the muted ink',
-      ok: cards.length > 0 && placed.length === 0 && fableLast && JSON.stringify(drawn) === JSON.stringify(wanted) && cardOf('nightly')?.querySelector('.qcard__extra .chip__flag')?.textContent === 'in use',
-      missing: [JSON.stringify(drawn), ...placed.map((c) => `misplaced on ${c.querySelector('.qcard__name')?.textContent?.trim()}`), fableLast ? 'Fable last' : 'a row after Fable'],
+      name: "/quota every plan account's card draws one Extra usage line directly after the Fable row, in use in the serious tone and each quiet state in the muted ink, and the usage-based seat's none",
+      ok: plans.length > 0 && placed.length === 0 && fableLast && seatLines === 0 && JSON.stringify(drawn) === JSON.stringify(wanted) && cardOf('nightly')?.querySelector('.qcard__extra .chip__flag')?.textContent === 'in use',
+      missing: [JSON.stringify(drawn), ...placed.map((c) => `misplaced on ${c.querySelector('.qcard__name')?.textContent?.trim()}`), fableLast ? 'Fable last' : 'a row after Fable', `${seatLines} lines on contract`],
     });
     // studio's block under the override carries the provider's reason, drawn inside the line and whole in its title.
     const line = cardOf('studio')?.querySelector('.qcard__extra');
     results.push({ name: '/quota draws the reason the provider gave for its extra usage inside the Extra usage line, whole in its title', ok: line?.querySelector('.qcard__extra-reason')?.textContent?.includes('Payment method declined') === true && line.getAttribute('title')?.includes('Payment method declined') === true, missing: [line?.outerHTML.slice(0, 200) ?? 'no line on studio'] });
   }
   {
-    // The Plan chip leads the chips row on every card, and studio, with no subscription block under the override,
-    // keeps its place empty.
+    // The Plan chip leads the chips row on every card, and studio, with no subscription block under the override, and
+    // contract, an Enterprise seat whose profile names no plan, keep the place empty.
     const firsts = cards.map((c) => {
       const first = c.querySelector('.qcard__chips')?.firstElementChild;
       const what = !first ? 'no chips row' : first.classList.contains('chip--empty') ? 'empty' : (first.querySelector('.chip__label')?.textContent?.trim() ?? first.textContent?.trim());
@@ -1676,7 +1684,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     });
     results.push({
       name: '/quota every card draws the chips row led by the Plan chip, and a card whose account reports no plan holds the empty slot first',
-      ok: firsts.some(([name]) => name === 'studio') && firsts.every(([name, what]) => what === (name === 'studio' ? 'empty' : 'Plan')),
+      ok: firsts.some(([name]) => name === 'studio') && firsts.every(([name, what]) => what === (name === 'studio' || name === 'contract' ? 'empty' : 'Plan')),
       missing: firsts.map(([name, what]) => `${name}: ${what}`),
     });
   }
@@ -1859,13 +1867,16 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
 }
 {
   // Every card draws the same slots in the same order whatever its account's state, so a conditional line never
-  // grows one card past the rest.
+  // grows one card past the rest. A usage-based seat's Spend row is its extra usage reading, so its card draws no
+  // Extra usage line.
   const SLOTS = ['qcard__head', 'qcard__body', 'qcard__extra', 'qcard__chips', 'qcard__foot'];
   const subscriptions = (await api.listAccounts()).filter(quotaListed);
+  const seats = new Set(subscriptions.filter((a) => a.usageBased).map((a) => a.label));
   const cards = [...m.container.querySelectorAll('.qcard')];
   const slotsOf = (card) => [...card.children].map((e) => SLOTS.find((s) => e.classList.contains(s)) ?? e.className).join();
-  const odd = cards.filter((c) => slotsOf(c) !== SLOTS.join()).map((c) => `${c.querySelector('.qcard__name')?.textContent?.trim()}: ${slotsOf(c)}`);
-  results.push({ name: '/quota every card holds the same slots in the same order', ok: cards.length === subscriptions.length && odd.length === 0, missing: [`${cards.length} cards of ${subscriptions.length}`, ...odd] });
+  const want = (card) => (seats.has(card.querySelector('.qcard__name')?.textContent?.trim() ?? '') ? SLOTS.filter((s) => s !== 'qcard__extra') : SLOTS).join();
+  const odd = cards.filter((c) => slotsOf(c) !== want(c)).map((c) => `${c.querySelector('.qcard__name')?.textContent?.trim()}: ${slotsOf(c)}`);
+  results.push({ name: "/quota every card holds the same slots in the same order, a usage-based seat's without the Extra usage line", ok: seats.size > 0 && cards.length === subscriptions.length && odd.length === 0, missing: [`${cards.length} cards of ${subscriptions.length}`, ...odd] });
 }
 {
   results.push({ name: '/quota draws no fast-mode line or chip on any card', ok: m.container.querySelector('.fast-lane') === null && !m.text().includes('Fast mode'), missing: [m.container.querySelector('.fast-lane')?.outerHTML.slice(0, 160) ?? 'Fast mode in the text'] });
@@ -1971,11 +1982,15 @@ await quotaSection(m, 'Quota windows');
 }
 expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'used', 'past window', 'plan ends']);
 {
-  const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
+  // A usage-based seat's lane carries its one Spend limit chip, which the seat's own block reads, so these read the plan
+  // accounts' lanes.
+  const seatLabels = new Set((await api.listAccounts()).filter((a) => a.usageBased).map((a) => a.label));
+  const planLanes = [...m.container.querySelectorAll('.lane')].filter((l) => !seatLabels.has(l.querySelector('.lane__name')?.textContent?.trim() ?? ''));
+  const laneChips = planLanes.map((l) => [...l.querySelectorAll('.tl-chip')].length);
   results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
-  const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
+  const chipLabels = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')]).map((c) => c.childNodes[0]?.textContent?.trim());
   results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
-  const chips = [...m.container.querySelectorAll('.tl-chip')].map((c) => ({ pct: [...(c.querySelector('.tl-chip__pct')?.classList ?? [])].find((n) => n.startsWith('tl-chip__pct--')) ?? 'none', text: c.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--')) ?? 'none' }));
+  const chips = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')]).map((c) => ({ pct: [...(c.querySelector('.tl-chip__pct')?.classList ?? [])].find((n) => n.startsWith('tl-chip__pct--')) ?? 'none', text: c.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--')) ?? 'none' }));
   const withShare = chips.filter((c) => c.text.includes('% left'));
   const withoutShare = chips.filter((c) => !c.text.includes('% left'));
   results.push({
@@ -1984,13 +1999,13 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     missing: [...new Set(chips.map((c) => `${c.text}: ${c.tone} ${c.pct}`))],
   });
   // A lane chip without a share carries no tone where the card chip of that window reads absent.
-  const laneChipTones = [...m.container.querySelectorAll('.lane')].flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
+  const laneChipTones = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
   const chipOff = laneChipTones.filter((c) => c.tone !== cardTone(c.label, c.window)).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
   results.push({ name: "/quota each timeline chip carries the tone of the same account's card chip for its window, and none where that chip has no share", ok: laneChipTones.length > 0 && chipOff.length === 0, missing: chipOff });
   const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
   results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
-  const shares = [...m.container.querySelectorAll('.tl-chip__pct')].map((e) => e.textContent?.trim() ?? '');
+  const shares = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip__pct')]).map((e) => e.textContent?.trim() ?? '');
   const liveShares = live.filter((l) => l.includes('%'));
   const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
   results.push({ name: '/quota every window share on the timeline reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
@@ -2400,6 +2415,215 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     missing: [foot('primary'), foot('legacy'), cardOf('Pools') ? 'a Pools card' : 'no Pools card', JSON.stringify(rows)],
   });
 }
+// The story's usage-based seat across the views: contract (mock/accounts.ts) has spent $1,025.00 of its $2,500.00
+// monthly limit, a share of 0.41, with its reset estimated at 00:00 UTC on the first of the next month, as the one
+// member of the pool contract behind the key fleet, which three story rows bill as usage-based. The smoke runs under
+// TZ=UTC, so each reset reads its UTC text, where a viewer's zone would move its hour and day.
+{
+  const seat = (await api.listAccounts()).find((a) => a.id === 'contract');
+  const reset = seat?.spend?.resetsAt ?? null;
+  const ESTIMATE = 'estimated: no reset header has been seen for this window yet';
+  const hover = `resets ${fmtAbsolute(reset)} (${ESTIMATE})`;
+  const estimatedLine = `resets ${fmtRelative(reset, CLOCK_ORIGIN)}, estimated`;
+  const OVERAGE_WORDS = ['Overage', 'extra usage on', 'Overage active', 'Overage since', 'in use'];
+  /** A spend bar's head, its reset line and the word the line mutes, its hover, and the triple's bars beside it. */
+  const spendBar = (root) => {
+    const bar = root?.querySelector('.wbars--1 .wbar--spend');
+    const line = bar?.querySelector('.wbar__reset');
+    return {
+      absent: root?.querySelectorAll('.wbar--absent').length ?? -1,
+      head: bar?.querySelector('.wbar__head')?.textContent ?? null,
+      label: bar?.querySelector('.wbar__label')?.textContent ?? null,
+      line: line?.textContent ?? null,
+      meter: bar?.querySelectorAll('.meter').length ?? -1,
+      muted: line?.querySelector('.muted')?.textContent ?? null,
+      title: line?.getAttribute('title') ?? null,
+      triple: root?.querySelectorAll('.wbars--3').length ?? -1,
+    };
+  };
+  const overageWords = (text) => OVERAGE_WORDS.filter((w) => text.includes(w));
+  {
+    const page = await mount('/accounts/contract', { now: CLOCK_ORIGIN });
+    const row = page.container.querySelector('a.account-row[href="/accounts/contract"]');
+    const compact = spendBar(row);
+    results.push({
+      name: "/accounts the usage-based seat's row draws one compact spend bar in the triple's place, its dollars and its estimated reset, and no overage word",
+      ok:
+        compact.label === 'Spend' && compact.head === 'Spend$1,025.00 of $2,500.00' && compact.line === estimatedLine && compact.muted === 'estimated' && compact.title === hover && compact.meter === 1 && compact.absent === 0 && compact.triple === 0 &&
+        overageWords(row?.querySelector('.account-row__foot')?.textContent ?? '').length === 0,
+      missing: [JSON.stringify(compact), row?.querySelector('.account-row__foot')?.textContent ?? 'no row'],
+    });
+    const detail = page.container.querySelector('.detail');
+    const cardOf = (title) => [...(detail?.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+    const usage = cardOf('Usage');
+    const whole = spendBar(usage);
+    const tier = [...(cardOf('Identity')?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent === 'Rate-limit tier')?.querySelector('dd')?.textContent ?? null;
+    const badges = [...(detail?.querySelectorAll('.detail__head .badge') ?? [])].map((b) => b.textContent?.trim());
+    results.push({
+      name: "/accounts/contract draws the whole spend bar on its Usage card, no Extra usage line, no overage badge, and its Rate-limit tier reads usage-based",
+      ok:
+        whole.label === 'Spend limit' && whole.head === 'Spend limit$1,025.00 of $2,500.00' && whole.line === estimatedLine && whole.muted === 'estimated' && whole.title === hover && whole.meter === 1 && whole.triple === 0 &&
+        !(usage?.textContent ?? '').includes('Extra usage this month') && !(usage?.textContent ?? '').includes('does not report quota windows') && !badges.some((b) => b?.startsWith('Overage')) && !(detail?.textContent ?? '').includes('Overage since') &&
+        tier === 'default_claude_zero, usage-based',
+      missing: [JSON.stringify(whole), JSON.stringify(badges), String(tier)],
+    });
+    page.unmount();
+  }
+  {
+    // The seat's spend reading is null under the override, as before its first poll: the row and the Usage card read
+    // the empty reading's sentence where the triple reads "No quota windows".
+    const { listAccounts } = api;
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: null } : a));
+    try {
+      const page = await mount('/accounts/contract', { now: CLOCK_ORIGIN });
+      const row = page.container.querySelector('a.account-row[href="/accounts/contract"] .wbar__none');
+      const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+      const none = usage?.querySelector('.wbar__none');
+      results.push({
+        name: '/accounts a usage-based seat with no spend reading yet reads "No spend reading yet" in the muted ink on its row and its Usage card',
+        ok: row?.textContent === 'No spend reading yet' && row.classList.contains('muted') && none?.textContent === 'No spend reading yet' && none.classList.contains('muted') && usage?.querySelector('.wbar') === null,
+        missing: [row?.textContent ?? 'no row line', none?.textContent ?? 'no card line'],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    // primary's extra usage reading is a poll's, with its amounts, and nightly's the heads', which carry none: its line
+    // reads the label and the in use badge alone, with no amounts and no meter.
+    const lineOf = async (id) => {
+      const page = await mount(`/accounts/${id}`, { now: CLOCK_ORIGIN });
+      const line = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage')?.querySelector('.extra-usage');
+      const read = { meter: line?.querySelectorAll('.meter').length ?? -1, text: line?.querySelector('.wbar__head')?.textContent ?? null };
+      page.unmount();
+      return read;
+    };
+    const read = { nightly: await lineOf('nightly'), primary: await lineOf('primary') };
+    results.push({
+      name: "/accounts the Usage card's extra usage line draws its amounts and meter where the reading carries them, and the state alone where a head wrote it",
+      ok: JSON.stringify(read) === JSON.stringify({ nightly: { meter: 0, text: 'Extra usage this monthin use' }, primary: { meter: 1, text: 'Extra usage this month$12.34 of $50.00' } }),
+      missing: [JSON.stringify(read)],
+    });
+  }
+  {
+    const page = await mount('/', { now: CLOCK_ORIGIN });
+    const card = page.container.querySelector('a.account-mini[href="/accounts/contract"]');
+    const bar = spendBar(card);
+    results.push({
+      name: "/ the usage-based seat's account card draws the compact spend bar and no Overage active",
+      ok: bar.head === 'Spend$1,025.00 of $2,500.00' && bar.line === estimatedLine && bar.title === hover && bar.triple === 0 && overageWords(card?.querySelector('.account-mini__foot')?.textContent ?? '').length === 0,
+      missing: [JSON.stringify(bar), card?.querySelector('.account-mini__foot')?.textContent ?? 'no card'],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/quota', { now: CLOCK_ORIGIN });
+    const cardOf = (label) => [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+    const card = cardOf('contract');
+    const chips = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].map((c) => c.textContent);
+    const line = card?.querySelector('.qcard__windows .qwin__reset');
+    const meter = card?.querySelector('.qcard__windows .meter');
+    results.push({
+      name: "/quota the usage-based seat's card draws one Spend row, its share left over its estimated reset with no pace, and no Extra usage line",
+      ok:
+        JSON.stringify(chips) === JSON.stringify(['Spend59% left']) && line?.textContent === estimatedLine && line.querySelector('.muted')?.textContent === 'estimated' && line.getAttribute('title')?.startsWith(hover) === true &&
+        meter?.getAttribute('aria-valuenow') === '59' && meter.getAttribute('title') === 'Spend limit: 59% left, $1,025.00 of $2,500.00' && card?.querySelector('.qcard__extra') === null && !/pace/.test(card?.textContent ?? ''),
+      missing: [JSON.stringify(chips), line?.textContent ?? 'no line', line?.getAttribute('title') ?? '', meter?.getAttribute('title') ?? 'no meter', card?.querySelector('.qcard__extra') ? 'an Extra usage line' : 'no Extra usage line'],
+    });
+    // Soonest recovery reads each card's earliest reset ahead, the seat's its spend window's.
+    const ahead = (a) => [...a.windows.map((w) => w.resetsAt), ...(a.spend ? [a.spend.resetsAt] : [])].flatMap((at) => (at === null ? [] : [Date.parse(at)])).filter((t) => t > CLOCK_ORIGIN);
+    const soonest = (a) => (ahead(a).length ? Math.min(...ahead(a)) : Number.POSITIVE_INFINITY);
+    const listed = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired');
+    const want = [...listed].sort((a, b) => soonest(a) - soonest(b)).map((a) => a.label);
+    await changeSelect(page, page.container.querySelector('.quota-sort select'), 'soonest');
+    const order = [...page.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim());
+    results.push({
+      name: '/quota Soonest recovery places the usage-based seat by its spend window\'s reset',
+      ok: want.includes('contract') && JSON.stringify(order) === JSON.stringify(want),
+      missing: [JSON.stringify(order), JSON.stringify(want)],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
+    const laneOf = () => [...page.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'contract');
+    const readLane = () => {
+      const lane = laneOf();
+      const live = lane?.querySelector('.lane__bar--live');
+      return {
+        bar: live ? [live.style.left, live.style.width] : null,
+        chips: [...(lane?.querySelectorAll('.tl-chip') ?? [])].map((c) => [c.textContent, c.getAttribute('title')]),
+        label: live?.querySelector('.lane__label')?.textContent ?? null,
+        used: live?.querySelector('.lane__used')?.style.width ?? null,
+      };
+    };
+    const weekly = readLane();
+    [...page.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === '5-hour')?.click();
+    await page.settle();
+    const session = readLane();
+    const chip = [['Spend limit $1,475.00 of $2,500.00 left', `$1,475.00 of $2,500.00 left, ${hover}`]];
+    results.push({
+      name: "/quota#quota-windows the usage-based seat's lane draws its one Spend limit chip and its current spend window, filled by the share spent, under both zooms",
+      ok:
+        JSON.stringify(weekly.chips) === JSON.stringify(chip) && JSON.stringify(session.chips) === JSON.stringify(chip) && /^59% left · .+ 00:00$/.test(weekly.label ?? '') && weekly.used !== null &&
+        JSON.stringify(weekly.bar) === JSON.stringify(['0%', '100%']) && JSON.stringify(session.bar) === JSON.stringify(['0%', '100%']),
+      missing: [JSON.stringify(weekly), JSON.stringify(session)],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/pools', { now: CLOCK_ORIGIN });
+    const rows = [...page.container.querySelectorAll('[id="contract"] .serving tbody tr')].map((tr) => [tr.children[0]?.textContent?.trim(), tr.children[1]?.querySelector('a')?.textContent?.trim(), tr.children[2]?.querySelector('.chips')?.textContent?.trim()]);
+    results.push({
+      name: "/pools the contract pool's serving table files its usage-based member in the metered tier at P1, next for a fresh session",
+      ok: JSON.stringify(rows) === JSON.stringify([['metered P1', 'contract', 'next']]),
+      missing: [JSON.stringify(rows)],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/requests', { now: CLOCK_ORIGIN });
+    const cells = [...page.container.querySelectorAll('.requests__table tbody td[title^="Billed in dollars: usage-based"]')];
+    const words = cells.map((td) => [td.querySelector('.sub')?.textContent ?? null, td.getAttribute('title')?.split('. ')[0] ?? null]);
+    const fleet = (await api.listRequests({ keyIds: ['fleet'], limit: 50 })).requests;
+    results.push({
+      name: "/requests the usage-based seat's rows read their dollars over usage-based, titled billed in dollars",
+      ok: fleet.length === 3 && cells.length === fleet.length && words.every(([word, title]) => word === 'usage-based' && title === 'Billed in dollars: usage-based'),
+      missing: [`${fleet.length} fleet rows`, JSON.stringify(words)],
+    });
+    page.unmount();
+  }
+  {
+    // Billed dollars keeps the seat's rows beside the overage, fast and API-key ones: the fleet key's billed dollars are
+    // its three rows' own.
+    localStorage.removeItem('phoebis.unit');
+    const page = await mount('/analytics?by=key&unit=usd#cost', { now: CLOCK_ORIGIN });
+    await page.settle(900);
+    const table = [...page.container.querySelectorAll('#cost .card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by key');
+    const row = [...(table?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'fleet');
+    const cells = row ? [...row.children].slice(0, 3).map((td) => td.textContent?.trim()) : null;
+    const rows = (await api.listRequests({ keyIds: ['fleet'], limit: 50 })).requests;
+    const usd = rows.reduce((s, r) => s + r.costUsd, 0);
+    results.push({
+      name: '/analytics under Billed dollars the fleet key reads its three usage-based rows and their dollars',
+      ok: rows.length === 3 && JSON.stringify(cells) === JSON.stringify(['fleet', '3', fmtUsd(usd)]),
+      missing: [JSON.stringify(cells), `${rows.length} rows, ${fmtUsd(usd)}`],
+    });
+    page.unmount();
+    localStorage.removeItem('phoebis.unit');
+  }
+  {
+    const page = await mount('/keys', { now: CLOCK_ORIGIN });
+    const row = [...page.container.querySelectorAll('tbody tr')].find((tr) => tr.children[0]?.textContent?.includes('fleet'));
+    results.push({
+      name: '/keys lists the fleet key on the contract pool',
+      ok: row !== undefined && (row.textContent ?? '').includes('contract'),
+      missing: [row?.textContent ?? 'no fleet row'],
+    });
+    page.unmount();
+  }
+}
 await emailLines('/accounts each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/accounts/primary the head reads the email under the name', [['primary', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
@@ -2645,7 +2869,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const accounts = await api.listAccounts();
   const rows = [...page.container.querySelectorAll('a.account-row')].flatMap((row) => {
     const a = accounts.find((x) => x.id === new URL(row.getAttribute('href') ?? '/', 'http://127.0.0.1').pathname.split('/').pop());
-    return a ? barPhrases([...row.querySelectorAll('.wbar')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
+    // A usage-based seat's spend bar reads no projection, and the seat's own block reads it.
+    return a ? barPhrases([...row.querySelectorAll('.wbar:not(.wbar--spend)')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
   });
   const primary = accounts.find((a) => a.id === 'primary');
   const detail = primary ? barPhrases([...(page.container.querySelector('.detail .wbars--3')?.querySelectorAll('.wbar') ?? [])], primary, at, false) : [];
@@ -4446,8 +4671,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     // Under Window shares a card whose one member is a subscription account reads that account's own 7-day share of
     // the pool's day, as the breakdown route prices it when the request names the account, so the check reads the
     // page's own read through the wrapper. Every other card and the tile name no one account and read dashes. Each of
-    // the story's pools holds more than one member, so these checks read work with its subscription member alone, the
-    // page above held still meanwhile, since its own reads would take the staged membership in.
+    // the story's pools but contract, whose one member is the usage-based seat, holds more than one member, so these
+    // checks read work with its subscription member alone, the page above held still meanwhile, since its own reads
+    // would take the staged membership in.
     await chooseInterval(m, 'Off');
     const poolsRead = api.listPools;
     api.listPools = async (...args) => (await poolsRead.apply(api, args)).map((p) => (p.id === 'work' ? { ...p, members: p.members.filter((x) => x.kind === 'oauth') } : p));
@@ -4484,14 +4710,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     // The share is the route's, priced row by row at the account tier each row recorded, so the card reads it as
     // answered: a wired figure the pool's equivalent times no tier's capacity ratio reaches, and an answer with no
     // share (the account's tier unrecorded) reads a dash that says why.
+    // Each card's wired share is its own pool's, so two cards of one subscription member each read theirs.
     const wiredRead = async (shares) => {
-      let wired = null;
+      const wired = {};
       api.getAnalyticsBreakdown = async (q) => {
         const groups = await breakdownOf.call(api, q);
         if (q.groupBy !== 'pool' || q.accountIds?.length !== 1) return groups;
         const pool = alone.find((p) => p.id === q.poolIds?.[0]);
-        wired = shares(pool);
-        return groups.map((g) => ({ ...g, costShares: wired }));
+        wired[pool.id] = shares(pool);
+        return groups.map((g) => ({ ...g, costShares: wired[pool.id] }));
       };
       localStorage.setItem('phoebis.unit', 'share');
       const page = await mount('/pools');
@@ -4506,9 +4733,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({
       name: "/pools under Window shares the card of one subscription member reads the 7-day share the route priced with the 5-hour share on its title, and a dash that says why where the route answered no share",
       ok:
-        priced.wired !== null &&
         priced.read.length > 0 &&
-        priced.read.every(([, r]) => r.text.replace(/^~/, '') === shareLabel('seven_day', priced.wired.seven_day) && (r.title ?? '').includes(shareLabel('five_hour', priced.wired.five_hour))) &&
+        priced.read.every(([id, r]) => priced.wired[id] !== undefined && r.text.replace(/^~/, '') === shareLabel('seven_day', priced.wired[id].seven_day) && (r.title ?? '').includes(shareLabel('five_hour', priced.wired[id].five_hour))) &&
         unpriced.read.every(([, r]) => r.text === '-' && !!r.title && r.title !== SHARE_NOTE),
       missing: [JSON.stringify(priced), JSON.stringify(unpriced)],
     });
@@ -4681,7 +4907,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: "/pools every budget line in a serving table's Account cell carries its own text as its title", ok: lines.length > 0 && off.length === 0, missing: [`${lines.length} budget lines`, ...off.slice(0, 5)] });
   }
   const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
-  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'API keys P1']), missing: tiers });
+  // The third tier holds the API-key accounts and the usage-based seats alike, so it reads metered.
+  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'metered P1']), missing: tiers });
   const standing = (name, label) => {
     const tr = rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label);
     const td = tr ? cell(tr, 2) : null;
@@ -5391,7 +5618,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const selection = group(dlg, 'Selection');
     const strategy = selection?.querySelector('select[aria-label="Strategy"]');
     const toggle = selection?.querySelector('[role="switch"][aria-label="Prioritize subscription accounts"]');
-    expect('/pools the Prioritize subscription accounts hint reads "then API keys"', toggle?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '', ['then API keys']);
+    expect('/pools the Prioritize subscription accounts hint reads "then the metered accounts"', toggle?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '', ['then the metered accounts']);
     const options = [...(strategy?.querySelectorAll('option') ?? [])].map((o) => o.textContent?.trim());
     results.push({ name: '/pools the strategy select lists Pace, Priority, then random, and Round robin', ok: JSON.stringify(options) === JSON.stringify(['Pace', 'Priority, then random', 'Round robin']), missing: options });
     const choose = async (value) => {
@@ -5829,7 +6056,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex'];
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -5839,7 +6066,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -6099,7 +6326,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const moveSelect = moveDlg?.querySelector('select[aria-label="Destination pool"]');
   expect('/pools move dialog', moveDlg?.textContent ?? '', ['Move key laptop', 'ends its current session pins', 'Move key']);
-  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
+  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work,contract', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
   [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
   await m.settle(600);
   results.push({ name: '/pools moved key leaves the list', ok: keyRows().length > 0 && !keyRows().some((tr) => tr.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((tr) => tr.children[0]?.textContent?.trim()) });
@@ -7201,7 +7428,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -7230,7 +7457,7 @@ m.unmount();
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -16287,7 +16514,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // on desktop, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the
   // Traffic line does. Laptop's Failed and the line's errors count the two rows the router's own stop cut,
   // `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover `req_8c41f2d7-a93`, which
-  // answered on its second attempt.
+  // answered on its second attempt, and the contract seat's three rows on fleet, each answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -16300,7 +16527,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '214 requests, 17.3% errors',
+      line === '217 requests, 17.1% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }

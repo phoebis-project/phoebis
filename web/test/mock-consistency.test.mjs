@@ -405,12 +405,38 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     assert.deepEqual(
       s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.email),
-      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+reserve@example.com'],
+      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+reserve@example.com', 'operator+contract@example.com'],
       'every subscription keeps the identity it last paired with',
     );
     const pairing = await s.api.startPairing({ accountId: 'legacy' });
     const preview = await s.api.completePairing(pairing.id, { code: 'code', state: pairing.state });
     assert.deepEqual([preview.email, preview.organization], ['operator+old@example.com', 'Personal']);
+  });
+
+  test(`the story's usage-based seat reads its class and its spend window with no plan window, the one member of its pool behind the key fleet, at ${at}`, async () => {
+    const s = await story;
+    const seats = s.accounts.filter((a) => a.usageBased);
+    assert.deepEqual(seats.map((a) => a.id), ['contract'], 'one usage-based account');
+    const [seat] = seats;
+    const firstOfNextMonth = (ms) => Date.UTC(new Date(ms).getUTCFullYear(), new Date(ms).getUTCMonth() + 1, 1);
+    assert.deepEqual([seat.kind, seat.status, seat.windows, seat.fableWindow, seat.overage, seat.plan], ['oauth', 'ready', [], null, null, null]);
+    const { amounts } = seat.spend;
+    assert.deepEqual(
+      [amounts.usedMinor, amounts.limitMinor, amounts.exponent, seat.spend.utilization, seat.spend.resetSource, seat.spend.resetsAt],
+      [102_500, 250_000, 2, 0.41, 'estimated', iso(firstOfNextMonth(s.now))],
+      'the polled amounts, the share, and the reset estimated at 00:00 UTC on the first of the next month',
+    );
+    assert.ok(Date.parse(amounts.polledAt) < Date.parse(seat.spend.observedAt), 'a head read the share after the poll');
+    assert.deepEqual([seat.subscription.organizationType, seat.subscription.billingType, seat.subscription.rateLimitTier], ['claude_enterprise', 'stripe_subscription_contracted', 'default_claude_zero']);
+    assert.deepEqual(s.pools.find((p) => p.id === 'contract')?.members.map((m) => [m.accountId, m.priority]), [['contract', 1]], "the pool's one member");
+    assert.deepEqual(s.keys.filter((k) => k.poolId === 'contract').map((k) => k.id), ['fleet']);
+    const rows = s.requests.filter((r) => r.keyId === 'fleet');
+    assert.ok(rows.length > 0 && rows.every((r) => r.accountId === 'contract' && s.lib.fundingOf(r.attempts.at(-1)) === 'usage_based'), "the key's rows are the seat's, billed as usage-based");
+    const rollups = s.allRollups.filter((r) => r.keyId === 'fleet');
+    assert.ok(rollups.length > 0 && rollups.every((r) => r.funding === 'usage_based'), 'and its rollups file under the word');
+    assert.ok(s.accounts.filter((a) => a.id !== 'contract').every((a) => !a.usageBased && a.spend === null), 'no other account reads the class');
+    const headed = s.accounts.filter((a) => a.extraUsage?.enabled && a.extraUsage.usedCredits === null);
+    assert.deepEqual(headed.map((a) => [a.id, a.extraUsage.monthlyLimitCredits, a.extraUsage.inUse]), [['nightly', null, true]], "the plan account whose newest reading a head wrote carries no amounts");
   });
 
   test(`no account bills overage beside the provider's reason for no longer funding it, at ${at}`, async () => {
@@ -698,7 +724,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.equal(sum(p.members, (m) => m.activePins) + outside, p.activePins, `${p.id}'s members' sum and the ${outside} pins on accounts outside them make its figure`);
       above[p.id] = p.activePins - sum(p.members, (m) => m.activePins);
     }
-    assert.deepEqual(above, { all: 0, jobs: 0, work: 1 }, 'work holds one pin on a former member and the other pools none');
+    assert.deepEqual(above, { all: 0, contract: 0, jobs: 0, work: 1 }, 'work holds one pin on a former member and the other pools none');
     assert.ok(s.pools.some((p) => p.activePins > s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).length), 'a pool holds more pins than pinned sessions');
     assert.equal(s.overview.activePins, sum(s.pools, (p) => p.activePins), "the dashboard's active pins");
   });
@@ -1369,7 +1395,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       for (const c of r.candidates) {
         const id = `${r.requestId}/${r.seq}: ${c.accountId}`;
         assert.ok(c.cooldowns.every((x) => x.reason !== 'rate_limited') && c.obstacle?.reason !== 'rate_limited', id);
-        assert.ok(Object.values(c.windows).every((w) => ['head', 'poll'].includes(w.source)), id);
+        // A spend window names its reset's source, which no poll gives.
+        assert.ok(Object.entries(c.windows).every(([name, w]) => (name === 'spend' ? ['estimated', 'head'] : ['head', 'poll']).includes(w.source)), id);
       }
     }
   });
@@ -1840,6 +1867,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         // The 5-hour window runs to its reset and a weekly one five hours out at most, each to the end where it comes
         // first, and the projection adds the account's burn over the span.
         for (const [name, w] of Object.entries(c.windows)) {
+          // A usage-based seat's spend window is no plan window, so the engine projects nothing on it.
+          if (name === 'spend') {
+            assert.deepEqual([w.horizon, w.projection, w.ahead], [null, null, null], `${r.requestId}/${r.seq}: ${c.accountId}'s spend window projects nothing`);
+            continue;
+          }
           const reset = w.reset === null ? null : Date.parse(w.reset);
           const bounds = name === 'five_hour' ? [reset ?? t + 5 * HOUR, end] : [t + 5 * HOUR, reset, end];
           const horizon = Math.max(t, Math.min(...bounds.filter((x) => x !== null)));
@@ -2770,11 +2802,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`every rollup's funding reads the answer that served its requests, an API key account's answer filing under billed and a request no attempt served under plan, at ${at}`, async () => {
     const s = await story;
     // The ledger keys a rollup's funding off the served answer: an API key account's answer files billed whatever
-    // its speed or overage flag, a fast answer files fast, a head in overage files overage, and a request no attempt
-    // served, whatever speed it asked for, files plan. The requested speed names the speed key alone.
+    // its speed or overage flag, a usage-based seat's files usage_based, a fast answer files fast, a head in overage
+    // files overage, and a request no attempt served, whatever speed it asked for, files plan. The requested speed
+    // names the speed key alone.
     const fundingOf = (r) => {
       const last = r.attempts[r.attempts.length - 1];
       if (last?.accountKind === 'api_key') return 'billed';
+      if (last?.usageBased) return 'usage_based';
       return last?.response.speed === 'fast' ? 'fast' : last?.overageInUse === true ? 'overage' : 'plan';
     };
     const laneOf = (hour, keyId, poolId, accountId, model, kind, sessionId) => [hour, keyId, poolId, accountId, model, kind, sessionId].join('|');

@@ -308,7 +308,8 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
       {account.email && <div className="account-mini__sub mono muted">{account.email}</div>}
       <WindowTriple account={account} now={now} compact />
       <div className="account-mini__foot">
-        {account.extraUsage?.inUse && <Badge tone="serious">Overage active</Badge>}
+        {/* A usage-based seat always pays in dollars, which is no overage, whatever its flags read. */}
+        {!account.usageBased && account.extraUsage?.inUse && <Badge tone="serious">Overage active</Badge>}
         {account.status === 'cooldown' && cooldown && (
           <span className="muted" title={fmtAbsolute(cooldown.until)}>
             cooldown ends {fmtRelative(cooldown.until, now)}

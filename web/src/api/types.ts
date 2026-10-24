@@ -39,8 +39,21 @@ export interface ExtraUsage {
   disabledReason: string | null;
   enabled: boolean;
   inUse: boolean;
-  monthlyLimitCredits: number;
-  usedCredits: number;
+  /** The amounts come from the newest polled row of the day, so a reading a head wrote since carries none. */
+  monthlyLimitCredits: number | null;
+  usedCredits: number | null;
+}
+
+/** A usage-based seat's one window: what it has spent of its monthly limit, in dollars at API rates. */
+export interface Spend {
+  /** The newest polled row's amounts in minor units, null while no polled row of the last day carries them, with `limitMinor` null where no limit is set. */
+  amounts: { currency: string; exponent: number; limitMinor: number | null; polledAt: string; usedMinor: number } | null;
+  observedAt: string;
+  /** `head` from the newest head's reset header while ahead of now, else `estimated` for 00:00 UTC on the first of the next month. */
+  resetSource: 'estimated' | 'head';
+  resetsAt: string | null;
+  /** The share of the limit spent, the heads moving it between polls, null where no row carries one. */
+  utilization: number | null;
 }
 
 export interface Cooldown {
@@ -134,11 +147,18 @@ export interface Account {
    * the slow-down off, and an account no pinned selection has read since the last purge or restart.
    */
   slowDown: AccountSlowDown | null;
+  /** Null on every account but a usage-based seat. */
+  spend: Spend | null;
   status: AccountStatus;
   subscription: Subscription | null;
   /** The poll's standing and its last snapshot's error and instant, as the usage route answers them; null for an
    * API-key account, which the poll never reads. */
   usage: QuotaSnapshot | null;
+  /**
+   * An OAuth seat billed in dollars at API rates with no plan windows, classed from its stored profile's tier. It is
+   * never in overage, whatever its extra usage flags read.
+   */
+  usageBased: boolean;
   /** The 5-hour and 7-day windows; the Fable window is `fableWindow`. */
   windows: RateLimitWindow[];
 }
@@ -679,6 +699,8 @@ export interface Attempt {
   upstreamMessageId: string | null;
   upstreamRequestId: string | null;
   upstreamStatus: number | null;
+  /** The serving account's class at the attempt, false on an attempt from before the router stored it. */
+  usageBased: boolean;
   windows: AttemptWindow[];
 }
 
@@ -1363,7 +1385,8 @@ export interface DecisionRecord {
 
 export type AnalyticsGroupBy = 'account' | 'all' | 'classifier' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'request_class' | 'speed' | 'user_agent';
 
-/** The rows a read keeps by who paid for them: `billed` the overage, fast and API key rows, `plan` the plan-funded rows. */
+/** The rows a read keeps by who paid for them: `billed` the API key, fast, overage and usage-based rows, `plan` the
+ *  plan-funded rows. */
 export type FundingFilter = 'billed' | 'plan';
 
 export interface AnalyticsQuery {

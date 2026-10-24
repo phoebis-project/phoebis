@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -153,9 +153,14 @@ test("a share's short form names its window in a word, and every spelling of a w
   assert.equal(shareShort('five_hour', 0.0042), '0.42% 5h');
   assert.equal(shareShort('seven_day', 0.0012), '0.12% 7d');
   assert.equal(shareShort('seven_day_fable', 0.0012), '0.12% 7-day Fable');
-  assert.equal(shareShort('seven_day_overage_included', 0.0012), '0.12% 7-day Fable', 'the overage-included key is the 7-day Fable window too');
   assert.equal(shareShort('seven_day_opus', 0.5), '50% seven_day_opus', 'a window the pages do not know keeps its key');
   assert.equal(shareLabel('seven_day_fable', 0.0012), '0.12% of 7-day Fable', 'the full form stays for the titles and the other pages');
+});
+
+test('an amount in minor units reads in dollars at its exponent, two digits where the reading names none', () => {
+  assert.equal(fmtCredits(102_500, 2), '$1,025.00');
+  assert.equal(fmtCredits(102_500), '$1,025.00', 'cents unless the reading says otherwise');
+  assert.equal(fmtCredits(102_500, 0), '$102,500.00', 'an exponent of 0 counts whole dollars');
 });
 
 test('a 20x window equivalent reads as a percent of the named 20x window to three significant digits, and zero as 0%', () => {

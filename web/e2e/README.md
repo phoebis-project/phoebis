@@ -55,7 +55,9 @@ the load groups (the overage grace field against the window ceiling field, the u
 shedding preview line), the pool dialog's ceiling handle in the plain view (on the track at the field's value, centered
 on the track and taller than it), the Active pins tile's line under its figure (in the mock pass on the work card alone,
 "1 on a former member" inside its tile below the figure, in the labels' ink and the type of the serving table's sub line
-at a normal weight), the pool card's serving table and its seven tiles, its attention rows ending with their age (the
+at a normal weight), the contract member's Tier cell (mock pass: `metered P1` in the text, face, size, weight and ink of
+the all pool's API-key member's), the pool card's serving table and its seven tiles, its attention rows ending with
+their age (the
 row's last cell, on the detail's line in the detail's ink and size, uncut and inside the card, at the pass's viewport
 and at 400 px), the serving table's columns (Account the fill), the chevron of the pool dialog's Identity select (12 px
 square at a 1.5 stroke), the pool dialog's members table (Account the fill, each Priority and budget input at least its
@@ -72,7 +74,10 @@ bottom, uncovered, in the legend's 12 px type and closed by Escape), the Appeara
 rows at 400 px (each control under its label), the cooling-down block's columns (Reason the fill), the Delete account
 button, the window bars on the dashboard and the Accounts page (each bar's line inside its bar, a compact bar's
 projection in its reset's place as two parts, its share and its horizon, and a whole bar's reset and projection as two
-parts, each part whole on its line), the account lines, the Quota cards' poll lines (short of the Refresh pill and
+parts, each part whole on its line), the usage-based seat's spend bar there at 1280 and 400 by 800 (mock pass: its row
+as wide as a window triple's beside it, from its left edge where the two share a column, the dollars spent of the limit
+in its head, and its reset on one line inside the bar with the estimate's word muted and its sentence on hover), the
+account lines, the Quota cards' poll lines (short of the Refresh pill and
 inside the card, the backoff line in the serious ink, none wrapping, a failed poll's reason cut inside its line and
 whole in its title where a listed card draws one), the Quota cards' chips and reset cells (each chip and each reset cell
 without a projection on one line inside its column, a live label with its projection split between its reset and its
@@ -81,9 +86,12 @@ title where a listed card draws one) and each live window's pace mark (inside it
 timeline's chips on the Quota windows section (each inside its column, a chip with a share in the background and ink of
 the card chip of the same tone, primary's used fill at the share the page computed, the now line at the chart's now
 share of primary's track within a pixel, each live bar's body and used fill its lane's color at two strengths, and the
-label's ink at 4.5:1 or better over both for every color a lane can take), the timeline at 340 and 400 by 900 (each
+label's ink at 4.5:1 or better over both for every color a lane can take, and in the mock pass the contract lane's one
+chip, its dollars left of the limit with the estimate's sentence on hover, from primary's chips' left edge, of their
+height and at least their column's width), the timeline at 340 and 400 by 900 (each
 lane's head above its track, the now line at the chart's now share on every track and its pill in the axis row, the day
-grid crossing no lane's head and starting at the tracks' left, the chips wrapping inside the lane with none cut, every
+grid crossing no lane's head and starting at the tracks' left, the chips wrapping inside the lane with none cut, a
+usage-based seat's one chip on one row, every
 day cell's short labels whole, no bar's label cut and nothing scrolling sideways), the timeline under the 12-hour
 setting in the 5-hour zoom at 340 and 400 by 900 and 1280 by 800 (mock pass, on loads of its own: as many cells as the
 largest divisor of twelve whose cell holds "12 AM" in the sub's face, every cell's labels whole and a short hour's full
@@ -122,7 +130,9 @@ the card, scrolling inside its wrap with Time at its floor), its sizes (at 1440 
 whole in the mock pass, and at 375 by 800 at its narrowest with Time at its floor, scrolling inside its wrap with the
 page as wide as the window), its columns (Time the fill, the Status, Attempts and links cells wrapping), its text at
 1920 by 1080 in the mock pass (no client class or agent type cut, each read
-on its own span, and every id whole), the table with Time turned off (`table--no-fill` at its content width at 1280 by
+on its own span, and every id whole), the usage-based Cost cell (mock pass: `usage-based` under its dollars in the tag,
+size, weight and ink of a billed row's funding word, its hover `Billed in dollars: usage-based`), the table with Time
+turned off (`table--no-fill` at its content width at 1280 by
 800 and 1920 by 1080), the Cache warming grid (an odd last card spanning its row, its title in the type of the card
 before it), the Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost
 and Cache warming tiles rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on
@@ -155,7 +165,9 @@ the load, the request log's late request on a page of 50 and the routing log's l
 reload at 5 s with every cell in `--accent-soft` over the surface, apart from the row's resting fill and in its box, the
 one row in the tint, recorded as skipped in the router pass), the traffic cards (each Analytics check opens the tab it
 reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab (the bar 49 px at
-rest and 83 px with a chip line, read on an address of its own), the Unit select and the legend's button in the top bar
+rest and 83 px with a chip line, read on an address of its own), the unit legend's lines in the top bar's popover at
+1280 by 800 (Native's and Billed dollars' sentences naming the four billed fundings, each in the face, size and ink of
+the line after it, its label at that label's weight), the Unit select and the legend's button in the top bar
 (inside the bar, clear of Log out and the theme switch, inside the viewport at 1280 and 400 px with nothing scrolling
 the bar sideways, every short label whole and no legend button at 400 px, the long labels whole at 1280 px, and the
 legend's popover over the filter bar uncovered at 1280 px), the top bar on every view at 1280 and 400 px (nothing

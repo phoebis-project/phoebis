@@ -947,6 +947,7 @@ export const WALK_KEY: Record<string, string> = {
   slow_down: 'slow-down',
   slow_down_until: 'slowed until',
   speed: 'realized',
+  spend: 'spend',
   spent: 'spent',
   strategy: 'strategy',
   stretch_ms: 'stretch',
@@ -1425,23 +1426,31 @@ function projectionTitle(c: RecordCandidate, now: number): string | null {
 /** The time a pin could stay before its window that binds reaches the ceiling, unbounded where nothing binds. */
 const runwayWord = (c: RecordCandidate) => (c.fit === null ? '-' : c.runwayMs === null ? 'unbounded' : c.runwayMs === 0 ? 'none' : span(c.runwayMs));
 
+/** A spend window's lines: the share over the reset, and the estimate's word where no head has named the reset yet. */
+const spendLines = (w: RecordCandidate['windows'][string], now: number): string[] => [`spend ${fmtPct(w.utilization)}`, w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), ...(w.source === 'estimated' ? ['estimated'] : [])];
+
 /**
  * One member's row of the candidate table: the account and its plan, the tier, the three windows (or a key's one
- * merged reading), the projection with the demand on its hover and the runway the gate read, the slots, the Pace score
- * with its hover, the prefix entry and the verdict with the one chip that decided it. A chip that names the
- * destination's fit carries its tone.
+ * merged reading, or a usage-based seat's spend window), the projection with the demand on its hover and the runway the
+ * gate read, the slots, the Pace score with its hover, the prefix entry and the verdict with the one chip that decided
+ * it. A chip that names the destination's fit carries its tone.
  */
 export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; projection: string[]; projectionTitle: string | null; runway: string; tier: string; verdict: { badge: string; chip: Chip | null; tone: VerdictTone | null }; windows: string[][] } {
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
   const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
+  // An OAuth candidate the record files with the API keys is a usage-based seat, whose one window is its spend, an entry
+  // the record carries only while a share is held.
+  const spend = c.kind === 'oauth' && c.tier[0] === 2;
   const windows =
     c.kind === 'api_key'
       ? [[own(c.windows, 'worst_bucket') ? `worst bucket ${fmtPct(c.windows.worst_bucket.utilization)}` : 'not reported']]
-      : WINDOWS.map((name) => {
-          if (!own(c.windows, name)) return ['not reported'];
-          const w = c.windows[name];
-          return [fmtPct(w.utilization), w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), `${w.source} ${ageWord(w.ageMs)}`];
-        });
+      : spend
+        ? [own(c.windows, 'spend') ? spendLines(c.windows.spend, now) : ['not reported']]
+        : WINDOWS.map((name) => {
+            if (!own(c.windows, name)) return ['not reported'];
+            const w = c.windows[name];
+            return [fmtPct(w.utilization), w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), `${w.source} ${ageWord(w.ageMs)}`];
+          });
   const entry = prefixEntryOf(c, record);
   return {
     account: accountChip(c.accountId),

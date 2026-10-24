@@ -1980,6 +1980,28 @@ async function poolFormerPins(theme) {
 }
 
 /**
+ * The contract pool's one member reads `metered P1` in its serving table's Tier cell, the word and the type of the all
+ * pool's API-key member beside it in the same tier, read in the cell's text, face, size, weight and ink. Only the mock's
+ * story holds the contract pool.
+ */
+async function servingTierWord(theme) {
+  if (!mock) return;
+  const read = await page.evaluate(() => {
+    const cellOf = (pool, account) => {
+      const row = [...document.querySelectorAll(`[id="${pool}"] .serving tbody tr`)].find((tr) => tr.querySelector('a')?.textContent?.trim() === account);
+      const cell = row?.querySelector('td.pool__prio');
+      if (!cell) return null;
+      const s = getComputedStyle(cell);
+      return { color: s.color, family: s.fontFamily, size: s.fontSize, text: cell.textContent?.trim() ?? '', weight: s.fontWeight };
+    };
+    return { contract: cellOf('contract', 'contract'), neighbor: cellOf('all', 'Overflow workspace') };
+  });
+  measurements.push(`${theme} /pools serving tier word ${JSON.stringify(read)}`);
+  failures.push(...compare(read.contract, read.neighbor, ['color', 'family', 'size', 'text', 'weight'], `${theme} /pools: the contract member's Tier cell against the all pool's API-key member's`));
+  if (read.contract && read.contract.text !== 'metered P1') failures.push(`${theme} /pools: the contract member's Tier cell reads ${JSON.stringify(read.contract.text)}, not metered P1`);
+}
+
+/**
  * The first pool card at the pass's viewport and in the 720 px strip: the serving table ends inside the card, and the
  * seven tiles stand in rows of three, then of two, the seventh alone on the last row, with a left hairline on every
  * tile but a row's first.
@@ -3208,6 +3230,68 @@ async function windowBarLines(theme, path) {
 }
 
 /**
+ * The usage-based seat's spend bar in the window triple's place on the dashboard's account cards and the Accounts list,
+ * at 1280 by 800 and at 400 by 800: its row as wide as a window triple's row beside it, from the same left edge where
+ * the two share a column, its head reading the dollars spent of the limit, and its reset on one line inside the bar
+ * with the estimate's word in the muted ink and the estimate's sentence on hover. The viewport returns to the pass's
+ * 1280 by 800. Only the mock's story holds a usage-based seat.
+ */
+async function spendBarLines(theme, path) {
+  if (!mock) return;
+  try {
+    for (const width of [1280, 400]) {
+      const say = (what) => failures.push(`${theme} ${path}: at ${width} by 800 ${what}`);
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      const read = await page.evaluate(() => {
+        const box = (el) => {
+          const r = el.getBoundingClientRect();
+          return { left: Math.round(r.left * 10) / 10, width: Math.round(r.width * 10) / 10 };
+        };
+        const lines = (el) => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
+        };
+        const row = document.querySelector('.wbars--1');
+        const bar = row?.querySelector('.wbar--spend');
+        const reset = bar?.querySelector('.wbar__reset');
+        if (!row || !bar || !reset) return null;
+        const spend = box(row);
+        const triples = [...document.querySelectorAll('.wbars--3')].map(box);
+        const triple = triples.find((t) => Math.abs(t.left - spend.left) < 0.5) ?? triples[0] ?? null;
+        return {
+          bar: Math.round(bar.getBoundingClientRect().width * 10) / 10,
+          column: triple !== null && Math.abs(triple.left - spend.left) < 0.5,
+          head: bar.querySelector('.wbar__head')?.textContent?.trim() ?? '',
+          lines: lines(reset),
+          muted: reset.querySelector('.muted')?.textContent?.trim() ?? null,
+          reset: reset.textContent?.trim() ?? '',
+          resetWidth: Math.round(reset.scrollWidth),
+          spend,
+          title: reset.getAttribute('title') ?? '',
+          triple,
+        };
+      });
+      measurements.push(`${theme} ${path} spend bar at ${width} by 800 ${JSON.stringify(read)}`);
+      if (read === null) {
+        say("the story's usage-based seat draws no spend bar");
+        continue;
+      }
+      failures.push(...compare(read.spend, read.triple, read.column ? ['left', 'width'] : ['width'], `${theme} ${path}: at ${width} by 800 the spend bar's row against a window triple's`));
+      if (read.head !== 'Spend$1,025.00 of $2,500.00') say(`the spend bar's head reads ${JSON.stringify(read.head)}, not the seat's $1,025.00 of $2,500.00`);
+      if (!/^resets in .+, estimated$/.test(read.reset) || read.muted !== 'estimated') say(`the spend bar's reset reads ${JSON.stringify(read.reset)} with ${JSON.stringify(read.muted)} muted, not the estimated reset`);
+      if (!read.title.endsWith('(estimated: no reset header has been seen for this window yet)')) say(`the spend bar's reset hover reads ${JSON.stringify(read.title)}`);
+      if (read.lines !== 1) say(`the spend bar's reset wraps over ${read.lines} lines`);
+      if (read.resetWidth > read.bar + 0.5) say(`the spend bar's reset needs ${read.resetWidth}px of its ${read.bar}px bar`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+  }
+}
+
+/**
  * The story slows studio, whose Usage card on its own Accounts page draws the whole 5-hour bar with the speed chip
  * beside its label, so the mock pass opens that page after the view's shot and reads its window bars there.
  */
@@ -3537,6 +3621,27 @@ async function quotaLaneChips(theme) {
   if (mock && share === null) say('the current period draws no now line');
   else if (share !== null && !Number.isFinite(share)) say(`the now line's calc carries no finite share, reading ${share}`);
   else if (line !== null && Math.abs(line.at - line.want) > 1) say(`the now line stands at ${line.at}px, not at ${line.want}px where the chart's now share ${share} of primary's track lies`);
+  // The contract seat's lane carries one chip, its dollars left of the limit, from primary's chips' left edge, of their
+  // height and at least their column's width.
+  const spendChip = await page.evaluate(() => {
+    const chipOf = (name) => {
+      const lane = [...document.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === name);
+      const chips = [...(lane?.querySelectorAll('.tl-chip') ?? [])];
+      const el = chips[0];
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { chips: chips.length, height: Math.round(r.height * 10) / 10, left: Math.round(r.left * 10) / 10, text: el.textContent?.trim() ?? '', title: el.getAttribute('title') ?? '', width: Math.round(r.width * 10) / 10 };
+    };
+    return { contract: chipOf('contract'), primary: chipOf('primary') };
+  });
+  measurements.push(`${theme} /quota#quota-windows contract lane chip ${JSON.stringify(spendChip)}`);
+  if (mock) {
+    failures.push(...compare(spendChip.contract, spendChip.primary, ['height', 'left'], `${theme} /quota#quota-windows: the contract lane's chip against primary's`));
+    const c = spendChip.contract;
+    if (c && (c.chips !== 1 || c.text !== 'Spend limit $1,475.00 of $2,500.00 left')) say(`the contract lane draws ${c.chips} chips, the first reading ${JSON.stringify(c.text)}, not its one Spend limit chip`);
+    if (c && !c.title.endsWith('(estimated: no reset header has been seen for this window yet)')) say(`the contract lane's chip hover reads ${JSON.stringify(c.title)}, not the estimate's sentence`);
+    if (c && spendChip.primary && c.width < spendChip.primary.width - 0.5) say(`the contract lane's chip is ${c.width}px, narrower than primary's ${spendChip.primary.width}px column`);
+  }
 }
 
 /** The phone windows the timeline is read at: the 340 px nothing may scroll sideways from, and a common phone. */
@@ -3613,6 +3718,7 @@ async function timelinePhone(theme) {
           const chips = [...lane.querySelectorAll('.tl-chip')];
           return {
             chipRows: new Set(chips.map((chip) => Math.round(box(chip).top))).size,
+            chips: chips.length,
             chipsCut: chips.filter((chip) => chip.scrollWidth > chip.clientWidth).map((chip) => chip.textContent?.trim() ?? ''),
             chipsOut: chips.filter((chip) => !inside(box(chip), outer)).map((chip) => chip.textContent?.trim() ?? ''),
             columns: getComputedStyle(lane).gridTemplateColumns,
@@ -3665,7 +3771,9 @@ async function timelinePhone(theme) {
       if (lane.headBottom === null || lane.trackTop === null || lane.headBottom > lane.trackTop + 0.5) say(`${where} ${lane.name}'s head ends at ${lane.headBottom}px, below its track's top ${lane.trackTop}px, so the lane does not stack`);
       if (lane.chipsOut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsOut)} stand outside its lane`);
       if (lane.chipsCut.length > 0) say(`${where} ${lane.name}'s chips ${JSON.stringify(lane.chipsCut)} are cut`);
-      if (where.startsWith('at 400 ') && lane.chipRows !== 2) say(`${where} ${lane.name}'s three chips take ${lane.chipRows} rows, where two share the first`);
+      // A usage-based seat's lane carries its one Spend limit chip, on one row.
+      if (where.startsWith('at 400 ') && lane.chips === 3 && lane.chipRows !== 2) say(`${where} ${lane.name}'s three chips take ${lane.chipRows} rows, where two share the first`);
+      if (lane.chips === 1 && lane.chipRows !== 1) say(`${where} ${lane.name}'s one chip takes ${lane.chipRows} rows`);
       if (lane.nowOnHead) say(`${where} the now line crosses ${lane.name}'s head`);
       if (lane.rasterOnHead) say(`${where} the day grid crosses ${lane.name}'s head`);
       if (got.now !== null && (lane.nowAt.length !== 1 || Math.abs(lane.nowAt[0] - lane.nowWant) > 1)) say(`${where} the now line crosses ${lane.name}'s track at ${JSON.stringify(lane.nowAt)}, not once at ${lane.nowWant}px where the chart's now share ${got.now.share} of the track lies`);
@@ -5144,6 +5252,30 @@ async function requestsTableWide(theme) {
 }
 
 /**
+ * The Cost cell of a usage-based seat's request on the request log under Native: its dollars over the funding word
+ * `usage-based`, the word in the type and the ink of a billed row's funding word in the same table, and the cell's hover
+ * naming it as billed in dollars. Only the mock's story holds a usage-based seat.
+ */
+async function requestsFundingWord(theme) {
+  if (!mock) return;
+  const read = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('.requests__table tbody td[title^="Billed in dollars: "]')];
+    const wordOf = (td) => {
+      const word = td?.querySelector('.sub');
+      if (!word) return null;
+      const s = getComputedStyle(word);
+      return { color: s.color, size: s.fontSize, tag: word.tagName, text: word.textContent?.trim() ?? '', title: td.getAttribute('title')?.split('. ')[0] ?? '', weight: s.fontWeight };
+    };
+    const seat = cells.find((td) => td.getAttribute('title')?.startsWith('Billed in dollars: usage-based'));
+    const billed = cells.find((td) => !td.getAttribute('title')?.startsWith('Billed in dollars: usage-based'));
+    return { billed: wordOf(billed), seat: wordOf(seat) };
+  });
+  measurements.push(`${theme} /requests funding word ${JSON.stringify(read)}`);
+  failures.push(...compare(read.seat, read.billed, ['color', 'size', 'tag', 'weight'], `${theme} /requests: the usage-based Cost cell's funding word against a billed row's`));
+  if (read.seat && (read.seat.text !== 'usage-based' || read.seat.title !== 'Billed in dollars: usage-based')) failures.push(`${theme} /requests: the usage-based Cost cell reads ${JSON.stringify(read.seat.text)} with the hover ${JSON.stringify(read.seat.title)}`);
+}
+
+/**
  * The request table with Time, its fill, hidden through the Columns control, so no drawn column fills: the table
  * carries `table--no-fill` and takes its content width up to its wrap's, read at the pass's 1280 by 800 and at 1920
  * by 1080, where the content leaves the card's rest empty. The viewport and the column return afterwards.
@@ -6229,6 +6361,45 @@ async function topBarFits(theme, path) {
   } finally {
     await page.setViewportSize({ height: 800, width: 1280 });
     await settle();
+  }
+}
+
+/**
+ * The unit legend's lines in the top bar's popover at 1280 by 800: Native's and Billed dollars' lines name the four
+ * billed fundings, each line in the face, size and ink of the line after it, the label in the weight of that line's
+ * label. Escape closes the popover again.
+ */
+async function unitLegendLines(theme) {
+  const LEGEND = 'What the units mean';
+  const WANT = {
+    'Billed dollars': 'Billed dollars The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
+    Native: 'Native Each request in the unit its funding pays in: a subscription request as 20x window equivalents, an API key, fast-mode, overage or usage-based request in dollars.',
+  };
+  const button = page.locator('.topbar').getByRole('button', { name: LEGEND, exact: true });
+  if ((await button.count()) === 0) {
+    failures.push(`${theme} /analytics: the top bar draws no legend button to read the legend's lines by`);
+    return;
+  }
+  await button.click();
+  await settle();
+  const lines = await page.evaluate((legend) =>
+    [...document.querySelectorAll(`.topbar [role="dialog"][aria-label="${legend}"] .unit-legend__line`)].map((p) => {
+      const s = getComputedStyle(p);
+      const label = p.querySelector('b');
+      return { color: s.color, family: s.fontFamily, label: label?.textContent?.trim() ?? null, labelWeight: label ? getComputedStyle(label).fontWeight : null, size: s.fontSize, text: p.textContent?.replace(/\s+/g, ' ').trim() ?? '' };
+    }),
+  LEGEND);
+  await page.keyboard.press('Escape');
+  await settle();
+  measurements.push(`${theme} /analytics unit legend lines ${JSON.stringify(lines.map((l) => [l.label, l.size, l.color, l.labelWeight]))}`);
+  for (const [label, want] of Object.entries(WANT)) {
+    const at = lines.findIndex((l) => l.label === label);
+    if (at < 0) {
+      failures.push(`${theme} /analytics: the unit legend draws no ${label} line`);
+      continue;
+    }
+    if (lines[at].text !== want) failures.push(`${theme} /analytics: the legend's ${label} line reads ${JSON.stringify(lines[at].text)}`);
+    failures.push(...compare(lines[at], lines[at + 1], ['color', 'family', 'size', 'labelWeight'], `${theme} /analytics: the legend's ${label} line against the line after it`));
   }
 }
 
@@ -10165,6 +10336,7 @@ try {
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
       if (['/', '/accounts'].includes(view.path)) await windowBarLines(theme, view.path);
+      if (['/', '/accounts'].includes(view.path)) await spendBarLines(theme, view.path);
       if (view.path === '/sessions') {
         // Its loads end on the bare view, so the measures after it read the view as it first drew.
         if (mock) await sessionsTilesError(theme);
@@ -10192,6 +10364,7 @@ try {
         await poolCardLayout(theme);
         await poolMemberPins(theme);
         await poolFormerPins(theme);
+        await servingTierWord(theme);
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
         await poolRailFit(theme);
@@ -10209,6 +10382,7 @@ try {
         await analyticsTabs(theme);
         await stickyStrip(theme);
         await unitControl(theme);
+        await unitLegendLines(theme);
         if (mock) await accountsCardToggles(theme);
         // These two last: their loads set the page's clock back to the origin, and the Burn shot above reads the clock
         // its earlier measures stepped.
@@ -10251,6 +10425,7 @@ try {
         // is empty.
         await tableColumns(theme, 'requests', '.requests__table', ['Time'], 0, { wrapping: ['Status', 'Attempts', ''] });
         if (mock) await requestsTableWide(theme);
+        await requestsFundingWord(theme);
         await pagerControls(theme, view.path);
       }
       if (view.path === '/routing-log') {

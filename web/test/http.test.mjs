@@ -172,7 +172,13 @@ test('the accounts list carries the poll standing and no usage route is read', a
   const calls = stub(() => answer(200, body));
   const accounts = await new HttpApi().listAccounts();
   assert.deepEqual(calls.map((c) => [c.init.method ?? 'GET', c.url]), [['GET', '/admin/accounts']], 'one read of the list, no usage read per account');
-  assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [['business', 'clean'], ['direct', null]]);
+  // The seat's poll has not read it yet, so its row carries the sentence standing in for a snapshot.
+  const seat = body.accounts.find((a) => a.id === 'usage-seat').usage;
+  assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [
+    ['business', 'clean'],
+    ['direct', null],
+    ['usage-seat', { accountId: 'usage-seat', error: seat.error, fetchedAt: null, heldUntil: null, poll: null, status: 'error' }],
+  ]);
 });
 
 test('updateAccount is one PATCH that carries the canceled flag and the end in milliseconds', async () => {

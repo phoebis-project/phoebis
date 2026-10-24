@@ -44,11 +44,13 @@ test('a plan request with a window the route could not price reads the priced on
   }
 });
 
-test('an overage request, a fast answer and an API key request read dollars over their funding word under every position but Dollar equivalent', () => {
+test('an overage request, a fast answer, an API key request and a usage-based request read dollars over their funding word under every position but Dollar equivalent', () => {
   for (const [a, funding, word] of [
     [attempt('oauth', true, 'standard'), 'overage', 'overage'],
     [attempt('oauth', false, 'fast'), 'fast', 'fast mode'],
     [attempt('api_key', null, 'standard'), 'api_key', 'API key'],
+    // The class reads ahead of the speed and the overage flag, so a seat's fast answer is usage-based too.
+    [{ ...attempt('oauth', null, 'fast'), usageBased: true }, 'usage_based', 'usage-based'],
   ]) {
     for (const position of POSITIONS.filter((p) => p !== 'equivalent')) {
       const unit = d.costUnitOf(request(null, [PLAN, a], 1.25), position);
@@ -107,11 +109,11 @@ test('under Billed dollars a plan request reads a dash titled nothing billed, wi
 
 test('the Cost header names what a subscription and a billed request read under each position', () => {
   assert.deepEqual(Object.fromEntries(POSITIONS.map((position) => [position, d.costHeaderTitle(position)])), {
-    all: 'Dollar equivalent for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-    equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an overage, fast mode or API key request',
-    native: '20x window equivalents for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-    share: 'Window shares for a request a subscription window paid, dollars for an overage, fast mode or API key request',
-    usd: 'A dash for a request a subscription window paid, dollars for an overage, fast mode or API key request',
+    all: 'Dollar equivalent for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+    equivalent: 'Dollar equivalent for a request a subscription window paid, a dash for an API key, fast mode, overage or usage-based request',
+    native: '20x window equivalents for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+    share: 'Window shares for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
+    usd: 'A dash for a request a subscription window paid, dollars for an API key, fast mode, overage or usage-based request',
   });
 });
 

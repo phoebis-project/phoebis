@@ -1782,7 +1782,7 @@ export function PoolDialog({
           beside
           hint={
             <>
-              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then API keys, and <GroupLink id="members">priority</GroupLink> orders each of those groups.
+              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then the metered accounts, and <GroupLink id="members">priority</GroupLink> orders each of those groups.
             </>
           }
         >

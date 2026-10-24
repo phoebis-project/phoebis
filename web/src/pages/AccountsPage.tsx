@@ -247,8 +247,9 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
         <WindowTriple account={account} now={now} compact />
         <div className="account-row__foot">
           <span className="muted">{account.pool ? `pool ${account.pool.poolId}` : 'no pool'}</span>
-          {account.extraUsage?.inUse && <Badge tone="serious">Overage</Badge>}
-          {account.extraUsage?.enabled && !account.extraUsage.inUse && <span className="muted">extra usage on</span>}
+          {/* A usage-based seat always pays in dollars, which is no overage, whatever its flags read. */}
+          {!account.usageBased && account.extraUsage?.inUse && <Badge tone="serious">Overage</Badge>}
+          {!account.usageBased && account.extraUsage?.enabled && !account.extraUsage.inUse && <span className="muted">extra usage on</span>}
         </div>
       </Link>
     </li>
@@ -442,11 +443,11 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
                 cooldown ends {fmtRelative(cooldown.until, now)}
               </Badge>
             )}
-            {extra?.inUse && <Badge tone="serious">Overage active</Badge>}
+            {!account.usageBased && extra?.inUse && <Badge tone="serious">Overage active</Badge>}
             {!account.routingEnabled && account.status !== 'paused' && <Badge tone="neutral">Routing paused</Badge>}
           </div>
           {/* A usage sample reports overage without a start, and a line counting from nothing would say nothing. */}
-          {overage?.inUse && overage.since && (
+          {!account.usageBased && overage?.inUse && overage.since && (
             <p className="detail__sub" title={fmtAbsolute(overage.since)}>
               Overage since {fmtRelative(overage.since, now)}
             </p>
@@ -587,7 +588,7 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
                       title: account.subscription?.rateLimitTier || undefined,
                       value: account.subscription ? `${account.plan ?? '-'}${account.subscription.since ? ` since ${fmtDate(account.subscription.since)}` : ''}` : 'unknown until paired',
                     },
-                    { label: 'Rate-limit tier', value: account.subscription?.rateLimitTier ?? '-', mono: account.subscription !== null },
+                    { label: 'Rate-limit tier', value: account.subscription ? `${account.subscription.rateLimitTier}${account.usageBased ? ', usage-based' : ''}` : '-', mono: account.subscription !== null },
                     ...(endsAt ? [{ label: 'Ends', title: fmtAbsolute(endsAt), value: fmtEndsIn(endsAt, now) }] : []),
                     ...(account.planEndedAt ? [{ label: 'Plan ended', title: fmtAbsolute(account.planEndedAt), value: fmtRelative(account.planEndedAt, now) }] : []),
                     ...(trialEndsAt ? [{ label: 'Trial ends', title: fmtAbsolute(trialEndsAt), value: fmtEndsIn(trialEndsAt, now) }] : []),
@@ -649,14 +650,15 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
         </Card>
 
         <Card title="Usage" subtitle="Remaining share of each window" className="card--fill">
-          {account.windows.length === 0 && !account.fableWindow ? (
+          {!account.usageBased && account.windows.length === 0 && !account.fableWindow ? (
             awaitingReading ? <p className="muted">The first quota reading is in flight.</p> : <p className="muted">This account does not report quota windows.</p>
           ) : (
             <WindowTriple account={account} now={now} others />
           )}
-          {extra && (extra.enabled || extra.disabledReason) && (
+          {/* A usage-based seat's spend bar above is that reading, so its extra usage line would draw one figure twice. */}
+          {extra && ((extra.enabled && !account.usageBased) || extra.disabledReason) && (
             <div className="extra-usage">
-              {extra.enabled && (
+              {extra.enabled && !account.usageBased && (
                 <>
                   <div className="wbar__head">
                     <span className="wbar__label">
@@ -667,11 +669,14 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
                         </Badge>
                       )}
                     </span>
-                    <span className="num">
-                      {fmtCredits(extra.usedCredits)} of {fmtCredits(extra.monthlyLimitCredits)}
-                    </span>
+                    {/* A reading a head wrote carries no amounts, which would read as $0.00 of $0.00. */}
+                    {extra.usedCredits !== null && extra.monthlyLimitCredits !== null && (
+                      <span className="num">
+                        {fmtCredits(extra.usedCredits)} of {fmtCredits(extra.monthlyLimitCredits)}
+                      </span>
+                    )}
                   </div>
-                  <Meter value={extra.usedCredits / extra.monthlyLimitCredits} tone="accent" label="Extra usage spend" />
+                  {extra.usedCredits !== null && extra.monthlyLimitCredits !== null && <Meter value={extra.usedCredits / extra.monthlyLimitCredits} tone="accent" label="Extra usage spend" />}
                 </>
               )}
               {extra.disabledReason && (

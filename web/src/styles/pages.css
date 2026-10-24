@@ -1073,6 +1073,15 @@
   font-weight: 700;
 }
 
+/* The one chip of a spend lane names dollars, which run longer than a share: it keeps the column's width at least,
+   grows to its words, and on a lane too narrow for them puts the figure on a line under the label. */
+.tl-chip.lane__spend {
+  flex-wrap: wrap;
+  row-gap: 0;
+  width: auto;
+  min-width: min(var(--tl-chip), 100%);
+}
+
 .tl-chip--good {
   color: var(--good-ink);
   background: var(--good-soft);
@@ -3519,6 +3528,11 @@
 .wbars--3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+/* A usage-based seat's one spend bar, across the width the triple takes. */
+.wbars--1 {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .wbars--compact .wbar__head {

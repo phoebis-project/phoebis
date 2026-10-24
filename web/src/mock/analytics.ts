@@ -47,10 +47,10 @@ export interface HourlyRollup {
   failovers: number;
   /**
    * Who paid for the hour's requests, as the ledger keys its rollups off the served answer: `billed` for an API key
-   * account's answer whatever its speed, else a fast answer's credits, else the head's overage, else the plan, which a
-   * request no attempt served files under too.
+   * account's answer whatever its speed, else `usage_based` for a usage-based seat's, else a fast answer's credits, else
+   * the head's overage, else the plan, which a request no attempt served files under too.
    */
-  funding: 'billed' | 'fast' | 'overage' | 'plan';
+  funding: 'billed' | 'fast' | 'overage' | 'plan' | 'usage_based';
   histograms: LatencyHistograms;
   hour: string;
   /** The incomplete requests by the code each ended on, which the ledger counts beside the outcome. */
@@ -553,6 +553,8 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
   const { bucketMs, starts } = bucketsOf(range);
   const kinds = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
   const tiers = new Map(ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
+  // A usage-based seat is a paid source, so its burn reads in dollars as an API key's does.
+  const usageBased = new Set(ACCOUNTS.filter((a) => a.usageBased).map((a) => a.id));
   const first = starts[0] ?? 0;
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
   const accounts = filters.accountIds ?? [];
@@ -639,7 +641,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
         sevenDayUnpriced: unpriced(s.sevenDayEquivalent),
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
-        unit: kind === undefined ? null : kind === 'oauth' ? 'window_share' : 'usd',
+        unit: kind === undefined ? null : kind === 'oauth' && !usageBased.has(account ?? '') ? 'window_share' : 'usd',
         usd: s.usd,
       };
     }),
