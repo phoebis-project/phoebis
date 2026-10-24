@@ -573,7 +573,7 @@ test('the verdict line and the Outcome read a hold for the reset and a reservati
   const booked = await cardOf({ ...placed.record, outcome: { ...placed.record.outcome, reservation } }, placed.row);
   assert.ok(chips(booked).includes('reserved 10.4% of 5h'), chips(booked).join(' / '));
   assert.deepEqual(rowsOf(booked, '.decision-card__outcome').find(([label]) => label === 'Reservation'), ['Reservation', `onprimary / 5h10.4% / 7d1.2% / expires${formatFact(expires, 'time', Date.parse(placed.row.at))}`]);
-  assert.equal(booked.querySelector('.decision-card__record')?.textContent, 'Record v2');
+  assert.equal(booked.querySelector('.decision-card__record')?.textContent, 'Record v3');
   const legacy = await cardOf({ ...placed.record, version: 1 }, placed.row);
   assert.equal(legacy.querySelector('.decision-card__record')?.textContent, 'Record v1');
 });

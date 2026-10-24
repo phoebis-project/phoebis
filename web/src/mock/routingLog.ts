@@ -2035,7 +2035,7 @@ function buildDecisions() {
 
 const built = buildDecisions();
 
-/** One version 2 record per decision of every mock request, keyed `${requestId}/${seq}`. */
+/** One version 3 record per decision of every mock request, keyed `${requestId}/${seq}`. */
 export const DECISIONS: Map<string, DecisionRecord> = built.decisions;
 /** One summary per record, the routing log's decision rows, newest first. */
 export const SUMMARIES: DecisionSummary[] = built.summaries;
