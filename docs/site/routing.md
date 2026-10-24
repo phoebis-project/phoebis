@@ -384,7 +384,7 @@ seat is a paid source beside the API-key accounts: it sorts in their group with 
 API-key account, untouched since it reads no bucket.
 
 A non-portable request, one whose body references a `file_id`, a `container` or a server-tool result, is answered by its
-live pin's account or not at all. With affinity off or an expired pin, it runs the normal selection instead, and the
+live pin's account or not at all. With affinity off or no live pin, it runs the normal selection instead, and the
 account-scoped reference it carries may then not resolve.
 
 Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's

@@ -1205,8 +1205,8 @@ Stretch and Hold as spans, Return to plan as its word and Return dwell as a span
 pool had left the registry". A refused record, which no pool setting entered, draws no settings fold. A record written
 before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and the
 five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
-twenty-four, each marked `(then)`, the three settings it carried that a version 2 record does not. "Outcome" lists the
-pin written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
+twenty-four, each marked `(then)`, the three settings it carried that a later record does not. "Outcome" lists the pin
+written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
 (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading `for the reset at
 {time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips `speed 0.5x`, `stretch
 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the rewrite in flight of

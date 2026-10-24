@@ -228,10 +228,10 @@ gone, and one deleted, or deleted and created again under its id, between admiss
 refusal is the one `auth_unknown`, whose message names no cause, so a caller learns nothing about why. Every
 credential refusal, the registry's included, carries `x-should-retry: false`, so the client does not resend it.
 
-A client whose class is not Claude Code is refused `403` `client_not_allowed` before its body is read, under every key
-([Clients](routing.md#clients)). When no account can serve for the moment the answer is `503` `accounts_unavailable`,
-which also stands where an account's authentication failure is the request's last word: the router never forwards an
-upstream `401`, and the answer names no account and no reason ([When nothing can
+A request on either Messages route whose class is not Claude Code is refused `403` `client_not_allowed` before its body
+is read, under every key ([Clients](routing.md#clients)). When no account can serve for the moment the answer is `503`
+`accounts_unavailable`, which also stands where an account's authentication failure is the request's last word: the
+router never forwards an upstream `401`, and the answer names no account and no reason ([When nothing can
 serve](routing.md#when-nothing-can-serve)).
 
 A token count is relayed through the same selection and failover loop as a message and travels as the client sent it
