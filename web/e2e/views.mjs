@@ -847,9 +847,10 @@ const REQUESTS_TITLE = 'Requests the router asked an account for. The refused re
 
 /**
  * The Dashboard's tile words beside their neighbors: the Estimated cost, 24h tile's figure and note under native, its
- * subscription line reading the 7-day window (`{share} of 20x 7-day`) over its word and its note a figure per hour,
- * and the Refused, 24h tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two
- * labels in one type.
+ * subscription line reading the 7-day window (`{share} of 20x 7-day`, or `0%` with no window named on a day without
+ * subscription cost, as `fmtEquivalent` draws a zero share) over its word and its note a figure per hour, and the
+ * Refused, 24h tile's hover naming the router's own refusals beside the Requests, 24h tile's hover, the two labels in
+ * one type.
  */
 async function dashboardTileWords(theme) {
   const say = (what) => failures.push(`${theme} /: ${what}`);
@@ -873,8 +874,8 @@ async function dashboardTileWords(theme) {
   });
   measurements.push(`${theme} / Dashboard tile words ${JSON.stringify(read)}`);
   const subscription = read.cost.lines.find(([, word]) => word === 'subscription');
-  if (!/^~?\d[\d.]*% of 20x 7-day$/.test(subscription?.[0] ?? '')) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription ?? null)}, not a share of the 20x 7-day window`);
-  if (!/^(~?\d[\d.]*% of 20x 7-day|\$[\d,.]+ billed) per hour$/.test(read.cost.note ?? '')) say(`the Estimated cost, 24h tile's note reads ${JSON.stringify(read.cost.note)}`);
+  if (!/^~?(\d[\d.]*% of 20x 7-day|0%)$/.test(subscription?.[0] ?? '')) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription ?? null)}, not a share of the 20x 7-day window or 0%`);
+  if (!/^(~?(\d[\d.]*% of 20x 7-day|0%)|\$[\d,.]+ billed) per hour$/.test(read.cost.note ?? '')) say(`the Estimated cost, 24h tile's note reads ${JSON.stringify(read.cost.note)}`);
   if (read.refused.title !== REFUSED_TITLE) say(`the Refused, 24h tile's hover reads ${JSON.stringify(read.refused.title)}`);
   if (read.requests.title !== REQUESTS_TITLE) say(`the Requests, 24h tile's hover reads ${JSON.stringify(read.requests.title)}`);
   for (const what of compare(read.refused.label, read.requests.label, ['color', 'family', 'size', 'weight'], "the Refused, 24h tile's label against the Requests, 24h tile's")) say(what);
@@ -5455,7 +5456,9 @@ async function analyticsTiles(theme) {
 /**
  * The Traffic table grouped by model: the group the story's refusal before a model resolved files under, `no model`,
  * holds no request, so its Error rate cell reads a dash in the muted ink, in the type of the rate cell of the row
- * beside it, which reads a percent. The page's grouping returns to the key one, its default, afterwards.
+ * beside it, which reads a percent. The Error rate column is required on both passes and the row on the mock pass
+ * alone, since the router's seed holds no request without a model, so the router pass reads the row where drawn and
+ * records whether it was. The page's grouping returns to the key one, its default, afterwards.
  */
 async function analyticsEmptyRate(theme) {
   const say = (what) => failures.push(`${theme} /analytics Traffic by model: ${what}`);
@@ -5469,7 +5472,7 @@ async function analyticsEmptyRate(theme) {
       const at = heads.indexOf('Error rate');
       const rows = [...(card?.querySelectorAll('tbody tr') ?? [])];
       const empty = rows.findIndex((tr) => tr.children[0]?.textContent?.trim() === 'no model');
-      if (at < 0 || empty < 0) return null;
+      if (at < 0 || empty < 0) return { column: at >= 0, row: empty >= 0 };
       const ink = (td) => {
         const inner = td.querySelector('.muted') ?? td;
         const s = getComputedStyle(inner);
@@ -5480,13 +5483,12 @@ async function analyticsEmptyRate(theme) {
       probe.className = 'muted';
       const muted = getComputedStyle(probe).color;
       probe.remove();
-      return { empty: ink(rows[empty].children[at]), muted, neighbour: ink(rows[empty === 0 ? 1 : empty - 1].children[at]) };
+      return { column: true, empty: ink(rows[empty].children[at]), muted, neighbour: ink(rows[empty === 0 ? 1 : empty - 1].children[at]), row: true };
     });
     measurements.push(`${theme} /analytics Traffic by model empty rate ${JSON.stringify(read)}`);
-    if (read === null) {
-      say('draws no no model row or no Error rate column');
-      return;
-    }
+    if (!read.column) say('draws no Error rate column');
+    if (mock && !read.row) say("draws no no model row, the group the story's refusal before a model resolved files under");
+    if (!read.column || !read.row) return;
     if (read.empty.text !== '-') say(`the no model row's Error rate reads ${JSON.stringify(read.empty.text)}, not a dash`);
     if (read.empty.color !== read.muted) say(`the no model row's dash is in ${read.empty.color}, not the muted ${read.muted}`);
     if (!/^\d[\d.]*%$/.test(read.neighbour.text)) say(`the row beside it reads ${JSON.stringify(read.neighbour.text)}, not a percent`);
