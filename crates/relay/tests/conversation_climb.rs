@@ -403,6 +403,7 @@ async fn a_subagents_first_request_identifies_by_its_session_under_its_own_agent
     settle(&h).await;
     let pins = h.router.pins().await.unwrap();
     assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0].session_id, "s1", "a pin under its own session");
     assert_eq!(pins[0].agent_id, "sub-1", "a pin under its own agent");
     {
         let map = h.router.affinity();

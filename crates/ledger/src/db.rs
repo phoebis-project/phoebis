@@ -603,8 +603,8 @@ pub(crate) fn insert_request_in(
             request.context_edits, request.temperature, request.requested_speed, request.requested_service_tier,
             request.presented_retired, request.rotation_at, request.request_truncated, request.response_truncated,
             request.client, request.agent_type, request.compaction, request.context_compacted, request.prev_tool_ms, request.turn_origin,
-            request.request_class,
-            request.forked_from, request.fork_depth.map(|n| n as i64), request.auto_mode, request.held, request.stream_end_at,
+            request.request_class, request.forked_from, request.fork_depth.map(|n| n as i64), request.auto_mode, request.held,
+            request.stream_end_at,
             request.diagnostics_source, request.guardrail_id, request.classifier, request.client_contract, landed_at, request.refused,
         ],
     )?;

@@ -11,9 +11,9 @@ use axum::Json;
 use phoebis_bus::Classifier;
 use phoebis_ledger::{
     entrypoint_of_client, free_equivalent, free_shares, funding_of, list_request_page,
-    price_equivalent, price_shares, request_by_id, request_events,
-    AttemptRecord, Funding, LiveKeys, PlanTables, PriceRevisions, PricedShares, RequestFilter,
-    RequestRecord, Speed, SHARE_REASON_CLIENT_CLASSIFIER,
+    price_equivalent, price_shares, request_by_id, request_events, AttemptRecord, Funding,
+    LiveKeys, PlanTables, PriceRevisions, PricedShares, RequestFilter, RequestRecord, Speed,
+    SHARE_REASON_CLIENT_CLASSIFIER,
 };
 use phoebis_routing::PinUsage;
 use serde_json::Value;
@@ -117,8 +117,8 @@ pub(crate) struct RequestSummary {
     #[schema(example = "stream_cut")]
     pub error_code: Option<String>,
     pub client_drift: Option<String>,
-    /// The item a `client_contract` refusal named: `session_header`, `class_header`, `attribution_line`,
-    /// `metadata_user_id`, `agent_id_header` or `compaction_header`. Null for every other request.
+    /// The item a `client_contract` refusal named: `client_version`, `session_header`, `class_header`,
+    /// `attribution_line`, `metadata_user_id`, `agent_id_header` or `compaction_header`. Null for every other request.
     #[schema(example = "class_header")]
     pub client_contract: Option<String>,
     pub ttfb_ms: Option<i64>,

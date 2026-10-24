@@ -6649,6 +6649,7 @@ fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
         key_id: request.key_id.clone(),
         key_generation: request.key_generation,
         pool_id,
+        session_id: Some(request.session_id.clone()),
         agent_id: request.agent_id.clone(),
         parent_agent_id: request.parent_agent_id.clone(),
         client_class: request.client.as_str(),

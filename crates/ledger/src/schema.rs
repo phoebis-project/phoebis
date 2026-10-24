@@ -716,6 +716,8 @@ ALTER TABLE account_rollups_hourly ADD COLUMN rewrite_tokens INTEGER NOT NULL DE
 ALTER TABLE account_rollups_hourly ADD COLUMN migrations_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE attempts ADD COLUMN selection TEXT;",
     ),
+    // The three identity columns hold the rows of the climb written before this build and are written
+    // null since.
     (
         19,
         "ALTER TABLE requests ADD COLUMN identified_by TEXT;

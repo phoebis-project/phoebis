@@ -7268,17 +7268,7 @@ fn session_identities_answer_a_session_whose_requests_are_older_than_the_activit
     let db = LedgerDb::open_in_memory().unwrap();
     // Old enough that `session_activity`'s own `since` bound would drop it; `session_identities` reads no
     // such bound, since a pin-only row (no request of its own) still needs the identity of what it holds.
-    plant_identity(
-        &db,
-        "r1",
-        "k1",
-        0,
-        "s1",
-        "inference",
-        0,
-        None,
-        None,
-    );
+    plant_identity(&db, "r1", "k1", 0, "s1", "inference", 0, None, None);
     assert!(
         db.read_blocking(|c| phoebis_ledger::session_activity(c, 500))
             .unwrap()
@@ -7289,6 +7279,26 @@ fn session_identities_answer_a_session_whose_requests_are_older_than_the_activit
         .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s1".into())]))
         .unwrap();
     assert_eq!(rows.len(), 1);
+}
+
+/// The activity groups every request under its own session id, the one the router keys its pin by.
+#[test]
+fn session_activity_groups_every_row_under_its_own_session() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_identity(&db, "r1", "k1", 0, "s1", "inference", 1_000, None, None);
+    plant_identity(&db, "r2", "k1", 0, "s2", "inference", 2_000, None, None);
+    let mut grouped: Vec<(String, u64)> = db
+        .read_blocking(|c| phoebis_ledger::session_activity(c, 0))
+        .unwrap()
+        .into_iter()
+        .map(|a| (a.session_id, a.requests))
+        .collect();
+    grouped.sort();
+    assert_eq!(
+        grouped,
+        [("s1".to_string(), 1), ("s2".to_string(), 1)],
+        "each row groups under its own session"
+    );
 }
 
 #[test]
@@ -7305,17 +7315,7 @@ fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
         Some("s1"),
         Some(3),
     );
-    plant_identity(
-        &db,
-        "r2",
-        "k1",
-        0,
-        "s2",
-        "inference",
-        2_000,
-        None,
-        None,
-    );
+    plant_identity(&db, "r2", "k1", 0, "s2", "inference", 2_000, None, None);
     let rows = db
         .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s2".into())]))
         .unwrap();
@@ -7324,6 +7324,26 @@ fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
         (rows[0].forked_from.as_deref(), rows[0].fork_depth),
         (Some("s1"), Some(3)),
         "the fork facts come from the session's first request, kept even though the later one carries none"
+    );
+    let identity_columns = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT identified_by, identity_root, identity_depth FROM requests WHERE id = 'r1'",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        identity_columns,
+        (None, None, None),
+        "a row written with a fork leaves the three identity columns null"
     );
 }
 
@@ -7387,17 +7407,7 @@ fn a_forked_sessions_identity_skips_an_auxiliary_request_ahead_of_its_first_main
 #[test]
 fn a_session_the_ledger_holds_no_client_request_for_is_absent_from_the_answer() {
     let db = LedgerDb::open_in_memory().unwrap();
-    plant_identity(
-        &db,
-        "r1",
-        "k1",
-        0,
-        "s3",
-        "probe",
-        1_000,
-        None,
-        None,
-    );
+    plant_identity(&db, "r1", "k1", 0, "s3", "probe", 1_000, None, None);
     let rows = db
         .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s3".into())]))
         .unwrap();

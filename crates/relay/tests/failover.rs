@@ -3553,6 +3553,11 @@ async fn a_drift_refusal_emits_one_decision_with_the_client_trigger_and_version(
             "{trigger}: the refusal precedes any selection, so it names nothing tried or waited on"
         );
         assert_eq!(
+            record.request.session_id.as_deref(),
+            Some(FIRST_PARTY_SESSION),
+            "{trigger}: the refusal names the session the request carried"
+        );
+        assert_eq!(
             summary
                 .fact
                 .iter()

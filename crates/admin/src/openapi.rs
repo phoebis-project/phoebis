@@ -86,7 +86,7 @@ Each operation names its request (path segments, query parameters, or body field
         (name = "Sessions", description = "Rows group by key, key generation, and session, so a key id created again \
             never merges its sessions with an earlier holder's. A row whose generation no live key holds is \
             `historical`, reads `companion` `none` with no recipe, and cannot be released. The session of a pinned or \
-            active row is the one the router keys pins by (a request's `routing_session_id`). A row the keepalive mod \
+            active row is the one the router keys pins by, the client's own session id. A row the keepalive mod \
             registered keeps the client's own session, the one the mod registered under."),
         (name = "Settings"),
         (name = "System"),

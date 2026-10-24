@@ -756,8 +756,8 @@ pub fn request_body(conn: &Connection, id: &str, now: i64) -> Result<Option<Vec<
         .optional()?)
 }
 
-/// The events of the request's window under its own session, and
-/// every event that names the request itself, by its `request_id` column or the `source_request_id` of its detail.
+/// The events of the request's window under its own session, the one its pin is keyed by, and every event that
+/// names the request itself, by its `request_id` column or the `source_request_id` of its detail.
 pub fn request_events(
     conn: &Connection,
     request: &RequestRecord,
@@ -771,6 +771,7 @@ pub fn request_events(
             to,
             request.session_id,
             marker,
+            request.session_id,
             request.id
         ],
         |r| {
@@ -3531,26 +3532,17 @@ pub struct SessionActivity {
 
 /// Every (key, key generation, session) with a client request since `since`, with the canonical model and the
 /// serving account of its newest request. Grouped by generation as well as id, so a key id created again never
-/// merges its sessions with an earlier holder's.
+/// merges its sessions with an earlier holder's. One pass over the window's client requests: the newest request of
+/// a session is inside the window whenever any of its requests is, so the window alone answers both the counts and
+/// the newest request's facts. The count leaves the refused requests out, while their rows stay in the partition,
+/// so a session whose every request was refused keeps its newest request and is listed.
 pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
-    activity(conn, since, "session_id")
-}
-
-/// One pass over the window's client requests, grouped by `group` (a column expression over `requests`): the
-/// newest request of a group is inside the window whenever any of its requests is, so the window alone answers
-/// both the counts and the newest request's facts. The count leaves the refused requests out, while their rows
-/// stay in the partition, so a session whose every request was refused keeps its newest request and is listed.
-fn activity(
-    conn: &Connection,
-    since: i64,
-    group: &str,
-) -> Result<Vec<SessionActivity>, LedgerError> {
-    let mut stmt = conn.prepare(&format!(
-        "WITH recent AS (SELECT id, key_id, key_generation, session_id, {group} AS grp, received_at, canonical_model, \
-         presented_retired, rotation_at, identified_by, identity_root, refused FROM requests \
+    let mut stmt = conn.prepare(
+        "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, received_at, canonical_model, \
+         presented_retired, rotation_at, refused FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
          ranked AS (SELECT recent.*, \
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
@@ -3559,9 +3551,9 @@ fn activity(
          FROM recent WHERE grp IS NOT NULL) \
          SELECT key_id, key_generation, grp, first_at, received_at, n, canonical_model, \
          (SELECT a.account_id FROM attempts a WHERE a.request_id = ranked.id ORDER BY a.attempt DESC LIMIT 1), \
-         presented_retired, rotation_at, session_id, identified_by, identity_root \
-         FROM ranked WHERE nth = 1 ORDER BY received_at DESC"
-    ))?;
+         presented_retired, rotation_at \
+         FROM ranked WHERE nth = 1 ORDER BY received_at DESC",
+    )?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(SessionActivity {
             key_id: r.get(0)?,
@@ -3598,7 +3590,7 @@ pub struct AgentModel {
 /// conversation request. A conversation request is every request whose class is not `auxiliary`, a raw caller's
 /// request with no class among them, since an auxiliary request names a model of its own.
 pub fn agent_models(conn: &Connection, since: i64) -> Result<Vec<AgentModel>, LedgerError> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, agent_id, received_at, model \
          FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1 \
@@ -3607,8 +3599,8 @@ pub fn agent_models(conn: &Connection, since: i64) -> Result<Vec<AgentModel>, Le
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp, agent_id ORDER BY received_at DESC, id DESC) \
          AS nth FROM recent WHERE grp IS NOT NULL) \
          SELECT key_id, key_generation, grp, agent_id, received_at, model FROM ranked WHERE nth = 1 \
-         ORDER BY received_at DESC, id DESC"
-    ))?;
+         ORDER BY received_at DESC, id DESC",
+    )?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(AgentModel {
             key_id: r.get(0)?,

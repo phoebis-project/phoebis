@@ -59,6 +59,7 @@ pub use pricing::{
 pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_tables;
+pub use query::{agent_models, AgentModel};
 pub use query::{
     breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard,
     decision_record, group_of, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
@@ -78,7 +79,6 @@ pub use query::{
 };
 pub use query::{guardrail_sample_page, request_body, SampleRow, SampleSubject};
 pub use query::{list_request_page, RequestPage};
-pub use query::{agent_models, AgentModel};
 pub use quota::{
     lead_over_pace, polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled,
     POLL_INTERVAL, PROFILE_EVERY_POLLS,

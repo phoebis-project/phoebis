@@ -269,7 +269,7 @@ impl DecisionRow {
             pool_id: column(&request.pool_id),
             account_id: record.outcome.account_id.clone(),
             from_account_id: record.outcome.from_account_id.clone(),
-            session_id: None,
+            session_id: request.session_id.clone(),
             agent_id: column(&request.agent_id),
             model: column(&request.canonical_model),
             summary,

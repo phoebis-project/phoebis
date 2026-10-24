@@ -3273,12 +3273,55 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
     assert_eq!(db.schema_version().await.unwrap(), 43);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
-        (
-            row.forked_from,
-            row.fork_depth
-        ),
+        (row.forked_from, row.fork_depth),
         (None, None),
         "a row from before the identity columns reads both fork members null"
+    );
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: 1,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s2".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            forked_from: Some("s1".into()),
+            fork_depth: Some(3),
+            ..Default::default()
+        },
+        &[],
+        None,
+    )
+    .unwrap();
+    let identity_columns = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT identified_by, identity_root, identity_depth FROM requests WHERE id = 'r1'",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        identity_columns,
+        (None, None, None),
+        "a row written with a fork leaves the three identity columns null"
+    );
+    let (forked, _) = db.request("r1").await.unwrap().unwrap();
+    assert_eq!(
+        (forked.forked_from.as_deref(), forked.fork_depth),
+        (Some("s1"), Some(3))
     );
     let has_member_index = |ledger: &phoebis_ledger::LedgerDb| {
         ledger

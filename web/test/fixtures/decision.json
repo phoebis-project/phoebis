@@ -13,7 +13,7 @@
       "key_id": "desktop",
       "key_generation": 1791721000000,
       "pool_id": "main",
-      "routing_session_id": "s-static",
+      "session_id": "s-static",
       "agent_id": "main",
       "parent_agent_id": null,
       "client_class": "claude_code",

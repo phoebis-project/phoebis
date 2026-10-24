@@ -329,7 +329,7 @@ pub(crate) struct DecisionRecord {
     /// 3.
     pub version: u32,
     /// `request_id`, `attempt`, `seq`, `at`, `received_at` (when the relay received the request, the same on every
-    /// selection of it, a refusal's `at`), `key_id`, `key_generation`, `pool_id`, `routing_session_id`, `agent_id`,
+    /// selection of it, a refusal's `at`), `key_id`, `key_generation`, `pool_id`, `session_id`, `agent_id`,
     /// `parent_agent_id`, `client_class`, `request_class`, `canonical_model`, `lane` (`speed`, `thinking`, `effort`),
     /// `flags` (`fast`, `count`, `probe`, `portable`, `marker`, `context_compacted`), `chain` (`static_boundaries` and
     /// `boundaries`, the chains' lengths, and `static_hash`), `attempted` (the accounts already tried), `holds` (each

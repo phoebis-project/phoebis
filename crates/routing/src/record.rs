@@ -75,6 +75,9 @@ pub struct RequestFacts {
     pub key_id: String,
     pub key_generation: i64,
     pub pool_id: String,
+    /// The client's own session id, which the pin and the pin events are keyed on. `None` on a refusal of a
+    /// request without the session header, which names none.
+    pub session_id: Option<String>,
     pub agent_id: String,
     pub parent_agent_id: Option<String>,
     pub client_class: &'static str,
@@ -851,6 +854,7 @@ impl DecisionRecord {
                 key_id: request.key_id.clone(),
                 key_generation: request.key_generation,
                 pool_id: key.map(|key| key.pool_id.clone()).unwrap_or_default(),
+                session_id: request.session_id.clone(),
                 agent_id: request.agent_id.clone(),
                 parent_agent_id: request.parent_agent_id.clone(),
                 client_class: request.client.as_str(),
@@ -1015,6 +1019,7 @@ mod tests {
                 key_id: "k".into(),
                 key_generation: 1,
                 pool_id: "p".into(),
+                session_id: Some("s1".into()),
                 agent_id: "main".into(),
                 parent_agent_id: None,
                 client_class: "claude_code",
@@ -1183,6 +1188,48 @@ mod tests {
                 cause: None,
             },
         }
+    }
+
+    /// A refusal for a missing session header names no session, so the record's member stays optional and reads
+    /// null on the wire under its own name.
+    #[test]
+    fn a_contract_refusal_for_a_missing_session_header_records_no_session() {
+        let snapshot =
+            RegistrySnapshot::from_load(phoebis_store::RegistryLoad::default(), [0; 32], 0, 1);
+        let (record, _) = DecisionRecord::refused(
+            &RefusedRequest {
+                request_id: "r-1".into(),
+                attempt: 1,
+                seq: 1,
+                at: 1_000,
+                key_id: "k".into(),
+                key_generation: 1,
+                agent_id: "main".into(),
+                parent_agent_id: None,
+                session_id: None,
+                request_class: None,
+                canonical_model: "claude-sonnet-5".into(),
+                lane: Default::default(),
+                flags: Default::default(),
+                chain: Default::default(),
+                attempted: Vec::new(),
+                holds: Vec::new(),
+                client: ClientClass::ClaudeCode,
+                client_version: Some("2.1.269".into()),
+            },
+            &snapshot,
+            &RefusalFacts {
+                kind: "client",
+                code: "contract",
+                reason: "session_header".into(),
+            },
+        );
+        let json = serde_json::to_value(&record).unwrap();
+        assert_eq!(
+            json["request"].get("session_id"),
+            Some(&serde_json::Value::Null),
+            "{json}"
+        );
     }
 
     fn keys(value: &serde_json::Value) -> Vec<&str> {

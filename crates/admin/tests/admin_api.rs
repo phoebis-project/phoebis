@@ -6062,13 +6062,11 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
     }
     assert_eq!(
         (
-            row("pin-no-request")["identified_by"].as_str(),
-            row("pin-no-request")["identity_root"].as_str(),
             row("pin-no-request")["forked_from"].as_str(),
             row("pin-no-request")["fork_depth"].as_i64(),
         ),
-        (None, None, None, None),
-        "a pin the ledger holds no client request for at all reads null on every identity field"
+        (None, None),
+        "a pin the ledger holds no client request for at all reads null on both fork fields"
     );
 }
 
@@ -6203,6 +6201,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
         v["events"].as_array().is_some_and(|e| !e.is_empty())
     })
     .await;
+    assert_eq!(detail["request"]["session_id"].as_str(), Some("s1"));
     assert!(
         detail["events"]
             .as_array()
@@ -6732,6 +6731,21 @@ async fn a_request_row_answers_its_fork_fields() {
         (Some("s1"), Some(3)),
         "the detail route answers the same fields"
     );
+    for member in [
+        "identified_by",
+        "identity_depth",
+        "identity_root",
+        "routing_session_id",
+    ] {
+        assert!(
+            row.get(member).is_none(),
+            "the row carries no {member}: {row}"
+        );
+        assert!(
+            detail["request"].get(member).is_none(),
+            "the detail carries no {member}: {detail}"
+        );
+    }
 }
 
 /// A finished request of `session` on the `desktop` key, from `received_at` to `finished_at`.

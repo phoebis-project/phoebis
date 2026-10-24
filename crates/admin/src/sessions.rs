@@ -222,6 +222,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     let overages = state.router.overages().await.unwrap_or_default();
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
+    // Grouped by the client's own session, which the router keys pins under, so a request shows on the row of the
+    // pin it took.
     let activity = match state
         .ledger
         .db()
@@ -353,6 +355,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             }),
         );
     }
+    // Every row is keyed by its own session, as the pins are, so a session's requests land on the row of its pin.
     for a in activity {
         let entry = rows
             .entry((a.key_id.clone(), a.key_generation, a.session_id.clone()))
@@ -528,8 +531,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["account_id"] = json!(recipe.account_id);
         }
     }
-    // One read over every row's key, after the pin, activity and engine passes have settled who belongs on
-    // the page at all, so a row's fork facts come from the requests of its own session whichever pass surfaced it.
+    // One read over every row's key, after the pin, activity and engine passes have settled who belongs on the page
+    // at all, so a row's fork facts come from the requests of its own session whichever pass surfaced it.
     let identity_keys: Vec<(String, i64, String)> = rows.keys().cloned().collect();
     let identities = match state
         .ledger
