@@ -126,14 +126,13 @@ read a day and an hour on, where every Time cell prints its date on one line ins
 12-hour setting, the table carrying its 12-hour class and, where the set runs past the card, scrolling inside its wrap
 with Time at its floor), its sizes (at 1440 by 900 inside the card with every id whole in the mock pass, and at 375 by
 800 at its narrowest with Time at its floor, scrolling inside its wrap with the page as wide as the window), its columns
-(Time the fill, the Status, Attempts and links cells wrapping), its text at 1920 by 1080 in the mock pass (no client
-class or agent type cut, each read on its own span, and every id whole), the usage-based Cost cell (mock pass:
-`usage-based` under its dollars in the tag, size, weight and ink of a billed row's funding word, its hover `Billed in
-dollars: usage-based`), the table with Time turned off (`table--no-fill` at its content width at 1280 by 800 and 1920 by
-1080), the Cache warming grid (an odd last card spanning its row, its title in the type of the card before it), the
-Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming
-tiles rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on its row spanning the
-grid and a last card that shares its row on its neighbor's top edge, each figure and card recorded), the Traffic table
+(Time the fill, the Status, Attempts and links cells wrapping), the usage-based Cost cell (mock pass: `usage-based`
+under its dollars in the tag, size, weight and ink of a billed row's funding word, its hover `Billed in dollars:
+usage-based`), the table with Time turned off (`table--no-fill` at its content width at 1280 by 800 and 1920 by 1080),
+the Cache warming grid (an odd last card spanning its row, its title in the type of the card before it), the Analytics
+tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming tiles
+rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on its row spanning the grid
+and a last card that shares its row on its neighbor's top edge, each figure and card recorded), the Traffic table
 grouped by model (its Error rate column, and the no model row's Error rate a dash in the muted ink and in the type of
 the rate cell beside it, which reads a percent, the row required in the mock pass alone since the router's seed holds no
 request without a model), the request pages' widths, walked on a load of their own once every view's shot is taken, the
@@ -232,20 +231,20 @@ dialog's backdrop leaves the page's scroll and its content box where they stood,
 scroll it had), the cost reference, the session table's fit (inside the card at 1280 by 800 and 1440 by 900, and at 375
 by 800 scrolling inside its wrap with Session at its 74 px floor and the page as wide as the window) and its columns
 (each fit column as wide as its content, the Session column the fill), the session id's width, the session row menu, the
-agent lines, the fork badges (inside their cell and whole), the session row's
-chevron (14 px square at the icon's 1.75 stroke), the Sessions tiles in error (mock pass, on loads of its own under the
-mock's sessions failure switch: the Sessions and Agents tiles a dash over "could not load" titled with the read's
-message, in the box, the value's line and the note's line of the Retained tile beside them, which keeps its figure, and
-the notice under the tiles naming the sessions), the fork link, which is followed once the session list's shot is taken,
-the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings view's own load, and
-on a Key created dialog's secret in the mock pass, on a load of its own), the login screen's Stay logged in row (on both
-logins, the light theme's and the dark one's after the Log out: the secret field's, the row's, its box's, its label's
-and its hint's edges inside the card recorded, asserting nothing)). A check that opens an editor, a dialog or a row
-closes it again before the view's shot, and one that turns a column on turns it off again. The recent requests' table is
-fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their 5-hour equivalent in
-the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there, and its width
-under Window shares, where the cell keeps its two-line shares, is recorded beside it. The script exits non-zero with the
-list of failures when any of that does not hold.
+agent lines, the fork badge's face (under the session id, in the row's badge face), the fork badges (inside their cell
+and whole), the session row's chevron (14 px square at the icon's 1.75 stroke), the Sessions tiles in error (mock pass,
+on loads of its own under the mock's sessions failure switch: the Sessions and Agents tiles a dash over "could not load"
+titled with the read's message, in the box, the value's line and the note's line of the Retained tile beside them, which
+keeps its figure, and the notice under the tiles naming the sessions), the fork link, which is followed once the session
+list's shot is taken, the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings
+view's own load, and on a Key created dialog's secret in the mock pass, on a load of its own), the login screen's Stay
+logged in row (on both logins, the light theme's and the dark one's after the Log out: the secret field's, the row's,
+its box's, its label's and its hint's edges inside the card recorded, asserting nothing)). A check that opens an editor,
+a dialog or a row closes it again before the view's shot, and one that turns a column on turns it off again. The recent
+requests' table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their
+5-hour equivalent in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap
+there, and its width under Window shares, where the cell keeps its two-line shares, is recorded beside it. The script
+exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

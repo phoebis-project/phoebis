@@ -975,8 +975,8 @@ expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost
   const requestsHint = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
   const rateHint = 'Errors among the requests the router asked an account for, the refused requests left out';
   results.push({
-    name: "/ the Refused tile reads the story's six refusals with guardrail_blocked the most common and the three tiles carry their hints, the Refused tile's naming the router's own refusals",
-    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '6', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint && tiles[4]?.getAttribute('title') === REFUSED_TITLE,
+    name: "/ the Refused tile reads the story's eight refusals with guardrail_blocked the most common and the three tiles carry their hints, the Refused tile's naming the router's own refusals",
+    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '8', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint && tiles[4]?.getAttribute('title') === REFUSED_TITLE,
     missing: [JSON.stringify(read(tiles[4])), `first tile ${tiles[0]?.getAttribute('title') ?? 'no title'}`, `fourth tile ${tiles[3]?.getAttribute('title') ?? 'no title'}`, `fifth tile ${tiles[4]?.getAttribute('title') ?? 'no title'}`],
   });
 }
@@ -10159,9 +10159,8 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
 }
 {
   // The client cell holds two lines (the class over the agent type), so each of its spans carries its own text as its
-  // title.
-  // The id span prints the row's whole id, the column's room alone cutting
-  // it, and carries it on its title, as the row's Details link names it.
+  // title. The id span prints the row's whole id, the column's room alone cutting it, and carries it on its title, as
+  // the row's Details link names it.
   const rows = [...m.container.querySelectorAll('.requests__table tbody tr')];
   const classes = rows.flatMap((tr) => [...tr.querySelectorAll('.requests__client-text')]);
   const agents = rows.flatMap((tr) => [...tr.querySelectorAll('.requests__client .sub')]);
@@ -10344,7 +10343,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   results.push({
     name: classCheck,
     ok: claudeCode.length > 0 && !claudeCode.includes('other') && otherKeys.length > 0 && otherKeys.every((k) => k === 'ci'),
-    missing: [`claude-code/* ${[...new Set(claudeCode)].join(',')}`, `other ${[...new Set(otherKeys)].join(',')}`],
+    missing: [`claude-code/* ${[...new Set(claudeCode)].join(',')}`, `other, the gate's refused rows, under ${[...new Set(otherKeys)].join(',')}`],
   });
   await type(classCheck, 'Client', '');
 
@@ -10801,6 +10800,25 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     missing: [`${heldMarkers.length} markers`, ...new Set(heldMarkers.map((b) => b.className))],
   });
   await removeChip(m, 'held only');
+
+  // A forked session's request names its base and where the two part on the drawer's Client row, the base cut at a
+  // session id's width and whole on the title.
+  const forked = requests.find((r) => r.forkedFrom !== null);
+  results.push({ name: 'fixture: a forked session', ok: forked !== undefined, missing: [] });
+  if (forked) {
+    await m.navigate(`/requests/${forked.id}`);
+    await m.settle(300);
+    const clientRow = [...(m.container.querySelectorAll('.drawer .kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Client')?.querySelector('dd');
+    const line = clientRow?.querySelector('div');
+    const base = forked.forkedFrom.length > 13 ? `${forked.forkedFrom.slice(0, 13)}…` : forked.forkedFrom;
+    results.push({
+      name: "/requests the drawer's Client row reads the fork's base and where the two part, the whole base on the title",
+      ok: line?.textContent?.trim() === `fork of ${base}${forked.forkDepth === null ? '' : ` at ${forked.forkDepth}`}` && line?.getAttribute('title') === `fork of ${forked.forkedFrom}`,
+      missing: [line?.textContent ?? 'no fork line', line?.getAttribute('title') ?? 'no title'],
+    });
+    await m.navigate('/requests');
+    await m.settle(300);
+  }
 }
 {
   const hinted = requests.find((r) => r.turnOrigin !== null && r.userAgent !== null);
@@ -14850,8 +14868,9 @@ m.unmount();
         ok:
           JSON.stringify(folds.map((f) => f.querySelector('summary')?.firstChild?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
           since === edited && values['Load shedding'] === 'on' && values['Window ceiling'] === fmtPct(record.settings.windowCeiling) && values['Shed cap'] === fmtPct(record.settings.shedCap) &&
-          JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
+          JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Session', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
+          request.Session?.querySelector('a')?.getAttribute('href') === '/sessions' && request.Session?.querySelector('.chip')?.getAttribute('title') === record.request.sessionId && JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
           JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twentyFour) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
         missing: [JSON.stringify(closed), String(since), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
@@ -14955,6 +14974,15 @@ m.unmount();
       name: '/routing-log a card reads a placement beside the move that led to it',
       ok: record.outcome.rule === 'spent' && record.outcome.rung?.rung === 'static' && verdictChipsOf(card).includes('spent rule') && landed?.verdict === 'match' && outcomeOf(card)['Pin written']?.[0] === `moved on ${record.outcome.accountId}`,
       missing: [verdictChipsOf(card).join(' / '), JSON.stringify(outcomeOf(card)['Pin written'])],
+    });
+    // The session the pin is keyed by is the one the row and the card link.
+    const session = rowOf(page, 'req_da52d141-a5a/1')?.querySelector('td.routing-log__session a');
+    const folded = card?.querySelector('details.decision-card__fold .kv');
+    const factSession = kvRows(folded).find((r) => r.label === 'Session')?.dd?.querySelector('a');
+    results.push({
+      name: '/routing-log a move is drawn by the session its pin is keyed by, the row and the card naming it',
+      ok: record.request.sessionId !== null && session?.getAttribute('href') === '/sessions' && session?.getAttribute('title') === record.request.sessionId && factSession?.getAttribute('href') === '/sessions' && factSession?.closest('.chip')?.getAttribute('title') === record.request.sessionId,
+      missing: [String(session?.getAttribute('href')), String(factSession?.getAttribute('href')), String(record.request.sessionId)],
     });
     page.unmount();
   }
@@ -16680,11 +16708,12 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   });
 }
 {
-  // The story's refusals by key: the runner's send after its key's revocation on ci, the three guardrail blocks
-  // on desktop, and the drift and the contract refusals on laptop. Each key's Failed leaves them out, as the
-  // Traffic line does. Laptop's Failed and the line's errors count the two rows the router's own stop cut,
-  // `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover `req_8c41f2d7-a93`, which
-  // answered on its second attempt, and the contract seat's three rows on fleet, each answered.
+  // The story's refusals by key: the earlier runner's two sends the gate refused and the runner's send after its key's
+  // revocation on ci, the three guardrail blocks on desktop, and the drift and the contract refusals on laptop. Each
+  // key's Failed leaves them out, as the Traffic line does. Laptop's Failed and the line's errors count the two rows
+  // the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover
+  // `req_8c41f2d7-a93`, which answered on its second attempt, and the contract seat's three rows on fleet, each
+  // answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -16695,8 +16724,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   results.push({
     name: "/analytics the Refused and Failed cells by key, the Refusals by code card and the Traffic line read the story's refusals apart from the counts",
     ok:
-      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '1'], ['laptop', '6', '2']]) &&
-      JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
+      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
+      JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
       line === '217 requests, 17.1% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
@@ -19293,9 +19322,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Model');
     {
-      // The story's revoked key sends one request refused before it resolved a model, so it carries no model. Its row
-      // counts the request under Refused alone, as no request, so its Error rate has no requests to rate and reads a
-      // muted dash where the row above it reads a percent.
+      // The story's revoked key sends one request refused before it resolved a model, and the gate refuses the earlier
+      // runner's two before reading their bodies, so the three carry no model. Their row counts them under Refused
+      // alone, as no request, so its Error rate has no requests to rate and reads a muted dash where the row above it
+      // reads a percent.
       const rows = [...(traffic('model')?.querySelectorAll('tbody tr') ?? [])];
       const at = rows.findIndex((tr) => tr.children[0]?.textContent?.trim() === 'no model');
       const row = at < 0 ? [] : [...rows[at].children].map((td) => td.textContent?.trim() ?? '');
@@ -19304,7 +19334,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
       results.push({
         name: '/analytics grouped by model the Traffic table names the request refused before it resolved a model "no model", under Refused alone, its Error rate a muted dash',
-        ok: row.length === 13 && figure(1) === 0 && figure(2) === 0 && row[8] === '1' && row[9] === '-' && dash?.textContent === '-' && /^\d[\d.]*%$/.test(neighbour ?? ''),
+        ok: row.length === 13 && figure(1) === 0 && figure(2) === 0 && row[8] === '3' && row[9] === '-' && dash?.textContent === '-' && /^\d[\d.]*%$/.test(neighbour ?? ''),
         missing: row.length ? [...row, `dash ${dash?.outerHTML ?? 'not muted'}`, `neighbour ${neighbour}`] : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
       });
     }
@@ -19321,7 +19351,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Client');
     const classes = trafficRows('client').map((row) => row[0]);
-    results.push({ name: '/analytics traffic by client lists the classes', ok: classes.includes('claude-code/cli') && classes.includes('other'), missing: classes });
+    results.push({ name: '/analytics traffic by client lists the classes', ok: classes.includes('claude-code/cli') && classes.includes('claude-code/sdk-cli'), missing: classes });
 
     await groupBy('Request class');
     const requestClasses = trafficRows('request class').map((row) => row[0]);
@@ -19339,11 +19369,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: tokens,
     });
     const listCheck = '/analytics a user agent pattern list names the groups and gathers the rest';
-    await typeGroups(listCheck, 'claude-cli/2.1.*\nphoebis-batch/*');
+    await typeGroups(listCheck, 'claude-cli/2.1.26*\nclaude-cli/2.1.30*');
     const named = trafficRows('user agent').map((row) => row[0]);
     results.push({
       name: listCheck,
-      ok: JSON.stringify([...named].sort()) === JSON.stringify(['claude-cli/2.1.*', 'other', 'phoebis-batch/*']),
+      ok: JSON.stringify([...named].sort()) === JSON.stringify(['claude-cli/2.1.26*', 'claude-cli/2.1.30*', 'other']),
       missing: named,
     });
     const boundCheck = '/analytics the user agent groups hold 32 patterns of 256 characters at most';
@@ -19439,8 +19469,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const byEffort = linksUnder('effort', 'efforts', { high: 'high', max: 'max', none: 'none' });
     results.push({ name: '/analytics a breakdown cell under the effort grouping links with its effort', ok: byEffort.linked.size === 3 && byEffort.wrong.length === 0, missing: [...byEffort.wrong, `rows ${[...byEffort.linked].join(',')}`] });
     await groupBy('Request class');
+    // The story's classless rows are the gate's refusals, which reach no account and count no miss, so a classless row
+    // is read where one counts a miss.
     const byClass = linksUnder('request class', 'request_classes', { main: 'main', unattributed: '-' });
-    results.push({ name: '/analytics a breakdown cell under the request class grouping links with its class, and any classless row that counts a miss as -', ok: byClass.linked.has('main') && byClass.wrong.length === 0, missing: [...byClass.wrong, `rows ${[...byClass.linked].join(',')}`] });
+    results.push({ name: '/analytics a breakdown cell under the request class grouping links with its class, a classless row that counts a miss as -', ok: byClass.linked.has('main') && byClass.wrong.length === 0, missing: [...byClass.wrong, `rows ${[...byClass.linked].join(',')}`] });
     await groupBy('Classifier');
     const byClassifier = linksUnder('classifier', 'classifiers', { client: 'client', none: '-' });
     results.push({ name: '/analytics a breakdown cell under the classifier grouping links with its standing, client as client and the rest as -', ok: byClassifier.linked.size === 2 && byClassifier.wrong.length === 0, missing: [...byClassifier.wrong, `rows ${[...byClassifier.linked].join(',')}`] });
@@ -21917,7 +21949,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   const COLUMNS = ['Key', 'Model', 'Context', 'Account', 'Runway', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
   const HIDDEN = ['Requests', 'Last request', 'Agents', 'Next probe'];
   {
-    // The default set fits the card at 1280 by 800 without these three, each one tick away in the control.
+    // The default set fits the card at 1280 by 800 without these four, each one tick away in the control.
     const button = () => m.container.querySelector('button[aria-label="Columns"]');
     const shown = heads();
     const label = `${button()?.textContent?.trim()}, ${button()?.getAttribute('title')}`;
@@ -22236,14 +22268,12 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     });
   }
 
-  // A forked session's badge links to the row of the session it branched from.
-  // The earlier holder below lie past the hour, so these read with every row shown, through
-  // Expand all.
+  // A forked session's badge links to the row of the session it branched from. The forks lie past the hour, so these
+  // read with every row shown, through Expand all.
   await m.navigate('/sessions?age=none&finished=1');
   {
     const named = heads();
     const sessionAt = named.indexOf('Session');
-    results.push({ name: '/sessions the Session column leads after the gutter and Key follows it', ok: sessionAt === 1 && named.indexOf('Key') === 2, missing: named });
     {
       // Every column is on here, so the fill set is read whole: the gutter keeps its own width and carries neither
       // class, and each row's cell carries its header's class, which is what makes the fill cut and the fit hug.
@@ -22255,8 +22285,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       });
     }
     const listed = await api.listSessions();
-    // The cell's id line, while the whole id rides the cell's
-    // title.
+    // The cell's id line, while the whole id rides the cell's title.
     const cellOf = (r) => ({ label: r.children[sessionAt]?.querySelector('.srow__id')?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
     // A row is its key, its holder and its session id, the three the route keys a session by.
     const sessionOf = (r) => listed.find((s) => s.sessionId === cellOf(r).title && s.keyId === cell(r, 'Key')?.firstChild?.textContent && s.historical === (cell(r, 'Key')?.querySelector('.sub') !== null));

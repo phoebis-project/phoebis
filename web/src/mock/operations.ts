@@ -41,10 +41,9 @@ interface WrittenFigures {
 // use, and their account has been at its daily budget since its last served
 // request. Session 0 reads it so too, since its main still awaits the evidence of
 // its last request, so no probe has renewed the pin since and the row and the line
-// agree.
-// `released` marks a session whose every
-// agent, main included, the mod released. `sessionId` writes out the id of a
-// session past the story's ids whose story row names it.
+// agree. `released` marks a session whose every agent, main included, the mod
+// released. `sessionId` writes out the id of a session past the story's ids whose
+// story row names it.
 const sessionSpec: ({
   accountId: string;
   agents: number;

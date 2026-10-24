@@ -46,16 +46,16 @@ export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 export const DELETED_HOLDER_GENERATION = Date.parse(daysAgo(120));
 const AGENT_IDS = ['main', 'main', 'main', 'a7f3', 'c21e', 'e90b', '4d1a'];
 
-/** One client per key, the way a machine runs one build of Claude Code and a runner runs its own script. */
+/** One client per key, the way a machine runs one build of Claude Code and a runner its job on the Agent SDK. */
 export const USER_AGENTS: Record<string, string> = {
-  ci: 'phoebis-batch/0.9 (external, ci)',
+  ci: 'claude-cli/2.1.302 (external, sdk-cli)',
   desktop: 'claude-cli/2.1.269 (external, cli)',
   laptop: 'claude-cli/2.0.44 (external, cli)',
 };
 
 /** The class the router derives from each of those agents. */
 export const CLIENTS: Record<string, string> = {
-  ci: 'other',
+  ci: 'claude-code/sdk-cli',
   desktop: 'claude-code/cli',
   laptop: 'claude-code/cli',
 };
@@ -868,6 +868,8 @@ interface StorySeed {
   capturedBodies?: boolean;
   /** The client's own auto-mode classifier call, which the class header and the beta mark. */
   classifier?: 'client';
+  /** The label the ledger wrote, where it is not the lane's. */
+  client?: string | null;
   /** The item a contract refusal named. */
   clientContract?: string;
   clientDrift?: string;
@@ -893,8 +895,8 @@ interface StorySeed {
   refused?: true;
   /** The class header as the client sent it, null for a request that sent none. */
   requestClass: string | null;
-  /** The client's session, a prefix of the story's own ids. */
-  session: string;
+  /** The client's session, a prefix of the story's own ids, null for a request that sent none. */
+  session: string | null;
   status?: number;
   /** The tier the answer ran on, where it is not the standard one. */
   tier?: 'priority';
@@ -905,10 +907,11 @@ interface StorySeed {
 /**
  * The routing log's hand-written requests: the story hour, the morning's shedding round and its move, nightly's
  * Fable-week round, the least-bad move onto nightly and the wait for its head, the hold for nightly's reset,
- * studio's slowed sessions in work with the round their stretch fires, and the client's two classifier calls.
+ * studio's slowed sessions in work with the round their stretch fires, and the client's two classifier calls. The
+ * gate's two refusals on ci sit among them with no decision, since the gate writes none.
  */
 export const STORY_IDS = new Set([
-  'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2b9e4c7f-d36', 'req_2c7d9f15-b63', 'req_2e7c90a1-6d4',
+  'req_0b7c2d94-e61', 'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2b9e4c7f-d36', 'req_2c7d9f15-b63', 'req_2d8e5b13-f40', 'req_2e7c90a1-6d4',
   'req_2f9a6c4e-d84', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9', 'req_3d7b9e2f-a41', 'req_3e2b9d47-c18', 'req_3e7a5c19-f84',
   'req_4a9c3e7b-a27', 'req_4b0e9d17-c31',
   'req_4d9a1e6b-c20',
@@ -917,7 +920,7 @@ export const STORY_IDS = new Set([
   'req_5e3c8a41-d27',
   'req_63a8d2f5-b17',
   'req_69e30548-32e', 'req_6b3e8d1a-c73', 'req_6c3a9e27-5b1', 'req_6e1f3b98-a24', 'req_7a2d4c18-e95', 'req_7a3f0c26-d81',
-  'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8c41f2d7-a93', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9d4c1a73-e58',
+  'req_7e4f1a9c-f16', 'req_868264bc-611', 'req_8c41f2d7-a93', 'req_8d4b7f2c-f58', 'req_8e1c4a6d-b52', 'req_9a07c4e1-d55', 'req_9b4f1c62-a07', 'req_9d4c1a73-e58',
   'req_9f2e7c5a-c49', 'req_a1f04c2e-7b3', 'req_a3d8f1b6-c25', 'req_a6c19e73-5d2', 'req_b1e7c4a9-a69', 'req_b2bed817-a58',
   'req_b72e9d05-c14', 'req_b8c3e9d4-e61', 'req_c41d0311-200', 'req_c5d8e2b7-e95', 'req_c90d3f61-a28', 'req_d2a8f6c1-d50',
   'req_d4e8a7b2-916', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_e1b6d4f8-b38', 'req_e2c7a4f9-d13', 'req_e5a1c093-4d7',
@@ -953,7 +956,7 @@ const IDLE_NOTEBOOK_SESSION_ID = '2d8b5f1a-7c4e-4e92-b6a3-8f0d1c9e5a47';
 const IDLE_NOTEBOOK_REQUEST_ID = 'req_3c8e1f7a-b29';
 /** The desktop session the 5-hour 429 on secondary fails over to primary. */
 const FAILED_OVER_SESSION_ID = 'd6f1a3c8-2e94-4b07-8a5d-3c9e7f2b1a64';
-/** The session a laptop client sent. */
+/** The laptop session of the relay's 502 and the client's retry of that turn. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
 export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
@@ -973,7 +976,7 @@ function storyRow(seed: StorySeed): RequestLog {
   const answered = last?.status === 200;
   const usage: Usage = { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS, ...(answered ? seed.usage : {}) };
   const fast = fastTurn(seed.keyId, seed.model, seed.kind ?? 'inference');
-  const sessionId = sessionOf(seed.session);
+  const sessionId = seed.session === null ? null : sessionOf(seed.session);
   const kind = seed.kind ?? 'inference';
   // A canceled seed was cut by the router's own stop or the client's leaving, so its attempts end canceled with no stop
   // reason.
@@ -1033,7 +1036,7 @@ function storyRow(seed: StorySeed): RequestLog {
     canonicalModel: seed.canonical ?? seed.model,
     capturedBodies: seed.capturedBodies ?? seed.keyId === 'laptop',
     classifier: seed.classifier ?? null,
-    client: CLIENTS[seed.keyId] ?? null,
+    client: seed.client === undefined ? (CLIENTS[seed.keyId] ?? null) : seed.client,
     clientContract: seed.clientContract ?? null,
     clientDrift: seed.clientDrift ?? null,
     compaction: null,
@@ -1081,6 +1084,9 @@ function storyRequests(): RequestLog[] {
   const rateLimited = (until: number) => ({ reason: '429 on 5h window', until });
   // A 429 whose head rejects no plan window cools its account for the retry-after alone.
   const retryAfter = (answeredAt: number) => ({ reason: '429, retry after 20 s', until: answeredAt + 20_000 });
+  // The job's earlier runner, a raw Messages client the gate refuses before reading its body: the row carries
+  // the code, the user agent and the label, no model and no session, as the relay lands one.
+  const BATCH_AGENT = 'phoebis-batch/0.9 (external, ci)';
   const seeds: StorySeed[] = [
     // An answer the upstream ran on its priority tier.
     { agentId: 'main', at: t(14, 27, 28), attempts: [{ accountId: 'primary', at: t(14, 27, 28), ms: 6_400, status: 200 }], id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', tier: 'priority', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } },
@@ -1132,6 +1138,8 @@ function storyRequests(): RequestLog[] {
     // A compacted conversation renews its pin cold and writes its prefix afresh.
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
+    { agentId: 'main', at: t(14, 15, 48), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_9b4f1c62-a07', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
+    { agentId: 'main', at: t(14, 15, 12), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_2d8e5b13-f40', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     // The same client's next request carried no class header, so the contract refused it before any account was chosen.
     { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
@@ -1853,16 +1861,15 @@ function traceRequests() {
 }
 
 /**
- * One Claude Code session's first request branched from another seeded session.
+ * The fork facts the ladder records on each drawn request: none, but on the first turns of three seeded sessions, each
+ * branched from another session the story seeds.
  */
 function identifyRequests() {
-  for (const r of REQUESTS) {
-    if (STORY_IDS.has(r.id)) continue;
-    Object.assign(r, { forkDepth: null, forkedFrom: null });
-  }
+  for (const r of REQUESTS) if (!STORY_IDS.has(r.id)) Object.assign(r, { forkDepth: null, forkedFrom: null });
   // A session's oldest row is its first request, and the rows run newest first, so the last one set per session
   // stays. A fork is a turn the log lists, never a probe, and its base another session the story seeds. Both forks
   // are pinned by identity, so neither moves with the load instant and the two never land on one row.
+  // An unattended job's rows open no fork, since a fork is a turn an interactive session made.
   const oldest = new Map<string, RequestLog>();
   for (const r of REQUESTS) if (r.sessionId !== null && r.keyId !== 'ci' && !STORY_IDS.has(r.id)) oldest.set(r.sessionId, r);
   const turnOf = (sessionId: string) => {

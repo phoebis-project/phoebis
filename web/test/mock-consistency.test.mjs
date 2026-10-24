@@ -37,10 +37,11 @@ const lastUseOf = (r) => Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((x
 const pinnedRecipesOf = (s, recipes) => recipes.filter((r) => r.agentState !== 'released' || s.now - lastUseOf(r) <= affinityOf(s, r));
 
 /**
- * The story's refusals, each seed flagged as the ledger's landing would flag it: the runner's send on ci after its key's
- * revocation, the three guardrail blocks on desktop, and the contract and the drift refusals on laptop.
+ * The story's refusals, each seed flagged as the ledger's landing would flag it: the earlier runner's two sends on ci
+ * the gate refused, the runner's send on ci after its key's revocation, the three guardrail blocks on desktop, and the
+ * contract and the drift refusals on laptop.
  */
-const REFUSED_IDS = ['req_0c4e7a91-b5d', 'req_5d1b8e2f-c64', 'req_6c3a9e27-5b1', 'req_a8f3c6d0-e17', 'req_e0a4c6f2-118', 'req_f1c8e3a5-29d'];
+const REFUSED_IDS = ['req_0c4e7a91-b5d', 'req_2d8e5b13-f40', 'req_5d1b8e2f-c64', 'req_6c3a9e27-5b1', 'req_9b4f1c62-a07', 'req_a8f3c6d0-e17', 'req_e0a4c6f2-118', 'req_f1c8e3a5-29d'];
 
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
 const RETIRED = ['business', 'codex', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
@@ -745,6 +746,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const item = s.attention.find((i) => i.kind === 'pool_exhausted' && i.subject.id === ci.poolId);
     assert.ok(first !== undefined && item !== undefined, `the ${ci.poolId} pool holds an exhausted answer after its last success and an exhaustion item`);
     assert.deepEqual([item.since, item.detail.key], [iso(Date.parse(first.at) + (first.durationMs ?? 0)), first.keyId], `the ${ci.poolId} pool's exhaustion`);
+  });
+
+  test(`the ci key's job sends as the Agent SDK with a class on every row, and its earlier runner's sends are the gate's refusals, at ${at}`, async () => {
+    const s = await story;
+    const rows = s.requests.filter((r) => r.keyId === 'ci');
+    const refused = rows.filter((r) => r.errorCode === 'client_not_allowed');
+    assert.equal(refused.length, 2, 'the earlier runner sent twice');
+    for (const r of refused) {
+      const read = [r.status, r.refused, r.outcome, r.client, r.userAgent, r.sessionId, r.requestClass, r.model, r.attempts.length, r.costUsd];
+      assert.deepEqual(read, [403, true, 'rejected', 'other', 'phoebis-batch/0.9 (external, ci)', null, null, '', 0, 0], r.id);
+    }
+    const job = rows.filter((r) => r.errorCode !== 'client_not_allowed');
+    assert.ok(job.length > 0, 'the job has requests');
+    for (const r of job) {
+      const read = [r.client, r.userAgent, r.sessionId !== null, r.requestClass !== null];
+      assert.deepEqual(read, ['claude-code/sdk-cli', 'claude-cli/2.1.302 (external, sdk-cli)', true, true], `${r.id} under class ${r.requestClass}`);
+    }
   });
 
   test(`the runner's sessions on ci read their last use off their own newest request, at ${at}`, async () => {
@@ -1530,6 +1548,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     let seen = 0;
     for (const r of await decisionsOf(s)) {
       if (r.pin?.found !== 'live') continue;
+      const session = r.request.sessionId;
+      for (const [name, at] of [['refresh', r.pin.lastRefreshAt], ['last use', r.pin.lastUsedAt]]) {
+        assert.ok(written(session, at), `${r.requestId}/${r.seq}: the pin's ${name} at ${at} has no request of session ${session} at it`);
+      }
       seen += 1;
     }
     assert.ok(seen > 0, 'the story reads a live pin');
@@ -2371,6 +2393,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const cause = { reason: 'rate_limit', scope: 'account', window: 'five_hour' };
     const landing = record('req_b8c3e9d4-e61', 2);
     assert.deepEqual([landing.request.poolId, landing.outcome.kind, landing.outcome.fromAccountId, landing.outcome.cause], ['all', 'placed', 'secondary', { cause: null, ...cause, state: null }]);
+    const failover = log.find((x) => x.type === 'event' && x.kind === 'pin_migrated' && x.sessionId === landing.request.sessionId && x.at === landing.request.at);
+    assert.deepEqual([failover?.detail.reason, failover?.detail.cause], ['cooldown', cause], 'the event carries the cause the landing names');
 
     // Every read of studio's entry is a pinned selection's, its stretch the time to the reset less the time the demand
     // takes from the utilization to the ceiling, and its factor one less the stretch over the time to the reset.
@@ -3099,7 +3123,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         map[code] = (map[code] ?? 0) + n;
       }
     }
-    assert.deepEqual(byKey, { ci: { auth_unknown: 1 }, desktop: { guardrail_blocked: 3 }, laptop: { client_contract: 1, client_drift: 1 } });
+    assert.deepEqual(byKey, { ci: { auth_unknown: 1, client_not_allowed: 2 }, desktop: { guardrail_blocked: 3 }, laptop: { client_contract: 1, client_drift: 1 } });
     // Folded from the story's rows and from its asked rows alone, the request counts agree member by member.
     const countsOf = (rollups) => {
       const out = {};
@@ -3126,7 +3150,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const map = (want[live.get(r.keyId) === r.keyGeneration ? r.keyId : `${r.keyId}@${r.keyGeneration}`] ??= {});
       map[r.errorCode] = (map[r.errorCode] ?? 0) + 1;
     }
-    assert.deepEqual(want, { ci: { auth_unknown: 1 }, desktop: { guardrail_blocked: 3 }, laptop: { client_contract: 1, client_drift: 1 } }, "the day's refused rows by key");
+    assert.deepEqual(want, { ci: { auth_unknown: 1, client_not_allowed: 2 }, desktop: { guardrail_blocked: 3 }, laptop: { client_contract: 1, client_drift: 1 } }, "the day's refused rows by key");
     for (const g of groups) {
       const map = want[g.key] ?? {};
       assert.deepEqual([g.refused, { ...g.refusals }], [sum(Object.values(map), (n) => n), map], `${g.key}'s Refused and its map read its refused rows`);

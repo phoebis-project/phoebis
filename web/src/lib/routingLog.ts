@@ -2204,6 +2204,7 @@ export function requestRows(record: DecisionRecord, row: DecisionSummary): CardR
     { chips: [plain(fmtTime(r.at))], label: 'At' },
     { chips: [{ entity: { id: r.keyId, kind: 'key' }, mono: true, value: r.keyId }], label: 'Key' },
     { chips: [{ entity: { id: r.poolId, kind: 'pool' }, value: r.poolId }], label: 'Pool' },
+    { chips: [r.sessionId === null ? plain('none') : sessionChip(r.sessionId)], label: 'Session' },
     { chips: [plain(r.agentId)], label: 'Agent' },
     { chips: [plain(r.requestClass ?? words(r.clientClass))], label: 'Class' },
     { chips: [modelChip(r.canonicalModel)], label: 'Model resolved' },

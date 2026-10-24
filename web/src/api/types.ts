@@ -1109,6 +1109,8 @@ export interface RecordRequest {
   requestClass: string | null;
   requestId: string;
   seq: number;
+  /** Null on a refusal of a request that sent no session header. */
+  sessionId: string | null;
 }
 
 /** Step 1's reading of the pin, its row's fields null when none was found. */
@@ -1148,8 +1150,8 @@ export interface RecordPin {
 
 /**
  * The twenty-five values that entered the decision, each named as the pool row names the field it was read from. A
- * version 1 record read the cap, the average and the dwell under their old names and carried neither the
- * switch nor the ceiling. The slow-down's three and the return-to-plan's two read null on a record from before them.
+ * version 1 record read the cap, the average and the dwell under their old names and carried neither the switch nor
+ * the ceiling. The slow-down's three and the return-to-plan's two read null on a record from before them.
  */
 export interface RecordSettings {
   affinityMode: string;

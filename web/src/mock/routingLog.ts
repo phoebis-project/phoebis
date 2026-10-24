@@ -1397,7 +1397,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       flags: { contextCompacted: r.contextCompacted !== null, count: r.kind === 'count_tokens', fast, marker: r.kind === 'inference' && spec.pin !== 'pinning_off', portable, probe: r.kind === 'probe' },
       holds: spec.holds ?? [],
       keyGeneration: r.keyGeneration, keyId: r.keyId ?? '', lane: { effort: r.shape.effort ?? '-', speed: fast ? 'fast' : 'standard', thinking: r.shape.thinkingType ?? 'none' }, parentAgentId: r.agentId === 'main' ? null : 'main', poolId: r.poolId ?? '',
-      registryRevision: 412, requestClass: r.requestClass, requestId: r.id, seq: spec.seq,
+      registryRevision: 412, requestClass: r.requestClass, requestId: r.id, seq: spec.seq, sessionId: r.sessionId,
     },
     requestId: r.id,
     seq: spec.seq,
@@ -2215,6 +2215,7 @@ function roundEvent(decision: string, pins: RoundPin[]): EventSeed | null {
     model: record.request.canonicalModel,
     poolId: record.request.poolId,
     requestId: record.requestId,
+    sessionId: record.request.sessionId,
   };
 }
 
@@ -2224,7 +2225,7 @@ function markCleared(): EventSeed[] {
     const m = record.outcome.markCleared;
     if (m === null) return [];
     const detail = { agent_id: record.request.agentId, marked_at: Date.parse(m.markedAt), marked_on: m.markedOn, marked_window: m.markedWindow, projection: m.projection, reason: m.reason };
-    return [{ accountId: m.markedOn, agentId: record.request.agentId, at: record.request.at, detail, keyId: record.request.keyId, kind: 'mark_cleared', model: record.request.canonicalModel }];
+    return [{ accountId: m.markedOn, agentId: record.request.agentId, at: record.request.at, detail, keyId: record.request.keyId, kind: 'mark_cleared', model: record.request.canonicalModel, sessionId: record.request.sessionId }];
   });
 }
 

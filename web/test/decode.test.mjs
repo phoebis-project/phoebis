@@ -1524,11 +1524,12 @@ test('a request decodes the holds it waited through, whether or not an attempt f
   assert.equal(d.decodeRequest({ ...wire, held: null }).held, null, 'a request never held');
 });
 
-test('a request decodes its fork', () => {
+test('a request decodes its fork beside its session and no identity members', () => {
   const wire = fixture('request').request;
   const detail = d.decodeRequest(wire);
   assert.deepEqual([detail.forkedFrom, detail.forkDepth], [wire.forked_from, wire.fork_depth]);
   assert.deepEqual([detail.sessionId, detail.forkedFrom, detail.forkDepth], ['s1', 's0', 2], 'the captured session branched from another at depth 2');
+  for (const member of ['identifiedBy', 'identityDepth', 'identityRoot', 'routingSessionId']) assert.equal(member in detail, false, `the row carries no ${member}`);
   const plain = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-failed');
   assert.deepEqual([plain.forkedFrom, plain.forkDepth], [null, null], 'a request that branched from no other reads no fork');
 });
@@ -1592,7 +1593,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual([r.version, r.requestId, r.seq], [3, 'r-static', 1]);
   assert.equal(r.raw, body, 'the record keeps the route answer whole for the card to copy');
   assert.ok(isIso(r.request.at));
-  assert.deepEqual([r.request.keyId, r.request.poolId, r.request.canonicalModel], ['desktop', 'main', 'claude-sonnet-5']);
+  assert.deepEqual([r.request.keyId, r.request.poolId, r.request.sessionId, r.request.canonicalModel], ['desktop', 'main', 's-static', 'claude-sonnet-5']);
   assert.deepEqual(r.request.lane, { effort: '-', speed: 'standard', thinking: 'none' });
   assert.equal(r.request.flags.marker, true);
   assert.deepEqual(r.request.chain, { boundaries: 0, staticBoundaries: 1, staticHash: false });
@@ -2298,14 +2299,9 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
 });
 
 test('a session decodes its fork', () => {
-  const rows = fixture('sessions').sessions;
-  const sessions = rows.map(d.decodeSession);
+  const sessions = fixture('sessions').sessions.map(d.decodeSession);
   const by = (id) => sessions.find((s) => s.sessionId === id);
-  assert.deepEqual(
-    [by('s1').forkedFrom, by('s1').forkDepth],
-    ['s0', 2],
-    'a session that branched from another names its base and the depth where the two part',
-  );
+  assert.deepEqual([by('s1').forkedFrom, by('s1').forkDepth], ['s0', 2], 'a session that branched from another names its base and the depth where the two part');
   assert.deepEqual([by('s2').forkedFrom, by('s2').forkDepth], [null, null], 'a session that continued no other reads no fork');
   assert.deepEqual([by('s-fixture').forkedFrom, by('s-fixture').forkDepth], [null, null], 'a session the ledger holds no request for reads no fork');
 });

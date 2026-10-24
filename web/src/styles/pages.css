@@ -2208,8 +2208,8 @@
   min-width: 114px;
 }
 
-/* A sub that wrapped would set the height of its whole row, and a log a third taller costs more
-   than the room a one-line sub takes. */
+/* A sub that wrapped would set the height of its whole row, and a log a third taller costs more than the room a
+   one-line sub takes. */
 .requests__table .sub {
   white-space: nowrap;
 }

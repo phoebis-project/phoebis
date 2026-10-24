@@ -299,6 +299,11 @@ export const shortId = (id: string, n = 8) => (id.length > n ? `${id.slice(0, n)
 /** The characters a session or conversation id shows where the whole id does not fit a label. */
 export const SESSION_CHARS = 13;
 
+/** `fork of 1a2b3c4d-5e6f… at 3`, the base cut at the session id's width, without the depth where none is known. */
+export function forkLabel(from: string, depth: number | null): string {
+  return `fork of ${shortId(from, SESSION_CHARS)}${depth === null ? '' : ` at ${depth}`}`;
+}
+
 /**
  * A placement's verdict against the response's cache read, the rule the placements route counts hits by: a
  * `content` placement wants the whole prefix it was promised, the others any read at all. Null without a read.

@@ -675,10 +675,10 @@ function decodeRecordOutcome(v: unknown): RecordOutcome {
 }
 
 /**
- * The settings by the record's version: version 2 names the switch, the ceiling, the cap, the average and the dwell, and
- * version 1 the three old names of the last three with its three removed settings, which `legacy` keeps so an old
- * record still shows what it read. The slow-down's three and the return-to-plan's two read null on a record written
- * before them, so the card draws them as not recorded.
+ * The settings by the record's version: a record names the switch, the ceiling, the cap, the average and the dwell, and
+ * a version 1 record the three old names of the last three with its three removed settings, which `legacy` keeps so an
+ * old record still shows what it read. The slow-down's three and the return-to-plan's two read null on a record
+ * written before them, so the card draws them as not recorded.
  */
 function decodeRecordSettings(x: Rec, version: number): RecordSettings {
   const shared = {
@@ -724,6 +724,7 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
       keyGeneration: num(q.key_generation), keyId: str(q.key_id), lane: { effort: str(lane.effort), speed: str(lane.speed), thinking: str(lane.thinking) }, parentAgentId: strOrNull(q.parent_agent_id), poolId: str(q.pool_id),
       registryRevision: num(q.registry_revision), requestClass: strOrNull(q.request_class), requestId: str(q.request_id),
       seq: num(q.seq, 1),
+      sessionId: strOrNull(q.session_id),
     },
     requestId: str(r.request_id),
     seq: num(r.seq, 1),

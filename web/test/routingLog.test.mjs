@@ -585,7 +585,7 @@ const record = (o = {}) => ({
     agentId: 'main', at: iso(ms(14, 27, 28)), attempt: 1, attempted: [], canonicalModel: 'claude-sonnet-5-5', chain: { boundaries: 6, staticBoundaries: 2, staticHash: true }, clientClass: 'claude_code',
     flags: { contextCompacted: false, count: false, fast: false, marker: true, portable: true, probe: false }, holds: [], keyGeneration: 1,
     keyId: 'desktop', lane: { effort: 'high', speed: 'standard', thinking: 'enabled' }, parentAgentId: null, poolId: 'all', registryRevision: 412, requestClass: 'main', requestId: 'req_f8085653-422',
-    seq: 1, ...o.request,
+    seq: 1, sessionId: '7bea4514-0000-4000-8000-000000000000', ...o.request,
   },
   requestId: 'req_f8085653-422',
   seq: 1,
@@ -1409,6 +1409,8 @@ test('the settings fold lists twenty-four rows, draws the five as not recorded o
   assert.deepEqual(legacy.slice(8, 10), [['Window ceiling', ['not recorded']], ['Load shedding', ['not recorded']]]);
   assert.deepEqual(legacy.slice(-3), [['Shed above (then)', ['90%']], ['Select below (then)', ['off']], ['Pace floor (then)', ['5%']]]);
   assert.equal(rows(SETTINGS).length, 24);
+  const refused = record({ outcome: { accountId: null, kind: 'refused', refusal: { code: 'contract', kind: 'client', reason: 'the request has no session header' }, strategy: '' } });
+  assert.equal(d.settingsRows(refused), null, 'a refusal entered no setting, so it lists none');
   assert.equal(Object.keys(d.OBSTACLE_HINT).length, 14);
   assert.equal(d.OBSTACLE_HINT.budget_unknown, 'its spend unknown while the ledger is degraded');
 });

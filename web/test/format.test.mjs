@@ -5,7 +5,14 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+
+test("a fork reads its base cut at the session's width and the depth where one is known", () => {
+  const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
+  assert.equal(forkLabel(base, 3), 'fork of 1a2b3c4d-5e6f… at 3', 'a base shortens as the Sessions page shortens a session id');
+  assert.equal(forkLabel('s-1', 3), 'fork of s-1 at 3', 'a short base reads whole');
+  assert.equal(forkLabel('s-1', null), 'fork of s-1', 'a fork without a depth names its base alone');
+});
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };

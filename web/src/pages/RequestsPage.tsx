@@ -24,7 +24,7 @@ import { clock } from '@/lib/clock';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION } from '@/lib/dimensions';
 import { notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, FOLLOW_OVERRUN, type Paging, pagingFor, pollQuery, readEnd, spanEnded } from '@/lib/follow';
-import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
+import { bytesDropped, earlierHolderLabel, fmtAbsolute, fmtCompact, fmtDatedTime, fmtEquivalent, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, forkLabel, shareLabel, shortAgent, shortId, shortModel, tokensTotal, withEstimate } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt } from '@/lib/hooks';
 import { planLabel } from '@/lib/quota';
@@ -115,7 +115,6 @@ const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
   rejected: 'rejected',
   succeeded: 'succeeded',
 };
-
 
 /**
  * The router's ids run to 44 characters, which would wrap the drawer head to a second line beside its two actions at
@@ -710,6 +709,11 @@ function RequestDrawer({ guardrails, request, requestId, now, onClose, rows, set
                           {' '}
                           <Badge title="The request class the client sent">{r.requestClass}</Badge>
                         </>
+                      )}
+                      {r.forkedFrom !== null && (
+                        <div className="mono secondary" title={`fork of ${r.forkedFrom}`}>
+                          {forkLabel(r.forkedFrom, r.forkDepth)}
+                        </div>
                       )}
                     </>
                   ),
