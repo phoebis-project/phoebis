@@ -245,11 +245,15 @@ The Keys view, the key dialog and the secret dialog are described on [Keys](cons
 ## Clients
 
 Every request carries a class, read off its user agent: `claude-code/<entrypoint>` for a `claude-cli/` caller (the
-entrypoint token it names, `cli` when it names none)
-and `other` for anything else.
-A Claude Code request
-without the headers and the body members the router reads is refused `400` `client_contract` before any account is
-chosen, the client page naming them ([The required set](client.md#the-required-set)).
+entrypoint token it names, `cli` when it names none) and `other` for anything else. The router admits Claude Code alone:
+a request on `/v1/messages` or `/v1/messages/count_tokens` whose class is `other` is refused `403` `permission_error`
+`client_not_allowed` with the message `the router admits Claude Code clients only` before its body is read, under every
+key ([Refusal codes](client.md#refusal-codes)), and the answer carries `x-should-retry: false`. The class is the
+client's own claim, read off a user agent the client sends, so the gate is a routing rule and not authentication: the
+contract behind it holds every admitted request to what Claude Code sends. A Claude Code request whose `claude-cli/`
+version is not spelled as the client spells one, or that lacks the headers and the body members the router reads, is
+refused `400` `client_contract` before any account is chosen, the client page naming them ([The required
+set](client.md#the-required-set)).
 
 With the pool's `auto_mode_server` on, or a key's override on, the upstream reviews a Claude Code session's tool uses on
 the model's own turn. Off, the client reviews them with classifier requests of its own, which the router routes as
@@ -379,9 +383,8 @@ with no share of the router's own. Ties are random. `priority` and `round_robin`
 seat is a paid source beside the API-key accounts: it sorts in their group with the flag on, and `pace` scores it as an
 API-key account, untouched since it reads no bucket.
 
-
 A non-portable request, one whose body references a `file_id`, a `container` or a server-tool result, is answered by its
-live pin's account or not at all. With affinity off or no live pin, it runs the normal selection instead, and the
+live pin's account or not at all. With affinity off or an expired pin, it runs the normal selection instead, and the
 account-scoped reference it carries may then not resolve.
 
 Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's

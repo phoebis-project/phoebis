@@ -564,20 +564,19 @@ button under "Copy the secret now. The router stores only a hash, so it cannot b
 `CLAUDE_CODE_OAUTH_TOKEN` on the client. The Settings page has the full snippet.", and closes on "Done".
 
 The key dialog, "Create key" or `Edit {name}`, is grouped like the pool dialog, with the rail "Key settings" and the
-groups Key (Name, Pool, Notes), Access (Enabled on an existing key, Expiry,
-and Server-side auto mode with Inherit, On or Off), Models (Model rules, with Pool rules as Extend pool rules or
-Replace pool rules, and List [1m] twins in the models listing), Guardrails (the pool's guardrails first in gray, each
-marked "inherited", then the key's own in their order with move up, move down, remove and "Attach guardrail", a box
-over every guardrail of the registry the pool does not attach with the key's own ones checked, which stays open while
-the operator picks: a check adds its guardrail to the end of the list at once and an uncheck removes it, "Select all"
-adds every guardrail the box lists and its uncheck removes them all, and Escape or a click outside closes the box, the
-save writing the list as it stands, the control disabled with "No other guardrail is left to attach" on hover while
-the registry holds nothing beyond the pool's, under the hint "The pool's guardrails run first and cannot be dropped
-here. This key's own run after them." and the link "Manage guardrails", reading "Guardrails can be attached once the
-key is saved." on create), Sessions (Cache warming opt-out) and Capture (Capture request and response bodies as Inherit
-from pool, an override in hours or off for this key). Server-side auto mode, Pool rules and List [1m] twins show in the
-expert view. While the key captures, the Capture group warns what the bodies hold, the warning [Keys](routing.md#keys)
-quotes.
+groups Key (Name, Pool, Notes), Access (Enabled on an existing key, Expiry, and Server-side auto mode with Inherit, On
+or Off), Models (Model rules, with Pool rules as Extend pool rules or Replace pool rules, and List [1m] twins in the
+models listing), Guardrails (the pool's guardrails first in gray, each marked "inherited", then the key's own in their
+order with move up, move down, remove and "Attach guardrail", a box over every guardrail of the registry the pool does
+not attach with the key's own ones checked, which stays open while the operator picks: a check adds its guardrail to the
+end of the list at once and an uncheck removes it, "Select all" adds every guardrail the box lists and its uncheck
+removes them all, and Escape or a click outside closes the box, the save writing the list as it stands, the control
+disabled with "No other guardrail is left to attach" on hover while the registry holds nothing beyond the pool's, under
+the hint "The pool's guardrails run first and cannot be dropped here. This key's own run after them." and the link
+"Manage guardrails", reading "Guardrails can be attached once the key is saved." on create), Sessions (Cache warming
+opt-out) and Capture (Capture request and response bodies as Inherit from pool, an override in hours or off for this
+key). Server-side auto mode, Pool rules and List [1m] twins show in the expert view. While the key captures, the Capture
+group warns what the bodies hold, the warning [Keys](routing.md#keys) quotes.
 
 A saved key's dialog shows its Effective list under the Models group: the list the key is judged by, top to bottom, with
 the level each entry comes from and, where accounts cool for a model the entry names, a cooling count whose hover names
@@ -677,43 +676,43 @@ filter keeps the requests whose serving attempt ran on the account, so a request
 account that answered it. Every filter, the range and the page size live in the page's address, so a reload or a shared
 link keeps them.
 
-The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status,
-Attempts, TTFB, Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns
-them on, and shows Time, Model, Status and Attempts alone while the drawer is open. Every column but Time is as wide as
-its widest value, and Time takes the card's free width: the request id under the time is cut by the room with an
-ellipsis, whole on hover, and reads whole where the card holds it, on a wide screen or beside the drawer. Time keeps
-room for the widest time the clock draws, so a time never cuts, and under the 12-hour clock, whose times run wider, the
-default columns can run past the card at 1280 px and scroll inside it, as any set of columns wider than the card does. A
-row older than a day prints its date before the time, so a 7-day or 30-day range reads without the hover. The model
-column reads the family and version with the whole id on hover, and a dash for a request the router refused before it
-resolved a model. The client column reads the class the router derived from the user agent (`claude-code/<entrypoint>`
-or `other`), whole on hover, with the agent type beneath it on a subagent's turn.
-Status reads the code with the outcome word beside it where the
-request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One row is one client request
-however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, nothing for a
-request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
-account was at its cap, for a reset, for the slow-down or for the rewrite in flight, whose hover names each wait with
-its reason in the row's order and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`
-or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits span two, `waited
-for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads `waited 1 s on
-{account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover naming what
-each kind of request reads under the position. Under Native a request a subscription window paid reads its 20x 5-hour
-equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the model week among them,
-and the dollar equivalent on hover. Under Window shares it reads its account's own window shares, each with its window's
-short word (`0.12% 7-day Fable` over `0.42% 5h`, the full labels on hover), under All in dollars and Dollar equivalent
-its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under Billed dollars a dash with the
-hover "Nothing billed: a subscription request". An API-key, fast mode, overage or usage-based request reads dollars
-under every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no subscription
-equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted
-model", and a dash carries no mark. A client classifier call on a subscription account reads `0%` under Native and
-Window shares, its 20x equivalents and its window shares zero, with the hover "Free on the plan: a client classifier
-call takes no window share" ahead of the estimate, its dollar equivalent over `equivalent` under All in dollars and
-Dollar equivalent with the same hover ahead of its zero 20x equivalents, and a dash under Billed dollars, while on an
-overage or API-key account it reads its dollars as any billed request does. The table pages by "Rows" (10, 25, 50 or
-100, 25 by default) with First, Previous and Next, holds the requests up to the moment you opened it so paging does not
-shift, and the split Refresh button's body brings it up to now. An empty table reads "No requests match" with "Widen the
-range or clear a filter." and "Reset filters", which clears the filters, the search and the range. What each figure
-means is on [Statistics](statistics.md).
+The table offers thirteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status, Attempts, TTFB,
+Tokens and Cost, with Kind, Pool and Transport hidden until the Columns control turns them on, and shows Time, Model,
+Status and Attempts alone while the drawer is open. Every column but Time is as wide as its widest value, and Time takes
+the card's free width: the request id under the time is cut by the room with an ellipsis, whole on hover, and reads
+whole where the card holds it, on a wide screen or beside the drawer. Time keeps room for the widest time the clock
+draws, so a time never cuts, and under the 12-hour clock, whose times run wider, the default columns can run past the
+card at 1280 px and scroll inside it, as any set of columns wider than the card does. A row older than a day prints its
+date before the time, so a 7-day or 30-day range reads without the hover. The model column reads the family and version
+with the whole id on hover, and a dash for a request the router refused before it resolved a model. The client column
+reads the class the router derived from the user agent (`claude-code/<entrypoint>` or `other`), whole on hover, with the
+agent type beneath it on a subagent's turn. The drawer's Client row names a session that branched from another
+conversation, `fork of {base} at 3`, with the base's whole id on hover. Status reads the code with the outcome word
+beside it where the request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One row is
+one client request however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on
+hover, nothing for a request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a
+slot while every account was at its cap, for a reset, for the slow-down or for the rewrite in flight, whose hover names
+each wait with its reason in the row's order and the account it waited on, `waited for the slow-down 42 s, for a slot 3
+s on {account}` or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits
+span two, `waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads
+`waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover
+naming what each kind of request reads under the position. Under Native a request a subscription window paid reads its
+20x 5-hour equivalent over its 20x 7-day one (`1.47% 20x 5h` over `0.244% 20x 7d`), with every window, the model week
+among them, and the dollar equivalent on hover. Under Window shares it reads its account's own window shares, each with
+its window's short word (`0.12% 7-day Fable` over `0.42% 5h`, the full labels on hover), under All in dollars and Dollar
+equivalent its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under Billed dollars a dash
+with the hover "Nothing billed: a subscription request". An API-key, fast mode, overage or usage-based request reads
+dollars under every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no
+subscription equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's
+latest weighted model", and a dash carries no mark. A client classifier call on a subscription account reads `0%` under
+Native and Window shares, its 20x equivalents and its window shares zero, with the hover "Free on the plan: a client
+classifier call takes no window share" ahead of the estimate, its dollar equivalent over `equivalent` under All in
+dollars and Dollar equivalent with the same hover ahead of its zero 20x equivalents, and a dash under Billed dollars,
+while on an overage or API-key account it reads its dollars as any billed request does. The table pages by "Rows" (10,
+25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the moment you opened it so paging
+does not shift, and the split Refresh button's body brings it up to now. An empty table reads "No requests match" with
+"Widen the range or clear a filter." and "Reset filters", which clears the filters, the search and the range. What each
+figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
@@ -753,9 +752,9 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   when the request arrived (`Priced at the API prices of {date} and the cost model of {date}`). A client classifier
   call's row reads its zero figures under Native and Window shares and its dollar equivalent under All in dollars and
   Dollar equivalent, with the hover "Free on the plan: a client classifier call takes no window share".
-- Request: Session, Agent, Client with the request class badge, User agent (such as
-  `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row per attempt with the upstream's
-  request id and, on the answer that served, its message id.
+- Request: Session, Agent, Client with the request class badge and the fork line where the session branched from another
+  conversation, User agent (such as `claude-cli/2.1.269 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row
+  per attempt with the upstream's request id and, on the answer that served, its message id.
 - Request shape: Effort (the level the upstream applies), Thinking, Max tokens, "Tools, system blocks, messages",
   Context edits, Temperature, "Speed, service tier", Auto mode and Classifier (`client` for the client's own auto-mode
   classifier call, `none` otherwise), "not sent" where absent.
@@ -976,31 +975,29 @@ row's menu is open. The probes and the recipe are explained on [Keepalive](keepa
 mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
 
 The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
-all" or "Collapse all". The Session column is always drawn, and the twelve others, which the bar's Columns control
-shows or hides, are Key, Model, Context, Account, Runway, Last used, Requests, Last request, Agents,
-Companion, Cache warming and Next probe, with Agents, Last request, Next probe and Requests hidden by
-default. Requests counts the session's requests, the ones the router refused before any account was asked left out, and
-"View in requests" lists those with the rest, so a session whose every request was refused still opens its analytics and
-its request log. Session takes the card's free width and keeps at least 74 px,
-and a set of columns wider than the card scrolls inside it. Context reads the main agent's context in tokens, `184K`,
-and under it its share of the model's window, `92% of 200K`, which its hover repeats, and its cached prefix, the deepest
-prompt-cache entry of its pin, `prefix 171K`, with a dash for a session with no pin or no figure. Runway reads the time
-until the projection of the pin's account reaches the ceiling on the window that binds, among those the pin's model
-draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where nothing burns, and a dash for an
-unpinned row or a pinned row with no projection. On a pinned row whose pin carries a cycle its hover reads `cycle 20 s`,
-the gap between the session's requests the slow-down's hold is sized from. Account draws the speed chip after the
-account's name on a slowed session, with the Quota view's hover. The session cell cuts a long id with an ellipsis, whole
-on hover.
-A session that branched from another conversation at depth 2 or deeper carries a fork badge under
-its id, `fork, on another account` or `fork, same account` where the session it branched from is listed with a pinned
-account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover, and a click on the badge
-scrolls to the base's row where the list holds it. Companion reads the mod's state, `reporting` with how long ago the
-person was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge, `busy`, `idle`,
-`parked`, `released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the instant, "pending" or
-"not scheduled". Before the first session the card reads "No live sessions" with "A session appears here on its first
-request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." While the
-filters hide every row the router lists, the card reads "No sessions kept by the filters" with `{k} sessions hidden by
-the filters.`
+all" or "Collapse all". The Session column is always drawn, and the twelve others, which the bar's Columns control shows
+or hides, are Key, Model, Context, Account, Runway, Last used, Requests, Last request, Agents, Companion, Cache warming
+and Next probe, with Agents, Last request, Next probe and Requests hidden by default. Requests counts the session's
+requests, the ones the router refused before any account was asked left out, and "View in requests" lists those with the
+rest, so a session whose every request was refused still opens its analytics and its request log. Session takes the
+card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls inside it. Context reads
+the main agent's context in tokens, `184K`, and under it its share of the model's window, `92% of 200K`, which its hover
+repeats, and its cached prefix, the deepest prompt-cache entry of its pin, `prefix 171K`, with a dash for a session with
+no pin or no figure. Runway reads the time until the projection of the pin's account reaches the ceiling on the window
+that binds, among those the pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded`
+where nothing burns, and a dash for an unpinned row or a pinned row with no projection. On a pinned row whose pin
+carries a cycle its hover reads `cycle 20 s`, the gap between the session's requests the slow-down's hold is sized from.
+Account draws the speed chip after the account's name on a slowed session, with the Quota view's hover. The session cell
+cuts a long id with an ellipsis, whole on hover. A session that branched from another conversation at depth 2 or deeper
+carries a fork badge under its id, `fork, on another account` or `fork, same account` where the session it branched from
+is listed with a pinned account, and `fork at 3` otherwise, with the base, the depth and the base's account on hover,
+and a click on the badge scrolls to the base's row where the list holds it. Companion reads the mod's state, `reporting`
+with how long ago the person was last seen at the terminal, `silent` or `none`. Cache warming reads the pin state badge,
+`busy`, `idle`, `parked`, `released` or `unknown`, with the recipe summary, or "no recipe". Next probe reads the
+instant, "pending" or "not scheduled". Before the first session the card reads "No live sessions" with "A session
+appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the
+session expiry." While the filters hide every row the router lists, the card reads "No sessions kept by the filters"
+with `{k} sessions hidden by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has ledgered traffic, "View in routing
 log", which opens the log on that session's decisions an hour either side of its last request, and "Release". Release
@@ -1199,28 +1196,28 @@ accounts whose scores tied, the runway that narrowed them where it did, and whet
 Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of $5.00`), whose hover says why
 the member was passed over, and beside it a badge for a destination the gate read that did not fit, `rewrite only` or
 `least bad` in the warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that pins
-nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until)
-and `Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence
-re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account
-it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The
-settings fold lists the pool's twenty-four settings in the card's order with Load shedding and
-Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at
-once` at 0, or "The key and its pool had left the registry". A record written before a
-setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and the five
-slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the twenty-four,
-each marked `(then)`, the three settings it carried that a version 2 record does not. "Outcome" lists the pin written,
-the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote (`pending`
-until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading `for the reset at {time}` where
-the request waited for a reset, or `for the slow-down until {time}` with the chips `speed 0.5x`, `stretch 42 min of 30
-min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the rewrite in flight of {request} until
-{time}` with `bound 2 min` where it waited for a moved pin's first head, a Cause on a failover's landing or a move with
-a cause (`429 on 5h` or `fast lane 429` for a cooldown, `re-auth required by credential refused` for a mark), the answer
-an exhaustion or a refusal gave, and the spend against a budget. With four entries or more, the cache-map row draws one
-chip per tier with its count and depth range, such as `message ×11 depth 1 to 11`, then its three deepest message
-depths, and its control "All {n} entries" lists every entry until "Latest 3" folds them again. The foot offers the three
-widenings after "Widen to", this minute, this session and this account, names the record's version as `Record v{n}`, and
-"Copy as JSON" copies the record route's answer whole. A record the retention purged reads "The record left with the
-retention", and one still loading "Loading the record".
+nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and `Settings
+in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence re-reads the
+pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account it left,
+`shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The settings
+fold lists the pool's twenty-four settings in the card's order with Load shedding and Slow-down reading `on` or `off`,
+Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key and its
+pool had left the registry". A refused record, which no pool setting entered, draws no settings fold. A record written
+before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and the
+five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
+twenty-four, each marked `(then)`, the three settings it carried that a version 2 record does not. "Outcome" lists the
+pin written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
+(`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading `for the reset at
+{time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips `speed 0.5x`, `stretch
+42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the rewrite in flight of
+{request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a Cause on a failover's landing
+or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown, `re-auth required by credential refused` for a
+mark), the answer an exhaustion or a refusal gave, and the spend against a budget. With four entries or more, the
+cache-map row draws one chip per tier with its count and depth range, such as `message ×11 depth 1 to 11`, then its
+three deepest message depths, and its control "All {n} entries" lists every entry until "Latest 3" folds them again. The
+foot offers the three widenings after "Widen to", this minute, this session and this account, names the record's version
+as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A record the retention purged reads "The
+record left with the retention", and one still loading "Loading the record".
 
 An event row opens to a panel of pairs: When to the second, the account and the pool as links, then the kind's own
 pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour

@@ -44,19 +44,17 @@ status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a 200 an
 `stream_undecodable` under `incomplete`, and `stream_cut`, `stream_stalled` or `stream_undecodable` under `failed` for
 a forwarded answer of another status whose body was cut, went silent or did not decode). It carries the time to first
 byte and to first token, the duration, the bytes sent and received, whether the response was served kept warm, and
-whether its body was captured. It names the client's user agent and class (`claude-code/<entrypoint>`
-or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted markers, and the summed
-tool durations of the turn before), the turn origin off its attribution line, and its auto-mode standing as admission
-read it: a server-side check asked for under an on setting, the `safeguards` member carried under an off setting,
-which the dispatch drops, or a refusal for the body's shape before any upstream saw it. It names its classifier
-standing, `client` for the client's own auto-mode classifier call (the class `auxiliary` with the beta), and the item a
-`client_contract` refusal named. The request's shape is recorded as the effort, the thinking mode and budget, the output
-limit, the tool, system-block and message counts, the context edits, the temperature, and the requested speed and
-service tier.
-A session that branched from another conversation
-carries that conversation's root and the matched depth as well. The session the row names is the client's own,
-and the Sessions view groups a row by it. The request row records who put the cache
-diagnostics member on the body the upstream compared: the client, the router, or none.
+whether its body was captured. It names the client's user agent and class (`claude-code/<entrypoint>` or `other`), the
+gateway hints it sent (the agent type, the compaction and context-compacted markers, and the summed tool durations of
+the turn before), the turn origin off its attribution line, and its auto-mode standing as admission read it: a
+server-side check asked for under an on setting, the `safeguards` member carried under an off setting, which the
+dispatch drops, or a refusal for the body's shape before any upstream saw it. It names its classifier standing, `client`
+for the client's own auto-mode classifier call (the class `auxiliary` with the beta), and the item a `client_contract`
+refusal named. The request's shape is recorded as the effort, the thinking mode and budget, the output limit, the tool,
+system-block and message counts, the context edits, the temperature, and the requested speed and service tier. The row
+also names a session that branched from another conversation: that conversation's root and the matched depth. The
+session the row names is the client's own, and the Sessions view groups a row by it. The request row records who put the
+cache diagnostics member on the body the upstream compared: the client, the router, or none.
 
 The attempt row names the account and its kind, whether the account is a usage-based seat, the upstream status, request
 id and message id, the outcome, the cooldown the attempt set, the stop reason, the model the answer names when it

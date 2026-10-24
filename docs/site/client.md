@@ -156,31 +156,34 @@ policy the variable has no effect, since the pool decides ([Cache TTL](routing.m
 ## The required set
 
 The router reads a Claude Code inference request for the session's pin, the restoration, the identity splice and the
-record: the session header keys the pin and the session memory, the request class decides whether the restoration fills
-`cc_prev_req` and lands on the record, the attribution line carries the fields the router restores, `metadata.user_id`
-carries the account identity the router splices, and the agent and compaction headers tell a subagent's turn and a
-summarization apart. The body never decides a class, so a request that lacks one of these items is refused rather than
-guessed at.
+record: the user agent's version is the one the restoration signs into the line, the session header keys the pin and the
+session memory, the request class decides whether the restoration fills `cc_prev_req` and lands on the record, the
+attribution line carries the fields the router restores, `metadata.user_id` carries the account identity the router
+splices, and the agent and compaction headers tell a subagent's turn and a summarization apart. The body never decides a
+class, so a request that lacks one of these items is refused rather than guessed at.
 
-| Item | The client sends it | Word |
-| --- | --- | --- |
-| `x-claude-code-session-id` | Always | `session_header` |
-| `x-claude-code-request-class` | Under `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` or the first-party assumption | `class_header` |
-| The attribution line at `system[0]`, where `system` is an array | Always, unless `CLAUDE_CODE_ATTRIBUTION_HEADER=0` | `attribution_line` |
-| `metadata.user_id` | Always | `metadata_user_id` |
-| `x-claude-code-agent-id`, under the class `subagent` or `workflow` | On a subagent's turns and its forks | `agent_id_header` |
-| `x-claude-code-compaction`, under the class `compaction` | Under `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` or the first-party assumption, on the summarization request | `compaction_header` |
+| Item | The client sends it | Word | Kinds |
+| --- | --- | --- | --- |
+| The `claude-cli/` version spelled as the client spells one, digits and dots with at most one `-` and a prerelease suffix | Always | `client_version` | inference, count, probe |
+| `x-claude-code-session-id` | Always | `session_header` | inference, count, probe |
+| `x-claude-code-request-class` | Under `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` or the first-party assumption | `class_header` | inference |
+| The attribution line at `system[0]`, where `system` is an array | Always, unless `CLAUDE_CODE_ATTRIBUTION_HEADER=0` | `attribution_line` | inference |
+| `metadata.user_id` with an `account_uuid` member | Always | `metadata_user_id` | inference |
+| `x-claude-code-agent-id`, under the class `subagent` or `workflow` | On a subagent's turns and its forks | `agent_id_header` | inference |
+| `x-claude-code-compaction`, under the class `compaction` | Under `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` or the first-party assumption, on the summarization request | `compaction_header` | inference |
 
 A request that lacks an item is refused `400` `invalid_request_error` with the code `client_contract` before any account
 is chosen. The message names the missing item and the fix, the answer carries `x-should-retry: false`, and the Requests
 view names the item in the drawer's Outcome section, and the routing log reads `client contract` with the item's word.
-The first missing item in the table's order names the refusal.
+The first missing item in the table's order names the refusal. A token count and a keepalive probe are inside the set
+for the version and the session header, the two items their headers carry, and outside the five others.
 
 The other headers stay optional: the agent type, the context-compacted mark, the parent agent id, the prompt-id header,
 the tool durations and `x-client-request-id`. A request without one is relayed the same way.
 
-`CLAUDE_CODE_ATTRIBUTION_HEADER=0` meets the refusal, since the line is required where `system` is an array. A token
-count is outside the set, the quota probe (no `system`) is outside the line's item alone.
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0` meets the refusal, since the line is required where `system` is an array. The quota
+probe (no `system`) is outside the line's item alone, and a client outside the Claude Code class is refused `403`
+`client_not_allowed` before the set is read ([Clients](routing.md#clients)).
 
 ## The first request
 
@@ -225,10 +228,11 @@ gone, and one deleted, or deleted and created again under its id, between admiss
 refusal is the one `auth_unknown`, whose message names no cause, so a caller learns nothing about why. Every
 credential refusal, the registry's included, carries `x-should-retry: false`, so the client does not resend it.
 
-When no account can serve for the moment the answer is `503`
-`accounts_unavailable`, which also stands where an account's authentication failure is the request's last word: the
-router never forwards an upstream `401`, and the answer names no account and no reason
-([When nothing can serve](routing.md#when-nothing-can-serve)).
+A client whose class is not Claude Code is refused `403` `client_not_allowed` before its body is read, under every key
+([Clients](routing.md#clients)). When no account can serve for the moment the answer is `503` `accounts_unavailable`,
+which also stands where an account's authentication failure is the request's last word: the router never forwards an
+upstream `401`, and the answer names no account and no reason ([When nothing can
+serve](routing.md#when-nothing-can-serve)).
 
 A token count is relayed through the same selection and failover loop as a message and travels as the client sent it
 under every policy: the markers it carries keep their TTLs, no marker is added to a marker-less one, no beta follows
@@ -266,7 +270,7 @@ with.
 | `auth_missing` | 401 | `authentication_error` | `a key is required` | Set `CLAUDE_CODE_OAUTH_TOKEN` to the key's secret. The answer carries `x-should-retry: false`, so the client does not resend it. |
 | `auth_unknown` | 401 | `authentication_error` | `the presented key is not valid` | The key is unknown, revoked, retired, disabled or expired, or its pool is disabled or gone. Ask the operator. The answer carries `x-should-retry: false`, so the client does not resend it. |
 | `body_budget_exhausted` | 503 | `api_error` | `the router holds as many request bytes as it allows` | Send the request again. The bodies in flight held `proxy.body_budget_bytes`. |
-| `body_shape` | 400 | `invalid_request_error` | `the request body carries a billing stamp the relay can neither check nor restamp`, `the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it`, `the request body has no metadata.user_id the account can be bound to`, `the request body has no top-level model to resolve`, `the request body carries a safeguards member the relay cannot place under this key's auto-mode setting`, `the request body carries the top-level member "{name}" more than once` for `metadata`, `model`, `safeguards`, `stream` and `system`, and `the request body carries the member "{name}" more than once` for `metadata.user_id` and `system[0].text` | Send the body as Claude Code sends it. The relay edits that shape and no other. |
+| `body_shape` | 400 | `invalid_request_error` | `the request body carries a billing stamp the relay can neither check nor restamp`, `the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it`, `the request body has no top-level model to resolve`, `the request body carries a safeguards member the relay cannot place under this key's auto-mode setting`, `the request body carries the top-level member "{name}" more than once` for `metadata`, `model`, `safeguards`, `stream` and `system`, and `the request body carries the member "{name}" more than once` for `metadata.user_id` and `system[0].text` | Send the body as Claude Code sends it. The relay edits that shape and no other. |
 | `client_contract` | 400 | `invalid_request_error` | `the client version in the User-Agent header is not spelled as Claude Code spells one. Report the client version to the operator, who updates the router`, `the request carries no x-claude-code-session-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them`, `the request carries no x-claude-code-request-class header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`, `the request carries no attribution line at system[0] the router requires of a Claude Code client. Leave CLAUDE_CODE_ATTRIBUTION_HEADER unset`, `the request body has no metadata.user_id with an account_uuid member the router requires of a Claude Code client. Send the requests as Claude Code sends them`, `the request names a subagent class and carries no x-claude-code-agent-id header the router requires of a Claude Code client. Send the requests as Claude Code sends them`, `the request names the compaction class and carries no x-claude-code-compaction header the router requires of a Claude Code client. Set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` | Set the lines of the environment block above, and send the requests as Claude Code sends them ([The required set](#the-required-set)). |
 | `client_drift` | 400 | `invalid_request_error` | `the client's version suffix does not reproduce from the prompt and the user agent. Re-pin the router to this client version`, `the conversation was resumed, and the client's version suffix does not reproduce from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this client version`, `the client's billing hash does not match the pinned profile. Re-pin the router to this client version` | The client build moved past the one the router is pinned to, in a resumed conversation as in any other, and the second message names the resume ([Client drift](relay.md#client-drift)). The operator re-pins ([re-pinning the client build](operations.md#re-pinning-the-client-build)). |
 | `client_not_allowed` | 403 | `permission_error` | `the router admits Claude Code clients only` | Use Claude Code. The router serves no other client, under any key ([clients](routing.md#clients)). The answer carries `x-should-retry: false`. |
@@ -399,11 +403,12 @@ the slow-down's among them where the operator raises its bound.
 
 ## How a request is identified
 
-A conversation is identified by its session header, as
-[Clients](routing.md#clients) describes, and the two boundary-hash chains the router reads off every body
-are [The boundary chains](relay.md#the-boundary-chains). A body the strict JSON reader refuses because a string
-was cut between the two halves of a character, which the client sends as a lone surrogate escape, is still read for
-its facts, and the cut character travels as the client sent it.
+A conversation is identified by its session header, the session id every Claude Code request carries
+([Clients](routing.md#clients)), and the two boundary-hash chains the router reads off every body are [The boundary
+chains](relay.md#the-boundary-chains): a new session whose messages continue another conversation of the same key at
+depth 2 or deeper is recorded as a fork of it. A body the strict JSON reader refuses because a string was cut between
+the two halves of a character, which the client sends as a lone surrogate escape, is still read for its facts, and the
+cut character travels as the client sent it.
 
 ## Auto mode behind the router
 

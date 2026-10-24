@@ -60,12 +60,12 @@ Then every guardrail attached to the pool and then the key is evaluated, in thei
 so the facts carry the matches, and an enforcing match then refuses the request with `guardrail_blocked` before any
 account is read ([Guardrails](guardrails.md)). A key with no guardrail pays one lookup here and nothing else.
 
-The candidates are resolved from the key's model rules (`model_not_allowed`).
-A Claude Code inference request that lacks an item of [the required
-set](client.md#the-required-set) is then refused (`client_contract`), before any account is read. The drift checks judge
-the billing stamp and the version suffix once, before any account is selected (`client_drift`, [Client
-drift](#client-drift)), and the selection takes over: the session's pin or the pool's strategy, whose own refusals are
-on [When nothing can serve](routing.md#when-nothing-can-serve).
+The candidates are resolved from the key's model rules (`model_not_allowed`). The contract check follows
+(`client_contract`), with its seven items on an inference request and its two header items, the version and the session
+header, on a token count and on a keepalive probe ([the required set](client.md#the-required-set)), before any account
+is read. The drift checks judge the billing stamp and the version suffix once, before any account is selected
+(`client_drift`, [Client drift](#client-drift)), and the selection takes over: the session's pin or the pool's strategy,
+whose own refusals are on [When nothing can serve](routing.md#when-nothing-can-serve).
 
 ## The body edits
 
@@ -147,28 +147,28 @@ never rewritten. A Claude Code request whose `system` is an array and carries no
 set](client.md#the-required-set)), and the router still writes no line the client did not, so every restoration carries
 the client's own stamp.
 
-The restoration applies to an inference request whose `User-Agent` is `claude-cli/` followed by a version the client
-itself would spell, digits and dots with at most one `-` and a prerelease suffix of letters, digits, dots and hyphens,
-as in `claude-cli/2.1.269 (external, cli)`. The version lands in a line this build signs, so a version spelled any
-other way restores nothing rather than a guessed one. A request without the class header is refused before the
-restoration reads it ([The required set](client.md#the-required-set)), so the restoration reads the class from every
-request and falls back on nothing. A token count has no line to fill,
-and a probe replays a request as the client sent it.
+The restoration applies to an inference request whose body carries the line, and the version the contract admitted lands
+in it: `claude-cli/` followed by a version the client itself would spell, digits and dots with at most one `-` and a
+prerelease suffix of letters, digits, dots and hyphens, as in `claude-cli/2.1.269 (external, cli)`, any other spelling
+refused `400` `client_contract` under the item `client_version` ([The required set](client.md#the-required-set)). A
+request without the class header is refused before the restoration reads it, so the restoration reads the class from
+every request and falls back on nothing. A token count has no line to fill, and a probe replays a request as the client
+sent it.
 
 The previous request id comes from the router's session memory, keyed on the client's own session id
-([Clients](routing.md#clients)), and the memory survives a
-restart ([sessions](installation.md#sessions)). It is filled on the conversation classes (`compaction`, `main`,
-`subagent`, `workflow`) and on a class `auxiliary` request that carries an agent id or a prompt id, the
-conversation-shaped forks, never on a side query, since the client's own builder writes the field on its conversation
-sites alone. The prompt id comes from the `x-claude-code-prompt-id` header, which the client sets from the same id it
-writes into the line, so a request without the header gets no `cc_prompt_id`, as the native client writes none. The auto
-mode classifier requests are side queries, so the restoration writes no line field on them beyond the `cch` placeholder
-where the line lacks it, and the router records the ones that carry the classifier marker as the client's classifier
-calls, which take no share of a plan window ([Auto mode behind the router](#auto-mode-behind-the-router)). Three things
-are not restored, because the router cannot: the `advanced-tool-use-2025-11-20` beta, since the client has to run its
-tool search (`ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and
-`cc_turn_origin` with the five fields after it in the client's order (the turn position, the gateway and the project
-fields), which the router never writes and whose turn origin it records when the line carries it.
+([Clients](routing.md#clients)), and the memory survives a restart ([sessions](installation.md#sessions)). It is filled
+on the conversation classes (`compaction`, `main`, `subagent`, `workflow`) and on a class `auxiliary` request that
+carries an agent id or a prompt id, the conversation-shaped forks, never on a side query, since the client's own builder
+writes the field on its conversation sites alone. The prompt id comes from the `x-claude-code-prompt-id` header, which
+the client sets from the same id it writes into the line, so a request without the header gets no `cc_prompt_id`, as the
+native client writes none. The auto mode classifier requests are side queries, so the restoration writes no line field
+on them beyond the `cch` placeholder where the line lacks it, and the router records the ones that carry the classifier
+marker as the client's classifier calls, which take no share of a plan window ([Auto mode behind the
+router](#auto-mode-behind-the-router)). Three things are not restored, because the router cannot: the
+`advanced-tool-use-2025-11-20` beta, since the client has to run its tool search (`ENABLE_TOOL_SEARCH=true` selects it),
+the global cache scope on the static system block, and `cc_turn_origin` with the five fields after it in the client's
+order (the turn position, the gateway and the project fields), which the router never writes and whose turn origin it
+records when the line carries it.
 
 ## Client drift
 
