@@ -5212,6 +5212,47 @@ async function requestsTableFitsWithShares(theme, range = null) {
 }
 
 /**
+ * The request table's text at 1920 by 1080 with the default columns, the mock pass's alone: every column but Time is
+ * as wide as its content, so no Client text or agent type is cut, read off each span's own overflow (each keeps its
+ * own ellipsis, so a cut behind the cell's clip still reads on the span), Time takes the rest with every id line
+ * printing the whole id uncut, and the table fits its wrap. The viewport then returns to the pass's 1280 by 800.
+ */
+async function requestsTableWide(theme) {
+  const say = (what) => failures.push(`${theme} /requests at 1920 by 1080: ${what}`);
+  await page.setViewportSize({ height: 1080, width: 1920 });
+  await settle();
+  const read = await page.evaluate(() => {
+    const table = document.querySelector('.requests__table');
+    const wrap = table?.closest('.table-wrap');
+    if (!table || !wrap) return null;
+    const spans = (selector) => [...table.querySelectorAll(`tbody ${selector}`)];
+    const cut = (list) => list.filter((s) => s.scrollWidth > s.clientWidth).map((s) => s.textContent ?? '');
+    const agent = spans('.requests__client .sub');
+    const client = spans('.requests__client-text');
+    const ids = spans('td .sub.mono');
+    return {
+      client: wrap.clientWidth,
+      cut: { agent: cut(agent), client: cut(client) },
+      ids: { lines: ids.length, short: ids.filter((s) => s.scrollWidth > s.clientWidth || s.textContent !== s.getAttribute('title')).map((s) => s.getAttribute('title') ?? '') },
+      scroll: table.scrollWidth,
+      spans: { agent: agent.length, client: client.length },
+    };
+  });
+  measurements.push(`${theme} /requests at 1920 by 1080 ${JSON.stringify(read)}`);
+  if (read === null) say('no request table to measure');
+  else {
+    if (read.spans.client === 0) say('no Client text to measure');
+    for (const text of read.cut.client) say(`the Client text "${text}" is cut`);
+    for (const text of read.cut.agent) say(`the agent type "${text}" is cut`);
+    if (read.ids.lines === 0) say('no id line to measure');
+    for (const id of read.ids.short) say(`the id "${id}" is not drawn whole`);
+    if (read.scroll > read.client) say(`the table needs ${read.scroll}px of its wrap's ${read.client}px`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+}
+
+/**
  * The Cost cell of a usage-based seat's request on the request log under Native: its dollars over the funding word
  * `usage-based`, the word in the type and the ink of a billed row's funding word in the same table, and the cell's
  * hover naming it as billed in dollars. Only the mock's story holds a usage-based seat.
@@ -10378,6 +10419,7 @@ try {
         // The Status, Attempts and links cells drop their second item under the first, and the links column's header
         // is empty.
         await tableColumns(theme, 'requests', '.requests__table', ['Time'], 0, { wrapping: ['Status', 'Attempts', ''] });
+        if (mock) await requestsTableWide(theme);
         await requestsFundingWord(theme);
         await pagerControls(theme, view.path);
       }
