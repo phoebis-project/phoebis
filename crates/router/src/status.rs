@@ -1293,7 +1293,21 @@ mod tests {
             1 + pinned.len(),
             "a column line, then one per pin: {screen}"
         );
-        for (line, row) in pins[1..].iter().zip(&pinned) {
+        // The screen sorts its pins by account label, then newest first, so a line pairs with its row by the session
+        // id it opens with, cut as the screen cuts it.
+        let mut paired = std::collections::BTreeSet::new();
+        for line in &pins[1..] {
+            let session = line.split_whitespace().next().unwrap();
+            let row = pinned
+                .iter()
+                .find(|row| {
+                    text(&row["session_id"])
+                        .chars()
+                        .take(SESSION_CHARS)
+                        .eq(session.chars())
+                })
+                .unwrap_or_else(|| panic!("no pinned row for {line}"));
+            assert!(paired.insert(session), "one line per pin: {screen}");
             assert!(
                 line.contains(&label_of(row["account_id"].as_str().unwrap()))
                     && line.contains("pinned"),

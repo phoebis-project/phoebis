@@ -608,7 +608,7 @@ INSERT INTO pins (key_id, session_id, model, account_id, epoch, created_at, last
 "#;
 
 #[test]
-fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_defaults() {
+fn a_pin_a_pool_and_a_member_from_before_the_affinity_columns_read_the_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
