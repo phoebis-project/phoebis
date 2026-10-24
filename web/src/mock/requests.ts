@@ -958,7 +958,7 @@ export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
 export const RELEASED_SESSION_ID = '3c36d663-d074-42f6-8738-f54da7c9f026';
 /** The contract seat's batch session on fleet. */
-const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
+export const FLEET_SESSION_ID = '8b1f4c2e-6a93-4d07-b5e2-3c9a7f1d4e68';
 /**
  * The contract seat's rows on fleet: story rows the routing log derives its records for, as it does a drawn row's, that
  * take no draw from the streams the drawn rows read, so every drawn figure stays where it was.

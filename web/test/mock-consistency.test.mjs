@@ -446,6 +446,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(headed.map((a) => [a.id, a.extraUsage.monthlyLimitCredits, a.extraUsage.inUse]), [['nightly', null, true]], "the plan account whose newest reading a head wrote carries no amounts");
   });
 
+  test(`the story's fleet session is listed with its live pin, which the contract pool and its member count, at ${at}`, async () => {
+    const s = await story;
+    const rows = s.requests.filter((r) => r.keyId === 'fleet');
+    const [session] = new Set(rows.map((r) => r.sessionId));
+    // The last decision places an Opus pin inside the pool's affinity window, and no recipe warms the session.
+    const listed = s.sessions.filter((x) => x.sessionId === session).map((x) => [x.keyId, x.accountId, x.model, x.pinned, x.keepalive.state]);
+    assert.deepEqual(listed, [['fleet', 'contract', 'claude-opus-5-5', true, null]], 'the session is listed once, pinned on the seat');
+    const pool = s.pools.find((p) => p.id === 'contract');
+    assert.deepEqual([pool.activePins, pool.members.map((m) => [m.accountId, m.activePins])], [1, [['contract', 1]]], 'the pool and its member count the pin');
+  });
+
   test(`the story's usage-based seat scores as a paid source and books no plan reservation on the fleet rows' records, at ${at}`, async () => {
     const s = await story;
     const fleetIds = new Set(s.requests.filter((r) => r.keyId === 'fleet').map((r) => r.id));

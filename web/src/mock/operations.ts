@@ -4,7 +4,7 @@ import { accountById } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById } from './pools';
-import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
+import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead } from './time';
@@ -639,6 +639,68 @@ for (const pin of SLOWED_PINS) {
   });
 }
 
+/**
+ * The contract seat's batch session on fleet, whose pool keeps no cache warm, so no recipe warms it. Its main agent
+ * holds one pin per model it sent, and a pin stands while its last turn is inside the pool's affinity window: the Opus
+ * pin of the newest turn, where the earlier Sonnet turns' pin has lapsed. Written after the recipes rather than rolled,
+ * so every drawn row and recipe keeps its rolls, the burn a figure of its own in dollars, as a usage-based seat's burn
+ * reads.
+ */
+const fleetRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'fleet' && r.sessionId === FLEET_SESSION_ID);
+const fleetPool = keyById.get('fleet')!.poolId;
+const fleetTtlMs = (poolById.get(fleetPool)?.affinityTtlSeconds ?? 0) * 1_000;
+// The rows run newest first, so each model's first row is its pin's last turn.
+const FLEET_PINS = [...new Set(fleetRows.map((r) => r.canonicalModel))]
+  .map((model) => fleetRows.find((r) => r.canonicalModel === model)!)
+  .filter((last) => NOW - Date.parse(last.attempts[last.attempts.length - 1].startedAt) <= fleetTtlMs);
+// The newest model's pin is the one the route lists the session's main agent under.
+if (FLEET_PINS.length > 0) {
+  const last = FLEET_PINS[0];
+  const lastAttempt = last.attempts[last.attempts.length - 1];
+  const lastInputTokens = last.usage.input + last.usage.cacheRead + last.usage.cacheWrite5m + last.usage.cacheWrite1h;
+  const keyGeneration = Date.parse(keyById.get('fleet')!.createdAt);
+  const seen = ledgered.get(activityOf('fleet', keyGeneration, FLEET_SESSION_ID)) ?? null;
+  SESSIONS.push({
+    ...SESSION_SAMPLE,
+    accountId: lastAttempt.accountId,
+    agentContexts: null,
+    agentId: 'main',
+    agents: 1,
+    burn: 0.36,
+    burnAt: lastAttempt.startedAt,
+    burnEquivalent: null,
+    burnUnit: 'usd',
+    cacheTtlMs: 5 * MINUTE,
+    companion: 'none',
+    companionSince: null,
+    createdAt: last.at,
+    cycleMs: null,
+    epoch: 1,
+    estimated: false,
+    forkDepth: null,
+    forkedFrom: null,
+    historical: false,
+    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
+    keyGeneration,
+    keyId: 'fleet',
+    lastInputTokens,
+    ...pinContext(lastInputTokens, seen?.model ?? null),
+    lastRefreshAt: lastAttempt.startedAt,
+    lastRequestAt: seen?.last ?? null,
+    lastUsedAt: lastAttempt.startedAt,
+    model: last.canonicalModel,
+    pinned: true,
+    presenceAgeSeconds: null,
+    requests: seen?.requests ?? 0,
+    runwayBounded: null,
+    runwayMs: null,
+    sessionId: FLEET_SESSION_ID,
+    shedFrom: null,
+    shedReason: null,
+    speed: null,
+  });
+}
+
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
 // with the creation minute in the viewer's zone: the router lists a holder's session while its last request is inside
 // the session expiry, with that holder's own requests and no pin or recipe. The holder's last request ran on the
@@ -756,6 +818,10 @@ for (const r of RECIPES) {
 for (const pin of SLOWED_PINS) {
   const member = `${keyById.get('notebook')!.poolId}|studio`;
   for (const a of pin.agents) PINS.set(member, (PINS.get(member) ?? new Set()).add(`notebook|${pin.sessionId}|${a.agentId}|${a.model}`));
+}
+for (const last of FLEET_PINS) {
+  const member = `${fleetPool}|${last.attempts[last.attempts.length - 1].accountId}`;
+  PINS.set(member, (PINS.get(member) ?? new Set()).add(`fleet|${FLEET_SESSION_ID}|main|${last.canonicalModel}`));
 }
 /** The pins under a pool's keys on one member's account. */
 export const memberPins = (poolId: string, accountId: string): number => PINS.get(`${poolId}|${accountId}`)?.size ?? 0;

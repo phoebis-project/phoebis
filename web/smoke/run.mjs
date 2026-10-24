@@ -999,16 +999,16 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 29, 0 and 6 pins, one per key, session, agent and model under their keys, on primary,
-  // nightly, secondary and studio, over 19 pinned rows, so a hero counting the pinned rows or a note counting every
-  // row's account reads otherwise. A hero counting every session row reads otherwise only while the story's row count
-  // differs from its pins, so the count is read first and a story where the two meet fails here.
-  const PINS = 35;
+  // The story's pools hold 29, 0, 6 and 1 pins, one per key, session, agent and model under their keys, on primary,
+  // nightly, secondary, studio and contract, over 21 pinned rows, so a hero counting the pinned rows or a note counting
+  // every row's account reads otherwise. A hero counting every session row reads otherwise only while the story's row
+  // count differs from its pins, so the count is read first and a story where the two meet fails here.
+  const PINS = 36;
   const sessionRows = (await api.listSessions()).length;
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({
     name: "/ the sessions card counts the router's live pins, which the story keeps apart from its session rows, over the pinned rows' accounts",
-    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 4 accounts',
+    ok: sessionRows !== PINS && hero?.querySelector('.stat__value')?.textContent === String(PINS) && hero?.querySelector('.stat__note')?.textContent === 'active pins across 5 accounts',
     missing: [`${sessionRows} session rows against ${PINS} pins`, hero?.textContent ?? 'absent'],
   });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
@@ -21431,27 +21431,27 @@ const CARD_VIEWS = [
     page.unmount();
     return got;
   };
-  // The story's 28 rows at its instant: the three finished sessions (the two the mod released whole and the one it
+  // The story's 29 rows at its instant: the three finished sessions (the two the mod released whole and the one it
   // ended), twelve rows a companion reports or went silent on, the registration-only row among them, and fourteen no
-  // companion reports: the laptop row the ledger never saw, with no last use, and by their last use the pinless fork 16
-  // minutes back, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook rows 25 to 42, the
-  // refusal-only row 98 by its newest refusal, the ci content row 109, the ci rows 118 and 240, the row idle for two
-  // hours 120 and the earlier holder 20 hours back. The one hour keeps 20 and hides 8.
+  // companion reports: the laptop row the ledger never saw, with no last use, and by their last use the fleet row 4
+  // minutes back, the pinless fork 16, nightly's notebook row 20, overflow's desktop row 28, studio's four notebook
+  // rows 25 to 42, the refusal-only row 98 by its newest refusal, the ci rows 118 and 240, the row idle for two hours
+  // 120 and the earlier holder 20 hours back. The one hour keeps 21 and hides 8.
   const bare = await read('');
   const AWAY = '8 sessions hidden by the filters';
   const drawnOf = (got) => got.drawn.map((id) => listed.find((s) => idOfRow(s) === id)).filter(Boolean);
   results.push({
     name: '/sessions the bare address keeps the rows the default filters keep, with no chip, the finished session and the row idle for two hours hidden',
-    ok: finished !== undefined && twoHours !== undefined && bare.chips.length === 0 && !bare.finished && !bare.twoHours && bare.drawn.length === 20 && bare.count === '20 sessions',
+    ok: finished !== undefined && twoHours !== undefined && bare.chips.length === 0 && !bare.finished && !bare.twoHours && bare.drawn.length === 21 && bare.count === '21 sessions',
     missing: [`finished ${finished?.sessionId ?? 'absent'}, two hours ${twoHours?.sessionId ?? 'absent'}`, JSON.stringify(bare.chips), `${bare.drawn.length} rows`, String(bare.count)],
   });
   results.push({
     name: '/sessions the Sessions and Agents tiles count the rows the filters keep and name the rows they hide on hover',
     ok:
-      bare.sessionsValue === '20 of 128' &&
+      bare.sessionsValue === '21 of 128' &&
       bare.sessionsTile === AWAY &&
       bare.agentsTile === AWAY &&
-      bare.agentsTitle === `The rows shown hold 31 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. ${AWAY}.`,
+      bare.agentsTitle === `The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. ${AWAY}.`,
     missing: [String(bare.sessionsValue), String(bare.sessionsTile), String(bare.agentsTile), String(bare.agentsTitle)],
   });
   {
@@ -21466,8 +21466,8 @@ const CARD_VIEWS = [
   }
   {
     // The age hides a row no companion reports past its preset and never a companion row, inside the expiry: fifteen
-    // minutes keeps the twelve companion rows and the laptop row with no last use, six hours all but the earlier
-    // holder, and no limit every row that is not finished.
+    // minutes keeps the twelve companion rows, the laptop row with no last use and the fleet row, six hours all but the
+    // earlier holder, and no limit every row that is not finished.
     const ages = {};
     for (const query of ['?age=15m', '?age=6h', '?age=none']) ages[query] = await read(query);
     const minutes = ages['?age=15m'];
@@ -21475,7 +21475,7 @@ const CARD_VIEWS = [
     const holder = listed.find((s) => s.historical);
     results.push({
       name: '/sessions ?age=15m hides the rows no companion reports last used over fifteen minutes back and no companion row, under the chip age: 15 min',
-      ok: JSON.stringify(minutes.chips) === JSON.stringify(['age: 15 min']) && minutes.drawn.length === 13 && drawnOf(minutes).filter(companionRow).length === 12,
+      ok: JSON.stringify(minutes.chips) === JSON.stringify(['age: 15 min']) && minutes.drawn.length === 14 && drawnOf(minutes).filter(companionRow).length === 12,
       missing: [JSON.stringify(minutes.chips), `${minutes.drawn.length} rows, ${drawnOf(minutes).filter(companionRow).length} companion rows`],
     });
     results.push({
@@ -21624,7 +21624,7 @@ const CARD_VIEWS = [
     });
     results.push({
       name: "/sessions the chip line's Clear all returns the four filters to their defaults and the bare address",
-      ok: JSON.stringify(four) === JSON.stringify(['companion only', 'finished sessions', 'age: 24 h', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 20,
+      ok: JSON.stringify(four) === JSON.stringify(['companion only', 'finished sessions', 'age: 24 h', 'released agents']) && cleared.search === '' && cleared.chips.length === 0 && cleared.rows === 21,
       missing: [JSON.stringify(four), JSON.stringify(cleared)],
     });
   }
@@ -21803,7 +21803,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // as a count of the cap the bootstrap file sets, so an operator sees how close the router runs to refusing a
     // session or dropping a recipe. The Agents figure leaves out the subagents the mod released under a live session,
     // which draw no line, and its title names them beside the records and then the rows the filters hide. Read on the
-    // story's instant, where the defaults keep 20 rows holding 31 records, two of them the written session's released
+    // story's instant, where the defaults keep 21 rows holding 32 records, two of them the written session's released
     // subagents, and whose lines read 9 busy, 7 idle and 4 parked: the overview's ninth idle agent is the main of a
     // row the defaults hide.
     const ov = await api.getKeepaliveOverview();
@@ -21813,8 +21813,8 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     const agentsTitle = [...pinned.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents')?.querySelector('.stat__value [title]')?.getAttribute('title') ?? '';
     pinned.unmount();
     const want = [
-      ['Sessions', '20 of 128'],
-      ['Agents', '29 of 1,024', '9 busy, 7 idle, 4 parked'],
+      ['Sessions', '21 of 128'],
+      ['Agents', '30 of 1,024', '9 busy, 7 idle, 4 parked'],
       ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
     ];
     results.push({
@@ -21822,15 +21822,15 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok:
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         JSON.stringify([ov.agents.busy, ov.agents.idle, ov.agents.parked]) === JSON.stringify([9, 9, 4]) &&
-        agentsTitle === 'The rows shown hold 31 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. 8 sessions hidden by the filters.' &&
+        agentsTitle === 'The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. 8 sessions hidden by the filters.' &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `overview ${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`, agentsTitle || 'no Agents title'],
     });
   }
   {
     // With no line hidden the title's second sentence would count none, so it draws the records' sentence alone. The
-    // view shows every row, so no row is hidden either and the title carries no hidden count. The story's 28 rows hold
-    // 42 agent records.
+    // view shows every row, so no row is hidden either and the title carries no hidden count. The story's 29 rows hold
+    // 43 agent records.
     const { listKeepaliveRecipes } = api;
     api.listKeepaliveRecipes = async (...args) => (await listKeepaliveRecipes.apply(api, args)).filter((r) => !(r.agentState === 'released' && r.cause === 'agent_released'));
     const none = await mount('/sessions?age=none&finished=1');
@@ -21838,7 +21838,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     api.listKeepaliveRecipes = listKeepaliveRecipes;
     results.push({
       name: "/sessions the Agents tile's title carries one sentence with no line and no row hidden",
-      ok: title === 'The rows shown hold 42 agent records against the cap.',
+      ok: title === 'The rows shown hold 43 agent records against the cap.',
       missing: [title || 'no Agents title'],
     });
     none.unmount();
@@ -21897,13 +21897,13 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     missing: [JSON.stringify(heads().slice(0, 2)), ...rows().slice(0, 3).map((r) => r.lastElementChild?.innerHTML ?? 'no cell')],
   });
   {
-    // The 20 rows the default filters keep at the story's instant, nine of them reading no recipe: the eight no recipe
+    // The 21 rows the default filters keep at the story's instant, ten of them reading no recipe: the nine no recipe
     // warms and the silent row past its idle limit.
     const pinned = await mount('/sessions', { now: CLOCK_ORIGIN });
     const drawn = [...pinned.container.querySelectorAll('tbody tr.srow')];
     const unwarmed = drawn.filter((tr) => sessionCell(pinned, tr, 'Cache warming')?.textContent?.trim() === 'no recipe').length;
     pinned.unmount();
-    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 20 && unwarmed === 9, missing: [`${drawn.length} rows, ${unwarmed} with no recipe`] });
+    results.push({ name: '/sessions lists every session the default filters keep, not only warmed ones', ok: drawn.length === 21 && unwarmed === 10, missing: [`${drawn.length} rows, ${unwarmed} with no recipe`] });
   }
   // The session the mod released whole is finished and the ci key's sessions lie past the hour, so these read with
   // every row shown.
@@ -22039,7 +22039,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
   // Of the 26 rows under no age limit, the registration-only row and the laptop row the ledger never saw carry no last
   // use and no request, so they have no expiry to count down.
-  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 25 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 23, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
+  results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 26 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 24, missing: [`${expiries.length} rows`, ...expiries.slice(0, 3)] });
   const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   // 21 of the 26 rows under no age limit hold ledgered requests, and the two rows with no last use, the row idle for
   // two hours, nightly's notebook row and the refusal-only row hold none.
@@ -22763,7 +22763,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
     const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 27, missing: [String(rows().length)] });
+    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 28, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
