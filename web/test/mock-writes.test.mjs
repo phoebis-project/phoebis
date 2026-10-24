@@ -360,7 +360,6 @@ test("a key write stores the server-side auto mode override and a pool write sto
   assert.equal(created.autoModeServer, true, "a new pool without the field takes the route's default");
 });
 
-
 test('a pool write with an unknown spelling or a budget the route refuses is refused with the route\'s text', async () => {
   const api = await signedIn();
   const all = await storyPool(api);

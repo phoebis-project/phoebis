@@ -457,6 +457,12 @@ test('a key edit sends enabled every time and expires_at only when the dialog ch
   assert.equal(d.encodeKey({ ...input, enabled: true, expiresAt: undefined }).enabled, true);
 });
 
+test('a key decodes only the members the console knows, and a write sends only the ones it reads', () => {
+  const row = fixture('keys').keys[0];
+  assert.equal('nickname' in d.decodeKey({ ...row, nickname: 'desk' }), false, 'a row member the console does not know reads as nothing');
+  const input = { autoModeServer: false, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'strict', notes: null, poolId: 'main' };
+  assert.equal('nickname' in d.encodeKey({ ...input, nickname: 'desk' }), false, 'a write sends no member the console does not read');
+});
 
 test("a key decodes its server-side auto mode override as on, off, or inheriting, and a write sends it as set", () => {
   const row = fixture('keys').keys[0];

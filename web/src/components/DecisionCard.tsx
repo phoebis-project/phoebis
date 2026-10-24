@@ -215,18 +215,21 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
           <summary>Pin and warmth</summary>
           <KeyValue rows={keyValueRows(pinRows(record, now))} />
         </details>
-        <details className="decision-card__fold">
-          <summary>
-            Settings in force
-            {record.settings !== null && (
-              <>
-                {' '}
-                <span className="decision-card__since muted">since {formatFact(record.settings.poolUpdatedAt, 'time', now)}</span>
-              </>
-            )}
-          </summary>
-          {settings === null ? <p className="muted">The key and its pool had left the registry</p> : <KeyValue className="decision-card__settings" rows={keyValueRows(settings)} />}
-        </details>
+        {/* A refusal entered no setting, so its card draws no settings fold. */}
+        {record.outcome.kind !== 'refused' && (
+          <details className="decision-card__fold">
+            <summary>
+              Settings in force
+              {record.settings !== null && (
+                <>
+                  {' '}
+                  <span className="decision-card__since muted">since {formatFact(record.settings.poolUpdatedAt, 'time', now)}</span>
+                </>
+              )}
+            </summary>
+            {settings === null ? <p className="muted">The key and its pool had left the registry</p> : <KeyValue className="decision-card__settings" rows={keyValueRows(settings)} />}
+          </details>
+        )}
       </div>
 
       <section>

@@ -220,7 +220,6 @@ test('the key dialog starts from the stored key and builds the edit from it', ()
   assert.deepEqual([fresh.enabled, fresh.expiry, fresh.poolId, fresh.captureMode], [true, 'never', 'all', 'inherit'], 'a new key starts on, with no expiry, in the pool it was opened from');
 });
 
-
 test('the key form reads its own guardrails in position order, the input leaves them out, and an edit sends the list only when it changed', () => {
   const refs = [
     { enabled: true, id: 'second', mode: 'observe', name: 'Second', position: 3 },

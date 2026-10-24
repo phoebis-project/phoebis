@@ -8858,7 +8858,6 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     ok: JSON.stringify(effective) === JSON.stringify(['bodies captured, 24h inherited', 'bodies captured, 6h', 'bodies not captured']),
     missing: effective,
   });
-  const subsOf = (name) => [...([...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name)?.children[0]?.querySelectorAll('.sub') ?? [])].map((sub) => sub.textContent?.trim());
 }
 {
   // A server refusal holds the footer until the operator edits; then the form's own next hold takes the line.
@@ -8996,15 +8995,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     const labels = [...(access?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({ name: '/keys Access reads Expiry and Server-side auto mode', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode']), missing: labels });
     const sessions = group(dlg, 'Sessions');
-    const selectIn = (section, label) => section?.querySelector(`select[aria-label="${label}"]`);
-    const optionsOf = (section, label) => [...(selectIn(section, label)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
     const sessionLabels = [...(sessions?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({
-      name: '/keys Sessions holds Cache warming opt-out alone',
-      ok:
-        JSON.stringify(sessionLabels) === JSON.stringify(['Cache warming opt-out']),
-      missing: [JSON.stringify(labels), JSON.stringify(sessionLabels)],
-    });
+    results.push({ name: '/keys Sessions holds Cache warming opt-out alone', ok: JSON.stringify(sessionLabels) === JSON.stringify(['Cache warming opt-out']), missing: sessionLabels });
   }
   {
     // A new key extends its pool's list, drawn read-only after its own rows; replacing the list drops them.
@@ -15228,16 +15220,17 @@ m.unmount();
     for (const f of folds) f.open = true;
     await page.settle(50);
     const pin = kvRows(folds[1]?.querySelector('.kv'));
+    const summaries = folds.map((f) => f.querySelector('summary')?.firstChild?.textContent);
     scan('refusal, folds open', card);
     results.push({
-      name: "/routing-log the refusal's card reads two lines and Pin not looked up",
+      name: "/routing-log the refusal's card reads two lines, Pin not looked up and no settings fold",
       ok:
         record.pinReason === 'not_looked_up' && sentenceOf(card) === 'Refused before selection' &&
         JSON.stringify(stations.map((s) => [s.step, s.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) &&
         rest?.querySelector('.strip-popover__sentence')?.textContent === 'The rest of the walk did not run: the moves, the rungs and the partitions.' && reason[0] === 'drift hash' &&
-        JSON.stringify(pin.map((r) => [r.label, r.dd?.textContent])) === JSON.stringify([['Pin', 'not looked up']]) &&
+        JSON.stringify(pin.map((r) => [r.label, r.dd?.textContent])) === JSON.stringify([['Pin', 'not looked up']]) && folds.length === 2 && JSON.stringify(summaries) === JSON.stringify(['Request facts', 'Pin and warmth']) &&
         candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${reason[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
-      missing: [...stations.map((s) => `${s.step} ${s.verdict}`), `Admission: ${rowsRead(admission)}`, rest?.textContent ?? 'no rest of the walk popover', JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
+      missing: [...stations.map((s) => `${s.step} ${s.verdict}`), `Admission: ${rowsRead(admission)}`, rest?.textContent ?? 'no rest of the walk popover', JSON.stringify(pin.map((r) => r.label)), JSON.stringify(summaries), JSON.stringify(outcomeOf(card).Answer)],
     });
     page.unmount();
   }
@@ -15912,11 +15905,11 @@ m.unmount();
     };
     const { card, page } = await story('req_e0a4c6f2-118');
     api.getDecision = original;
-    const fold = card?.querySelectorAll('details.decision-card__fold')[2];
+    const summaries = [...(card?.querySelectorAll('details.decision-card__fold') ?? [])].map((f) => f.querySelector('summary')?.firstChild?.textContent);
     results.push({
-      name: "/routing-log a refusal under a key or pool the registry no longer holds reads so in the settings fold",
-      ok: fold?.querySelector('summary')?.textContent === 'Settings in force' && fold.querySelector('.kv') === null && (fold.textContent ?? '').endsWith('The key and its pool had left the registry'),
-      missing: [fold?.textContent ?? 'no fold'],
+      name: "/routing-log a refusal under a key or pool the registry no longer holds draws no settings fold",
+      ok: JSON.stringify(summaries) === JSON.stringify(['Request facts', 'Pin and warmth']) && !(card?.textContent ?? '').includes('The key and its pool had left the registry'),
+      missing: [JSON.stringify(summaries), card ? 'card drawn' : 'no card'],
     });
     page.unmount();
   }

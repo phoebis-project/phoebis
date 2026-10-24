@@ -124,9 +124,7 @@ const rulesRefusal = (rules: ModelRule[] | undefined): string | null =>
  */
 const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRulesMode'>>): string | null => {
   const mode = input.modelRulesMode;
-  const rules = rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
-  if (rules) return rules;
-  return null;
+  return rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
 };
 
 /**

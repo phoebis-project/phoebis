@@ -160,8 +160,8 @@ interface ShedRound {
 const BEFORE_EDIT: Record<string, Partial<RecordSettings>> = { all: { minSharedPrefixTokens: 10_000, poolUpdatedAt: iso(NOW - 9 * DAY), slowDownHoldSeconds: 60 } };
 
 /**
- * The pool's settings as the record decided at `at` names them, by the pool fields they are read from: a
- * record decided before the pool's edit carries the values the edit moved.
+ * The pool's settings as the record decided at `at` names them, by the pool fields they are read from: a record
+ * decided before the pool's edit carries the values the edit moved.
  */
 function settingsOf(pool: PoolSeed, at: number): RecordSettings {
   return {

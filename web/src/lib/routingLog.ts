@@ -2245,12 +2245,12 @@ export function pinRows(record: DecisionRecord, now: number): CardRow[] {
 }
 
 /**
- * The Settings in force grid. A
- * version 1 record reads the switch and the ceiling as not recorded and its three removed settings after the list.
+ * The Settings in force grid. A refusal draws none, since no setting entered it. A version 1 record reads the
+ * switch and the ceiling as not recorded and its three removed settings after the list.
  */
 export function settingsRows(record: DecisionRecord): CardRow[] | null {
   const s = record.settings;
-  if (s === null) return null;
+  if (s === null || record.outcome.kind === 'refused') return null;
   const rows = SETTINGS_ROWS.map((r) => ({ chips: [plain(UNRECORDED.includes(r.key) && s[r.key] === null ? 'not recorded' : settingValue(r.key, s))], label: r.label }));
   const share = (v: number | null) => (v === null ? 'off' : fmtPct(v));
   const legacy = s.legacy === null ? [] : [
