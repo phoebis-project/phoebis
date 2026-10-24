@@ -446,6 +446,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(headed.map((a) => [a.id, a.extraUsage.monthlyLimitCredits, a.extraUsage.inUse]), [['nightly', null, true]], "the plan account whose newest reading a head wrote carries no amounts");
   });
 
+  test(`the story's usage-based seat scores as a paid source and books no plan reservation on the fleet rows' records, at ${at}`, async () => {
+    const s = await story;
+    const fleetIds = new Set(s.requests.filter((r) => r.keyId === 'fleet').map((r) => r.id));
+    const records = (await decisionsOf(s)).filter((r) => fleetIds.has(r.requestId));
+    assert.deepEqual([...new Set(records.map((r) => r.requestId))].sort(), ['req_3f6a9c21-d48', 'req_7b2e5d93-a16', 'req_c94d1e07-b35'], "the key's three rows");
+    // The engine scores a paid source by its remaining allowance with no hours, no window and no burn, and the seat
+    // reads no plan window, so all of its allowance is left.
+    const paid = { burn: 0, deadline: null, end: null, hours: null, remaining: 1, reset: null, score: 1, window: null };
+    for (const r of records) {
+      const seat = r.candidates.find((c) => c.accountId === 'contract');
+      assert.deepEqual(seat?.pace, paid, `${r.requestId}/${r.seq}'s pace`);
+      if (r.outcome.accountId !== 'contract') continue;
+      // A source with no plan capacity books nothing, so its placement reaches the reserve station with no booking.
+      assert.deepEqual([r.outcome.reservation, r.walk.find((w) => w.step === 'reserve')?.verdict], [null, 'none'], `${r.requestId}/${r.seq}'s reservation`);
+    }
+  });
+
   test(`no account bills overage beside the provider's reason for no longer funding it, at ${at}`, async () => {
     const s = await story;
     for (const a of s.accounts) {

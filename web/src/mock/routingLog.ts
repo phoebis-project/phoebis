@@ -64,6 +64,8 @@ const hashOf = (boundary: string): string => {
 };
 
 const accountOf = new Map(ACCOUNTS.map((a) => [a.id, a]));
+/** A paid source, as the engine reads one: an API-key account or a usage-based seat, neither with plan capacity. */
+const isPaidSource = (a: Pick<Account, 'kind' | 'usageBased'>): boolean => a.kind === 'api_key' || a.usageBased;
 /** A static boundary is the client's own prefix, which every session of a main conversation or a subagent shares. */
 const staticBoundary = (agentId: string | null, depth: number) => `static|claude-code-${agentId === 'main' ? 'main' : 'subagent'}|${depth}`;
 const fact = (key: string, value: unknown, unit: string | null = null, accountId: string | null = null): WalkFact => ({ accountId, key, unit, value });
@@ -512,15 +514,17 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
     // Pace reads one window as the engine does, chosen by the model alone: the 7-day Fable window for a Fable request,
-    // else the 7-day window, one the account has not read counting as untouched. An API key scores by its worst live
-    // bucket.
+    // else the 7-day window, one the account has not read counting as untouched. A paid source scores by its remaining
+    // allowance with no hours, no window and no burn: an API key its worst live bucket, and a usage-based seat, which
+    // reads no plan window, the whole of it.
+    const paid = isPaidSource(a);
     const windowName = r.canonicalModel.includes('fable') ? 'seven_day_fable' : 'seven_day';
-    const reading = a.kind === 'api_key' ? windows.worst_bucket : windows[windowName];
+    const reading = a.kind === 'api_key' ? windows.worst_bucket : paid ? undefined : windows[windowName];
     const remaining = reading === undefined ? 1 : Math.max(0, 1 - reading.utilization);
-    const reset = a.kind === 'api_key' ? null : (reading?.reset ?? null);
-    const deadlineMs = [reset ? Date.parse(reset) : null, endsAt].filter((x): x is number => x !== null).reduce<number | null>((min, x) => (min === null || x < min ? x : min), null);
-    const hours = a.kind === 'api_key' ? null : deadlineMs === null ? 168 : Math.max(1, (deadlineMs - at) / HOUR);
-    const paceBurn = a.kind === 'api_key' ? 0 : (burn[windowName] ?? 0);
+    const reset = paid ? null : (reading?.reset ?? null);
+    const deadlineMs = paid ? null : [reset ? Date.parse(reset) : null, endsAt].filter((x): x is number => x !== null).reduce<number | null>((min, x) => (min === null || x < min ? x : min), null);
+    const hours = paid ? null : deadlineMs === null ? 168 : Math.max(1, (deadlineMs - at) / HOUR);
+    const paceBurn = paid ? 0 : (burn[windowName] ?? 0);
     return {
       accountId: a.id,
       allowanceKnown: a.kind === 'api_key' || windows.five_hour !== undefined,
@@ -540,7 +544,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       obstacle,
       overage: overage ? { observedAt: iso(at - 40_000), reset: a.overage?.reset ?? null, since: iso(OVERAGE_FROM), source: 'head' } : null,
       // The spare rate: the share left per hour to the deadline less the burn the account's sessions already spend.
-      pace: pool.strategy === 'pace' ? { burn: paceBurn, deadline: deadlineMs === null ? null : iso(deadlineMs), end: endsAt === null ? null : iso(endsAt), hours: hours === null ? null : Math.round(hours * 10) / 10, remaining, reset, score: hours === null ? remaining : round5(remaining / hours - paceBurn), window: a.kind === 'api_key' ? null : windowName } : null,
+      pace: pool.strategy === 'pace' ? { burn: paceBurn, deadline: deadlineMs === null ? null : iso(deadlineMs), end: paid || endsAt === null ? null : iso(endsAt), hours: hours === null ? null : Math.round(hours * 10) / 10, remaining, reset, score: hours === null ? remaining : round5(remaining / hours - paceBurn), window: paid ? null : windowName } : null,
       partition: null,
       planTier: sub?.rateLimitTier ?? null,
       prefix: { ...NO_PREFIX, ...spec.prefix?.[a.id] },
@@ -1084,12 +1088,13 @@ function cycleStands(spec: Spec, accountId: string, pool: PoolSeed): boolean {
 /**
  * What a placement or a move books on the account it chose until the usage replaces it: the rewrite of the pin's last
  * prompt, or of the body for a fresh session, and the burn it brings, per plan window the model draws. A count, a
- * probe, a fast request and a client classifier call book nothing, and neither does an API-key account, which has no
- * plan window.
+ * probe, a fast request and a client classifier call book nothing, and neither does a paid source, which has no plan
+ * capacity.
  */
 function reservationOf(spec: Spec, chosen: RecordCandidate | undefined): { reservation: NonNullable<RecordOutcome['reservation']>; step: WalkStep } | null {
   const r = spec.request;
-  if ((spec.kind !== 'placed' && spec.kind !== 'moved') || chosen?.kind !== 'oauth' || r.kind !== 'inference' || r.shape.requestedSpeed === 'fast' || r.classifier !== null) return null;
+  const account = chosen === undefined ? undefined : accountOf.get(chosen.accountId);
+  if ((spec.kind !== 'placed' && spec.kind !== 'moved') || chosen === undefined || account === undefined || isPaidSource(account) || r.kind !== 'inference' || r.shape.requestedSpeed === 'fast' || r.classifier !== null) return null;
   const id = chosen.accountId;
   const rewrite = rewriteOf(spec.kind === 'moved' ? (spec.pinFigures?.tokens ?? bodyTokensOf(r)) : bodyTokensOf(r), r.canonicalModel);
   const brought = spec.kind === 'moved' && spec.pinFigures ? spec.pinFigures.burn : spec.story ? PRIOR_BURN : {};
