@@ -457,6 +457,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([pool.activePins, pool.members.map((m) => [m.accountId, m.activePins])], [1, [['contract', 1]]], 'the pool and its member count the pin');
   });
 
+  test(`every record of one request reads the request's one boundary count, at ${at}`, async () => {
+    const s = await story;
+    // The failed attempt on secondary writes no row, and the failover's answer writes eleven message rows on primary.
+    const records = (await decisionsOf(s)).filter((r) => r.requestId === 'req_1d9c3e55-0b2').sort((a, b) => a.seq - b.seq);
+    assert.deepEqual(records.map((r) => [r.seq, r.request.chain.boundaries]), [[1, 11], [2, 11]], 'both records read the count of the request');
+  });
+
   test(`the story's usage-based seat scores as a paid source and books no plan reservation on the fleet rows' records, at ${at}`, async () => {
     const s = await story;
     const fleetIds = new Set(s.requests.filter((r) => r.keyId === 'fleet').map((r) => r.id));

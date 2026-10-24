@@ -1116,8 +1116,11 @@ function markOf(accountId: string, at: number): { at: number; on: string; window
   return round === null ? null : { at: round, on: accountId, window: 'five_hour' };
 }
 
-/** What the router recorded for one decision: the record and the row the list route answers. */
-function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary } {
+/**
+ * What the router recorded for one decision: the record and the row the list route answers. `messageRows` is the
+ * request's most message rows any of its answers writes, which its chain's boundary count reads.
+ */
+function build(spec: Spec, messageRows: number): { record: DecisionRecord; summary: DecisionSummary } {
   const r = spec.request;
   const pool = poolById.get(r.poolId ?? '')!;
   const fast = r.shape.requestedSpeed === 'fast';
@@ -1321,8 +1324,6 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
         ...spec.cacheMap.staticSizes.map((size, i) => ({ depth: i + 1, prefixTokens: size, tier: 'static' })),
       ]
     : [{ depth: (spec.rung?.depth ?? 0) + 1, prefixTokens, tier: 'message' }];
-  // Each message row is a boundary new to the account, so the chain holds at least as many boundaries as rows.
-  const messageRows = written.filter((e) => e.tier === 'message').length;
   const completion: RecordCompletion | null = dispatched
     ? {
         cacheMapWritten: answered && usage.cacheWrite5m + usage.cacheWrite1h > 0 ? written.map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs })) : null,
@@ -2003,8 +2004,12 @@ function buildDecisions() {
   const specs = [...story, ...REQUESTS.filter((r) => !STORY_IDS.has(r.id)).flatMap(derivedSpecs)].sort((a, b) => a.at - b.at || a.request.id.localeCompare(b.request.id) || a.seq - b.seq);
   const decisions = new Map<string, DecisionRecord>();
   const summaries: DecisionSummary[] = [];
+  // The router writes the request's message boundary count on every record of it, and each message row an answer
+  // writes is a boundary new to the account, so the count holds at least the most rows any of its answers writes.
+  const messageRows = new Map<string, number>();
+  for (const spec of specs) messageRows.set(spec.request.id, Math.max(messageRows.get(spec.request.id) ?? 1, spec.cacheMap?.messages ?? 1));
   for (const spec of specs) {
-    const { record, summary } = build(spec);
+    const { record, summary } = build(spec, messageRows.get(spec.request.id) ?? 1);
     // The mock answers the record as it built it, so the card's copy is the record itself.
     const { raw: _, ...answered } = record;
     decisions.set(`${record.requestId}/${record.seq}`, { ...record, raw: answered });
