@@ -5047,8 +5047,8 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
     assert_eq!(names(&existing, decision_indexes).len(), 5);
 }
 
-/// A decision whose every column reads a value of its own: a probe's move from `a` to `b` under routing session
-/// `s1`. Built over a refusal's record, since the columns come off the request and outcome blocks alone.
+/// A decision whose every column reads a value of its own: a probe's move from `a` to `b` under session `s1`.
+/// Built over a refusal's record, since the columns come off the request and outcome blocks alone.
 fn decision(
     request_id: &str,
     seq: u32,

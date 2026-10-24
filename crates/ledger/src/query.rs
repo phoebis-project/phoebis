@@ -764,7 +764,7 @@ pub fn request_events(
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let to = request.finished_at.unwrap_or(i64::MAX);
     let marker = format!("%\"source_request_id\":\"{}\"%", request.id);
-    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND ((session_id IS NOT NULL AND session_id = ?3) OR detail LIKE ?4 OR request_id = ?5) ORDER BY at, rowid")?;
+    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND (session_id = ?3 OR detail LIKE ?4 OR request_id = ?5) ORDER BY at, rowid")?;
     let rows = stmt.query_map(
         params![
             request.received_at,
