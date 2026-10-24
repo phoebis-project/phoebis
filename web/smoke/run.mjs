@@ -2546,6 +2546,47 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     page.unmount();
   }
   {
+    // The router answers a seat's usage block as a failed read beside its full spend reading until the poll first
+    // reads it (the usage-seat row of test/fixtures/accounts.json). The spend reading is the seat's one window, so the
+    // card keeps its Spend row where a plan account with no window draws the error.
+    const { listAccounts } = api;
+    api.listAccounts = async () =>
+      (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, usage: { ...a.usage, error: 'the poll has not read this account yet', fetchedAt: null, heldUntil: null, poll: null, status: 'error' } } : a));
+    try {
+      const page = await mount('/quota', { now: CLOCK_ORIGIN });
+      const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
+      const chips = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].map((c) => c.textContent);
+      const retries = [...(card?.querySelectorAll('button.pill') ?? [])].filter((p) => p.textContent?.trim() === 'Retry').length;
+      results.push({
+        name: "/quota a usage-based seat whose read failed still draws its Spend row, with no error and no Retry",
+        ok: JSON.stringify(chips) === JSON.stringify(['Spend59% left']) && card?.querySelector('.qcard__error') === null && card?.classList.contains('is-error') === false && retries === 0,
+        missing: [JSON.stringify(chips), card?.querySelector('.qcard__error')?.textContent ?? 'no error block', `${retries} Retry`],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
+    // Once a reset header has named the spend window's reset, the Spend row reads as a plan row: the relative reset
+    // with no estimate's word, and the absolute instant alone on hover.
+    const { listAccounts } = api;
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, resetSource: 'head' } } : a));
+    try {
+      const page = await mount('/quota', { now: CLOCK_ORIGIN });
+      const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
+      const line = card?.querySelector('.qcard__windows .qwin__reset');
+      results.push({
+        name: "/quota a usage-based seat's Spend row with a header's reset reads as a plan row, the absolute instant alone on hover",
+        ok: line?.textContent === `resets ${fmtRelative(reset, CLOCK_ORIGIN)}` && line.querySelector('.muted') === null && line.getAttribute('title') === `${fmtAbsolute(reset)}, the first of this account to recover`,
+        missing: [line?.textContent ?? 'no line', line?.getAttribute('title') ?? 'no title'],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
     const page = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
     const laneOf = () => [...page.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'contract');
     const readLane = () => {

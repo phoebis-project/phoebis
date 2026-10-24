@@ -206,7 +206,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
   // Windows the card holds are drawn whatever the last read said; the error takes their place only with none.
-  const failed = status === 'error' && !w5 && !w7 && !account.fableWindow;
+  const failed = status === 'error' && !w5 && !w7 && !account.fableWindow && account.spend === null;
   return (
     <article className={`qcard ${failed ? 'is-error' : ''}`}>
       <header className="qcard__head">
@@ -400,7 +400,7 @@ function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: 
       )}
       {/* The estimate's word is a part of its own, so a column too narrow for the line breaks before it, as a live
           window's label breaks before its projection. */}
-      <span className={`qwin__reset ${spend.resetSource === 'estimated' ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`${spendResetTitle(spend)}${soon ? ', the first of this account to recover' : ''}`}>
+      <span className={`qwin__reset ${spend.resetSource === 'estimated' ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`${spend.resetSource === 'estimated' ? spendResetTitle(spend) : fmtAbsolute(spend.resetsAt)}${soon ? ', the first of this account to recover' : ''}`}>
         {spend.resetSource === 'estimated' ? (
           <>
             <span className="qwin__part">resets {fmtRelative(spend.resetsAt, now)},</span> <span className="qwin__part muted">estimated</span>

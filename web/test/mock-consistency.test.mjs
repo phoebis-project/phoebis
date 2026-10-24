@@ -434,6 +434,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(rows.length > 0 && rows.every((r) => r.accountId === 'contract' && s.lib.fundingOf(r.attempts.at(-1)) === 'usage_based'), "the key's rows are the seat's, billed as usage-based");
     const rollups = s.allRollups.filter((r) => r.keyId === 'fleet');
     assert.ok(rollups.length > 0 && rollups.every((r) => r.funding === 'usage_based'), 'and its rollups file under the word');
+    // The decision card's spend cell and the record checks of a spend entry read these facts, and those checks pass
+    // vacuously on records that carry no entry.
+    const fleetIds = new Set(rows.map((r) => r.id));
+    const records = (await decisionsOf(s)).filter((r) => fleetIds.has(r.requestId));
+    assert.deepEqual([...new Set(records.map((r) => r.requestId))].sort(), [...fleetIds].sort(), "each of the key's rows has its decision record");
+    const filed = records.map((r) => r.candidates.find((c) => c.accountId === 'contract')).map((c) => [c?.tier[0], c?.windows.spend?.utilization, c?.windows.spend?.source]);
+    assert.ok(filed.every(([tier, utilization, source]) => tier === 2 && utilization === 0.41 && source === 'estimated'), `the records file the seat in the metered tier with its spend window: ${JSON.stringify(filed)}`);
     assert.ok(s.accounts.filter((a) => a.id !== 'contract').every((a) => !a.usageBased && a.spend === null), 'no other account reads the class');
     const headed = s.accounts.filter((a) => a.extraUsage?.enabled && a.extraUsage.usedCredits === null);
     assert.deepEqual(headed.map((a) => [a.id, a.extraUsage.monthlyLimitCredits, a.extraUsage.inUse]), [['nightly', null, true]], "the plan account whose newest reading a head wrote carries no amounts");

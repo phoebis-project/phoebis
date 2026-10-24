@@ -39,7 +39,7 @@ export interface ExtraUsage {
   disabledReason: string | null;
   enabled: boolean;
   inUse: boolean;
-  /** The amounts come from the newest polled row of the day, so a reading a head wrote since carries none. */
+  /** The amounts are the newest polled row's, null while no polled row of the last day carries them. */
   monthlyLimitCredits: number | null;
   usedCredits: number | null;
 }
