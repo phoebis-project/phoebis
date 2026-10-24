@@ -22274,6 +22274,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   {
     const named = heads();
     const sessionAt = named.indexOf('Session');
+    results.push({ name: '/sessions the Session column leads after the gutter and Key follows it', ok: sessionAt === 1 && named.indexOf('Key') === 2, missing: named });
     {
       // Every column is on here, so the fill set is read whole: the gutter keeps its own width and carries neither
       // class, and each row's cell carries its header's class, which is what makes the fill cut and the fit hug.
