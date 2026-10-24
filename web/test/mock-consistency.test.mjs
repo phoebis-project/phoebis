@@ -384,13 +384,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(reached, [], 'a retired name reaches a row');
   });
 
-  test(`every account of the story draws in a color of its own, at ${at}`, async () => {
+  test(`every account the rings and the Quota windows lanes draw reads in a color of its own, at ${at}`, async () => {
     const s = await story;
     const slotOf = accountSlots(s.accounts.map((a) => a.id));
     const slots = s.accounts.map((a) => slotOf(a.id));
     // The eight series colors cycle past the eighth id, so the ids that wrap must be ones the rings and the Quota
-    // windows lanes never draw: those draw a listed account that routes, and two of them on one slot read as one.
-    const drawn = s.accounts.filter((a) => s.lib.isQuotaListed(a) && a.routingEnabled);
+    // windows lanes never draw: the lanes draw a listed account with a window, routing or not, the rings the ones that
+    // route, and two of them on one slot read as one.
+    const drawn = s.accounts.filter((a) => s.lib.isQuotaListed(a));
     const shared = drawn.flatMap((a, i) => drawn.slice(i + 1).filter((b) => slotOf(b.id) === slotOf(a.id)).map((b) => `${a.id} and ${b.id} on slot ${slotOf(a.id)}`));
     assert.deepEqual(shared, [], 'no two drawn accounts share a color');
     assert.ok(slots.every((slot) => slot !== null), 'every listed account has a slot');
@@ -3156,25 +3157,26 @@ test("the hour a full day back counts toward the accounts' and pools' day totals
 });
 
 test("a paired row's first reading is stamped at the list read that lands it, after the confirm", async () => {
-  // Every story load pins the clock its bundle reads while it loads, so this case waits for them and reads the wall
-  // clock alone.
+  // Every story load pins the clock its bundle reads while it loads, so this case waits for them, then holds the clock
+  // the mock reads and steps it past the confirm's first poll rather than waiting the poll out.
   await loading;
   const d = await import('./dist/api.js');
-  const api = new d.MockApi();
-  await api.login('admin');
-  const started = await api.startPairing({ id: 'stamped', label: 'Stamped' });
-  await api.completePairing(started.id, { code: 'code', state: started.state });
-  const before = Date.now();
-  await api.confirmPairing(started.id);
-  // The confirm's first poll lands a few seconds on, on the mock's clock.
-  await new Promise((resolve) => setTimeout(resolve, 2_200));
-  const from = Date.now();
-  const listing = api.listAccounts();
-  const to = Date.now();
-  const row = (await listing).find((a) => a.id === 'stamped');
-  assert.ok(row.windows.length > 0, 'the first reading landed');
-  for (const w of row.windows) {
-    const at = Date.parse(w.observedAt);
-    assert.ok(at >= from && at <= to && at > before, `${w.id} read at ${w.observedAt}, the list read at ${iso(from)}, the confirm after ${iso(before)}`);
+  const wall = Date.now;
+  let now = wall();
+  Date.now = () => now;
+  try {
+    const api = new d.MockApi();
+    await api.login('admin');
+    const started = await api.startPairing({ id: 'stamped', label: 'Stamped' });
+    await api.completePairing(started.id, { code: 'code', state: started.state });
+    const confirmed = now;
+    await api.confirmPairing(started.id);
+    // The confirm's first poll lands a few seconds on, on the mock's clock.
+    now += 2_200;
+    const row = (await api.listAccounts()).find((a) => a.id === 'stamped');
+    assert.ok(row.windows.length > 0, 'the first reading landed');
+    for (const w of row.windows) assert.equal(w.observedAt, iso(now), `${w.id} read at the list read, ${iso(now)}, after the confirm at ${iso(confirmed)}`);
+  } finally {
+    Date.now = wall;
   }
 });

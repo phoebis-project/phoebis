@@ -642,6 +642,7 @@ test("a poll's stand-in gives way to the list's answer under its address, its ro
   assert.deepEqual(drawn(), [[], 'ledger locked', null], "a Refresh clears the stand-in and the list's error shows again");
   act(() => clock.tick(5_000));
   await settled();
+  assert.deepEqual(drawn(), [['a'], null, 'p2'], 'the next poll stands in for the list again');
   f.render({ address: 'r' });
   assert.deepEqual(drawn(), [[], 'ledger locked', null], 'another address clears the stand-in the poll set again');
   act(() => clock.tick(5_000));

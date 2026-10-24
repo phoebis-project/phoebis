@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, CACHE_MISS_LABEL, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a window priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
@@ -2660,12 +2660,67 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     page.unmount();
   }
   {
+    // The reset falls on the first of the next month, past the default two weeks, so one Next period reaches it: the
+    // live bar ends at the reset's place and the upcoming window starts there. The smoke runs under TZ=UTC, so the span
+    // starts at a UTC midnight, three days before the anchor's day plus the period.
+    const page = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
+    page.container.querySelector('.timeline button[aria-label="Next period"]')?.click();
+    await page.settle();
+    const lane = [...page.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'contract');
+    const live = lane?.querySelector('.lane__bar--live');
+    const next = lane?.querySelector('.lane__bar--next');
+    const DAY = 86_400_000;
+    const start = new Date(CLOCK_ORIGIN).setUTCHours(0, 0, 0, 0) - 3 * DAY + 14 * DAY;
+    const at = ((Date.parse(reset) - start) / (14 * DAY)) * 100;
+    const liveEnd = live ? parseFloat(live.style.left) + parseFloat(live.style.width) : NaN;
+    const nextLeft = next ? parseFloat(next.style.left) : NaN;
+    results.push({
+      name: "/quota#quota-windows one Next period reaches the seat's reset, where the live spend window ends and the upcoming one starts",
+      ok: at > 0 && at < 100 && Math.abs(liveEnd - at) < 1e-6 && Math.abs(nextLeft - at) < 1e-6,
+      missing: [`reset at ${at}%`, `live ends at ${liveEnd}%`, `next starts at ${nextLeft}%`],
+    });
+    page.unmount();
+  }
+  {
+    // With no limit set the row and the Usage card read the amount spent alone with no meter, the reset line kept, and
+    // the lane's chip the amount spent.
+    const { listAccounts } = api;
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: { ...a.spend.amounts, limitMinor: null } } } : a));
+    try {
+      const page = await mount('/accounts/contract', { now: CLOCK_ORIGIN });
+      const row = spendBar(page.container.querySelector('a.account-row[href="/accounts/contract"]'));
+      const usage = spendBar([...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage'));
+      page.unmount();
+      const lanes = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
+      const chip = [...lanes.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'contract')?.querySelector('.tl-chip')?.textContent ?? null;
+      lanes.unmount();
+      results.push({
+        name: '/accounts and /quota#quota-windows a usage-based seat with no limit set reads the amount spent with no meter on its row and its Usage card, the reset kept, and its lane chip the amount spent',
+        ok: row.head === 'Spend$1,025.00 spent' && row.meter === 0 && row.line === estimatedLine && usage.head === 'Spend limit$1,025.00 spent' && usage.meter === 0 && usage.line === estimatedLine && chip === 'Spend limit $1,025.00 spent',
+        missing: [JSON.stringify(row), JSON.stringify(usage), String(chip)],
+      });
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
     const page = await mount('/pools', { now: CLOCK_ORIGIN });
     const rows = [...page.container.querySelectorAll('[id="contract"] .serving tbody tr')].map((tr) => [tr.children[0]?.textContent?.trim(), tr.children[1]?.querySelector('a')?.textContent?.trim(), tr.children[2]?.querySelector('.chips')?.textContent?.trim()]);
     results.push({
       name: "/pools the contract pool's serving table files its usage-based member in the metered tier at P1, next for a fresh session",
       ok: JSON.stringify(rows) === JSON.stringify([['metered P1', 'contract', 'next']]),
       missing: [JSON.stringify(rows)],
+    });
+    // The Member utilization bar measures the plan windows the ceiling binds, so the pool's one usage-based member
+    // draws no tick on it.
+    [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool contract')?.click();
+    await page.settle(300);
+    const track = page.container.querySelector('dialog[open] .ubar__track');
+    const ticks = track?.querySelectorAll('.ubar__tick').length ?? -1;
+    results.push({
+      name: "/pools the contract pool's Member utilization bar draws no tick for its usage-based member",
+      ok: track !== null && ticks === 0,
+      missing: [track ? `${ticks} ticks` : 'no bar'],
     });
     page.unmount();
   }
@@ -2885,6 +2940,19 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     box()?.click();
     await m.settle(80);
     const cleared = field()?.value;
+    // An end typed with the box unticked is refused, since the route saves an end only on a canceled plan.
+    setter.call(field(), new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16));
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(80);
+    const unticked = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
+    results.push({
+      name: '/accounts/primary an end typed with Canceled unticked is refused before the save',
+      ok: box()?.checked === false && unticked.includes('An end is saved only with Canceled ticked.') && button('Save')?.disabled === true,
+      missing: [String(box()?.checked), unticked || 'no callout', String(button('Save')?.disabled)],
+    });
+    setter.call(field(), '');
+    field()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(80);
     box()?.click();
     await m.settle(80);
     // The smoke runs in UTC, so the field's local value is the instant's own minute.
@@ -3744,7 +3812,8 @@ expect('/accounts/secondary', m.text(), [
   tick(5_000);
   await ended.settle(400);
   const cleared = identityRows(ended).map((r) => r.label);
-  results.push({ name: '/accounts/secondary the Plan ended row leaves once a read answers the flag cleared', ok: cleared.length > 0 && !cleared.includes('Plan ended'), missing: cleared });
+  // The row the answer drew first, so a page that never drew it fails here too.
+  results.push({ name: '/accounts/secondary the Plan ended row leaves once a read answers the flag cleared', ok: row !== undefined && cleared.length > 0 && !cleared.includes('Plan ended'), missing: [row ? 'drawn first' : 'never drawn', ...cleared] });
   ended.unmount();
 }
 {
@@ -12220,7 +12289,8 @@ m.unmount();
     });
   const param = (page, name) => new URLSearchParams(page.location().search).get(name);
   const served = (r) => r?.attempts.at(-1)?.cacheMissReason ?? null;
-  const KNOWN = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
+  // The known reasons in their reading order, the comparison still running left out, in the library's labels.
+  const KNOWN = ['none', 'model_changed', 'system_changed', 'tools_changed', 'messages_changed', 'previous_message_not_found', 'unavailable', 'not_requested'].map((reason) => CACHE_MISS_LABEL[reason]);
 
   const reasonCheck = '/requests the Cache miss reason filter stands in the Outcome group of Add filter and offers the known reasons in their reading order';
   const page = await mount('/requests', { now: CLOCK_ORIGIN });
@@ -12690,10 +12760,10 @@ m.unmount();
     results.push({
       name: "/requests the list's late answer replaces the page an auto reload poll stood in for it, and the next poll reads at the list's stamp",
       ok:
-        failed === 'Could not load the request log' && !stood.error && stood.count === '50 shown, more available' && stood.tinted.length === 0 && !stood.ids.includes(LATE) && landed &&
+        failed === 'Could not load the request log' && !stood.error && stood.count === '50 shown, more available' && stood.tinted.length === 0 && landed &&
         !replaced.error && JSON.stringify(replaced.ids) === JSON.stringify(answer.requests.map((r) => r.id)) && replaced.ids.filter((id) => id === LATE).length === 1 && replaced.tinted.length === 0 &&
         sent.length === 1 && sent[0].cursor === undefined && sent[0].landedAfter === answer.landedThrough,
-      missing: [String(failed), `stood ${stood.ids.length} rows, count ${stood.count}, error ${stood.error}, tinted ${stood.tinted.join(' | ')}, late ${stood.ids.includes(LATE)}`, `landed ${landed} by ${isoAt(at)}`, `replaced ${replaced.ids.length} rows of ${answer.requests.length}, error ${replaced.error}, late ${replaced.ids.filter((id) => id === LATE).length}, tinted ${replaced.tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.landedAfter])), `list ${answer.landedThrough}`],
+      missing: [String(failed), `stood ${stood.ids.length} rows, count ${stood.count}, error ${stood.error}, tinted ${stood.tinted.join(' | ')}`, `landed ${landed} by ${isoAt(at)}`, `replaced ${replaced.ids.length} rows of ${answer.requests.length}, error ${replaced.error}, late ${replaced.ids.filter((id) => id === LATE).length}, tinted ${replaced.tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.landedAfter])), `list ${answer.landedThrough}`],
     });
   }
   {
@@ -12792,19 +12862,20 @@ m.unmount();
     // first page sends its cursor and no end. A custom range keeps its own end on every page.
     const from = isoAt(CLOCK_ORIGIN - 24 * HOUR);
     const end = isoAt(CLOCK_ORIGIN - HOUR);
-    const nextFrom = async (path) => {
+    // Each first page is read while the page holds the clock at the anchor, as the page read its own, since the unmount
+    // hands the clock back to the wall.
+    const nextFrom = async (path, to) => {
       const page = await mount(path, { now: CLOCK_ORIGIN });
+      const first = await api.listRequests({ from, limit: 10, to });
       const spy = countCalls('listRequests');
       nextPage(page)?.click();
       await page.settle();
       spy.restore();
       page.unmount();
-      return spy.calls.map(([q]) => q);
+      return { first, sent: spy.calls.map(([q]) => q) };
     };
-    const preset = await nextFrom('/requests?rows=10');
-    const custom = await nextFrom(`/requests?rows=10&from=${from}&to=${end}`);
-    const presetFirst = await api.listRequests({ from, limit: 10, to: isoAt(CLOCK_ORIGIN) });
-    const customFirst = await api.listRequests({ from, limit: 10, to: end });
+    const { first: presetFirst, sent: preset } = await nextFrom('/requests?rows=10', isoAt(CLOCK_ORIGIN));
+    const { first: customFirst, sent: custom } = await nextFrom(`/requests?rows=10&from=${from}&to=${end}`, end);
     results.push({
       name: "/requests Next from the first page reads to the router's clock under a preset and to the range's own end under a custom range",
       ok:
@@ -20418,7 +20489,7 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
       retries.length === 1 &&
       line !== null &&
       line.contains(retries[0]) &&
-      (line.textContent ?? '').includes('ledger locked'),
+      (line.textContent ?? '').startsWith('Could not load the tiles: ledger locked'),
     missing: [JSON.stringify(tiles()), `${retries.length} Try again`, line?.textContent ?? 'no line under the tiles'],
   });
   retries[0]?.click();
@@ -20437,7 +20508,8 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
 {
   // The Sessions and Agents figures count the rows the sessions read builds, so a failed sessions read ends their
   // placeholder with its error while the four tiles that read the overview alone keep their figures. The card's own
-  // error state draws a Try again of its own on the same failure, so the notice's is counted inside the notice.
+  // error state draws a Try again of its own on the same failure, so the notice's is counted inside the notice and the
+  // page holds the two.
   failNextCall('listSessions', '/admin/sessions', 'store busy');
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
   await page.settle();
@@ -20453,6 +20525,7 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
   const fed = tiles();
   const line = page.container.querySelector('.stat-grid + .sessions__notice');
   const retries = [...(line?.querySelectorAll('button') ?? [])].filter((b) => b.textContent?.trim() === 'Try again');
+  const onPage = [...page.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Try again').length;
   results.push({
     name: '/sessions a failed sessions read draws the Sessions and Agents tiles as dashes and names the sessions under the tiles',
     ok:
@@ -20462,8 +20535,9 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
       fed.every((t) => (COUNTED.includes(t.label) ? t.value === '-' && t.note === 'could not load' && t.title === 'store busy' : drawn(t))) &&
       line !== null &&
       (line.textContent ?? '').startsWith('Could not load the sessions: store busy') &&
-      retries.length === 1,
-    missing: [JSON.stringify(fed), `${retries.length} Try again in the notice`, line?.textContent ?? 'no line under the tiles'],
+      retries.length === 1 &&
+      onPage === 2,
+    missing: [JSON.stringify(fed), `${retries.length} Try again in the notice, ${onPage} on the page`, line?.textContent ?? 'no line under the tiles'],
   });
   const spies = Object.fromEntries(['getKeepaliveOverview', 'listKeepaliveRecipes', 'listKeys', 'listSessions'].map((name) => [name, countCalls(name)]));
   retries[0]?.click();
@@ -24714,7 +24788,7 @@ m.unmount();
   const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
   const brief = (r) => `${r.trigger}, row ${JSON.stringify(r.head)}, ${r.checked.length} of ${r.choices.length} checked, ${r.address === null ? 'no address key' : `address ${r.address.length}`}`;
   // The Cache miss reason list's labels as the page writes them, each by the reason it names.
-  const MISS_REASON = { 'History edited': 'messages_changed', 'Model changed': 'model_changed', 'No divergence': 'none', 'Not requested': 'not_requested', Pending: 'pending', 'Previous message not found': 'previous_message_not_found', 'System prompt changed': 'system_changed', 'Tools changed': 'tools_changed', Unavailable: 'unavailable' };
+  const MISS_REASON = Object.fromEntries(Object.entries(CACHE_MISS_LABEL).map(([reason, label]) => [label, reason]));
   /**
    * Each picker's value by its row's label, from the lists the view's options come from: the Analytics page's from the
    * breakdown under `range`, the page's own, the other views' keys, pools, accounts and models from the mock's lists, a
