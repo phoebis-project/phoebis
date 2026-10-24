@@ -10192,7 +10192,7 @@ fn a_resolution_between_two_turns_keeps_the_pin_warm_on_the_dated_id() {
 }
 
 /// A state whose session "s1" already holds a pin on "a", made by a real selection with static prefix "s0" and
-/// tail "old-tail": the fixture every warmth test below builds on.
+/// tail "old-tail": the fixture the four warmth tests below build on.
 fn pinned_state(s: &RegistrySnapshot, now: i64) -> RoutingState {
     let mut st = RoutingState::from_load(RoutingLoad::default());
     let first = placement_req(
@@ -15647,6 +15647,41 @@ fn a_selection_whose_pool_the_snapshot_lacks_names_its_pin_not_looked_up() {
         (true, Some("not_looked_up")),
         "the engine returns before the pin lookup, whatever session the request named"
     );
+}
+
+#[test]
+fn a_request_filtered_off_pinning_names_its_pin_pinning_off() {
+    let off = snapshot(Pool {
+        affinity: 0,
+        ..Pool::default()
+    });
+    let when_cached = snapshot(Pool {
+        mode: AffinityMode::WhenCached,
+        ..Pool::default()
+    });
+    for (s, why) in [
+        (&off, "affinity off"),
+        (
+            &when_cached,
+            "a marker-less portable request under when_cached",
+        ),
+    ] {
+        let req = request(s, Some("s1"), "claude-sonnet-5", true, &[], T);
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        let d = decide(&mut st, s, &req, &mut rng());
+        assert!(matches!(d.result, SelectResult::Selected(_)), "{why}");
+        assert_eq!(
+            (d.record.pin.is_none(), d.record.pin_reason),
+            (true, Some("pinning_off")),
+            "{why}"
+        );
+        let pin = line(&d.record, "pin");
+        assert_eq!(
+            (pin.verdict, fact(pin, "reason")),
+            ("none", &FactValue::Text("pinning_off".into())),
+            "{why}"
+        );
+    }
 }
 
 #[test]
