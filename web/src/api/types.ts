@@ -1158,7 +1158,7 @@ export interface RecordSettings {
   affinityTtlSeconds: number;
   burnAverageSeconds: number;
   inFlightCap: number;
-  /** A version 1 record's three removed settings, null on a version 2 record. */
+  /** A version 1 record's three removed settings, null on a record from version 2 on. */
   legacy: { paceFloor: number; selectBelowUtilization: number | null; shedAheadOfPace: number | null } | null;
   /** Null on a version 1 record, which carried no switch. */
   loadShedding: boolean | null;

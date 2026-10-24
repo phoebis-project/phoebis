@@ -94,8 +94,8 @@ function highestAt(path, x) {
 test('every step the router records has a station, a renderer and a stub word, and every station a step, in both record versions', () => {
   const renderers = ['candidate', 'chips', 'hold', 'list', 'outcome', 'rung', 'sentence', 'table'];
   const stubs = ['fires', 'match', 'released'];
-  // A version 2 record draws through the table, a version 1 record through the legacy table its frozen fixture holds.
-  for (const [table, steps, version] of [[d.STATION_KINDS, fixture, 'version 2'], [d.LEGACY_STATION_KINDS, legacyFixture, 'version 1']]) {
+  // A record from version 2 on draws through the table, a version 1 record through the frozen fixture's legacy table.
+  for (const [table, steps, version] of [[d.STATION_KINDS, fixture, 'from version 2'], [d.LEGACY_STATION_KINDS, legacyFixture, 'version 1']]) {
     for (const { step: id, verdicts } of steps.steps) {
       assert.ok(Object.hasOwn(table, id), `${version}: ${id} has a station kind`);
       assert.ok(Object.hasOwn(d.STEP_NAME, id), `${version}: ${id} has a step name`);
