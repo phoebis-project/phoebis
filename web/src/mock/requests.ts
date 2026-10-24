@@ -1,3 +1,4 @@
+import { foldUserAgent } from '@/api/fold';
 import type {
   Account, AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
@@ -860,7 +861,8 @@ interface StoryAttempt {
 type StoryGeo = 'not_available';
 
 interface StorySeed {
-  agentId: string;
+  /** The agent the client named, null for a request refused before its body was read. */
+  agentId: string | null;
   at: number;
   attempts: StoryAttempt[];
   canonical?: string;
@@ -1029,7 +1031,7 @@ function storyRow(seed: StorySeed): RequestLog {
     ...REQUEST_SAMPLE,
     accountId: answered ? last.accountId : null,
     agentId: seed.agentId,
-    agentType: seed.agentId === 'main' ? null : 'general-purpose',
+    agentType: seed.agentId === null || seed.agentId === 'main' ? null : 'general-purpose',
     at: iso(seed.at),
     attempts,
     autoMode: null,
@@ -1138,8 +1140,8 @@ function storyRequests(): RequestLog[] {
     // A compacted conversation renews its pin cold and writes its prefix afresh.
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
-    { agentId: 'main', at: t(14, 15, 48), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_9b4f1c62-a07', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
-    { agentId: 'main', at: t(14, 15, 12), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_2d8e5b13-f40', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
+    { agentId: null, at: t(14, 15, 48), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_9b4f1c62-a07', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
+    { agentId: null, at: t(14, 15, 12), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_2d8e5b13-f40', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     // The same client's next request carried no class header, so the contract refused it before any account was chosen.
     { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-6', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
@@ -2179,6 +2181,9 @@ function incompleteCodesOf(rows: RequestLog[]): Record<string, number> {
   return codes;
 }
 
+/** A user agent as the ledger keys a rollup by it: its product token, `-` for a request that sent none. */
+const agentTokenOf = (userAgent: string | null) => (userAgent === null ? '-' : foldUserAgent(userAgent));
+
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -2186,15 +2191,16 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     const hour = iso(startOfHour(Date.parse(r.at)));
     // A request answered at the cap before any account served it files under `-`, as the ledger files what it could
     // not attribute. The funding is part of the key, so a lane-hour on both sides of nightly's overage raise splits.
-    // The model is the one the router resolved, as the ledger keys it, so an alias files under its resolved id.
-    const key = [hour, r.keyId, r.poolId, r.accountId ?? '-', r.canonicalModel, r.kind, r.sessionId, fundingKey(r)].join('|');
+    // The model is the one the router resolved, as the ledger keys it, so an alias files under its resolved id. The
+    // client and the agent are the request's own, so a refusal the gate answered under another agent files apart.
+    const key = [hour, r.keyId, r.poolId, r.accountId ?? '-', r.canonicalModel, r.kind, r.sessionId, fundingKey(r), r.client ?? '-', agentTokenOf(r.userAgent)].join('|');
     const list = groups.get(key) ?? [];
     list.push(r);
     groups.set(key, list);
   }
   const out: HourlyRollup[] = [];
   for (const [key, list] of groups) {
-    const [hour, keyId, poolId, accountId, model, kind, sessionId, funding] = key.split('|') as [string, string, string, string, string, RequestKind, string, HourlyRollup['funding']];
+    const [hour, keyId, poolId, accountId, model, kind, sessionId, funding, client, userAgent] = key.split('|') as [string, string, string, string, string, RequestKind, string, HourlyRollup['funding'], string, string];
     const okRows = list.filter((r) => r.status === 200);
     const isProbe = kind === 'probe';
     // The seeded draws are the lane hour's, taken once each in this order, so splitting its rows by effort and class
@@ -2232,7 +2238,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       const keptHere = partRows.filter((r) => kept.has(r));
       out.push({
         hour,
-        client: CLIENTS[keyId] ?? '-',
+        client,
+        userAgent,
         keyId,
         // One hour never holds two holders of a key, since the live key starts on the hour.
         keyGeneration: list[0].keyGeneration,
@@ -2408,6 +2415,7 @@ function historicalRollups(): HourlyRollup[] {
       const inference: HourlyRollup = {
         hour: iso(t),
         client: CLIENTS[lane.keyId] ?? '-',
+        userAgent: agentTokenOf(USER_AGENTS[lane.keyId] ?? null),
         effort: lane.keyId === 'desktop' ? 'high' : takesMaxEffort ? 'max' : 'none',
         keyId: lane.keyId,
         keyGeneration: generation,
@@ -2465,6 +2473,7 @@ function historicalRollups(): HourlyRollup[] {
         out.push({
           hour: iso(t),
           client: CLIENTS[lane.keyId] ?? '-',
+          userAgent: agentTokenOf(USER_AGENTS[lane.keyId] ?? null),
           effort: 'none',
           keyId: lane.keyId,
           keyGeneration: generation,
@@ -2526,7 +2535,8 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
   return [
     {
       hour: iso(startOfHour(at)),
-      client: CLIENTS[r.keyId ?? ''] ?? '-',
+      client: r.client ?? '-',
+      userAgent: agentTokenOf(r.userAgent),
       effort: NO_EFFORT,
       keyId: 'notebook',
       keyGeneration: r.keyGeneration,

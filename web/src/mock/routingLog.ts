@@ -1402,7 +1402,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     requestId: r.id,
     seq: spec.seq,
     settings: settingsOf(pool, spec.at),
-    version: 2,
+    version: 3,
     walk,
   };
   const { by, fact: facts } = byAndFact(spec, record, pick, pool);

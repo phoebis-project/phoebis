@@ -14934,9 +14934,9 @@ m.unmount();
     Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: undefined });
     const widen = [...(foot?.querySelectorAll('button.link-btn') ?? [])].map((b) => b.textContent);
     results.push({
-      name: '/routing-log the foot reads Record v2 and Copy as JSON copies the record whole with the full hash',
+      name: '/routing-log the foot reads Record v3 and Copy as JSON copies the record whole with the full hash',
       ok:
-        foot?.querySelector('.decision-card__record')?.textContent === 'Record v2' && foot.querySelector('.muted')?.textContent === 'Widen to' && JSON.stringify(widen) === JSON.stringify(['this minute', 'this session', 'this account']) && copied !== null &&
+        foot?.querySelector('.decision-card__record')?.textContent === 'Record v3' && foot.querySelector('.muted')?.textContent === 'Widen to' && JSON.stringify(widen) === JSON.stringify(['this minute', 'this session', 'this account']) && copied !== null &&
         copied === JSON.stringify(record.raw, null, 2) && copied.includes(`"${chosen.prefix.staticMatch.hash}"`) && chosen.prefix.staticMatch.hash.length === 64,
       missing: [foot?.textContent ?? 'no foot', String(copied).slice(0, 80)],
     });
@@ -19351,7 +19351,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
     await groupBy('Client');
     const classes = trafficRows('client').map((row) => row[0]);
-    results.push({ name: '/analytics traffic by client lists the classes', ok: classes.includes('claude-code/cli') && classes.includes('claude-code/sdk-cli'), missing: classes });
+    results.push({ name: '/analytics traffic by client lists the classes', ok: classes.includes('claude-code/cli') && classes.includes('claude-code/sdk-cli') && classes.includes('other'), missing: classes });
 
     await groupBy('Request class');
     const requestClasses = trafficRows('request class').map((row) => row[0]);
@@ -19365,15 +19365,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const tokens = trafficRows('user agent').map((row) => row[0]);
     results.push({
       name: '/analytics the user agent grouping lists each agent by its product token, as the rollups key it',
-      ok: tokens.includes('claude-cli/2.1.269') && tokens.every((t) => !t.includes(' (')),
+      ok: tokens.includes('claude-cli/2.1.269') && tokens.includes('phoebis-batch/0.9') && tokens.every((t) => !t.includes(' (')),
       missing: tokens,
     });
     const listCheck = '/analytics a user agent pattern list names the groups and gathers the rest';
-    await typeGroups(listCheck, 'claude-cli/2.1.26*\nclaude-cli/2.1.30*');
+    await typeGroups(listCheck, 'claude-cli/2.1.*\nphoebis-batch/*');
     const named = trafficRows('user agent').map((row) => row[0]);
     results.push({
       name: listCheck,
-      ok: JSON.stringify([...named].sort()) === JSON.stringify(['claude-cli/2.1.26*', 'claude-cli/2.1.30*', 'other']),
+      ok: JSON.stringify([...named].sort()) === JSON.stringify(['claude-cli/2.1.*', 'other', 'phoebis-batch/*']),
       missing: named,
     });
     const boundCheck = '/analytics the user agent groups hold 32 patterns of 256 characters at most';
@@ -19472,7 +19472,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // The story's classless rows are the gate's refusals, which reach no account and count no miss, so a classless row
     // is read where one counts a miss.
     const byClass = linksUnder('request class', 'request_classes', { main: 'main', unattributed: '-' });
-    results.push({ name: '/analytics a breakdown cell under the request class grouping links with its class, a classless row that counts a miss as -', ok: byClass.linked.has('main') && byClass.wrong.length === 0, missing: [...byClass.wrong, `rows ${[...byClass.linked].join(',')}`] });
+    results.push({ name: '/analytics a breakdown cell under the request class grouping links with its class, and any classless row that counts a miss as -', ok: byClass.linked.has('main') && byClass.wrong.length === 0, missing: [...byClass.wrong, `rows ${[...byClass.linked].join(',')}`] });
     await groupBy('Classifier');
     const byClassifier = linksUnder('classifier', 'classifiers', { client: 'client', none: '-' });
     results.push({ name: '/analytics a breakdown cell under the classifier grouping links with its standing, client as client and the rest as -', ok: byClassifier.linked.size === 2 && byClassifier.wrong.length === 0, missing: [...byClassifier.wrong, `rows ${[...byClassifier.linked].join(',')}`] });
@@ -20315,7 +20315,7 @@ m.unmount();
   }
   {
     // A session view walks the session's pages once, and on a custom range each auto reload reads the first page alone,
-    // the later pages standing as loaded. The client session's 502 and its retry fall inside the span, and a page of
+    // the later pages standing as loaded. The laptop session's 502 and its retry fall inside the span, and a page of
     // one row makes them two pages. A session that leaves and comes back on the same span walks its pages again, since
     // rows may have moved past the first page while the view was away.
     const name = "/analytics a session view on a custom range capped at the clock walks the session's pages by its session filter, then reads the first page alone at each tick and keeps the later rows, and walks the pages again after the session leaves and comes back";

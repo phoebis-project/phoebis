@@ -11,7 +11,7 @@ import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/
 import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS } from './accounts';
 import { keyById } from './pools';
-import { USER_AGENTS, clock } from './requests';
+import { clock } from './requests';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
@@ -27,7 +27,7 @@ export interface HourlyRollup {
   cacheMissReasons: Record<CacheMissReason, number>;
   /** `client` for the client's own auto-mode classifier calls, which take no share of a plan window, else `-`. */
   classifier: string;
-  /** The class the router derived for the lane's agent; the rollups file a row with none under `-`. */
+  /** The class the router derived from the requests' own agent, `-` for a row whose requests carry none. */
   client: string;
   cost: CostSplit;
   costUsd: number;
@@ -92,6 +92,8 @@ export interface HourlyRollup {
   tier: string | null;
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
+  /** The requests' own agent folded to its product token, as the ledger keys a row, `-` for none. */
+  userAgent: string;
   /** Probes no real request came back for, settled when the recipe stopped or the request after them read no cache. */
   wastedProbes: number;
   wastedProbeReasons: Record<WastedProbeReason, number>;
@@ -118,8 +120,7 @@ const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   pool: (r) => r.poolId,
   request_class: (r) => r.requestClass,
   speed: (r) => r.speed,
-  // Each key runs one client in this story, so the key names the client its rows were sent by.
-  user_agent: (r) => USER_AGENTS[r.keyId] ?? '-',
+  user_agent: (r) => r.userAgent,
 };
 
 /**
@@ -159,7 +160,7 @@ function inQuery(r: HourlyRollup, q: AnalyticsQuery, fromMs: number, toMs: numbe
   if (q.kinds?.length && !q.kinds.includes(r.kind)) return false;
   if (q.models?.length && !q.models.includes(r.model)) return false;
   if (q.poolIds?.length && !q.poolIds.includes(r.poolId)) return false;
-  if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? ''))) return false;
+  if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, r.userAgent))) return false;
   if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client))) return false;
   return true;
 }
@@ -454,7 +455,7 @@ const holderOf = (key: string, groupBy: AnalyticsGroupBy): Pick<AnalyticsGroup, 
  * none of them names falls under the one bucket, as the breakdown route files it.
  */
 const groupKeyOf = (groupBy: AnalyticsGroupBy, named: string[]): ((r: HourlyRollup) => string) =>
-  groupBy === 'user_agent' && named.length ? (r) => named.find((p) => matchesPattern(p, USER_AGENTS[r.keyId] ?? '')) ?? 'other' : GROUP_KEY[groupBy];
+  groupBy === 'user_agent' && named.length ? (r) => named.find((p) => matchesPattern(p, r.userAgent)) ?? 'other' : GROUP_KEY[groupBy];
 
 export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const of = groupKeyOf(q.groupBy, q.userAgentGroups ?? []);

@@ -754,8 +754,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const refused = rows.filter((r) => r.errorCode === 'client_not_allowed');
     assert.equal(refused.length, 2, 'the earlier runner sent twice');
     for (const r of refused) {
-      const read = [r.status, r.refused, r.outcome, r.client, r.userAgent, r.sessionId, r.requestClass, r.model, r.attempts.length, r.costUsd];
-      assert.deepEqual(read, [403, true, 'rejected', 'other', 'phoebis-batch/0.9 (external, ci)', null, null, '', 0, 0], r.id);
+      const read = [r.status, r.refused, r.outcome, r.client, r.userAgent, r.agentId, r.agentType, r.sessionId, r.requestClass, r.model, r.attempts.length, r.costUsd];
+      assert.deepEqual(read, [403, true, 'rejected', 'other', 'phoebis-batch/0.9 (external, ci)', null, null, null, null, '', 0, 0], r.id);
     }
     const job = rows.filter((r) => r.errorCode !== 'client_not_allowed');
     assert.ok(job.length > 0, 'the job has requests');
@@ -763,6 +763,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const read = [r.client, r.userAgent, r.sessionId !== null, r.requestClass !== null];
       assert.deepEqual(read, ['claude-code/sdk-cli', 'claude-cli/2.1.302 (external, sdk-cli)', true, true], `${r.id} under class ${r.requestClass}`);
     }
+    // The ledger keys a rollup by the request's own client and agent, so the refusals roll up apart from the job.
+    const lane = s.allRollups.filter((r) => r.keyId === 'ci');
+    const gated = lane.filter((r) => (r.refusals.client_not_allowed ?? 0) > 0);
+    assert.deepEqual([...new Set(gated.map((r) => `${r.client} ${r.userAgent} ${r.accountId}`))], ['other phoebis-batch/0.9 -'], 'the refusals roll up under their own client and agent');
+    assert.equal(sum(gated, (r) => r.refusals.client_not_allowed), 2, 'both refusals roll up');
+    const rest = lane.filter((r) => !gated.includes(r));
+    assert.deepEqual([...new Set(rest.map((r) => `${r.client} ${r.userAgent}`))], ['claude-code/sdk-cli claude-cli/2.1.302'], 'the job rolls up under its own client and agent');
   });
 
   test(`the runner's sessions on ci read their last use off their own newest request, at ${at}`, async () => {
@@ -2947,10 +2954,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`the default range's effort, request class and classifier breakdowns count the story's rows per folded value, at ${at}`, async () => {
+  test(`the default range's effort, request class, classifier, client and user agent breakdowns count the story's rows per folded value, at ${at}`, async () => {
     const s = await story;
     const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
-    const folds = { classifier: (r) => s.lib.foldClassifier(r.classifier), effort: (r) => s.lib.foldEffort(r.shape.effort), request_class: (r) => s.lib.foldRequestClass(r.requestClass) };
+    const folds = {
+      classifier: (r) => s.lib.foldClassifier(r.classifier),
+      client: (r) => r.client ?? '-',
+      effort: (r) => s.lib.foldEffort(r.shape.effort),
+      request_class: (r) => s.lib.foldRequestClass(r.requestClass),
+      user_agent: (r) => (r.userAgent === null ? '-' : s.lib.foldUserAgent(r.userAgent)),
+    };
     for (const [groupBy, fold] of Object.entries(folds)) {
       const want = {};
       for (const r of rows) want[fold(r)] = (want[fold(r)] ?? 0) + 1;
