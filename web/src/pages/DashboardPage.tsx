@@ -17,7 +17,7 @@ import { equivalentOrDash, nativeFiguresOf, SHARE_NOTE, UNPRICED_TITLE } from '@
 import { ESTIMATED_TITLE, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
-import { costHeaderTitle, costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
+import { REFUSED_TITLE, costHeaderTitle, costUnitOf, glanceCellOf, revisionsTitle } from '@/lib/requests';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 import { speedHover } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
@@ -76,12 +76,6 @@ function costTileOf(unit: UnitPosition, o: Overview): CostTile {
     value: figuresValue(figures),
   };
 }
-
-/**
- * The refusals the request figures leave out, named on the Refused tile's hover and the Traffic table's Refused column.
- */
-export const REFUSED_TITLE =
-  "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
 
 function ReadFailed({ title, error, retry }: { error: string | null; retry: () => void; title: string }) {
   return <ErrorState title={title} body={error} action={<Button size="sm" onClick={retry}>Try again</Button>} />;

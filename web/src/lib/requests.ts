@@ -12,6 +12,11 @@ export const NO_SHARE_TITLE = 'The cost model prices no share for this request';
 export const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
 export const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
 export const FREE_SHARE_TITLE = 'Free on the plan: a client classifier call takes no window share';
+/**
+ * The refusals the request figures leave out, named on the Refused tile's hover and the Traffic table's Refused column.
+ */
+export const REFUSED_TITLE =
+  "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
 
 /** A wait's reason as a held row's hover names it: `cap` waited for a slot the in-flight cap freed. */
 const WAIT_REASON_WORD: Record<string, string> = { cap: 'for a slot', reset: 'for the reset', rewrite: 'for the rewrite in flight', slow_down: 'for the slow-down' };

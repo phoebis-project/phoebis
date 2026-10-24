@@ -319,3 +319,10 @@ test('the_codec_reads_and_writes_the_guardrails_list', () => {
   assert.equal(written.get('guardrails'), 'large-auxiliary,-');
   assert.deepEqual(d.REQUESTS_CODEC.fromParams(new URLSearchParams('')).guardrails, [], 'a bare address filters on no guardrail');
 });
+
+test("the Refused hover names the refusals the request figures leave out, and the router's own refusals that count as requests", () => {
+  assert.equal(
+    d.REFUSED_TITLE,
+    "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.",
+  );
+});
