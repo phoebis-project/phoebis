@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event, Outcome, RequestShape, OTHER_CLIENT};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_routing::RouterEvent;
@@ -20,6 +21,18 @@ fn ok() -> Rule {
             headers: vec![],
             body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}"#
                 .to_vec(),
+        },
+    }
+}
+
+/// Ahead of `ok` in a harness that serves both, since the count path matches that prefix too.
+fn count() -> Rule {
+    Rule {
+        path_prefix: "/v1/messages/count_tokens".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"input_tokens":7}"#.to_vec(),
         },
     }
 }
@@ -181,6 +194,53 @@ async fn a_client_outside_claude_code_is_refused_before_the_body_is_read() {
             && line.contains(SDK_USER_AGENT)),
         "{log}"
     );
+    up.shutdown().await;
+}
+
+/// The token count runs through the Messages handler, so a user agent outside `claude-cli/` meets the same gate
+/// there: `403` `permission_error` `client_not_allowed`, no retry, and no decision for the request.
+#[tokio::test]
+async fn a_client_outside_claude_code_is_refused_on_the_count_route_too() {
+    let up = FakeUpstream::start(vec![count(), ok()]).await;
+    let h = harness(
+        &up,
+        &[api_key("apikey-only", "sk-ant-api03-COUNTGATE", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let mut decisions = h.router.subscribe_events();
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::ApiKey),
+        body(BodyFixture::ApiKey),
+        KEY,
+    );
+    *req.uri_mut() = "/v1/messages/count_tokens".parse().unwrap();
+    set_header(&mut req, "user-agent", "curl/8.5.0");
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
+        "client_not_allowed"
+    );
+    assert_eq!(resp.headers()["x-should-retry"].to_str().unwrap(), "false");
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let answer: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(answer["error"]["type"], "permission_error");
+    let message = answer["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("Claude Code clients") && !message.contains(';'),
+        "{message}"
+    );
+    assert!(up.requests().is_empty(), "the body was never read");
+    // The refusal queues any decision on the router task before it answers, so a pins read queued after the
+    // answer comes back once the task has emitted it.
+    let _ = h.router.pins().await;
+    while let Ok(event) = decisions.try_recv() {
+        assert!(
+            !matches!(&event, RouterEvent::Decision { .. }),
+            "{event:?}: no decision is recorded for a request refused before its body"
+        );
+    }
     up.shutdown().await;
 }
 
