@@ -2938,8 +2938,8 @@ impl Task {
                 // the pin was relaned from, and would read that pin as another cache.
                 request.lane = self.state.canonical_lane(&request.lane);
                 if request.revision < snapshot.revision {
-                    // The registry moved after admission: the key, its policy, the pool, and the candidates are
-                    // re-derived from what is current, and a request the current registry would refuse is refused.
+                    // The registry moved after admission: the key, the pool and the candidates are re-derived from what
+                    // is current, and a request the current registry would refuse is refused.
                     let now = (self.clock)();
                     let key = match snapshot.authenticate_id(&request.key_id, now) {
                         Ok(key) => key,

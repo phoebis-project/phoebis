@@ -2920,8 +2920,8 @@ pub(crate) fn slow_down_of(
 }
 
 /// Whether the slow-down may hold this request on a pin whose account is of `kind`: a main or subagent turn, or one
-/// with no class header (an SDK client), portable, and on an account with a 5-hour window. An auxiliary request, a
-/// compaction, a fast request, a probe and a token count are never held, and their burn counts.
+/// with no class header, portable, and on an account with a 5-hour window. An auxiliary request, a compaction, a fast
+/// request, a probe and a token count are never held, and their burn counts.
 pub(crate) fn slowable(request: &SelectRequest, kind: Option<AccountKind>) -> bool {
     let held_class = request
         .request_class

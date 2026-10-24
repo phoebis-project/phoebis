@@ -104,6 +104,9 @@ async fn api_key_request_emits_the_measured_api_key_shape() {
     let head = inference_head(FixtureKind::ApiKey);
     let native = body(BodyFixture::ApiKey);
     // The fixture's own Claude Code head with its session header, so the relay restores what the client's reduced
+    // shape lacks: the placeholder stamp in the attribution line and the client request id, a header it writes after
+    // `x-app`. The expected wire carries both where the relayed request carries them, the id read off that request
+    // since it is fresh.
     let req = request_from_fixture(head, native, "phoebis-testkey");
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);

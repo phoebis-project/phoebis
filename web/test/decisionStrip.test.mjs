@@ -464,8 +464,8 @@ test('a record of twelve candidates gives eight leaves and "and 4 more", the cho
 
 test('a bound renewal is the short shape with no placeholder', async () => {
   const base = await recordOf('req_ef099b34-453/1');
-  const m = modelOf(built(base, [step('pin', 'none'), step('eligible', 'match'), step('bound', 'renewed', [fact('account_id', 'primary', null, 'primary')]), step('renew', 'renewed')], 'renewed'));
-  assert.deepEqual(read(m), ['Pin: none (taken)', 'Eligible: match (taken)', 'Bound: renewed (taken)', 'Renew: renewed (taken)']);
+  const m = modelOf(built(base, [step('pin', 'match'), step('eligible', 'match'), step('bound', 'renewed', [fact('account_id', 'primary', null, 'primary')]), step('renew', 'renewed')], 'renewed'));
+  assert.deepEqual(read(m), ['Pin: match (taken)', 'Eligible: match (taken)', 'Bound: renewed (taken)', 'Renew: renewed (taken)']);
   assert.deepEqual([m.shape, m.decisive, m.host, m.branch, m.brackets], ['short', 'renew', 'renew', null, []]);
   assert.deepEqual(terminiOf(m), THREE_TERMINI(['chosen', 'renewed']));
 });

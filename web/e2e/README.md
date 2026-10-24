@@ -126,13 +126,14 @@ read a day and an hour on, where every Time cell prints its date on one line ins
 12-hour setting, the table carrying its 12-hour class and, where the set runs past the card, scrolling inside its wrap
 with Time at its floor), its sizes (at 1440 by 900 inside the card with every id whole in the mock pass, and at 375 by
 800 at its narrowest with Time at its floor, scrolling inside its wrap with the page as wide as the window), its columns
-(Time the fill, the Status, Attempts and links cells wrapping), the usage-based Cost cell (mock pass: `usage-based`
-under its dollars in the tag, size, weight and ink of a billed row's funding word, its hover `Billed in dollars:
-usage-based`), the table with Time turned off (`table--no-fill` at its content width at 1280 by 800 and 1920 by 1080),
-the Cache warming grid (an odd last card spanning its row, its title in the type of the card before it), the Analytics
-tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming tiles
-rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on its row spanning the grid
-and a last card that shares its row on its neighbor's top edge, each figure and card recorded), the Traffic table
+(Time the fill, the Status, Attempts and links cells wrapping), its text at 1920 by 1080 in the mock pass (no client
+class or agent type cut, each read on its own span, and every id whole), the usage-based Cost cell (mock pass:
+`usage-based` under its dollars in the tag, size, weight and ink of a billed row's funding word, its hover `Billed in
+dollars: usage-based`), the table with Time turned off (`table--no-fill` at its content width at 1280 by 800 and 1920 by
+1080), the Cache warming grid (an odd last card spanning its row, its title in the type of the card before it), the
+Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming
+tiles rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on its row spanning the
+grid and a last card that shares its row on its neighbor's top edge, each figure and card recorded), the Traffic table
 grouped by model (its Error rate column, and the no model row's Error rate a dash in the muted ink and in the type of
 the rate cell beside it, which reads a percent, the row required in the mock pass alone since the router's seed holds no
 request without a model), the request pages' widths, walked on a load of their own once every view's shot is taken, the
