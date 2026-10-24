@@ -10,7 +10,6 @@
     {
       "step": "bound",
       "verdicts": [
-        "bound",
         "exhausted",
         "renewed"
       ]

@@ -19,7 +19,7 @@ pub const RECORD_VERSION: u32 = 3;
 /// fixture `tests/walk_steps.rs` writes.
 pub const WALK_STEPS: &[(&str, &[&str])] = &[
     ("admission", &["refused"]),
-    ("bound", &["bound", "exhausted", "renewed"]),
+    ("bound", &["exhausted", "renewed"]),
     ("cap_filter", &["dropped", "passed"]),
     ("eligible", &["match", "none"]),
     ("exhausted", &["exhausted"]),
