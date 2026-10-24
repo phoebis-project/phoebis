@@ -54,10 +54,10 @@ export const LEGACY_LAPSED_AT = NOW - (2 * DAY + 2 * HOUR);
 /** The poll that read legacy's 5-hour window at its limit, an hour and twenty minutes before its last clean poll. */
 export const LEGACY_FIVE_HOUR_SPENT_AT = NOW - LEGACY_CLEAN_AGO - HOUR - 20 * MINUTE;
 
-/** How long before now backup's last clean poll read its windows, before its 5-hour window reset. */
-const BACKUP_CLEAN_AGO = 35 * MINUTE;
-/** Backup's last poll, the sixth 503 at the poll's five-minute cadence since the clean one. */
-const BACKUP_POLLED_AGO = 5 * MINUTE;
+/** How long before now reserve's last clean poll read its windows, before its 5-hour window reset. */
+const RESERVE_CLEAN_AGO = 35 * MINUTE;
+/** Reserve's last poll, the sixth 503 at the poll's five-minute cadence since the clean one. */
+const RESERVE_POLLED_AGO = 5 * MINUTE;
 
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
@@ -315,13 +315,13 @@ export const ACCOUNTS: Account[] = ([
   // 7-day one still runs.
   {
     ...ACCOUNT_SAMPLE,
-    id: 'backup',
+    id: 'reserve',
     kind: 'oauth',
-    label: 'backup',
-    email: 'operator+backup@example.com',
+    label: 'reserve',
+    email: 'operator+reserve@example.com',
     status: 'ready',
     routingEnabled: true,
-    windows: [win('5h', 0.71, -(20 * MINUTE), BACKUP_CLEAN_AGO, null), win('7d', 0.33, 2 * DAY + 6 * HOUR, BACKUP_CLEAN_AGO)],
+    windows: [win('5h', 0.71, -(20 * MINUTE), RESERVE_CLEAN_AGO, null), win('7d', 0.33, 2 * DAY + 6 * HOUR, RESERVE_CLEAN_AGO)],
     fableWindow: null,
     extraUsage: null,
     fastLane: null,
@@ -367,14 +367,14 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
   }
   // A 503 is a passing fault, neither a 429 nor a 401, so the poll holds nothing back and asks again at its next slot,
   // while the windows of the last clean read still answer.
-  if (a.id === 'backup') {
+  if (a.id === 'reserve') {
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,
       error: null,
-      fetchedAt: ago(BACKUP_CLEAN_AGO),
+      fetchedAt: ago(RESERVE_CLEAN_AGO),
       heldUntil: null,
-      poll: { backoffSince: null, lastAttemptAt: ago(BACKUP_POLLED_AGO), lastCleanAt: ago(BACKUP_CLEAN_AGO), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+      poll: { backoffSince: null, lastAttemptAt: ago(RESERVE_POLLED_AGO), lastCleanAt: ago(RESERVE_CLEAN_AGO), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
       status: 'success',
     };
   }
@@ -436,7 +436,7 @@ const HISTORY_SEED: Partial<Record<WindowId, number>> = { '5h': 1, '7d': 2, '7d_
 
 /**
  * Where an account's samples end: at its last reading, the last clean poll where every poll after it failed (legacy's
- * and backup's), spare's reading before its disconnect, and the rest now.
+ * and reserve's), spare's reading before its disconnect, and the rest now.
  */
 const samplesEndOf = (account: (typeof ACCOUNTS)[number]): number => {
   const last = account.usage?.poll?.lastOutcome === 'failed' ? account.usage.poll.lastCleanAt : account.id === 'spare' ? account.usage?.fetchedAt : null;

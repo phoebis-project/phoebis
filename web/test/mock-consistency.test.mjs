@@ -388,7 +388,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const slotOf = accountSlots(s.accounts.map((a) => a.id));
     const slots = s.accounts.map((a) => slotOf(a.id));
-    assert.equal(new Set(slots).size, Math.min(8, s.accounts.length), 'the eight series colors give every account its own until a ninth cycles');
+    // The eight series colors cycle past the eighth id, so the ids that wrap must be ones the rings and the Quota
+    // windows lanes never draw: those draw a listed account that routes, and two of them on one slot read as one.
+    const drawn = s.accounts.filter((a) => s.lib.isQuotaListed(a) && a.routingEnabled);
+    const shared = drawn.flatMap((a, i) => drawn.slice(i + 1).filter((b) => slotOf(b.id) === slotOf(a.id)).map((b) => `${a.id} and ${b.id} on slot ${slotOf(a.id)}`));
+    assert.deepEqual(shared, [], 'no two drawn accounts share a color');
     assert.ok(slots.every((slot) => slot !== null), 'every listed account has a slot');
   });
 
@@ -401,7 +405,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     assert.deepEqual(
       s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.email),
-      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+backup@example.com'],
+      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+reserve@example.com'],
       'every subscription keeps the identity it last paired with',
     );
     const pairing = await s.api.startPairing({ accountId: 'legacy' });

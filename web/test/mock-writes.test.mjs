@@ -87,12 +87,12 @@ test('a new pool reads each member the way the pool route does', async () => {
   };
   assert.deepEqual(await verdicts('first', 'never'), {
     annex: 'eligible',
-    backup: 'eligible',
     legacy: 'unavailable',
     nightly: 'overage',
     overflow: 'unavailable',
     primary: 'eligible',
     research: 'eligible',
+    reserve: 'eligible',
     secondary: 'cooldown',
     spare: 'unavailable',
     studio: 'eligible',
