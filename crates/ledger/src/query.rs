@@ -764,14 +764,13 @@ pub fn request_events(
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let to = request.finished_at.unwrap_or(i64::MAX);
     let marker = format!("%\"source_request_id\":\"{}\"%", request.id);
-    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND (session_id = ?3 OR detail LIKE ?4 OR request_id = ?5) ORDER BY at, rowid")?;
+    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND ((session_id IS NOT NULL AND session_id = ?3) OR detail LIKE ?4 OR request_id = ?5) ORDER BY at, rowid")?;
     let rows = stmt.query_map(
         params![
             request.received_at,
             to,
             request.session_id,
             marker,
-            request.session_id,
             request.id
         ],
         |r| {
@@ -904,7 +903,7 @@ pub struct RoutingLogFilter {
     pub from: i64,
     pub to: i64,
     pub request: Option<String>,
-    /// A routing session id or its prefix.
+    /// A session id or its prefix.
     pub session: Option<String>,
     pub keys: Vec<String>,
     pub pools: Vec<String>,
@@ -3548,7 +3547,7 @@ pub fn session_activity(
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
          MIN(received_at) OVER (PARTITION BY key_id, key_generation, grp) AS first_at, \
          SUM(CASE WHEN refused = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY key_id, key_generation, grp) AS n \
-         FROM recent WHERE grp IS NOT NULL) \
+         FROM recent) \
          SELECT key_id, key_generation, grp, first_at, received_at, n, canonical_model, \
          (SELECT a.account_id FROM attempts a WHERE a.request_id = ranked.id ORDER BY a.attempt DESC LIMIT 1), \
          presented_retired, rotation_at \
@@ -3597,7 +3596,7 @@ pub fn agent_models(conn: &Connection, since: i64) -> Result<Vec<AgentModel>, Le
          AND (request_class IS NULL OR request_class != 'auxiliary')), \
          ranked AS (SELECT recent.*, \
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp, agent_id ORDER BY received_at DESC, id DESC) \
-         AS nth FROM recent WHERE grp IS NOT NULL) \
+         AS nth FROM recent) \
          SELECT key_id, key_generation, grp, agent_id, received_at, model FROM ranked WHERE nth = 1 \
          ORDER BY received_at DESC, id DESC",
     )?;
