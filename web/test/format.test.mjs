@@ -169,6 +169,11 @@ test('a spend amount in minor units reads in its own currency at its exponent', 
   assert.equal(fmtMinor(1_250, 'EUR', 1), '€125.00', 'the exponent places the point');
 });
 
+test('a spend amount under a code Intl rejects reads as a decimal with the code after it, or alone without a code', () => {
+  assert.equal(fmtMinor(12_500, 'EURO', 2), '125.00 EURO', 'a code of four letters prints after the amount');
+  assert.equal(fmtMinor(12_500, '', 2), '125.00', 'an empty code prints the amount alone');
+});
+
 test('a 20x window equivalent reads as a percent of the named 20x window to three significant digits, and zero as 0%', () => {
   assert.equal(fmtEquivalent('five_hour', 0.014667), '1.47% of 20x 5-hour');
   assert.equal(fmtEquivalent('seven_day', 0.002444), '0.244% of 20x 7-day');
