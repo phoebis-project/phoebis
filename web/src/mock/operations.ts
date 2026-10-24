@@ -807,29 +807,27 @@ const pinKept = (r: KeepaliveRecipe, poolId: string): boolean => {
   const lastUse = Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((at) => (at === null ? [] : [Date.parse(at)])));
   return NOW - lastUse <= (poolById.get(poolId)?.affinityTtlSeconds ?? 0) * 1_000;
 };
-const PINS = new Map<string, Set<string>>();
+/** The pins by the account each sits on, each written `key|session|agent|model`. */
+const PINS = new Map<string | null, Set<string>>();
+const pinOn = (accountId: string | null, pin: string) => PINS.set(accountId, (PINS.get(accountId) ?? new Set()).add(pin));
 for (const r of RECIPES) {
   const poolId = keyById.get(r.keyId)?.poolId;
-  const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`;
   if (poolId === undefined || (r.agentState === 'released' && !pinKept(r, poolId))) continue;
-  const member = `${poolId}|${r.accountId}`;
-  PINS.set(member, (PINS.get(member) ?? new Set()).add(pin));
+  pinOn(r.accountId, `${r.keyId}|${r.sessionId}|${r.agentId}|${r.model}`);
 }
-for (const pin of SLOWED_PINS) {
-  const member = `${keyById.get('notebook')!.poolId}|studio`;
-  for (const a of pin.agents) PINS.set(member, (PINS.get(member) ?? new Set()).add(`notebook|${pin.sessionId}|${a.agentId}|${a.model}`));
-}
-for (const last of FLEET_PINS) {
-  const member = `${fleetPool}|${last.attempts[last.attempts.length - 1].accountId}`;
-  PINS.set(member, (PINS.get(member) ?? new Set()).add(`fleet|${FLEET_SESSION_ID}|main|${last.canonicalModel}`));
-}
-/** The pins under a pool's keys on one member's account. */
-export const memberPins = (poolId: string, accountId: string): number => PINS.get(`${poolId}|${accountId}`)?.size ?? 0;
+for (const pin of SLOWED_PINS) for (const a of pin.agents) pinOn('studio', `notebook|${pin.sessionId}|${a.agentId}|${a.model}`);
+for (const last of FLEET_PINS) pinOn(last.attempts[last.attempts.length - 1].accountId, `fleet|${FLEET_SESSION_ID}|main|${last.canonicalModel}`);
+const underKeys = (pins: Iterable<string>, keyIds: ReadonlySet<string>) => [...pins].filter((pin) => keyIds.has(pin.slice(0, pin.indexOf('|'))));
+/**
+ * The pins under a pool's current keys on one member's account, the one membership `pinsUnderPool` reads too, so a
+ * key that moved pools counts its pins on the member cells of the pool that holds it now.
+ */
+export const memberPins = (keyIds: ReadonlySet<string>, accountId: string): number => underKeys(PINS.get(accountId) ?? [], keyIds).length;
 /**
  * Every pin under a pool's current keys, one per key, session, agent and model as the route counts them, on a member's
  * account or not. A pin on an account that left the pool counts here and in no member's figure.
  */
-export const pinsUnderPool = (keyIds: ReadonlySet<string>): number => new Set([...PINS.values()].flatMap((pins) => [...pins].filter((pin) => keyIds.has(pin.slice(0, pin.indexOf('|')))))).size;
+export const pinsUnderPool = (keyIds: ReadonlySet<string>): number => [...PINS.values()].reduce((n, pins) => n + underKeys(pins, keyIds).length, 0);
 
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.

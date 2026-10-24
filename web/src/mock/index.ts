@@ -526,7 +526,7 @@ export class MockApi implements Api {
     revision: stampToken(1, p.updatedAt),
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
-      return { ...m, activePins: memberPins(p.id, m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
+      return { ...m, activePins: memberPins(new Set(this.keys.filter((k) => k.poolId === p.id).map((k) => k.id)), m.accountId), budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
     }),
   }));
   private secretRng = createRng(MOCK_SEED);
@@ -548,7 +548,10 @@ export class MockApi implements Api {
     const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
     const ids = new Set(keys.map((k) => k.id));
     const cohort = Math.max(0, ...this.sessions.filter((s) => s.pinned && ids.has(s.keyId)).map((s) => s.agents));
-    return { ...p, activePins: poolPins(p, this.keys), guardrails: this.guardrailRefs('pools', p.id), keys, warnings: poolWarnings(p, cohort) };
+    // A member's pins are read under the keys the pool holds at the read, as its figure is, so a key that moved here
+    // counts its pins on the member cells too.
+    const members = p.members.map((m) => ({ ...m, activePins: memberPins(ids, m.accountId) }));
+    return { ...p, activePins: poolPins(p, this.keys), guardrails: this.guardrailRefs('pools', p.id), keys, members, warnings: poolWarnings(p, cohort) };
   }
 
   /**

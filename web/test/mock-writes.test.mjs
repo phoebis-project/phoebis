@@ -315,7 +315,16 @@ test("a pool deleted and created again under its id counts the pins of the keys 
   await api.deletePool('work');
   const again = await api.createPool({ ...poolInputOf(work), members: [] });
   assert.deepEqual([again.id, again.activePins, formerPins(again)], ['work', 0, 0], 'the pool created again holds no key, so no pin');
-  assert.equal((await poolOf('all')).activePins, all.activePins + work.activePins, "the pool the keys moved to counts their pins");
+  const moved = await poolOf('all');
+  assert.equal(moved.activePins, all.activePins + work.activePins, "the pool the keys moved to counts their pins");
+  // The moved keys' former-member pin sits on nightly, a member of all, and the pins on work's own members sit on
+  // accounts all does not hold.
+  const cells = (p) => p.members.reduce((n, m) => n + m.activePins, 0);
+  assert.deepEqual(
+    [cells(moved), formerPins(moved)],
+    [cells(all) + formerPins(work), formerPins(all) + cells(work)],
+    "each member's cell counts the pins under the pool's current keys, as the total does",
+  );
 });
 
 test('a rotation or a revocation moves the key\'s stamp, so an edit read before it is refused as stale', async () => {
