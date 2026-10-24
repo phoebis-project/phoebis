@@ -32,6 +32,8 @@ fn identity_less_body() -> Vec<u8> {
     native
 }
 
+/// A request under the foreign user agent `agent` that also carries the Stainless header, so the gate case shows
+/// the header does not change the label.
 fn identity_less_request(agent: &str) -> Request<Body> {
     let mut req = request_from_fixture(
         inference_head(FixtureKind::ApiKey),
@@ -162,7 +164,9 @@ async fn a_client_outside_claude_code_is_refused_before_the_body_is_read() {
             Some(SDK_USER_AGENT)
         )
     );
-    // The completion arrived, so a decision would be on the stream by now: none names the request.
+    // A refusal's decision is a command the relay queues on the router task before it answers, so once a pins read
+    // queued after the completion comes back, the task has emitted any decision: none names the request.
+    let _ = h.router.pins().await;
     while let Ok(event) = decisions.try_recv() {
         assert!(
             !matches!(&event, RouterEvent::Decision { record, .. } if record.request.request_id == row.id),
@@ -172,9 +176,9 @@ async fn a_client_outside_claude_code_is_refused_before_the_body_is_read() {
     let key_id = observed.key_id.as_deref().expect("the row names the key");
     let log = captured.text();
     assert!(
-        log.contains("WARN")
-            && log.contains(&format!("key={key_id}"))
-            && log.contains(SDK_USER_AGENT),
+        log.lines().any(|line| line.contains("WARN")
+            && line.contains(&format!("key={key_id}"))
+            && line.contains(SDK_USER_AGENT)),
         "{log}"
     );
     up.shutdown().await;
