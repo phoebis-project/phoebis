@@ -262,7 +262,7 @@ fn every_operator_holds_and_fails_on_the_subjects_it_applies_to() {
         &without
     ));
     assert!(!holds(
-        fact(Subject::Client, Equals, Some("sdk/py")),
+        fact(Subject::Client, Equals, Some("other")),
         &without
     ));
     assert!(holds(
@@ -270,7 +270,7 @@ fn every_operator_holds_and_fails_on_the_subjects_it_applies_to() {
         &without
     ));
     assert!(!holds(
-        fact(Subject::Client, Matches, Some("^sdk/")),
+        fact(Subject::Client, Matches, Some("^other")),
         &without
     ));
 

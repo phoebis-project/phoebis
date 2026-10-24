@@ -31,7 +31,8 @@ use crate::state::{
 use crate::windows::{window_for, MODEL_WINDOWS};
 use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 
-/// Who sent the request: `claude-code/*` is Claude Code, everything else is not.
+/// Who sent the request, as the record and a refused request carry it: `claude-code/*` is Claude Code,
+/// everything else is not.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ClientClass {
     ClaudeCode,

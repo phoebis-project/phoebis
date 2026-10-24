@@ -56,9 +56,10 @@ pub struct RequestIdentity {
     /// The user agent's entrypoint token for a `claude-cli/` agent (`cli` where it names none), `None` for any other
     /// client: what the selection's request and the pin carry, and what the cost model's regime prices by.
     pub entrypoint: Option<String>,
-    /// `claude-code/<entrypoint>` or `other`: a log label, never a gate.
+    /// `claude-code/<entrypoint>` or `other`: the request's label, which the gate reads before the body and the log
+    /// and the row carry.
     pub client: String,
-    /// The class the label maps to.
+    /// The class the label maps to, which the gate admitted.
     pub class: ClientClass,
     /// For a request whose messages continue another conversation of the key and generation at depth 2 or
     /// deeper: that conversation's root (its session id) and the matched depth. The session id stays the

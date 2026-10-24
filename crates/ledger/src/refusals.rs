@@ -68,10 +68,9 @@ refusal_codes!(
 );
 
 /// The ledger's reading of a row's own facts: a kind other than `probe`, the outcome `rejected`, a code of
-/// `REFUSAL_CODES` and an attempt count of zero, the count the row stores. A `client_not_allowed`,
-/// `model_not_allowed` or `auth_unknown` answered at a reselect after an attempt stays a rejected request, also where
-/// the bus lost that attempt's selection event and the trail holds no row, and a probe the registry refused stays on
-/// its probe row.
+/// `REFUSAL_CODES` and an attempt count of zero, the count the row stores. An `auth_unknown` or a `model_not_allowed`
+/// answered at a reselect after an attempt stays a rejected request, also where the bus lost that attempt's selection
+/// event and the trail holds no row, and a probe the registry refused stays on its probe row.
 pub fn is_refusal(kind: &str, outcome: &str, error_code: Option<&str>, attempts: u32) -> bool {
     kind != "probe"
         && outcome == "rejected"

@@ -27,9 +27,10 @@ pub struct Candidate {
     pub upstream_model: String,
 }
 
-/// Every member of the key's pool, in priority order, once the key's processed list allows `canonical_model`;
+/// Every member of the key's pool, in priority order, once the key's processed list allows `canonical_model`.
 /// `upstream_model` is `folded_model`, the spelling the body carries upstream. No member is an empty list, which
-/// selection reports as untimed exhaustion.
+/// selection reports as untimed exhaustion. The client's class is judged at admission, before the body is read,
+/// so every request that reaches here is Claude Code's.
 pub fn resolve(
     snapshot: &RegistrySnapshot,
     key: &ApiKeyRow,

@@ -763,13 +763,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
     // rule (which only ever answers a request that already has a pin) has one to find.
     let snapshot = r.h.router.snapshot();
     let key = snapshot.key("desktop").unwrap();
-    let candidates = resolve(
-        &snapshot,
-        key,
-        "claude-sonnet-4-5",
-        "claude-sonnet-4-5",
-    )
-    .unwrap();
+    let candidates = resolve(&snapshot, key, "claude-sonnet-4-5", "claude-sonnet-4-5").unwrap();
     r.h.router
         .select(SelectRequest {
             request_id: "r-1".into(),

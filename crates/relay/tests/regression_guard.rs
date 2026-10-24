@@ -11,14 +11,9 @@ fn ok() -> Rule {
     Rule { path_prefix: "/v1/messages".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}"#.to_vec() } }
 }
 
-/// The fixture head with its `Content-Length` set to the
-/// edited body, an inference head ending in the class header the harness sends where the recorded head has none,
-/// and the body appended: the wire the base commit produced.
-fn expected_wire(
-    head: &[u8],
-    native_len: usize,
-    edited_body: &[u8],
-) -> Vec<u8> {
+/// The fixture head with its `Content-Length` set to the edited body, an inference head ending in the class header
+/// the harness sends where the recorded head has none, and the body appended: the wire the base commit produced.
+fn expected_wire(head: &[u8], native_len: usize, edited_body: &[u8]) -> Vec<u8> {
     let mut text = String::from_utf8(head.to_vec()).unwrap().replace(
         &format!("Content-Length: {native_len}"),
         &format!("Content-Length: {}", edited_body.len()),

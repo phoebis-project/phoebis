@@ -5492,13 +5492,9 @@ async fn main_turn(
         .key("desktop")
         .expect("the key is in the snapshot")
         .clone();
-    let candidates = phoebis_routing::resolve(
-        &snapshot,
-        &key,
-        "claude-sonnet-5",
-        "claude-sonnet-5",
-    )
-    .expect("the pool allows the model");
+    let candidates =
+        phoebis_routing::resolve(&snapshot, &key, "claude-sonnet-5", "claude-sonnet-5")
+            .expect("the pool allows the model");
     parts
         .router
         .select(phoebis_routing::SelectRequest {

@@ -378,18 +378,12 @@ fn a_pool_with_no_member_answers_an_empty_list() {
 }
 
 #[test]
-fn a_claude_code_request_resolves_every_member_regardless_of_kind() {
+fn a_request_resolves_every_member_regardless_of_kind() {
     let s = snapshot();
     let mixed = s.key("mixed_client").unwrap();
     let ids = |c: Vec<Candidate>| c.into_iter().map(|c| c.account_id).collect::<Vec<_>>();
     assert_eq!(
-        ids(resolve(
-            &s,
-            mixed,
-            "claude-sonnet-5",
-            "claude-sonnet-5",
-        )
-        .unwrap()),
+        ids(resolve(&s, mixed, "claude-sonnet-5", "claude-sonnet-5").unwrap()),
         ["a".to_string(), "oauth-member".to_string(), "g".to_string()]
     );
 }

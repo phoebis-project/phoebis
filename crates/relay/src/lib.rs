@@ -108,6 +108,8 @@ pub enum RelayError {
     /// version suffix refusal's words name the resume apart.
     #[error("request body carries a billing hash this build's rules do not reproduce ({kind})")]
     ClientDrift { kind: &'static str, resumed: bool },
+    #[error("the router admits Claude Code clients only")]
+    ClientRefused,
     #[error("blocked by guardrail \"{name}\"")]
     GuardrailBlocked { name: String },
     #[error("request body names a model the relay will not repeat")]

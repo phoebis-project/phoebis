@@ -632,9 +632,9 @@ async fn a_first_party_line_carrying_cc_turn_origin_keeps_its_order_when_a_field
     up.shutdown().await;
 }
 
+/// A probe replays what the client sent: the reduced line stays reduced and no header is generated.
 #[tokio::test]
 async fn nothing_is_restored_for_a_probe_turn() {
-    // A probe replays what the client sent: the reduced line stays reduced and no header is generated.
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let h = harness(
         &up,

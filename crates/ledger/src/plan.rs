@@ -1492,8 +1492,8 @@ fn zero_windows(
         .collect()
 }
 
-/// `Some(token)` for the relay's `claude-code/<token>` label, `None` for `other`, `sdk/<lang>` and the rollups' `-`,
-/// so a ledger row prices under the regime its own `client` column names, history included.
+/// `Some(token)` for the relay's `claude-code/<token>` label, `None` for `other`, any other stored label and the
+/// rollups' `-`, so a ledger row prices under the regime its own `client` column names, history included.
 pub fn entrypoint_of_client(client: &str) -> Option<&str> {
     client.strip_prefix("claude-code/")
 }

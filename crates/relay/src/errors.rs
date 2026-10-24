@@ -373,6 +373,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             retry_after: None,
             no_retry: false,
         },
+        RelayError::ClientRefused => Failure {
+            status: StatusCode::FORBIDDEN,
+            error_type: "permission_error",
+            code: "client_not_allowed",
+            message: Cow::Borrowed("the router admits Claude Code clients only"),
+            retry_after: None,
+            no_retry: true,
+        },
         // The client's query loop treats a 403 as final and heals none. The name rule refuses the two phrases the
         // client reads in a 403, `model:` and `OAuth token has been revoked`, since the message carries the name.
         RelayError::GuardrailBlocked { .. } => Failure {
@@ -653,6 +661,11 @@ mod tests {
         ] {
             assert_eq!(contract_message(item), quoted, "{item}");
         }
+        assert_eq!(
+            relay_failure(&RelayError::ClientRefused).message,
+            "the router admits Claude Code clients only",
+            "the client page quotes the gate's message whole"
+        );
     }
 
     #[test]
@@ -726,18 +739,18 @@ mod tests {
         );
     }
 
-    /// The arms that refuse by policy answer the 403 `permission_error` the client reads as final, each under its
-    /// own code, and among them only the block asks the client not to resend the request.
+    /// The arms that refuse by rule answer the 403 `permission_error` the client reads as final, each under its
+    /// own code, and the block and the gate both ask the client not to resend the request.
     #[test]
-    fn each_403_arm_answers_permission_error_under_its_own_code_and_the_block_alone_asks_for_no_retry(
+    fn each_403_arm_answers_permission_error_under_its_own_code_and_the_block_and_the_gate_ask_for_no_retry(
     ) {
-        for (error, code, no_retry) in [
+        for (error, code) in [
+            (RelayError::ClientRefused, "client_not_allowed"),
             (
                 RelayError::GuardrailBlocked {
                     name: "Large auxiliary".into(),
                 },
                 "guardrail_blocked",
-                true,
             ),
         ] {
             let failure = relay_failure(&error);
@@ -748,15 +761,15 @@ mod tests {
                     failure.code,
                     failure.no_retry
                 ),
-                (StatusCode::FORBIDDEN, "permission_error", code, no_retry),
+                (StatusCode::FORBIDDEN, "permission_error", code, true),
                 "{error:?}"
             );
         }
     }
 
-    /// A client that retries its 4xx answers would send a blocked request, one the contract refused or a refused
-    /// credential again unchanged, and no other refusal asks the client to stop, so the header rides those answers
-    /// alone.
+    /// A client that retries its 4xx answers would send a blocked request, one the gate or the contract refused, or
+    /// a refused credential again unchanged, and no other refusal asks the client to stop, so the header rides
+    /// those answers alone.
     #[test]
     fn no_retry_writes_the_header_and_no_other_arm_does() {
         let errors = [
@@ -822,6 +835,9 @@ mod tests {
         .response("r-1");
         assert_eq!(blocked.headers()[SHOULD_RETRY_HEADER], "false");
         assert_eq!(blocked.headers()[ERROR_CODE_HEADER], "guardrail_blocked");
+        let gate = relay_failure(&RelayError::ClientRefused).response("r-1");
+        assert_eq!(gate.headers()[SHOULD_RETRY_HEADER], "false");
+        assert_eq!(gate.headers()[ERROR_CODE_HEADER], "client_not_allowed");
         let contract = relay_failure(&RelayError::ClientContract {
             item: "class_header",
         })

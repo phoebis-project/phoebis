@@ -43,7 +43,7 @@ pub const CLAUDE_CLI_USER_AGENT: &str = "claude-cli/2.1.269 (external, sdk-cli)"
 /// The session id the first-party fixture's head carries.
 pub const FIRST_PARTY_SESSION: &str = "11111111-1111-4111-8111-111111111111";
 pub const KEY: &str = "phoebis-testkey";
-/// A raw Messages caller, not Claude Code.
+/// A raw Messages caller, which the gate refuses before the body is read.
 pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
 
 pub const NOW: i64 = 1_000_000;
@@ -1240,8 +1240,11 @@ pub fn conversation_request(
 /// A billing line in the client's placeholder spelling, which the drift check exempts from the hash it verifies.
 pub const PLACEHOLDER_LINE: &str =
     "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=00000;";
+/// The placeholder line under the version and the entrypoint `CLAUDE_CLI_USER_AGENT` names, the version spelled
+/// bare: a bare version carries no suffix for the suffix check to judge, the entrypoint agrees with the agent's,
+/// and the placeholder stamp is the one the hash check exempts, so a Claude Code request carrying it is admitted.
 pub const BARE_PLACEHOLDER_LINE: &str =
-    "x-anthropic-billing-header: cc_version=2.1.269; cc_entrypoint=cli; cch=00000;";
+    "x-anthropic-billing-header: cc_version=2.1.269; cc_entrypoint=sdk-cli; cch=00000;";
 /// A billing line stamping a hash this build never computed over the body.
 pub const UNCHECKED_LINE: &str =
     "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=abcde;";

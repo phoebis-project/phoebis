@@ -534,13 +534,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .key("desktop")
         .expect("the desktop key is in the snapshot")
         .clone();
-    let candidates = phoebis_routing::resolve(
-        &snapshot,
-        &key_row,
-        "claude-sonnet-5",
-        "claude-sonnet-5",
-    )
-    .expect("the pool's model rules allow claude-sonnet-5");
+    let candidates =
+        phoebis_routing::resolve(&snapshot, &key_row, "claude-sonnet-5", "claude-sonnet-5")
+            .expect("the pool's model rules allow claude-sonnet-5");
     let selected = parts
         .router
         .select(phoebis_routing::SelectRequest {

@@ -33,8 +33,8 @@ use phoebis_routing::{
     SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
-    Secret, StateCause, Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Secret, StateCause,
+    Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
@@ -1002,10 +1002,11 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         // exhaustion: the account that answered it is conclusive either way, not a transport or upstream
         // failure.
         Some("model_rejected") => Outcome::Rejected,
-        // A key or policy refusal is conclusive whether it is caught at admission or at the reselect after an
-        // attempt, so the ledger row reads rejected rather than failed. A guardrail's block is conclusive too: it
-        // is answered at attempt 0, and naming it here keeps a later change to the attempt-count rule below from
-        // moving it. The contract's refusal is answered at attempt 0 and named here for the same reason.
+        // A key's refusal of the key itself or of the model is conclusive whether it is caught at admission or at
+        // the reselect after an attempt, so the ledger row reads rejected rather than failed. A guardrail's block is
+        // conclusive too: it is answered at attempt 0, and naming it here keeps a later change to the attempt-count
+        // rule below from moving it. The gate's refusal and the contract's are answered at attempt 0 and named here
+        // for the same reason.
         Some("auth_unknown")
         | Some("client_contract")
         | Some("client_not_allowed")
@@ -1356,6 +1357,46 @@ impl Relay {
             .body_capture_hours(&key)
             .min(self.limits.body_capture_max_hours);
         let client_version = self.drift.check(&parts.headers);
+        // The class is read off the user agent alone, with no body read yet to justify: the router admits Claude
+        // Code and refuses any other client before the bytes it would never use are even taken off the wire.
+        if ClientClass::of_label(&client_class(&parts.headers)) != ClientClass::ClaudeCode {
+            self.ledger_standing(&trace, false);
+            trace
+                .observed(
+                    Some(&key),
+                    None,
+                    &parts.headers,
+                    false,
+                    Bytes::new(),
+                    false,
+                    capture_hours,
+                    RequestShape::default(),
+                    None,
+                    Vec::new(),
+                    client_facts(&parts.headers, None, None),
+                    None,
+                    presented == Presented::Retired,
+                    key.rotated_at,
+                    None,
+                    Vec::new(),
+                )
+                .await;
+            tracing::warn!(
+                user_agent = %user_agent(&parts.headers),
+                key = %key.id,
+                "a client outside Claude Code sent a request the router admits from Claude Code alone",
+            );
+            return self
+                .refused(
+                    &trace,
+                    0,
+                    relay_failure(&RelayError::ClientRefused),
+                    Some(&key),
+                    None,
+                    client_version.as_deref(),
+                )
+                .await;
+        }
         let retired = presented == Presented::Retired;
         let pool = snapshot.pool(&key.pool_id);
         let failover = pool.map(|p| p.failover).unwrap_or_default();

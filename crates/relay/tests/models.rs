@@ -391,3 +391,25 @@ async fn a_bad_limit_with_no_key_answers_the_authentication_refusal_first() {
     assert_eq!(error_code(&resp), "auth_missing");
     assert_eq!(should_retry(&resp), Some("false"));
 }
+
+/// The listing reads the key alone, so a caller outside Claude Code that holds a key reads the list the client
+/// reads.
+#[tokio::test]
+async fn the_listing_answers_a_curl_user_agent_on_any_key() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(catalog_rows()).await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+
+    let mut curl = models_request(KEY, "/v1/models");
+    set_header(&mut curl, "user-agent", "curl/8.0.1");
+    let resp = h.app.clone().oneshot(curl).await.unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let listed = body_json(resp).await;
+    let mut native = models_request(KEY, "/v1/models");
+    set_header(&mut native, "user-agent", CLAUDE_CLI_USER_AGENT);
+    let resp = h.app.clone().oneshot(native).await.unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let native = body_json(resp).await;
+    assert!(!ids_of(&listed).is_empty(), "{listed}");
+    assert_eq!(ids_of(&listed), ids_of(&native), "the key's list");
+}

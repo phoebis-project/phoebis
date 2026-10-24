@@ -1,5 +1,5 @@
-//! What the relay writes upstream for a caller the profile never measured: the caller's own headers, in the
-//! caller's order and spelling, with nothing invented for the slots it left out.
+//! What the relay writes upstream for a Claude Code caller whose head differs from the measured shape: the
+//! caller's own headers, in the caller's order and spelling, with nothing invented for the slots it left out.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -15,7 +15,21 @@ use tower::ServiceExt;
 mod common;
 use common::*;
 
-const BODY: &[u8] = br#"{"model":"claude-sonnet-4-5","messages":[]}"#;
+/// A body under `session` carrying the `metadata.user_id` the router requires of a Claude Code client.
+fn body_for(session: &str) -> Vec<u8> {
+    let user_id = serde_json::to_string(&user_id_for(session)).unwrap();
+    format!(r#"{{"model":"claude-sonnet-4-5","messages":[],"metadata":{{"user_id":{user_id}}}}}"#)
+        .into_bytes()
+}
+
+/// The three lines of a Claude Code head that the gate and the contract read: the agent, the session and the class.
+fn claude_code_lines(session: &str) -> [String; 3] {
+    [
+        format!("User-Agent: {CLAUDE_CLI_USER_AGENT}"),
+        format!("X-Claude-Code-Session-Id: {session}"),
+        "x-claude-code-request-class: main".to_string(),
+    ]
+}
 
 /// A head a test writes itself, in the shape the recorder hands the relay.
 fn head(lines: &[String]) -> Vec<u8> {
@@ -62,17 +76,23 @@ fn value<'a>(request: &'a RecordedRequest, name: &str) -> Option<&'a str> {
 async fn a_custom_caller_header_reaches_the_upstream_verbatim_and_in_its_own_slot() {
     let up = upstream().await;
     let app = relay_with(AccountKind::ApiKey, &up).await;
+    let session = fresh_session();
+    let body = body_for(&session);
+    let [agent, session_line, class] = claude_code_lines(&session);
     let raw = lines(
         &[
             "Accept: application/json",
             "x-api-key: sk-ant-api03-PLACEHOLDER",
             "X-Corp-Trace: 9f2a/BETA",
+            &agent,
+            &session_line,
+            &class,
             "anthropic-version: 2023-06-01",
         ],
-        BODY,
+        &body,
     );
     let resp = app
-        .oneshot(request_from_fixture(&raw, BODY, KEY))
+        .oneshot(request_from_fixture(&raw, &body, KEY))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -86,8 +106,14 @@ async fn a_custom_caller_header_reaches_the_upstream_verbatim_and_in_its_own_slo
                 "sk-ant-api03-PLACEHOLDER".to_string()
             ),
             ("X-Corp-Trace".to_string(), "9f2a/BETA".to_string()),
+            ("User-Agent".to_string(), CLAUDE_CLI_USER_AGENT.to_string()),
+            ("X-Claude-Code-Session-Id".to_string(), session.clone()),
+            (
+                "x-claude-code-request-class".to_string(),
+                "main".to_string()
+            ),
             ("anthropic-version".to_string(), "2023-06-01".to_string()),
-            ("Content-Length".to_string(), BODY.len().to_string()),
+            ("Content-Length".to_string(), body.len().to_string()),
             ("Host".to_string(), "api.anthropic.com".to_string()),
         ],
         "the header the capture never had travels verbatim, in the slot the caller gave it"
@@ -99,17 +125,23 @@ async fn a_custom_caller_header_reaches_the_upstream_verbatim_and_in_its_own_slo
 async fn a_callers_expect_line_stays_behind_and_the_body_follows_the_head() {
     let up = upstream().await;
     let app = relay_with(AccountKind::ApiKey, &up).await;
+    let session = fresh_session();
+    let body = body_for(&session);
+    let [agent, session_line, class] = claude_code_lines(&session);
     let raw = lines(
         &[
             "Accept: application/json",
             "x-api-key: sk-ant-api03-PLACEHOLDER",
+            &agent,
+            &session_line,
+            &class,
             "Expect: 100-continue",
             "anthropic-version: 2023-06-01",
         ],
-        BODY,
+        &body,
     );
     let resp = app
-        .oneshot(request_from_fixture(&raw, BODY, KEY))
+        .oneshot(request_from_fixture(&raw, &body, KEY))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -119,13 +151,16 @@ async fn a_callers_expect_line_stays_behind_and_the_body_follows_the_head() {
         [
             "Accept",
             "x-api-key",
+            "User-Agent",
+            "X-Claude-Code-Session-Id",
+            "x-claude-code-request-class",
             "anthropic-version",
             "Content-Length",
             "Host"
         ],
         "the upstream is never asked to wait for a continue the relay does not send"
     );
-    assert_eq!(got.body, BODY);
+    assert_eq!(got.body, body);
     up.shutdown().await;
 }
 
@@ -133,16 +168,22 @@ async fn a_callers_expect_line_stays_behind_and_the_body_follows_the_head() {
 async fn a_caller_that_omits_the_measured_headers_has_nothing_invented_for_it() {
     let up = upstream().await;
     let app = relay_with(AccountKind::ApiKey, &up).await;
+    let session = fresh_session();
+    let body = body_for(&session);
+    let [agent, session_line, class] = claude_code_lines(&session);
     let raw = lines(
         &[
             "Accept: application/json",
             "x-api-key: sk-ant-api03-PLACEHOLDER",
+            &agent,
+            &session_line,
+            &class,
             "anthropic-version: 2023-06-01",
         ],
-        BODY,
+        &body,
     );
     let resp = app
-        .oneshot(request_from_fixture(&raw, BODY, KEY))
+        .oneshot(request_from_fixture(&raw, &body, KEY))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -150,7 +191,6 @@ async fn a_caller_that_omits_the_measured_headers_has_nothing_invented_for_it() 
     for absent in [
         "accept-encoding",
         "anthropic-beta",
-        "user-agent",
         "x-app",
         "x-stainless-arch",
         "x-stainless-lang",
@@ -194,18 +234,24 @@ async fn an_oauth_account_adds_the_oauth_beta_once_and_an_api_key_account_strips
     );
 
     let claimed = "fine-grained-tool-streaming-2025-05-14,oauth-2025-04-20,claude-code-20250219";
+    let session = fresh_session();
+    let body = body_for(&session);
+    let [agent, session_line, class] = claude_code_lines(&session);
     let raw = lines(
         &[
             "x-api-key: sk-ant-api03-PLACEHOLDER",
+            &agent,
+            &session_line,
+            &class,
             &format!("anthropic-beta: {claimed}"),
             "anthropic-version: 2023-06-01",
         ],
-        BODY,
+        &body,
     );
     let key_up = upstream().await;
     let app = relay_with(AccountKind::ApiKey, &key_up).await;
     let resp = app
-        .oneshot(request_from_fixture(&raw, BODY, KEY))
+        .oneshot(request_from_fixture(&raw, &body, KEY))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -222,16 +268,22 @@ async fn an_oauth_account_adds_the_oauth_beta_once_and_an_api_key_account_strips
 async fn a_head_in_an_order_the_capture_never_had_travels_in_that_order() {
     let up = upstream().await;
     let app = relay_with(AccountKind::ApiKey, &up).await;
+    let session = fresh_session();
+    let body = body_for(&session);
+    let [agent, session_line, class] = claude_code_lines(&session);
     let raw = head(&[
-        format!("Content-Length: {}", BODY.len()),
+        format!("Content-Length: {}", body.len()),
         "X-Stainless-Lang: js".into(),
         "Accept: application/json".into(),
         "x-api-key: sk-ant-api03-PLACEHOLDER".into(),
         "Host: proxy.example.invalid".into(),
+        agent,
+        session_line,
+        class,
         "anthropic-version: 2023-06-01".into(),
     ]);
     let resp = app
-        .oneshot(request_from_fixture(&raw, BODY, KEY))
+        .oneshot(request_from_fixture(&raw, &body, KEY))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
@@ -244,6 +296,9 @@ async fn a_head_in_an_order_the_capture_never_had_travels_in_that_order() {
             "Accept",
             "x-api-key",
             "Host",
+            "User-Agent",
+            "X-Claude-Code-Session-Id",
+            "x-claude-code-request-class",
             "anthropic-version",
         ],
         "the relay imposes no order of its own, not even on the slots it owns"
@@ -276,15 +331,20 @@ async fn listening(
     (addr, stop)
 }
 
+/// A Claude Code request in the caller's own spelling under a session of its own, with `trace` in a header the
+/// capture never had.
 fn raw_request(addr: SocketAddr, trace: &str) -> Vec<u8> {
+    let session = fresh_session();
+    let body = body_for(&session);
     let mut out = format!(
         "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAccePT: application/json\r\n\
-         X-CoRp-TrAcE: {trace}\r\nx-api-key: {KEY}\r\nanthropic-VERSION: 2023-06-01\r\n\
-         Content-Length: {}\r\n\r\n",
-        BODY.len()
+         X-CoRp-TrAcE: {trace}\r\nx-api-key: {KEY}\r\nUser-Agent: {CLAUDE_CLI_USER_AGENT}\r\n\
+         X-Claude-Code-Session-Id: {session}\r\nx-claude-code-request-class: main\r\n\
+         anthropic-VERSION: 2023-06-01\r\nContent-Length: {}\r\n\r\n",
+        body.len()
     )
     .into_bytes();
-    out.extend_from_slice(BODY);
+    out.extend_from_slice(&body);
     out
 }
 
@@ -345,6 +405,9 @@ async fn a_head_read_off_a_socket_reaches_the_upstream_with_the_callers_own_spel
             "AccePT",
             "X-CoRp-TrAcE",
             "x-api-key",
+            "User-Agent",
+            "X-Claude-Code-Session-Id",
+            "x-claude-code-request-class",
             "anthropic-VERSION",
             "Content-Length",
         ],
@@ -381,6 +444,9 @@ async fn the_callers_header_spelling_survives_a_tls_connection() {
             "AccePT",
             "X-CoRp-TrAcE",
             "x-api-key",
+            "User-Agent",
+            "X-Claude-Code-Session-Id",
+            "x-claude-code-request-class",
             "anthropic-VERSION",
             "Content-Length",
         ],
@@ -437,22 +503,28 @@ async fn a_duplicated_caller_line_fills_a_relay_owned_slot_once() {
     up.shutdown().await;
 }
 
-/// A request head written with one line ending or the other, so a test can send what hyper accepts and the
-/// recorder has to agree with.
+/// A Claude Code request head written with one line ending or the other, under a session of its own, so a test
+/// can send what hyper accepts and the recorder has to agree with.
 fn session_request(addr: SocketAddr, eol: &str, session: &str, key: &str) -> Vec<u8> {
+    let claude_session = fresh_session();
+    let body = body_for(&claude_session);
+    let [agent, session_line, class] = claude_code_lines(&claude_session);
     let mut out = [
         "POST /v1/messages?beta=true HTTP/1.1",
         &format!("Host: {addr}"),
         &format!("X-Session: {session}"),
         &format!("x-api-key: {key}"),
+        &agent,
+        &session_line,
+        &class,
         "anthropic-version: 2023-06-01",
-        &format!("Content-Length: {}", BODY.len()),
+        &format!("Content-Length: {}", body.len()),
         "",
         "",
     ]
     .join(eol)
     .into_bytes();
-    out.extend_from_slice(BODY);
+    out.extend_from_slice(&body);
     out
 }
 
@@ -587,6 +659,9 @@ async fn the_second_request_on_a_keep_alive_connection_keeps_its_own_spelling_to
                 "AccePT",
                 "X-CoRp-TrAcE",
                 "x-api-key",
+                "User-Agent",
+                "X-Claude-Code-Session-Id",
+                "x-claude-code-request-class",
                 "anthropic-VERSION",
                 "Content-Length",
             ],

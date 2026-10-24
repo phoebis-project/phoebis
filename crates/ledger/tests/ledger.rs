@@ -328,8 +328,9 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
 }
 
 /// The class the relay derives at admission, the gateway hints the client sent, and the turn origin off a
-/// stamped attribution line all reach the request row, and the log filters on each of them; the class is also
-/// the hourly rollup's dimension, so two classes in the same hour hold two rows.
+/// stamped attribution line all reach the request row, and the log filters on each of them. The class is also
+/// the hourly rollup's dimension, so Claude Code's requests and a caller the gate refused under `other` in the
+/// same hour hold two rows.
 #[tokio::test]
 async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_log_filters_on_them(
 ) {
@@ -529,13 +530,13 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
         ))
         .await
         .unwrap();
-    assert_eq!(resp3.status(), 200);
+    assert_eq!(resp3.status(), 403);
     let id3 = request_id(&resp3);
     let _ = resp3.into_body().collect().await.unwrap();
     assert_eq!(
         ledgered(&h, &id3).await.0.client.as_deref(),
         Some("other"),
-        "a caller outside Claude Code carries the other label"
+        "a caller outside Claude Code is refused and its row carries the other label"
     );
     let rollups =
         h.db.read(|c| {
@@ -555,9 +556,15 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
         Some(2),
         "the first two requests fold under the same client"
     );
+    // A refusal before any account was asked files under the row's refusal map alone, beside no request.
+    let refused: u64 = rollups
+        .iter()
+        .filter(|r| r.client == "other")
+        .map(|r| r.refusals.get("client_not_allowed").copied().unwrap_or(0))
+        .sum();
     assert_eq!(
-        by_client.get("other").copied(),
-        Some(1),
+        (by_client.get("other").copied(), refused),
+        (Some(0), 1),
         "the third request's class is its own row in the same hour"
     );
     up.shutdown().await;
@@ -582,7 +589,7 @@ async fn a_request_with_no_user_agent_is_found_by_the_wildcard_and_the_exact_das
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
     req.headers_mut().remove("user-agent");
     let resp = h.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 403);
     let id = request_id(&resp);
     let _ = resp.into_body().collect().await.unwrap();
     assert_eq!(ledgered(&h, &id).await.0.user_agent, None);

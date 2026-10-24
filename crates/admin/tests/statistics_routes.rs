@@ -4496,13 +4496,9 @@ fn select_request(
         .key("desktop")
         .expect("the key is in the snapshot")
         .clone();
-    let candidates = phoebis_routing::resolve(
-        &snapshot,
-        &key,
-        "claude-sonnet-5",
-        "claude-sonnet-5",
-    )
-    .expect("the pool allows the model");
+    let candidates =
+        phoebis_routing::resolve(&snapshot, &key, "claude-sonnet-5", "claude-sonnet-5")
+            .expect("the pool allows the model");
     phoebis_routing::SelectRequest {
         request_id: request_id.into(),
         attempt,
