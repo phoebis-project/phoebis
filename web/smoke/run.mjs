@@ -1982,8 +1982,8 @@ await quotaSection(m, 'Quota windows');
 }
 expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'used', 'past window', 'plan ends']);
 {
-  // A usage-based seat's lane carries its one Spend limit chip, which the seat's own block reads, so these read the plan
-  // accounts' lanes.
+  // A usage-based seat's lane carries its one Spend limit chip, which the seat's own block reads, so these read the
+  // plan accounts' lanes.
   const seatLabels = new Set((await api.listAccounts()).filter((a) => a.usageBased).map((a) => a.label));
   const planLanes = [...m.container.querySelectorAll('.lane')].filter((l) => !seatLabels.has(l.querySelector('.lane__name')?.textContent?.trim() ?? ''));
   const laneChips = planLanes.map((l) => [...l.querySelectorAll('.tl-chip')].length);
@@ -2142,7 +2142,7 @@ m.unmount();
     missing: [`${shortHours.length} cells`, JSON.stringify(shortHours)],
   });
   results.push({
-    name: '/quota#quota-windows at one width the 12-hour setting draws six 5-hour cells, at 316 px each too narrow for its full time, so it prints the short hour with the full time on its title, and at 318 px each wide enough for its full time, where the 24-hour setting draws twelve with the two-digit hour',
+    name: '/quota#quota-windows at 316 and 318 px the 12-hour setting draws six 5-hour cells, at 316 px each too narrow for its full time, so it prints the short hour with the full time on its title, and at 318 px each wide enough for its full time, where the 24-hour setting draws twelve with the two-digit hour',
     ok:
       fewer.length === 6 &&
       fewer.every(([sub, title], i) => sub === ['12 AM', '12 PM'][i % 2] && new RegExp(`^${dated(i, 2)}12:00\\s${i % 2 === 0 ? 'AM' : 'PM'}$`).test(title ?? '')) &&
@@ -2737,8 +2737,8 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     page.unmount();
   }
   {
-    // Billed dollars keeps the seat's rows beside the overage, fast and API-key ones: the fleet key's billed dollars are
-    // its three rows' own.
+    // Billed dollars keeps the seat's rows beside the overage, fast and API-key ones: the fleet key's billed dollars
+    // are its three rows' own.
     localStorage.removeItem('phoebis.unit');
     const page = await mount('/analytics?by=key&unit=usd#cost', { now: CLOCK_ORIGIN });
     await page.settle(900);

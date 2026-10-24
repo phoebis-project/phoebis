@@ -44,10 +44,10 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
 }
 
 /**
- * A usage-based seat's one window in the window bars' shape: the dollars spent of the monthly limit in the head, a meter
- * of the share spent toned by the share left, and the reset line, `estimated` in the muted ink where no head has named
- * the reset yet. With no limit set the head reads the dollars spent alone and no meter draws, and a reading without a
- * share draws its amounts with no meter.
+ * A usage-based seat's one window in the window bars' shape: the dollars spent of the monthly limit in the head, a
+ * meter of the share spent toned by the share left, and the reset line, `estimated` in the muted ink where no head has
+ * named the reset yet. With no limit set the head reads the dollars spent alone and no meter draws, and a reading
+ * without a share draws its amounts with no meter.
  */
 export function SpendBar({ spend, now, compact = false }: { compact?: boolean; now: number; spend: Spend }) {
   const { amounts, utilization } = spend;

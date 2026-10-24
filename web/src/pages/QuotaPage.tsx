@@ -205,7 +205,8 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const endsAt = account.canceled ? (account.subscription?.endsAt ?? null) : null;
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
-  // Windows the card holds are drawn whatever the last read said; the error takes their place only with none.
+  // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
+  // spend reading with neither amounts nor a share counts as none.
   const failed = status === 'error' && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
   return (
     <article className={`qcard ${failed ? 'is-error' : ''}`}>
@@ -486,7 +487,10 @@ function SpendChip({ spend }: { spend: Spend }) {
   );
 }
 
-/** The instant `months` calendar months from `ms` in UTC, the router's clock, a day past the month's end held to its last. */
+/**
+ * The instant `months` calendar months from `ms` in UTC, the router's clock, a day past the month's end held to its
+ * last.
+ */
 function addMonths(ms: number, months: number): number {
   const d = new Date(ms);
   const first = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 1));
@@ -497,8 +501,8 @@ function addMonths(ms: number, months: number): number {
 /**
  * A usage-based seat's lane: one chip for its spend limit and one bar per monthly spend window in the account's color.
  * The current window runs from one calendar month before the reading's reset to the reset, filled by the share spent
- * and labeled as a plan bar is, the upcoming one dashed where the span reaches it. With no limit set the current window's
- * outline stands alone, with no share to fill it.
+ * and labeled as a plan bar is, the upcoming one dashed where the span reaches it. With no limit set the current
+ * window's outline stands alone, with no share to fill it.
  */
 function SpendLane({ account, cells, color, now, nowPct, span, spend, stamp, steps }: { account: Account; cells: { at: number; weekend: boolean }[]; color: string; now: number; nowPct: number | null; span: { endMs: number; startMs: number }; spend: Spend; stamp: (at: number) => string; steps: ReadonlyMap<string, LabelStep> }) {
   const width = span.endMs - span.startMs;

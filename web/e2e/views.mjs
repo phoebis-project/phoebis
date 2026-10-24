@@ -1982,8 +1982,8 @@ async function poolFormerPins(theme) {
 
 /**
  * The contract pool's one member reads `metered P1` in its serving table's Tier cell, the word and the type of the all
- * pool's API-key member beside it in the same tier, read in the cell's text, face, size, weight and ink. Only the mock's
- * story holds the contract pool.
+ * pool's API-key member beside it in the same tier, read in the cell's text, face, size, weight and ink. Only the
+ * mock's story holds the contract pool.
  */
 async function servingTierWord(theme) {
   if (!mock) return;
@@ -5254,8 +5254,8 @@ async function requestsTableWide(theme) {
 
 /**
  * The Cost cell of a usage-based seat's request on the request log under Native: its dollars over the funding word
- * `usage-based`, the word in the type and the ink of a billed row's funding word in the same table, and the cell's hover
- * naming it as billed in dollars. Only the mock's story holds a usage-based seat.
+ * `usage-based`, the word in the type and the ink of a billed row's funding word in the same table, and the cell's
+ * hover naming it as billed in dollars. Only the mock's story holds a usage-based seat.
  */
 async function requestsFundingWord(theme) {
   if (!mock) return;

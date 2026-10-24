@@ -47,8 +47,8 @@ export interface HourlyRollup {
   failovers: number;
   /**
    * Who paid for the hour's requests, as the ledger keys its rollups off the served answer: `billed` for an API key
-   * account's answer whatever its speed, else `usage_based` for a usage-based seat's, else a fast answer's credits, else
-   * the head's overage, else the plan, which a request no attempt served files under too.
+   * account's answer whatever its speed, else `usage_based` for a usage-based seat's, else a fast answer's credits,
+   * else the head's overage, else the plan, which a request no attempt served files under too.
    */
   funding: 'billed' | 'fast' | 'overage' | 'plan' | 'usage_based';
   histograms: LatencyHistograms;

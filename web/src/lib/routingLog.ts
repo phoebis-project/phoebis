@@ -1885,6 +1885,13 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Actor', plain(row.actor ?? 'admin'));
       pin();
       break;
+    case 'plan_ended':
+    case 'plan_restored':
+      add('Source', text(d.source, PLAN_SOURCE_WORD));
+      add('Organization type', text(d.organization_type));
+      add('Rate-limit tier', text(d.rate_limit_tier));
+      add('Subscription status', text(d.subscription_status));
+      break;
     case 'poll_backoff_ended': {
       const resumed = num(d.resumed_at) ?? atOf(row);
       const lasted = num(d.duration_ms);
@@ -1899,13 +1906,6 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Next attempt', time(d.next_attempt_at));
       add('Last clean poll', time(d.last_clean_poll_at));
       add('Effect', plain("decisions read this account's windows from response heads alone"));
-      break;
-    case 'plan_ended':
-    case 'plan_restored':
-      add('Source', text(d.source, PLAN_SOURCE_WORD));
-      add('Organization type', text(d.organization_type));
-      add('Rate-limit tier', text(d.rate_limit_tier));
-      add('Subscription status', text(d.subscription_status));
       break;
     case 'poll_failed': {
       const status = num(d.status);

@@ -1521,7 +1521,7 @@
 
 /* The day's five tiles take the columns that hold the cost tile's figure, where the auto-fit grid would hold five at
    1440 px and four at 1280 px. The figure keeps its window's name on one line, and the widest form a share at or above
-   0.001% draws, the eight-digit `~0.00998% of 20x 7-day`, runs to 194.4 px at 15 px: four tiles hold it from a
+   0.001% draws, the eight-character `~0.00998% of 20x 7-day`, runs to 194.4 px at 15 px: four tiles hold it from a
    1260 px viewport (the shell takes 288 px) and two from 511 px (the content's 16 px padding a side), and under that
    the tiles stack. A share under 0.001% draws a wider string still. In four columns and in two the fifth tile opens a
    row and spans it, since a tile alone at a quarter width reads as a gap. */

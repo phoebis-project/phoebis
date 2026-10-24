@@ -1020,7 +1020,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(Date.parse(five.resetsAt) > Date.parse(cleared.at) && cleared.detail.reset === Date.parse(five.resetsAt));
   });
 
-
   test(`spare's samples end at the reading its snapshot keeps from before the disconnect, with no poll, at ${at}`, async () => {
     const s = await story;
     const spare = s.accounts.find((a) => a.id === 'spare');
@@ -2105,8 +2104,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const fast = rounds.flatMap((e) => e.detail.pins.filter((p) => p.skip === 'fast_lane').map((p) => [e, p]));
     assert.ok(fast.length > 0, 'the story leaves a fast-lane pin out of a round');
     for (const [e, p] of fast) {
-      // Fast mode serves the desktop key's Opus turns alone, so a stored lane reads fast there and nowhere else, and the
-      // pin left out carries no burn.
+      // Fast mode serves the desktop key's Opus turns alone, so a stored lane reads fast there and nowhere else, and
+      // the pin left out carries no burn.
       assert.deepEqual([e.detail.unit, e.detail.window, p.key_id, p.model.includes('opus'), p.burn, p.note], ['window_share', 'five_hour', 'desktop', true, null, null], `${e.requestId}: ${p.session_id}`);
     }
     // The current pin's lane is the request's own.

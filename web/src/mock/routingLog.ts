@@ -509,7 +509,8 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const sub = a.subscription;
     const endsAt = sub?.endsAt ? Date.parse(sub.endsAt) : null;
     // Drawn for every member, so a count the story sets moves no later draw. A drawn count stands under the cap, so a
-    // member reads full only where the story's own pins hold it there. A row outside the seeded streams draws none.
+    // member reads full only where the story's own pins or the marks of `fillDrawnRivals` hold it there. A row outside
+    // the seeded streams draws none.
     const drawn = UNSEEDED_IDS.has(r.id) ? 0 : inFlightRng.int(0, 5);
     const drawnInFlight = Math.min(drawn, pool.inFlightCap - 1);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
@@ -1667,7 +1668,10 @@ const ROUND_PINS: RoundPin[] = [
   { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-6', note: null, sessionId: sessionId('76ddb35b'), skip: null },
 ];
 
-/** The parked desktop session's Opus pin on primary, whose stored lane is fast since fast mode serves that key's Opus turns. */
+/**
+ * The parked desktop session's Opus pin on primary, whose stored lane is fast since fast mode serves that key's Opus
+ * turns.
+ */
 const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyId === 'desktop');
 
 /**

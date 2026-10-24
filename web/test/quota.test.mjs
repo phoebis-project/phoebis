@@ -250,7 +250,7 @@ test("a short timeline cell's hour drops its leading zero and carries its period
 
 test('the 5-hour timeline draws fewer cells at one width under the 12-hour setting, so each cell holds its short hour', () => {
   assert.equal(d.cellsFit(316, '24h'), 12, 'twelve cells of 26 px hold "06"');
-  assert.equal(d.cellsFit(316, '12h'), 6, 'twelve cells of 26 px cut "12 AM", six of 53 px hold it');
+  assert.equal(d.cellsFit(316, '12h'), 6, 'twelve cells of 26 px cut "12 AM", six of 52.67 px hold it');
   assert.equal(d.cellsFit(876, '24h'), 12);
   assert.equal(d.cellsFit(876, '12h'), 12, 'twelve cells of 73 px hold "12 AM"');
   assert.ok(d.CELL_MIN_PX['12h'].short > d.CELL_MIN_PX['24h'].short, `the short "12 AM" needs ${d.CELL_MIN_PX['12h'].short} px against ${d.CELL_MIN_PX['24h'].short} px for "06"`);

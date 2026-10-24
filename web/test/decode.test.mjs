@@ -290,7 +290,7 @@ test("an account decodes its fast lane's two readings, a missing one as null, an
   assert.equal(d.decodeAccount({ ...body, fast_lane: null }).fastLane, null, 'no answer to a fast request yet');
 });
 
-test("an account's windows read in page order with no fold, and the Fable week is the first seven_day_fable row", () => {
+test("an account's windows read in page order with no fold, and the 7-day Fable window is the first seven_day_fable row", () => {
   const base = fixture('account');
   const newer = { id: 'five_hour', observed_at: 1_900_000, resets_at: 4_600_000, utilization: 0.77 };
   const all = d.decodeAccount({
@@ -340,7 +340,7 @@ test('the window key helper names the three known windows and keeps any other ke
   assert.deepEqual(
     keys.map(d.windowId),
     ['5h', '5h', '7d', '7d', '7d_fable', '7d_fable', '7d_fable', 'seven_day_overage_included', 'seven_day_opus'],
-    'the route answers the Fable week under seven_day_fable alone, so the overage-included key is a window of its own',
+    'the route answers the 7-day Fable window under seven_day_fable alone, so the overage-included key is a window of its own',
   );
 });
 

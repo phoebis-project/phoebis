@@ -1782,7 +1782,9 @@ function addStoryEvents() {
  *  metered sources, the API keys and the usage-based seats. */
 const kindGroupOf = (pool: PoolSeed | undefined, account: Account | undefined): number => (pool?.preferSubscription ? (account?.kind === 'api_key' || account?.usageBased ? 2 : account?.overage?.inUse === true ? 1 : 0) : 0);
 
-/** The trace of a row outside the seeded streams: the strategy's pick in its account's tier, with nobody passed over. */
+/**
+ * The trace of a row outside the seeded streams: the strategy's pick in its account's tier, with nobody passed over.
+ */
 function undrawnTrace(r: RequestLog, a: Attempt, last: boolean): SelectionTrace {
   const pool = poolById.get(r.poolId ?? '');
   const account = accountById.get(a.accountId);
@@ -2247,7 +2249,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
           // the same status filter, so the error split that subtracts it never reads negative.
           undecodable: served.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
           upstream_error: served.filter(upstreamFailed).length,
-          // The ledger files a stream the client closed as failed, under the code the relay gave it.
+          // The ledger files a stream the client closed, and one the router's own stop cut, as failed, each under the
+          // code the relay gave it.
           client_gone: served.filter((r) => r.errorCode === 'client_gone').length,
           router_shutdown: served.filter((r) => r.errorCode === 'router_shutdown').length,
         },

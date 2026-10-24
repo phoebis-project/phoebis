@@ -46,10 +46,16 @@ export interface ExtraUsage {
 
 /** A usage-based seat's one window: what it has spent of its monthly limit, in dollars at API rates. */
 export interface Spend {
-  /** The newest polled row's amounts in minor units, null while no polled row of the last day carries them, with `limitMinor` null where no limit is set. */
+  /**
+   * The newest polled row's amounts in minor units, null while no polled row of the last day carries them, with
+   * `limitMinor` null where no limit is set.
+   */
   amounts: { currency: string; exponent: number; limitMinor: number | null; polledAt: string; usedMinor: number } | null;
   observedAt: string;
-  /** `head` from the newest head's reset header while ahead of now, else `estimated` for 00:00 UTC on the first of the next month. */
+  /**
+   * `head` from the newest head's reset header while ahead of now, else `estimated` for 00:00 UTC on the first of the
+   * next month.
+   */
   resetSource: 'estimated' | 'head';
   resetsAt: string | null;
   /** The share of the limit spent, the heads moving it between polls, null where no row carries one. */

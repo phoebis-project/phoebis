@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { keyRankOf } from './dist/ui.js';
 
-/** A key's lifetime sum, its plan rows' 7-day equivalent flagged where `unpriced` holds, as the keys route answers it. */
+/**
+ * A key's lifetime sum, its plan rows' 7-day equivalent flagged where `unpriced` holds, as the keys route answers it.
+ */
 const lifetime = ({ billedUsd = 0, cost = 0, sevenDay = 0, unpriced = false } = {}) => ({
   billedUsd,
   cost,

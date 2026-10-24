@@ -461,8 +461,8 @@ export function unpricedNote(labels: readonly string[], buckets: number): string
 }
 /**
  * Whether a probe figure's plan side carries the estimate's mark: a plan probe row priced through the model tier's
- * fallback, which a request row's fallback never stands in for, on a side with plan probes that priced a figure, since a
- * dash or a side with no plan probe is no estimate.
+ * fallback, which a request row's fallback never stands in for, on a side with plan probes that priced a figure, since
+ * a dash or a side with no plan probe is no estimate.
  */
 export const probeMarked = (whole: Pick<AnalyticsGroup, 'probeEstimated'>, planProbes: number, priced: number | null): boolean => whole.probeEstimated && planProbes > 0 && priced !== null;
 /** The Cost section's head under a position, as `costHeadOf` reads it. */

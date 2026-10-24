@@ -50,7 +50,7 @@ the session's state.
 
 The dialog shows the email and organization the upstream answered. Check that they are the ones you meant to pair, then
 choose Confirm to store the refresh token for this account. The Accounts view shows the account's first reading once
-the poll lands, a few seconds after the confirm, and its Usage card reads "The first quota reading is in flight" until
+the poll lands, a few seconds after the confirm, and its Usage card reads "The first quota reading is in flight." until
 then.
 
 Both of the console's starts, for a new account and for an existing one, are `claude_ai` logins, which authorize at

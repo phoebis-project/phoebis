@@ -228,8 +228,8 @@ export function decodePairingConfirmed(v: unknown): PairingConfirmed {
   return { accountId: str(c.account_id), firstPollInFlight: bool(c.first_poll_in_flight), status: str(c.status) };
 }
 
-/** The history's samples keep the ledger's stored key, which spells a head's Fable week `seven_day_overage_included`,
- *  so the history alone reads that key as the 7-day Fable window. */
+/** The history's samples keep the ledger's stored key, which spells a head's 7-day Fable window
+ *  `seven_day_overage_included`, so the history alone reads that key as the Fable series. */
 const historyWindowId = (id: string): WindowId | null => (id === 'seven_day_overage_included' ? '7d_fable' : windowId(id));
 
 export function decodeQuotaHistory(v: unknown): QuotaHistory[] {

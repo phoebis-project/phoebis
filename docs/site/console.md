@@ -155,19 +155,19 @@ not list draws muted.
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the speed chip beside it on a
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, the window bars or the spend bar of a usage-based
 seat, "Overage active" while requests bill as extra usage, the cooldown line, and "API key" for an API-key account.
-"Recent requests" ("Last 10 across every pool", with
-"All requests" opening the Requests view) lists Time, Key, Account, Model, Status, TTFB, Tokens and Cost, the status
-badge reading `×{n}` for a request of several attempts. Time is the column that gives way: the time reads whole, and
-the request id under it is cut by the room past its first twelve characters, whole on hover, while Key and the other
-columns read whole. Cost reads as the Requests view's column does: under All in dollars and Dollar equivalent a
-subscription request's dollar equivalent over `equivalent`, under Billed dollars a dash and under Window shares its
-account's shares, and a billed request's dollars under each of the four but Dollar equivalent, where it reads a dash.
-Under Native a subscription request reads its 20x 5-hour equivalent alone, with the other windows, the dollar equivalent
-and the price list and cost model in force on hover, a client classifier call's hover leading with "Free on the plan: a
-client classifier call takes no window share", and a billed request its dollars. The column header's hover names what
-each kind of request reads under the position. Where the table runs wider than its card it scrolls inside it. "Sessions"
-("Sticky pins and cache-warming agents", with "Open") reads the active pins as `active pins across {n} accounts` and the
-agents as Agents, Busy, Idle and Parked. What each figure means is on [Statistics](statistics.md).
+"Recent requests" ("Last 10 across every pool", with "All requests" opening the Requests view) lists Time, Key, Account,
+Model, Status, TTFB, Tokens and Cost, the status badge reading `×{n}` for a request of several attempts. Time is the
+column that gives way: the time reads whole, and the request id under it is cut by the room past its first twelve
+characters, whole on hover, while Key and the other columns read whole. Cost reads as the Requests view's column does:
+under All in dollars and Dollar equivalent a subscription request's dollar equivalent over `equivalent`, under Billed
+dollars a dash and under Window shares its account's shares, and a billed request's dollars under each of the four but
+Dollar equivalent, where it reads a dash. Under Native a subscription request reads its 20x 5-hour equivalent alone,
+with the other windows, the dollar equivalent and the price list and cost model in force on hover, a client classifier
+call's hover leading with "Free on the plan: a client classifier call takes no window share", and a billed request its
+dollars. The column header's hover names what each kind of request reads under the position. Where the table runs wider
+than its card it scrolls inside it. "Sessions" ("Sticky pins and cache-warming agents", with "Open") reads the active
+pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle and Parked. What each figure means is on
+[Statistics](statistics.md).
 
 ## Quota
 
@@ -191,15 +191,14 @@ Accounts draws a card per account, sorted "Default order", "Soonest recovery", "
 Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the
 status badge, one row per window ("5h", "7d" and "Fable"), the Extra usage line, the chips and the poll reading. A
 usage-based seat's card draws one Spend row in the windows' place and no Extra usage line, and "Soonest recovery" reads
-its spend window's reset. The
-three pace orders put the account furthest ahead of that window's pace first, the one whose used share runs furthest
-past the share of the window elapsed (the lead the router answers for each window), and the accounts without the window,
-with the window expired or without a lead on it last. Each live window's meter reads the share left and its pace,
-`{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its end at {time}` where the pace
-runs to the subscription's end rather than the reset, and a mark at the share of the window still to come. On a screen
-under 900 px wide the reset label takes a line of its own under the meter. Under the meter the window reads
-`resets {ago}`, followed on a window the router projects by the share the projection leaves at the window's horizon:
-`resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute),
+its spend window's reset. The three pace orders put the account furthest ahead of that window's pace first, the one
+whose used share runs furthest past the share of the window elapsed (the lead the router answers for each window), and
+the accounts without the window, with the window expired or without a lead on it last. Each live window's meter reads
+the share left and its pace, `{window}: {pct} left, {n}% ahead of pace`, `{n}% behind pace` or `on pace`, with ` to its
+end at {time}` where the pace runs to the subscription's end rather than the reset, and a mark at the share of the
+window still to come. On a screen under 900 px wide the reset label takes a line of its own under the meter. Under the
+meter the window reads `resets {ago}`, followed on a window the router projects by the share the projection leaves at
+the window's horizon: `resets in 2h 13m, 19% left at the reset` where the horizon is the reset (within a minute),
 `resets in 3d 5h, 56% left in 5 h` where it comes earlier (five hours out on a weekly window, or the account's end), and
 `{pct} left now` once it has come. A window the sessions spend before its horizon reads the time until it runs out,
 `spent in 2 h 10 min`, counted back from the projection at the horizon along the burn, so the span follows the router's
@@ -221,41 +220,39 @@ window whose reset has passed with no reading since reads `expired {ago}` instea
 {time}" on hover, and draws no share and an empty meter until the next reading, and a window the account does not report
 reads "not reported". A card with no window yet reads "No quota windows reported yet.", and one whose read failed shows
 the error with `, next attempt {time}` and a "Retry" button in the windows' place. A usage-based seat's Spend row reads
-the share of its monthly spend limit left, `59% left`, over the meter, with the dollars spent of the limit on hover and
-`resets {ago}` under it, and no pace, since the router projects no burn on the seat. With no limit set its chip reads
-the dollars spent, `$1,025.00 spent`, and no meter draws, and a seat with no reading yet reads "No spend reading yet."
-in the windows' place. Until a reset header names the spend window's reset, the router estimates it as 00:00 UTC on the
-first of the next month, and the line reads `resets {ago}, estimated`, the word in the muted ink, with `resets {time}
-(estimated: no reset header has been seen for this window yet)` on hover. The "Extra usage" chip reads `off`,
-`not in use`, `in use` or `not reported`, with the month's spend against its limit while extra usage is enabled and the
-reading carries the amounts, in the
-serious tone while requests bill as extra usage, and the provider's reason inside the line with the whole message on
-hover. The chips name the plan by its tier ("Plan"), when the plan of an account marked canceled ends (in the serious
-tone inside a week), and when a trial ends ("Trial"). The poll reading says when the poll last asked the endpoint and
-how it answered, with the whole message and the backoff on hover, and "Refresh" reads this account's endpoint now. A
-card that shows an error, whose last poll failed, or that is backing off counts as needing attention.
+the share of its monthly spend limit left, `59% left`, over the meter, with the amount spent of the limit in the
+reading's currency on hover and `resets {ago}` under it, and no pace, since the router projects no burn on the seat.
+With no limit set its chip reads the amount spent, `$1,025.00 spent`, and no meter draws, and a seat with no reading yet
+reads "No spend reading yet." in the windows' place. Until a reset header names the spend window's reset, the router
+estimates it as 00:00 UTC on the first of the next month, and the line reads `resets {ago}, estimated`, the word in the
+muted ink, with `resets {time} (estimated: no reset header has been seen for this window yet)` on hover. The "Extra
+usage" chip reads `off`, `not in use`, `in use` or `not reported`, with the month's spend against its limit while extra
+usage is enabled and the reading carries the amounts, in the serious tone while requests bill as extra usage, and the
+provider's reason inside the line with the whole message on hover. The chips name the plan by its tier ("Plan"), when
+the plan of an account marked canceled ends (in the serious tone inside a week), and when a trial ends ("Trial"). The
+poll reading says when the poll last asked the endpoint and how it answered, with the whole message and the backoff on
+hover, and "Refresh" reads this account's endpoint now. A card that shows an error, whose last poll failed, or that is
+backing off counts as needing attention.
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
 Weekly or 5-hour, an "Account" axis and a now marker over the bars at the instant's place in the span. It draws one lane
 per listed account with a window or a spend reading, and each lane carries the chips "5-hour limit", "7-day limit" and
-"Fable 7-day limit",
-each with its share left and its reset on hover, and one bar per window in the account's color, the current bar filled
-from the window's start by its used share in a stronger tone, so a fill past the now line is ahead of pace and one short
-of it behind, the upcoming window dashed and the elapsed ones muted. A usage-based seat's lane carries one chip, "Spend
-limit", with the dollars left of the limit (`$1,475.00 of $2,500.00 left`, or the dollars spent where no limit is set)
-and the reset with the estimate's word on hover, and one bar per monthly spend window, the current one from one calendar
-month before the reset to the reset, filled by the share spent and labeled as a plan bar is. The current bar is labeled
-with the share left and
-its reset, `59% left · Sep 19 20:10`, or with the share alone where the bar is too narrow for both, and a bar too
-narrow for its label keeps it on hover. On a narrow screen each lane stacks its account and its chips above its bars,
-the now marker and the day grid cross the bars alone, the marker's pill under the day labels, and the day axis prints
-short labels. A 5-hour cell too narrow for its full labels prints the hour alone, `06` under the 24-hour time format and
-`6 AM` under the 12-hour one. Under the 12-hour format the 5-hour mode draws fewer, wider cells where twelve would be
-too narrow for `12 AM`. An account marked canceled with a saved end shows the end on its lane: no window opens after it,
-and the window that spans it stops there. The legend reads current window, upcoming, used, past window, now and plan
-ends, and the note "Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the
-instant it resets. Lanes ending together compete for the same days."
+"Fable 7-day limit", each with its share left and its reset on hover, and one bar per window in the account's color, the
+current bar filled from the window's start by its used share in a stronger tone, so a fill past the now line is ahead of
+pace and one short of it behind, the upcoming window dashed and the elapsed ones muted. A usage-based seat's lane
+carries one chip, "Spend limit", with the amount left of the limit (`$1,475.00 of $2,500.00 left`, or the amount spent
+where no limit is set) and the reset with the estimate's word on hover, and one bar per monthly spend window, the
+current one from one calendar month before the reset to the reset, filled by the share spent and labeled as a plan bar
+is. The current bar is labeled with the share left and its reset, `59% left · Sep 19 20:10`, or with the share alone
+where the bar is too narrow for both, and a bar too narrow for its label keeps it on hover. On a narrow screen each lane
+stacks its account and its chips above its bars, the now marker and the day grid cross the bars alone, the marker's pill
+under the day labels, and the day axis prints short labels. A 5-hour cell too narrow for its full labels prints the hour
+alone, `06` under the 24-hour time format and `6 AM` under the 12-hour one. Under the 12-hour format the 5-hour mode
+draws fewer, wider cells where twelve would be too narrow for `12 AM`. An account marked canceled with a saved end shows
+the end on its lane: no window opens after it, and the window that spans it stops there. The legend reads current
+window, upcoming, used, past window, now and plan ends, and the note "Each bar is one full quota window, drawn from when
+it opened to when it resets, and labeled with the instant it resets. Lanes ending together compete for the same days."
 
 ## Accounts
 
@@ -294,32 +291,31 @@ it." The actions, with the dialog each opens:
 | "Disconnect" | "Disconnect account" | `Deletes {label}'s credential. Pool memberships and request history stay, and re-pairing stores the credential again.` |
 | "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.` |
 
-"Identity" lists, for a subscription account, Type ("OAuth login"), Plan by its tier with its start
-(`Max 20x since {date}`), Rate-limit tier (`{tier}, usage-based` on a usage-based seat), Ends where known, Plan ended
-where set, Trial ends where known, Organization
-and Billing type, and "Edit end" opens the end editor: the checkbox "Canceled", the field `Ends ({zone})`, whose label
-names the browser's time zone, with the hint "The date the plan's billing settings show as its end. An annual plan is
-marked canceled in its final month only. The time is in this browser's zone.", Save and Cancel, and "Reload" where the
-row changed under the editor. Beside the saved end the row answers `plan_ended_at`, the instant a profile read found the
-account's organization holding no plan, which the router reads as an end that has passed until a profile read or a
-pairing finds a plan again ([Account states](pairing.md#account-states)). The card closes on "Renewal date is not
-reported by the provider." For an API-key account it lists Type ("API key") and Windows ("None reported, billed per
-token"). "Usage" ("Remaining share of each window") draws the three windows as the Quota view does, or a usage-based
-seat's spend bar, "Spend limit" with `{used} of {limit}` over its meter and its reset line, the speed chip beside the
-5-hour bar's label on a slowed account, "Extra usage this month" on every account but a usage-based seat, with an "in
-use" badge and its amounts and spend meter where the reading carries them,
-the reason the provider gave for disabling extra usage, and a "Fast mode" line with the share of the fast lane's input
-and output buckets used and a chip while the fast lane cools, or reads "This account does not report quota windows."
-("No spend reading yet" on a usage-based seat), or
-"The first quota reading is in flight." from a pairing's confirm until the account's first reading lands. "7-day trend"
-("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a
-subscription account, or "No samples yet" with "Quota samples appear after the first successful quota fetch." "Cooling
-down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the model), Reason and Until with a Clear button
-per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The account becomes eligible immediately. If the
-account is still rate limited, the next request re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads
-"Not a member of a pool." "Credential" lists Access token, Refresh token, Last refresh and Last error for a subscription
-account, and Secret ("stored encrypted at rest") and Last error for an API-key account. "Requests" reads Last 24h, Last
-7d and Lifetime, with a "Routing log" link that opens the log on the account's rows over the last hour.
+"Identity" lists, for a subscription account, Type ("OAuth login"), Plan by its tier with its start (`Max 20x since
+{date}`), Rate-limit tier (`{tier}, usage-based` on a usage-based seat), Ends where known, Plan ended where set, Trial
+ends where known, Organization and Billing type, and "Edit end" opens the end editor: the checkbox "Canceled", the field
+`Ends ({zone})`, whose label names the browser's time zone, with the hint "The date the plan's billing settings show as
+its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.", Save and
+Cancel, and "Reload" where the row changed under the editor. Beside the saved end the row answers `plan_ended_at`, the
+instant a profile read found the account's organization holding no plan, which the router reads as an end that has
+passed until a profile read or a pairing finds a plan again ([Account states](pairing.md#account-states)). The card
+closes on "Renewal date is not reported by the provider." For an API-key account it lists Type ("API key") and Windows
+("None reported, billed per token"). "Usage" ("Remaining share of each window") draws the three windows as the Quota
+view does, or a usage-based seat's spend bar, "Spend limit" with `{used} of {limit}` over its meter and its reset line,
+the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this month" on every account but a
+usage-based seat, with an "in use" badge and its amounts and spend meter where the reading carries them, the reason the
+provider gave for disabling extra usage, and a "Fast mode" line with the share of the fast lane's input and output
+buckets used and a chip while the fast lane cools, or reads "This account does not report quota windows." ("No spend
+reading yet" on a usage-based seat), or "The first quota reading is in flight." from a pairing's confirm until the
+account's first reading lands, where a usage-based seat reads "No spend reading yet". "7-day trend" ("Utilization of
+each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a subscription account, or "No
+samples yet" with "Quota samples appear after the first successful quota fetch." "Cooling down" lists Scope ("Whole
+account", "Fast mode", "Fast mode credits" or the model), Reason and Until with a Clear button per row, or "Nothing
+cooling down", and Clear asks "Clear cooldown": "The account becomes eligible immediately. If the account is still rate
+limited, the next request re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads "Not a member of a
+pool." "Credential" lists Access token, Refresh token, Last refresh and Last error for a subscription account, and
+Secret ("stored encrypted at rest") and Last error for an API-key account. "Requests" reads Last 24h, Last 7d and
+Lifetime, with a "Routing log" link that opens the log on the account's rows over the last hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
 tokens, Output tokens and Effort levels, or "The upstream lists no models."
@@ -376,26 +372,25 @@ with the Burn section in view.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `metered P{n}` where the pool
 prefers subscription accounts, the metered tier holding the API-key accounts and the usage-based seats), Account,
-Standing and Pins. Standing reads `next` for the member a fresh session lands
-on, `eligible`, `after plan quota` for a member in overage ranked after the plan-funded ones, `winding down {left}` (on
-hover `Winding down to the plan's end at {time}`) for a member that serves only as the last resort, and for a member
-passed over `cooldown {left}` (on hover `In a cooldown that ends {time}`), `overage until {time}` (`overage` where the
-reset is unknown), `at budget` or `at budget until {time}` with the spend against the budget, and `unavailable` with the
-account's status on hover. On a card whose pool has the slow-down on, Standing carries the speed chip of a slowed
-member, `0.5x` with the Quota view's hover where the account is loaded. The caption names the strategy, `Pace`,
-`Priority, then random` or `Round robin`, with `subscription accounts first` appended where the pool prefers
-subscription accounts, and its hover notes "A request for a Fable model is placed on the Fable window instead, which
-this card does not draw." Pins reads the member's active pins, one per agent and model as the card's Active pins fact
-counts them, a muted `0` for none. Then "Traffic, 24h" draws requests per hour with a 3-hour average, or "No traffic in
-the last 24h", and the facts Members, Keys, Requests 24h, Cost 24h, Active pins, Warnings and Moves in the last hour.
-The card's request figures, the count in the chart's head, the bars per hour and Requests 24h, leave out the requests
-the router refused before any account was asked. Active pins counts every pin under the pool's keys, as the Dashboard's
-Sessions card does. A pin outlives its account's membership, so where the figure exceeds the sum of the Pins column, a
-line under it reads `{n} on a former member`, or `{n} on former members` for more than one. Warnings counts the pool's
-warnings with their sentences on hover, and its figure opens the dialog on the group of the first warning's first field.
-The figure of Moves in the last hour opens the routing log on the pool's moved decisions, and its hover lists the moves
-by reason. "Delete" asks `Delete pool {name}`: "Deletes the pool and its memberships. Its keys must be moved or revoked
-first."
+Standing and Pins. Standing reads `next` for the member a fresh session lands on, `eligible`, `after plan quota` for a
+member in overage ranked after the plan-funded ones, `winding down {left}` (on hover `Winding down to the plan's end at
+{time}`) for a member that serves only as the last resort, and for a member passed over `cooldown {left}` (on hover `In
+a cooldown that ends {time}`), `overage until {time}` (`overage` where the reset is unknown), `at budget` or `at budget
+until {time}` with the spend against the budget, and `unavailable` with the account's status on hover. On a card whose
+pool has the slow-down on, Standing carries the speed chip of a slowed member, `0.5x` with the Quota view's hover where
+the account is loaded. The caption names the strategy, `Pace`, `Priority, then random` or `Round robin`, with
+`subscription accounts first` appended where the pool prefers subscription accounts, and its hover notes "A request for
+a Fable model is placed on the Fable window instead, which this card does not draw." Pins reads the member's active
+pins, one per agent and model as the card's Active pins fact counts them, a muted `0` for none. Then "Traffic, 24h"
+draws requests per hour with a 3-hour average, or "No traffic in the last 24h", and the facts Members, Keys, Requests
+24h, Cost 24h, Active pins, Warnings and Moves in the last hour. The card's request figures, the count in the chart's
+head, the bars per hour and Requests 24h, leave out the requests the router refused before any account was asked. Active
+pins counts every pin under the pool's keys, as the Dashboard's Sessions card does. A pin outlives its account's
+membership, so where the figure exceeds the sum of the Pins column, a line under it reads `{n} on a former member`, or
+`{n} on former members` for more than one. Warnings counts the pool's warnings with their sentences on hover, and its
+figure opens the dialog on the group of the first warning's first field. The figure of Moves in the last hour opens the
+routing log on the pool's moved decisions, and its hover lists the moves by reason. "Delete" asks `Delete pool {name}`:
+"Deletes the pool and its memberships. Its keys must be moved or revoked first."
 
 The pool dialog, "Create pool" or `Edit pool {name}`, is grouped: a rail "Pool settings" on the left, one group open
 at a time, a status line reading "Every group saves together." or `Save is held: {reason}` (a pool that changed since
@@ -546,18 +541,17 @@ The view opens on its bar: "Search keys", Add filter with the Pool and Status fi
 edge the split Refresh button and the count of the keys the table lists, `{n} keys`. Status offers All statuses, Active,
 Disabled, Expired or Revoked. Pool takes any number of pools, each as a chip of its own, such as "pool: jobs" and "pool:
 all", and a pool the address names that the router does not list keeps its chip until the pools load. The search and the
-filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts at
-5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost
-follow, and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's
-figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the
-subscription traffic's 20x 7-day equivalent over the billed traffic's dollars, and a bar's figure and a cost line read a
-key's equivalent beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the cost
-line each reading the subscription side as a dash with the Dashboard's hover where a request priced nothing on the 7-day
-window, and its bar draws no fill and sorts last, and under Window shares a dash, since a key spans its pool's accounts.
-The columns are Name, Prefix, Pool,
-Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the capture setting,
-`bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and "keepalive off"
-for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they
+filters live in the page's address, so the pool card's key count link lands on its pool's keys. Auto reload starts at 5
+s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost follow,
+and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. Lifetime cost, each bar's figure
+and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the subscription
+traffic's 20x 7-day equivalent over the billed traffic's dollars, and a bar's figure and a cost line read a key's
+equivalent beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the cost line each
+reading the subscription side as a dash with the Dashboard's hover where a request priced nothing on the 7-day window,
+and its bar draws no fill and sorts last, and under Window shares a dash, since a key spans its pool's accounts. The
+columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a
+row notes the capture setting, `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows
+its pool and "keepalive off" for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they
 replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never". Status carries the key's state with
 `used {ago}` and, after a rotation, `{n} sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate
 {name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately. Its history stays in the ledger.")
@@ -709,18 +703,17 @@ and the dollar equivalent on hover. Under Window shares it reads its account's o
 short word (`0.12% 7-day Fable` over `0.42% 5h`, the full labels on hover), under All in dollars and Dollar equivalent
 its dollar equivalent over `equivalent` with every 20x equivalent on hover, and under Billed dollars a dash with the
 hover "Nothing billed: a subscription request". An API-key, fast mode, overage or usage-based request reads dollars
-under every
-position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no subscription equivalent". A
-figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted model", and a
-dash carries no mark. A client classifier call on a subscription account reads `0%` under Native and Window shares, its
-20x equivalents and its window shares zero, with the hover "Free on the plan: a client classifier call takes no window
-share" ahead of the estimate, its dollar equivalent over `equivalent` under All in dollars and Dollar equivalent with
-the same hover ahead of its zero 20x equivalents, and a dash under Billed dollars, while on an overage or API-key
-account it reads its dollars as any billed request does. The table pages by "Rows" (10, 25, 50 or 100, 25 by default)
-with First, Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split
-Refresh button's body brings it up to now. An empty table reads "No requests match" with "Widen the range or clear a
-filter." and "Reset filters", which clears the filters, the search and the range. What each figure means is on
-[Statistics](statistics.md).
+under every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no subscription
+equivalent". A figure an estimate priced leads with `~`, its hover adding "Estimated at the model tier's latest weighted
+model", and a dash carries no mark. A client classifier call on a subscription account reads `0%` under Native and
+Window shares, its 20x equivalents and its window shares zero, with the hover "Free on the plan: a client classifier
+call takes no window share" ahead of the estimate, its dollar equivalent over `equivalent` under All in dollars and
+Dollar equivalent with the same hover ahead of its zero 20x equivalents, and a dash under Billed dollars, while on an
+overage or API-key account it reads its dollars as any billed request does. The table pages by "Rows" (10, 25, 50 or
+100, 25 by default) with First, Previous and Next, holds the requests up to the moment you opened it so paging does not
+shift, and the split Refresh button's body brings it up to now. An empty table reads "No requests match" with "Widen the
+range or clear a filter." and "Reset filters", which clears the filters, the search and the range. What each figure
+means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
@@ -1190,44 +1183,43 @@ holds `realized`, in the order the engine applies them.
 Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the reset, the
 reading's source and age), or on a usage-based seat one cell across the three, `spend 41%` over its reset with
 `estimated` under it where the router estimated the reset, or "not reported", Projection and Runway, In flight against
-the cap, the Pace score, Prefix, and Verdict. The
-rows list the chosen, renewed or held-on member first, then a move's source and its other destinations, then the ranked
-members by rank, then the eligible ones the strategy did not rank, then the ones a partition or a check dropped with
-their obstacle. Projection reads one line per window the candidate reports, the projection at the window's horizon,
-`5h 99% at 18:20` where the horizon is the reset and `7d 41% in 5 h` where it falls earlier, and Runway a span
-(`2 h 10 min`), `none` or `unbounded`, each a dash for a candidate the gate did not read. The Projection cell's hover
-names the demand where it differs from the burn the window sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the
-candidate's slow-down factor. The Pace score stands under a header naming the window it read,
-`Spare rate, 7-day per hour` or `Spare rate, 7-day Fable per hour` (`Pace` where no subscription candidate names one,
-and `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
-`{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or
-`to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` The pick line names
-the accounts whose scores tied, the runway that narrowed them where it did, and whether the draw chose among more than
-one. Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of $5.00`), whose hover says
-why the member was passed over, and beside it a badge for a destination the gate read that did not fit, `rewrite only`
-or `least bad` in the warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that
-pins nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed
-until) and `Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the
-fence re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the
-account it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant.
-The settings fold lists the pool's twenty-four settings in the card's order with Load shedding and
-Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or
-`at once` at 0, or "The key and its pool had left the registry". A record written
-before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and the
-five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
-twenty-four, each marked `(then)`, the three settings it carried that a version 2 record does not. "Outcome" lists the
-pin written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
-(`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading
-`for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips
-`speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or
-`for the rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a
-Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown,
-`re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the spend against
-a budget. With four entries or more, the cache-map row draws one chip per tier with its count and depth range, such as
-`message ×11 depth 1 to 11`, then its three deepest message depths, and its control "All {n} entries" lists every entry
-until "Latest 3" folds them again. The foot offers the three widenings after "Widen to", this minute, this session and
-this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A
-record the retention purged reads "The record left with the retention", and one still loading "Loading the record".
+the cap, the Pace score, Prefix, and Verdict. The rows list the chosen, renewed or held-on member first, then a move's
+source and its other destinations, then the ranked members by rank, then the eligible ones the strategy did not rank,
+then the ones a partition or a check dropped with their obstacle. Projection reads one line per window the candidate
+reports, the projection at the window's horizon, `5h 99% at 18:20` where the horizon is the reset and `7d 41% in 5 h`
+where it falls earlier, and Runway a span (`2 h 10 min`), `none` or `unbounded`, each a dash for a candidate the gate
+did not read. The Projection cell's hover names the demand where it differs from the burn the window sees, `demand 12.86
+%/h over burn 6.43 %/h at 0.5x`, with the candidate's slow-down factor. The Pace score stands under a header naming the
+window it read, `Spare rate, 7-day per hour` or `Spare rate, 7-day Fable per hour` (`Pace` where no subscription
+candidate names one, and `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading `{pct} of the
+7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or `to its subscription's end at
+{time}`) followed by `Inside its tier, the highest spare rate wins.` The pick line names the accounts whose scores tied,
+the runway that narrowed them where it did, and whether the draw chose among more than one. Verdict carries the one chip
+that decided it (`429 on 5h until 14:55`, `budget $1.10 of $5.00`), whose hover says why the member was passed over, and
+beside it a badge for a destination the gate read that did not fit, `rewrite only` or `least bad` in the warning tone
+and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads why:
+not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and `Settings in force since
+{time}` (which a guardrail's attach to or detach from the pool moves too, since the fence re-reads the pool's settings),
+stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account it left, `shed from` after a
+shedding round and `failed over from` after a failover's landing, with the instant. The settings fold lists the
+pool's twenty-four settings in the card's order with Load shedding and Slow-down reading `on` or `off`,
+Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at once` at 0,
+or "The key and its pool had left the registry". A record written before a setting existed reads `not
+recorded` for it, Load shedding and Window ceiling on a version 1 record and the five slow-down and return-to-plan
+settings on an older version 2 record, and a version 1 record lists after the twenty-four, each marked `(then)`, the
+three settings it carried that a version 2 record does not. "Outcome" lists the pin written, the reservation (the
+account, the share per window and the expiry), the cache-map entries the answer wrote (`pending` until it ends), the
+cache read with the TTL tier of its deepest entry, the hold, reading `for the reset at {time}` where the request waited
+for a reset, or `for the slow-down until {time}` with the chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min`
+and `cycle 20 s` where the slow-down held it, or `for the rewrite in flight of {request} until {time}` with `bound 2
+min` where it waited for a moved pin's first head, a Cause on a failover's landing or a move with a cause (`429 on 5h`
+or `fast lane 429` for a cooldown, `re-auth required by credential refused` for a mark), the answer an exhaustion or a
+refusal gave, and the spend against a budget. With four entries or more, the cache-map row draws one chip per tier with
+its count and depth range, such as `message ×11 depth 1 to 11`, then its three deepest message depths, and its control
+"All {n} entries" lists every entry until "Latest 3" folds them again. The foot offers the three widenings after "Widen
+to", this minute, this session and this account, names the record's version as `Record v{n}`, and "Copy as JSON" copies
+the record route's answer whole. A record the retention purged reads "The record left with the retention", and one still
+loading "Loading the record".
 
 An event row opens to a panel of pairs: When to the second, the account and the pool as links, then the kind's own
 pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour

@@ -32,8 +32,7 @@ export default defineConfig({
     // The console and the API reference page are two entries of one bundle, so the ui crate embeds one dist/
     // and the page's hashed assets sit beside the console's. An entry's chunk is named after its key, and the
     // console's stays `index` for the `index-<hash>.js` name the release's binary smoke looks for. The warning limit
-    // sits just above the API reference entry's chunk, the largest of the bundle, so a real growth of either entry
-    // shows again.
+    // sits just above the API reference entry's chunk, the largest of the bundle, so that entry's growth shows again.
     chunkSizeWarningLimit: 1_700,
     rolldownOptions: {
       input: {
