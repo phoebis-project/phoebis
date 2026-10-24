@@ -2613,6 +2613,26 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
     }
   }
   {
+    // With no limit set the Spend row reads the amount spent alone and draws no meter track, its reset line kept.
+    const { listAccounts } = api;
+    api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'contract' ? { ...a, spend: { ...a.spend, amounts: { ...a.spend.amounts, limitMinor: null } } } : a));
+    try {
+      const page = await mount('/quota', { now: CLOCK_ORIGIN });
+      const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'contract');
+      const chips = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].map((c) => c.textContent);
+      const meters = card?.querySelectorAll('.qcard__windows .meter').length ?? -1;
+      const line = card?.querySelector('.qcard__windows .qwin__reset');
+      results.push({
+        name: "/quota a usage-based seat's Spend row with no limit set reads the amount spent with no meter track, its reset line kept",
+        ok: JSON.stringify(chips) === JSON.stringify(['Spend$1,025.00 spent']) && meters === 0 && line?.textContent === estimatedLine,
+        missing: [JSON.stringify(chips), `${meters} meters`, line?.textContent ?? 'no line'],
+      });
+      page.unmount();
+    } finally {
+      api.listAccounts = listAccounts;
+    }
+  }
+  {
     const page = await mount('/quota#quota-windows', { now: CLOCK_ORIGIN });
     const laneOf = () => [...page.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'contract');
     const readLane = () => {

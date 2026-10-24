@@ -398,6 +398,9 @@ function SpendWindow({ spend, now, soon }: { now: number; soon: boolean; spend: 
       </span>
       {left !== null ? (
         <Meter value={left} tone={meterTone(left)} thin label={reading} title={reading} />
+      ) : unlimited ? (
+        // An empty cell keeps the reset in its column of the card's grid.
+        <span aria-hidden="true" />
       ) : (
         <div className="meter meter--thin meter--absent" role="presentation">
           <div className="meter__fill" style={{ width: '100%' }} />
