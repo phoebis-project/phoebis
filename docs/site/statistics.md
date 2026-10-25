@@ -432,10 +432,11 @@ exhausted member.
 The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
 its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
 
-A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
-older hours keep their split. The re-fold moves the request rows alone. A wasted probe's counts and a probe the
-keepalive still holds keep the band they settled or were recorded in, so the waste of a probe whose prompt falls
-between the old and the new threshold inside the retained window stays priced at that band.
+A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, bounded
+at the first hour the rollup purge keeps where the request retention is 0, and the older hours keep their split. The
+re-fold moves the request rows alone. A wasted probe's counts and a probe the keepalive still holds keep the band they
+settled or were recorded in, so the waste of a probe whose prompt falls between the old and the new threshold inside the
+retained window stays priced at that band.
 
 ## Metrics
 

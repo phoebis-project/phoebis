@@ -264,11 +264,9 @@ pub(crate) async fn patch(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    if let Err(refusal) = parse_object::<serde::de::IgnoredAny>(&body) {
-        return refusal;
-    }
-    let Ok(input) = serde_json::from_slice::<PatchAccountInput>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
+    let input = match parse_object::<PatchAccountInput>(&body) {
+        Ok(input) => input,
+        Err(refusal) => return refusal,
     };
     if let Err(refusal) = within_text_bound("label", input.label.as_deref()) {
         return refusal;

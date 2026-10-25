@@ -1261,6 +1261,17 @@ async fn the_account_create_lists_the_object_refusal_and_the_members_route_the_m
             "{id}'s 400 lists {refusal}: {listed}"
         );
     }
+    let members = refusals("pool_members_put");
+    assert!(
+        members.contains(
+            "also the answer to an entry with an unknown field or a value past its field's type"
+        ),
+        "the members route's object refusal names the entries it also covers: {members}"
+    );
+    assert!(
+        !members.contains("a body without a `members` list"),
+        "the members route lists no list-less clause beside its list refusal: {members}"
+    );
 }
 
 #[tokio::test]

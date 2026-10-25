@@ -934,7 +934,7 @@ pub(crate) async fn remove(
     request_body(content = MembersInput, description = "The same shape and validation as `members` on `POST /admin/pools`, replacing the whole membership list", content_type = "application/json"),
     responses(
         (status = 200, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in an entry, or a value past its field's type\n- `body must carry a members list`: an object whose `members` is absent or not an array\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = "- `body must be a JSON object`, also the answer to an entry with an unknown field or a value past its field's type\n- `body must carry a members list`: an object whose `members` is absent or not an array\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `pool not found`\n- `account {id} not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 409, description = "- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`", body = ErrorBody, example = json!({"error": "account {id} is a member of pool {pool}"})),
         (status = 500, response = StorageFailure),

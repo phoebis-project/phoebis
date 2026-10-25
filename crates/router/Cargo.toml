@@ -14,8 +14,8 @@ name = "phoebis"
 path = "src/main.rs"
 
 [features]
-# The shutdown budget's debug figure, see `app::run`. The router's own dev-dependency below turns it on for a test
-# build, so a release build never reads it.
+# The shutdown budget's and the listener drain's debug figures, see `app::run`. The router's own dev-dependency below
+# turns it on for a test build, so a release build never reads them.
 debug-hooks = []
 
 [dependencies]
@@ -59,7 +59,7 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-keepalive = { path = "../keepalive", features = ["debug-hooks"] }
 # The test tables, kept off the dependency above so a release build carries none.
 phoebis-ledger = { path = "../ledger", features = ["test-support"] }
-# An integration test builds the library without `cfg(test)`, so the shutdown budget's debug figure needs it on.
+# An integration test builds the library without `cfg(test)`, so the debug figures need it on.
 phoebis-router = { path = ".", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 reqwest = { workspace = true }

@@ -655,22 +655,35 @@ async fn every_new_upstream_connection_logs_its_host_and_its_dial_and_handshake_
 /// removes it once the admin answers, as `probe_soon_on` and `probe_soon_off` do for the keepalive's timing.
 const SHUTDOWN_BUDGET_SECONDS: &str = "PHOEBIS_DEBUG_SHUTDOWN_BUDGET_SECONDS";
 
+/// The binary reads its listener drain at its start too, beside the shutdown budget.
+const LISTENER_DRAIN_SECONDS: &str = "PHOEBIS_DEBUG_LISTENER_DRAIN_SECONDS";
+
+/// The binary reads the shutdown budget and the listener drain at its start, outside the `ENV` lock, so a binary
+/// another case starts while a holder stands reads that holder's figure too. The budget holders share the read side
+/// and the drain holder takes the write side, so neither figure reaches the other's binary.
+static SHUTDOWN_FIGURES: std::sync::LazyLock<tokio::sync::RwLock<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::RwLock::new(()));
+
 /// The figure is removed when the last holder drops, a panic's unwinding included, so a case that fails before its
-/// admin answers leaves no short budget to a binary another case starts later.
-struct ShortShutdownBudget;
+/// admin answers leaves no short budget to a binary another case starts later. The holder keeps the read side of
+/// `SHUTDOWN_FIGURES` until the figure is gone, since the binary reads it at its start outside the `ENV` lock.
+struct ShortShutdownBudget {
+    _figures: tokio::sync::RwLockReadGuard<'static, ()>,
+}
 
 /// The cases holding the figure. Two may overlap, so the figure is removed only once the last of them has started.
 static SHORT_BUDGET_HOLDERS: Mutex<usize> = Mutex::new(0);
 
 impl ShortShutdownBudget {
-    fn set(seconds: &str) -> ShortShutdownBudget {
+    async fn set(seconds: &str) -> ShortShutdownBudget {
+        let figures = SHUTDOWN_FIGURES.read().await;
         let mut holders = SHORT_BUDGET_HOLDERS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var(SHUTDOWN_BUDGET_SECONDS, seconds);
         *holders += 1;
-        ShortShutdownBudget
+        ShortShutdownBudget { _figures: figures }
     }
 }
 
@@ -684,6 +697,29 @@ impl Drop for ShortShutdownBudget {
             let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             std::env::remove_var(SHUTDOWN_BUDGET_SECONDS);
         }
+    }
+}
+
+/// The figure is removed when the holder drops, a panic's unwinding included. The holder keeps the write side of
+/// `SHUTDOWN_FIGURES` until the figure is gone, since the binary reads it at its start outside the `ENV` lock: no
+/// budget case starts beside it, and the one holder it admits needs no count.
+struct ShortListenerDrain {
+    _figures: tokio::sync::RwLockWriteGuard<'static, ()>,
+}
+
+impl ShortListenerDrain {
+    async fn set(seconds: &str) -> ShortListenerDrain {
+        let figures = SHUTDOWN_FIGURES.write().await;
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(LISTENER_DRAIN_SECONDS, seconds);
+        ShortListenerDrain { _figures: figures }
+    }
+}
+
+impl Drop for ShortListenerDrain {
+    fn drop(&mut self) {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::remove_var(LISTENER_DRAIN_SECONDS);
     }
 }
 
@@ -747,7 +783,7 @@ async fn a_shutdown_with_a_stalled_body_ends_inside_its_budget_with_both_flushes
     let cfg_path = dir.path().join("config.yaml");
     std::fs::write(&cfg_path, yaml).unwrap();
     // Set outside the block below: its `ENV` guard drops first on a panic, so the figure's own drop can take the lock.
-    let short_budget = ShortShutdownBudget::set("3");
+    let short_budget = ShortShutdownBudget::set("3").await;
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -885,7 +921,7 @@ async fn a_shutdown_past_the_drain_window_books_the_cut_stream_and_the_headless_
     let cfg_path = dir.path().join("config.yaml");
     std::fs::write(&cfg_path, yaml).unwrap();
     // Three seconds, so the router's own cut ends the window long before the proxy listener's 30 s deadline.
-    let short_budget = ShortShutdownBudget::set("3");
+    let short_budget = ShortShutdownBudget::set("3").await;
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -987,6 +1023,153 @@ async fn a_shutdown_past_the_drain_window_books_the_cut_stream_and_the_headless_
             ),
         ],
         "the cut stream and the headless request both carry the router's own cut"
+    );
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stream_held_past_the_proxy_listeners_own_drain_is_cut_there_and_booked_as_router_shutdown(
+) {
+    const STREAMED: &str = "sk-ant-api03-LISTENERCUT";
+    // This thread's subscriber, as in the connection line's case: the binary's own lines are logged on this thread.
+    let captured = Captured::default();
+    let _capture = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(captured.clone())
+            .finish(),
+    );
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+        },
+    }])
+    .await;
+    // The head and `message_start` commit the stream, and the gate holds the rest past the stop.
+    up.add_credential_rule(
+        STREAMED,
+        "/v1/messages",
+        Respond::SseGated {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                fake_upstream::SseEvent {
+                    event: "message_start".into(),
+                    data: r#"{"type":"message_start","message":{"id":"msg_listener_cut","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":5,"output_tokens":1}}}"#.into(),
+                },
+                fake_upstream::SseEvent {
+                    event: "message_stop".into(),
+                    data: r#"{"type":"message_stop"}"#.into(),
+                },
+            ],
+        },
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    // Two seconds for the listeners alone, while the budget keeps its default and the listeners' phase its 30 s outer
+    // bound, so the proxy listener's own deadline is the one that cuts the stream. Set outside the block below, as
+    // the budget's figure is.
+    let short_drain = ShortListenerDrain::set("2").await;
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    drop(short_drain);
+    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "streamed", "kind": "api_key", "label": "Streamed", "secret": STREAMED })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "streamed", "priority": 0 }] })).send().await.unwrap().status(), 201);
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    let held = fixture_request(&client, proxy_port, &secret, "e2e-listener-cut")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(held.status(), 200, "the stream committed before the stop");
+
+    let _ = stop_tx.send(());
+    // Well past the two-second drain and well short of the 30 s outer bound.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(15), server).await;
+    let text = captured.text();
+    assert!(ended.is_ok(), "the stop ran past 15 s: {text}");
+    ended.unwrap().unwrap().unwrap();
+    drop(held);
+    let ledger = phoebis_ledger::LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+    let give_up = std::time::Instant::now() + SETTLE;
+    let rows = loop {
+        let (listed, _) = ledger
+            .read_blocking(|c| {
+                phoebis_ledger::list_requests(
+                    c,
+                    &phoebis_ledger::RequestFilter::default(),
+                    &phoebis_ledger::LiveKeys::default(),
+                    None,
+                    10,
+                )
+            })
+            .unwrap();
+        if !listed.is_empty() || std::time::Instant::now() >= give_up {
+            break listed;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    let booked: Vec<_> = rows
+        .iter()
+        .map(|(r, _)| (r.outcome.clone(), r.error_code.clone()))
+        .collect();
+    assert_eq!(
+        booked,
+        [("canceled".to_string(), Some("router_shutdown".to_string()))],
+        "the listener's own cut books the router's shutdown on the cut stream"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains("phoebis_relay::serve")
+                && line.contains("connections still open at the drain deadline were cut")
+                && line.contains("seconds=2")),
+        "the proxy listener cut the stream at its own deadline: {text}"
+    );
+    assert!(
+        !text.contains("requests were still in flight when the drain window closed"),
+        "the outer bound's abort path did not run: {text}"
     );
     up.release();
     up.shutdown().await;
