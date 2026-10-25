@@ -2458,6 +2458,20 @@ async fn the_request_list_answers_a_fixed_end_watermark_past_to_and_a_live_one_a
         Some(written_at),
         "the fixed-end read answers the late row's stamp, past to {to}: {fixed}"
     );
+    let spelled = json(
+        get(
+            &parts.app,
+            &format!("{range}&fixed_end=true"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        spelled["landed_through"].as_i64(),
+        Some(written_at),
+        "the console's fixed_end=true spelling reads the same stamp: {spelled}"
+    );
     let live = json(get(&parts.app, &range, Some(&cookie)).await).await;
     assert_eq!(
         (

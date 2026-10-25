@@ -957,7 +957,6 @@ pub(crate) async fn list(
         include_probes: q
             .get("include_probes")
             .is_some_and(|v| v == "true" || v == "1"),
-        fixed_end: q.get("fixed_end").is_some_and(|v| v == "true" || v == "1"),
         cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
         efforts: list_param(&q, "efforts"),
         request_classes: list_param(&q, "request_classes"),
@@ -965,6 +964,7 @@ pub(crate) async fn list(
         guardrails: list_param(&q, "guardrails"),
         stop_reasons: list_param(&q, "stop_reasons"),
         refusal_categories: list_param(&q, "refusal_categories"),
+        fixed_end: q.get("fixed_end").is_some_and(|v| v == "true" || v == "1"),
     };
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
         || !phoebis_ledger::patterns_within_bounds(filter.client.as_slice())
