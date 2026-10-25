@@ -100,6 +100,12 @@ test('a new pool reads each member the way the pool route does', async () => {
     // The sunset seed's plan ended, which the route reads as a term past its end.
     sunset: 'unavailable',
   });
+  // Two members, one half of the ended term each, since the sunset seed holds both halves at once.
+  await api.updateAccount('sunset', { canceled: false, subscriptionEndsAt: null });
+  await api.updateAccount('reserve', { canceled: true, subscriptionEndsAt: new Date(Date.now() - 60_000).toISOString() });
+  const ended = await verdicts('ended', 'never');
+  assert.equal(ended.sunset, 'unavailable', 'the flagged half alone: a plan-ended account with its cancel cleared is unavailable');
+  assert.equal(ended.reserve, 'unavailable', 'the canceled half alone: an unflagged account canceled past its saved end is unavailable');
   // Funded again, the flagged account serves; the account the router reads in overage is an obstacle only under a
   // policy that admits none.
   await api.clearFunding('overflow');
