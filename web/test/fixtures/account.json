@@ -43,7 +43,7 @@
       "rate_limit_tier": "default_claude_max_20x"
     },
     "subscription": {
-      "plan": "max",
+      "plan": "max_20x",
       "tier": "default_claude_max_20x",
       "since": 1773482400000,
       "trial_ends_at": null,

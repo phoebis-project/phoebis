@@ -2591,7 +2591,7 @@ fn projections(
                 priority,
                 upstream_model: String::new(),
             };
-            let tier = snapshot.tier(account_id).unwrap_or_default();
+            let tier = snapshot.priced_tier(account_id).unwrap_or_default();
             let achieved = projections_of(
                 state,
                 snapshot,
@@ -2739,7 +2739,7 @@ fn standing_runway(
     model: &str,
     now: i64,
 ) -> Option<(Option<i64>, Option<String>)> {
-    let tier = snapshot.tier(account_id).unwrap_or_default();
+    let tier = snapshot.priced_tier(account_id).unwrap_or_default();
     let mut projected = false;
     let mut bounded: Vec<(&str, i64)> = Vec::new();
     for window in plan_windows(model) {
@@ -4209,7 +4209,7 @@ impl Task {
                 {
                     return;
                 }
-                let Some(tier) = snapshot.tier(&account_id) else {
+                let Some(tier) = snapshot.priced_tier(&account_id) else {
                     return;
                 };
                 // The report's own entrypoint, never a booking's: an ordinary renewal holds none.
@@ -5897,6 +5897,7 @@ mod tests {
                 terms: vec![SubscriptionTerm {
                     account_id: "a".into(),
                     tier: Some(tier.into()),
+                    plan: Some("max_20x".into()),
                     ..SubscriptionTerm::default()
                 }],
                 ..RegistryLoad::default()

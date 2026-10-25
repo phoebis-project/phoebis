@@ -251,8 +251,9 @@ account reads 29.3% of its own 5-hour window. Under the interactive regime the s
 equivalent under the top bar's Unit switch, whose default Native position shows a subscription request in it and a
 billed request in dollars ([The shell](console.md#the-shell)).
 
-The base capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro
-subscription reports `default_claude_ai`):
+The base capacities the shipped file carries, in units per window, keyed by the tier the profile reports for the plans
+the cost model prices (a Pro subscription reports `default_claude_ai`, and a free organization reports the same tier
+with no priced capacity):
 
 | Tier | 5-hour | 7-day |
 | --- | --- | --- |

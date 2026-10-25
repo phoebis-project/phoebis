@@ -1208,6 +1208,67 @@ async fn a_profile_refresh_whose_seat_tier_alone_moves_the_class_reloads_the_rou
     up.shutdown().await;
 }
 
+/// A profile answer whose organization type names a Team plan under the Pro tier the case stores first.
+fn team_on_the_pro_tier_profile_rule() -> Rule {
+    Rule {
+        path_prefix: "/api/oauth/profile".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid"},"organization":{"uuid":"o","organization_type":"claude_team","rate_limit_tier":"default_claude_ai"}}"#
+                .to_vec(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn a_profile_refresh_whose_organization_type_alone_moves_the_plan_reloads_the_router() {
+    let up = FakeUpstream::start(vec![usage_rule(), team_on_the_pro_tier_profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The refresh repeats the stored tier, so only the organization type moves.
+    h.store
+        .set_profile(
+            "a",
+            r#"{"organization":{"organization_type":"claude_pro","rate_limit_tier":"default_claude_ai"}}"#,
+            &SubscriptionRow {
+                tier: Some("default_claude_ai".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    assert_eq!(
+        h.router.snapshot().plan("a"),
+        Some("pro"),
+        "a Pro plan before the refresh"
+    );
+    let row = h.store.account("a").unwrap().unwrap();
+    QuotaPoll::refresh_profile(
+        &h.store,
+        h.usage.as_ref().unwrap(),
+        &h.ledger,
+        &h.router,
+        &row,
+    )
+    .await;
+    assert_eq!(
+        h.store
+            .subscription_term("a")
+            .unwrap()
+            .unwrap()
+            .plan
+            .as_deref(),
+        Some("team"),
+        "the stored document names the Team plan"
+    );
+    assert_eq!(
+        h.router.snapshot().plan("a"),
+        Some("team"),
+        "the routing snapshot reads the plan the refresh stored, with no other reload"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;

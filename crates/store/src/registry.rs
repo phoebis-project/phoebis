@@ -687,12 +687,17 @@ pub struct SubscriptionTerm {
     pub trial_ends_at: Option<i64>,
     pub canceled: bool,
     pub ends_at: Option<i64>,
-    /// The profile's rate-limit tier, which prices the router's own use of the account's windows.
+    /// The profile's rate-limit tier, which prices the router's own use of the account's windows where `plan` is one
+    /// the cost table prices.
     pub tier: Option<String>,
     /// The class of a usage-based Enterprise seat: the tier `default_claude_zero`, or the stored document's
     /// `organization.seat_tier` `enterprise_usage_based`. Derived at every load from the stored tier and document,
     /// never stored, false for an `api_key` account and for a seat that keeps plan windows.
     pub usage_based: bool,
+    /// The plan the stored profile resolves to, one word: `free`, `pro`, `max_5x`, `max_20x`, `max`, `team`,
+    /// `enterprise` or `usage_based`, `None` while no profile document stands. Derived at every load by `plan_of`
+    /// beside `usage_based`, never stored.
+    pub plan: Option<String>,
     /// When a profile read found the account's organization holding no plan, epoch milliseconds, `None` while a plan
     /// stands. The engine reads it as an end that has passed.
     pub plan_ended_at: Option<i64>,
@@ -706,6 +711,48 @@ pub fn usage_based_of(tier: Option<&str>, profile_json: Option<&str>) -> bool {
             .is_some_and(|document| {
                 document["organization"]["seat_tier"] == "enterprise_usage_based"
             })
+}
+
+/// The one resolution of the plan, shared by the registry load and `Store::subscription_term`: the usage-based class
+/// above both, then the document's `organization.organization_type`, then the rate-limit tier alone.
+pub fn plan_of(
+    organization_type: Option<&str>,
+    tier: Option<&str>,
+    usage_based: bool,
+) -> Option<&'static str> {
+    if usage_based {
+        return Some("usage_based");
+    }
+    let by_tier = match tier {
+        Some("default_claude_ai") => Some("pro"),
+        Some("default_claude_max_5x") => Some("max_5x"),
+        Some("default_claude_max_20x") => Some("max_20x"),
+        Some("default_claude_zero") => Some("usage_based"),
+        _ => None,
+    };
+    match organization_type {
+        Some("claude_free") => Some("free"),
+        Some("claude_pro") => Some("pro"),
+        Some("claude_team") => Some("team"),
+        Some("claude_enterprise") => Some("enterprise"),
+        Some("claude_max") => Some(match tier {
+            Some("default_claude_max_5x") => "max_5x",
+            Some("default_claude_max_20x") => "max_20x",
+            _ => "max",
+        }),
+        _ => by_tier,
+    }
+}
+
+/// The stored document's `organization.organization_type`, `None` without a document or the member.
+pub(crate) fn organization_type_of(profile_json: Option<&str>) -> Option<String> {
+    profile_json
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|document| {
+            document["organization"]["organization_type"]
+                .as_str()
+                .map(String::from)
+        })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -887,6 +934,12 @@ impl Store {
                     let profile_json: Option<String> = r.get(7)?;
                     let usage_based = r.get::<_, AccountKind>(6)? == AccountKind::Oauth
                         && usage_based_of(tier.as_deref(), profile_json.as_deref());
+                    let plan = plan_of(
+                        organization_type_of(profile_json.as_deref()).as_deref(),
+                        tier.as_deref(),
+                        usage_based,
+                    )
+                    .map(String::from);
                     Ok(SubscriptionTerm {
                         account_id: r.get(0)?,
                         since: r.get(1)?,
@@ -895,6 +948,7 @@ impl Store {
                         ends_at: r.get(4)?,
                         tier,
                         usage_based,
+                        plan,
                         plan_ended_at: r.get(8)?,
                     })
                 })?

@@ -363,7 +363,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         } else {
             funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
         };
-        // The tier the store names now: a share is of the window the account has at this settlement.
+        // The tier the store names now: a share is of the window the account has at this settlement, and the record
+        // keeps that raw tier as the key its rows file under, as the request row keeps its own. The unit reads the
+        // snapshot's priced tier where the store named one, so a plan the cost model does not price (a free
+        // organization) settles in dollars as an untiered account does.
         let tier = (default_unit == SavingsUnit::WindowShare)
             .then(|| match engine.parts.store.subscription(&record.account) {
                 Ok(row) => {
@@ -384,11 +387,13 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             .flatten()
             .and_then(|s| s.tier);
         record.tier = tier.clone();
+        let snapshot = engine.parts.router.snapshot();
+        let priced_tier = tier.as_ref().and(snapshot.priced_tier(&record.account));
         let unit = settled_unit(
             default_unit,
             &tables,
             job.entrypoint.as_deref(),
-            tier.as_deref(),
+            priced_tier,
             &record.account,
             &record.canonical_model,
             record.usage,

@@ -1215,7 +1215,7 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     assert_eq!(
         listed["subscription"],
         serde_json::json!({
-            "plan": "max",
+            "plan": "max_5x",
             "tier": "default_claude_max_5x",
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,

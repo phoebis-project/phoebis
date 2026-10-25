@@ -2187,7 +2187,7 @@ fn run(
     // release.
     state.release_reservation(&request.request_id);
     if !(request.count || request.probe || request.fast || request.classifier) {
-        if let Some(tier) = snapshot.tier(&chosen.account_id) {
+        if let Some(tier) = snapshot.priced_tier(&chosen.account_id) {
             let prior = match moving {
                 Some(_) => Vec::new(),
                 None => fresh_prior(state, snapshot, pool, request.now),
@@ -2810,7 +2810,7 @@ pub(crate) fn slow_down_of(
 ) -> Option<SlowDownRead> {
     if !slow_down(pool)
         || snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey)
-        || snapshot.tier(account_id).is_none()
+        || snapshot.priced_tier(account_id).is_none()
     {
         return None;
     }
@@ -3010,7 +3010,7 @@ pub(crate) fn fit_of(
     }
     // An unnamed tier prices neither the rewrite nor the burn, so for a move the figures are the prediction alone and
     // the verdict stays least bad.
-    let tier = snapshot.tier(candidate);
+    let tier = snapshot.priced_tier(candidate);
     if tier.is_none() && judge == Judge::Placement {
         read.verdict = "fits";
         return read;
@@ -3742,7 +3742,7 @@ fn move_of<'a>(
     // under a fired one. The line names every projection it read whether or not one fired, with the stamp and the wait
     // of each window inside its wait and the 5-hour window's age and hold inside the hold.
     let source = current.account_id.as_str();
-    let tier = snapshot.tier(source).unwrap_or_default();
+    let tier = snapshot.priced_tier(source).unwrap_or_default();
     let projections = projections_of(
         state,
         snapshot,
@@ -4034,7 +4034,7 @@ fn slow_down_read(
     account_id: &str,
     now: i64,
 ) -> Option<SlowDownRead> {
-    let tier = snapshot.tier(account_id).unwrap_or_default();
+    let tier = snapshot.priced_tier(account_id).unwrap_or_default();
     let read = slow_down_of(state, snapshot, pool, account_id, tier, now)?;
     state.write_slow_down(
         &pool.id,
@@ -4512,7 +4512,7 @@ fn healed(
     now: i64,
 ) -> Option<Healed> {
     let window = pin.marked_window.as_deref()?;
-    let tier = snapshot.tier(&pin.account_id).unwrap_or_default();
+    let tier = snapshot.priced_tier(&pin.account_id).unwrap_or_default();
     if window == FIVE_HOUR && slow_down(pool) {
         let read = slow_down_of(state, snapshot, pool, &pin.account_id, tier, now)?;
         if read.stretch_ms > read.threshold_ms {
@@ -4738,7 +4738,7 @@ fn shed_round(
     // the speed that demand was read at and the round removes what the slow-down cannot cover in the excess's own
     // units. Each pin's figure is computed once before the order, which reads it in a window-share round, and the
     // pick's loop reads every covering candidate at every position.
-    let tier = snapshot.tier(account_id).unwrap_or_default();
+    let tier = snapshot.priced_tier(account_id).unwrap_or_default();
     let speed = trigger
         .speed
         .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
@@ -4853,7 +4853,7 @@ fn shed_round(
             read.skip = Some("no_runway");
             return (read, None);
         };
-        let destination_tier = snapshot.tier(&destination).unwrap_or_default();
+        let destination_tier = snapshot.priced_tier(&destination).unwrap_or_default();
         let (rewrite, pin_burn, regime) =
             pin_figures(state, pool, &req, Figures::Pin(p), destination_tier, now);
         read.runway_ms = fit.runway_ms;
@@ -5795,7 +5795,7 @@ pub(crate) fn pace_of(
         .unwrap_or(WEEK_HOURS);
     // A slowed account's calm is its holds' work, so the score reads what its sessions would spend unslowed.
     let burn = snapshot
-        .tier(&candidate.account_id)
+        .priced_tier(&candidate.account_id)
         .and_then(|tier| {
             state
                 .demand_shares(
@@ -6418,12 +6418,12 @@ fn candidate_facts(
             snapshot,
             pool,
             id,
-            snapshot.tier(id).unwrap_or_default(),
+            snapshot.priced_tier(id).unwrap_or_default(),
             now,
             BurnRead::Achieved,
             None,
         );
-        if let Some(tier) = snapshot.tier(id) {
+        if let Some(tier) = snapshot.priced_tier(id) {
             burn = state
                 .burn_shares(
                     id,
@@ -6551,7 +6551,7 @@ fn candidate_facts(
         account_id: id.to_string(),
         incarnation: candidate.incarnation,
         kind: kind_name(kind),
-        plan_tier: snapshot.tier(id).map(String::from),
+        plan_tier: snapshot.plan(id).map(String::from),
         enabled: account.is_some_and(|a| a.enabled),
         state: account.map_or("deleted", |a| state_name(a.state).unwrap_or("ready")),
         priority: candidate.priority,
@@ -6622,7 +6622,7 @@ fn five_hour_demand(
     now: i64,
 ) -> f64 {
     let speed = state.slow_down_speed(pool, account_id, now);
-    let demand = match snapshot.tier(account_id) {
+    let demand = match snapshot.priced_tier(account_id) {
         Some(tier) if speed != 1.0 => state
             .demand_shares(
                 account_id,
@@ -7492,6 +7492,7 @@ mod banded_tests {
                     ends_at: None,
                     tier: Some("default_claude_max_20x".into()),
                     usage_based: false,
+                    plan: Some("max_20x".into()),
                     plan_ended_at: None,
                 }],
                 ..RegistryLoad::default()
@@ -7657,6 +7658,7 @@ mod banded_tests {
                     ends_at: Some(T - HOUR),
                     tier: Some(tier.into()),
                     usage_based: false,
+                    plan: Some("max_20x".into()),
                     plan_ended_at: None,
                 }],
                 ..RegistryLoad::default()

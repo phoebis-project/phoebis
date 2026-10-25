@@ -4485,6 +4485,7 @@ fn a_probe_on_a_pin_whose_subscription_ended_answers_the_obstacle_and_moves_noth
             ends_at: Some(1_500),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -5610,6 +5611,7 @@ fn the_blocker_refuses_a_winding_down_account_for_the_static_tier() {
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -6222,6 +6224,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         ends_at: Some(at),
         tier: None,
         usage_based: false,
+        plan: None,
         plan_ended_at: None,
     };
     // No runway: b outranks a, so only the bypass can land the request there.
@@ -8129,6 +8132,7 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
         ends_at: Some(at),
         tier: None,
         usage_based: false,
+        plan: None,
         plan_ended_at: None,
     };
     let pool = || Pool {
@@ -8518,6 +8522,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -8565,6 +8570,7 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }];
         let failover = Failover {
@@ -8632,6 +8638,7 @@ fn a_canceled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_sub
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -8694,6 +8701,7 @@ fn an_account_flagged_plan_ended_is_the_obstacle_subscription_ended_as_one_past_
         ends_at: None,
         tier: None,
         usage_based: false,
+        plan: None,
         plan_ended_at,
     };
     let running = snapshot_with_terms(pool(), vec![term(None)]);
@@ -8752,6 +8760,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             ends_at: None,
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -8772,6 +8781,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             ends_at: None,
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -11770,6 +11780,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
             ends_at: Some(T + 10 * MINUTE),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );
@@ -12134,6 +12145,7 @@ fn usage_based_seat(id: &str) -> SubscriptionTerm {
         account_id: id.into(),
         tier: Some("default_claude_zero".into()),
         usage_based: true,
+        plan: Some("usage_based".into()),
         ..SubscriptionTerm::default()
     }
 }
@@ -17150,6 +17162,7 @@ fn tiered(pool: Pool) -> RegistrySnapshot {
             ends_at: None,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan: Some("max_20x".into()),
             plan_ended_at: None,
         })
         .collect();
@@ -18157,6 +18170,7 @@ fn tier_terms(ids: &[&str]) -> Vec<SubscriptionTerm> {
             ends_at: None,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan: Some("max_20x".into()),
             plan_ended_at: None,
         })
         .collect()
@@ -20897,6 +20911,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
             ends_at,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan: Some("max_20x".into()),
             plan_ended_at: None,
         })
         .to_vec();
@@ -21757,6 +21772,161 @@ fn a_pool_with_the_slow_down_off_an_api_key_account_and_an_unread_window_read_no
         .iter()
         .all(|f| f.key != "slow_down"));
     none_read("probe", &d, &st);
+}
+
+/// `ratio_pricer` with the Pro tier `default_claude_ai` priced as `TIER` is, so an account on the Pro tier prices its
+/// rewrite and its burn wherever its plan prices a capacity at all.
+fn pro_tier_pricer() -> SharePricer {
+    fn priced(tier: &str) -> &str {
+        if tier == "default_claude_ai" {
+            TIER
+        } else {
+            tier
+        }
+    }
+    let ratio = ratio_pricer();
+    let (price, rate) = (ratio.clone(), ratio.clone());
+    SharePricer::new(move |window, entrypoint, tier, model, usage, at| {
+        price.price(window, entrypoint, priced(tier), model, usage, at)
+    })
+    .with_rate(move |window, entrypoint, tier, model, burn, at| {
+        rate.rate(window, entrypoint, priced(tier), model, burn, at)
+    })
+    .with_equivalent(move |window, entrypoint, model, usage, at| {
+        ratio.equivalent(window, entrypoint, model, usage, at)
+    })
+}
+
+#[test]
+fn a_free_organization_on_the_pro_tier_prices_no_capacity_and_reads_as_an_untiered_account() {
+    // The account under test is a free organization on the Pro tier, a term with no tier or a Max 20x term, beside a
+    // Max 20x sibling, under a pricer that prices the Pro tier.
+    let term = |id: &str, tier: Option<&str>, plan: Option<&str>| SubscriptionTerm {
+        account_id: id.into(),
+        tier: tier.map(String::from),
+        plan: plan.map(String::from),
+        ..SubscriptionTerm::default()
+    };
+    let free = || term("b", Some("default_claude_ai"), Some("free"));
+    let untiered = || term("b", None, None);
+    let max = || term("b", Some(TIER), Some("max_20x"));
+    let without_word = |c: &CandidateFacts| CandidateFacts {
+        plan_tier: None,
+        ..c.clone()
+    };
+
+    // A spent move from `a` onto `b`: the gate's fit on `b`.
+    let moved = |b: SubscriptionTerm| {
+        let s = snapshot_with_terms(
+            Pool {
+                members: vec![("a", 0), ("b", 1)],
+                ..Pool::default()
+            },
+            vec![term("a", Some(TIER), Some("max_20x")), b],
+        );
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.set_share(pro_tier_pricer());
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+            &mut rng(),
+        );
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample("b", sample(0.1, 0.1, T + 500));
+        let d = decide(
+            &mut st,
+            &s,
+            &SelectRequest {
+                body_tokens: 1_000_000,
+                ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000)
+            },
+            &mut rng(),
+        );
+        assert_eq!(
+            landed(d.result.clone()),
+            ("b".into(), Some(MigrateReason::Spent))
+        );
+        d
+    };
+    let (on_free, on_untiered, on_max) = (moved(free()), moved(untiered()), moved(max()));
+    assert_eq!(
+        (
+            line(&on_free.record, "fit").verdict,
+            line(&on_untiered.record, "fit").verdict,
+            line(&on_max.record, "fit").verdict,
+        ),
+        ("least_bad", "least_bad", "fits"),
+        "the free organization prices no rewrite, so the move reads it least bad as it reads an untiered sibling, \
+         while the Max 20x sibling prices the rewrite and fits"
+    );
+    assert_eq!(
+        line(&on_free.record, "fit"),
+        line(&on_untiered.record, "fit"),
+        "the fit's facts are an untiered account's"
+    );
+    assert_eq!(
+        without_word(candidate(&on_free.record, "b")),
+        without_word(candidate(&on_untiered.record, "b")),
+        "the destination's facts are an untiered account's but for the plan word"
+    );
+
+    // A pinned turn on `a` under the slow-down: the read and its entry on `a`.
+    let slowed = |a: SubscriptionTerm| {
+        let s = snapshot_with_terms(
+            slowing(Pool {
+                members: vec![("a", 0), ("b", 1)],
+                load_shedding: false,
+                ..Pool::default()
+            }),
+            vec![a, term("b", Some(TIER), Some("max_20x"))],
+        );
+        let mut st = loaded(vec![burning("s1", "a", 10.0, true, T)]);
+        st.set_share(pro_tier_pricer());
+        reading(&mut st, "a", 0.80, 2 * HOUR, T);
+        let d = decide(&mut st, &s, &main_turn(&s, "s1", T), &mut rng());
+        let entry = st.slow_down_state("p", "a").is_some();
+        (d, entry)
+    };
+    let as_a = |term: SubscriptionTerm| SubscriptionTerm {
+        account_id: "a".into(),
+        ..term
+    };
+    let (free_turn, free_entry) = slowed(as_a(free()));
+    let (untiered_turn, untiered_entry) = slowed(as_a(untiered()));
+    let (max_turn, max_entry) = slowed(as_a(max()));
+    assert_eq!(
+        (free_entry, untiered_entry, max_entry),
+        (false, false, true),
+        "the slow-down writes an entry on the Max 20x account alone"
+    );
+    assert_eq!(
+        line(&free_turn.record, "move:shed"),
+        line(&untiered_turn.record, "move:shed"),
+        "the shed line reads the free organization as it reads an untiered account"
+    );
+    assert_eq!(
+        without_word(candidate(&free_turn.record, "a")),
+        without_word(candidate(&untiered_turn.record, "a")),
+        "the free organization's facts are an untiered account's but for the plan word"
+    );
+    assert!(
+        candidate(&free_turn.record, "a").burn.is_empty()
+            && !candidate(&max_turn.record, "a").burn.is_empty(),
+        "the free organization prices no burn, the Max 20x account its own: {:?} against {:?}",
+        candidate(&free_turn.record, "a").burn,
+        candidate(&max_turn.record, "a").burn
+    );
+    assert_eq!(
+        (
+            candidate(&free_turn.record, "a").plan_tier.as_deref(),
+            candidate(&free_turn.record, "b").plan_tier.as_deref(),
+            candidate(&untiered_turn.record, "a").plan_tier.as_deref(),
+            candidate(&max_turn.record, "a").plan_tier.as_deref(),
+        ),
+        (Some("free"), Some("max_20x"), None, Some("max_20x")),
+        "the record's plan fact carries the resolved plan word"
+    );
 }
 
 #[test]
@@ -25237,6 +25407,7 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
                     ends_at: None,
                     tier: Some(tier.into()),
                     usage_based: false,
+                    plan: Some(if tier == TIER { "max_20x" } else { "pro" }.into()),
                     plan_ended_at: None,
                 })
                 .collect(),
@@ -25549,6 +25720,7 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
             ends_at,
             tier: Some(TIER.into()),
             usage_based: false,
+            plan: Some("max_20x".into()),
             plan_ended_at: None,
         })
         .to_vec();
@@ -27324,6 +27496,7 @@ fn a_pin_released_past_its_saved_end_names_the_account_it_left() {
             ends_at: Some(1_000 + 6 * HOUR),
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }],
     );

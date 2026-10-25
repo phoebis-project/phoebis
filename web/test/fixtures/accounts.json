@@ -45,7 +45,7 @@
           "rate_limit_tier": "default_claude_max_20x"
         },
         "subscription": {
-          "plan": "max",
+          "plan": "max_20x",
           "tier": "default_claude_max_20x",
           "since": 1773482400000,
           "trial_ends_at": null,
@@ -181,6 +181,66 @@
         "spend": null
       },
       {
+        "id": "free-org",
+        "kind": "oauth",
+        "label": "Free",
+        "enabled": true,
+        "canceled": false,
+        "plan_ended_at": null,
+        "state": "ready",
+        "funding_retry_at": null,
+        "identity": {
+          "email": "free@example.invalid",
+          "account_uuid": "00000000-0000-4000-8000-000000000005",
+          "organization_uuid": "00000000-0000-4000-8000-000000000006"
+        },
+        "credential": {
+          "access_expires_at": 1791724600000,
+          "refresh_expires_at": null,
+          "generation": 1,
+          "last_refresh_at": null,
+          "last_error": null,
+          "quarantined": false
+        },
+        "lifecycle_generation": 1,
+        "revision": 4294967297,
+        "cooldowns": [],
+        "overage": null,
+        "profile": {
+          "billing_type": "free",
+          "display_name": "Free",
+          "has_extra_usage_enabled": false,
+          "organization_name": "Free Org",
+          "organization_type": "claude_free",
+          "rate_limit_tier": "default_claude_ai"
+        },
+        "subscription": {
+          "plan": "free",
+          "tier": "default_claude_ai",
+          "since": null,
+          "trial_ends_at": null,
+          "ends_at": null
+        },
+        "windows": [],
+        "slow_down": null,
+        "fast_lane": null,
+        "extra_usage": null,
+        "pool": null,
+        "requests": {
+          "last_24h": 0,
+          "last_7d": 0,
+          "lifetime": 0
+        },
+        "usage": {
+          "error": "the poll has not read this account yet",
+          "fetched_at": null,
+          "held_until": null,
+          "poll": null
+        },
+        "usage_based": false,
+        "spend": null
+      },
+      {
         "id": "usage-seat",
         "kind": "oauth",
         "label": "Seat",
@@ -215,7 +275,7 @@
           "rate_limit_tier": "default_claude_zero"
         },
         "subscription": {
-          "plan": null,
+          "plan": "usage_based",
           "tier": "default_claude_zero",
           "since": null,
           "trial_ends_at": null,

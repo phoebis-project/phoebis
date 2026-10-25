@@ -1137,7 +1137,7 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
     assert_eq!(
         acct["subscription"],
         serde_json::json!({
-            "plan": "max",
+            "plan": "max_5x",
             "tier": "default_claude_max_5x",
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,
@@ -1345,6 +1345,69 @@ async fn the_account_view_reads_the_extra_usage_flag_from_the_organization_alone
             Some(&serde_json::Value::Null)
         ),
         "the organization's flag answers over the account's, and a flag under the account alone answers null"
+    );
+}
+
+#[tokio::test]
+async fn the_account_view_answers_the_plan_the_profile_resolves_to() {
+    use common::{get, json, login};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (id, label) in [("seat", "Seat"), ("unpaired", "Unpaired")] {
+        store
+            .insert_account(&phoebis_store::AccountRow {
+                id: id.into(),
+                kind: phoebis_store::AccountKind::Oauth,
+                label: label.into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: phoebis_store::AccountState::Ready,
+                state_cause: phoebis_store::StateCause::Paired,
+            })
+            .unwrap();
+    }
+    // A free organization reports the Pro tier and neither plan flag, so the type alone names it.
+    store
+        .set_profile(
+            "business",
+            r#"{"account":{"has_claude_max":false,"has_claude_pro":false},"organization":{"organization_type":"claude_free","rate_limit_tier":"default_claude_ai"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_ai".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    store
+        .set_profile(
+            "seat",
+            r#"{"organization":{"organization_type":"claude_enterprise","rate_limit_tier":"default_claude_zero"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_zero".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    // Canceled before it ever paired, so the view answers a subscription with no profile behind it.
+    store
+        .set_canceled("unpaired", true, Some(common::NOW + 86_400_000))
+        .unwrap();
+    let mut plans = Vec::new();
+    for id in ["business", "seat", "unpaired"] {
+        let view = json(get(&app, &format!("/admin/accounts/{id}"), Some(&cookie)).await).await;
+        assert!(view["subscription"].is_object(), "{id}: {view}");
+        plans.push(view["subscription"]["plan"].clone());
+    }
+    assert_eq!(
+        plans,
+        [
+            serde_json::json!("free"),
+            serde_json::json!("usage_based"),
+            serde_json::Value::Null,
+        ],
+        "the free organization reads free, the usage-based seat its class, and an account with no profile null"
     );
 }
 
@@ -4295,7 +4358,7 @@ async fn a_start_with_new_confirms_into_a_ready_row_with_its_identity_plan_and_s
     assert_eq!(
         acct["subscription"],
         serde_json::json!({
-            "plan": "max",
+            "plan": "max_5x",
             "tier": "default_claude_max_5x",
             "since": 1_773_482_400_000_i64,
             "trial_ends_at": 1_790_899_200_000_i64,
@@ -5055,6 +5118,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         "the burn as the 20x 5-hour equivalent per hour: {on_20x:?} against {equivalent}"
     );
     name_the_tier(&parts.store, "business", "default_claude_ai");
+    parts.router.reload().await.unwrap();
     let on_pro = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         !close(session_row(v, "s1")["burn"].as_f64(), on_max_20x)
     })
@@ -5082,6 +5146,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         equivalent_of(&on_pro)
     );
     name_the_tier(&parts.store, "business", "default_claude_team");
+    parts.router.reload().await.unwrap();
     let on_team = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         session_row(v, "s1")["burn"].is_null()
     })

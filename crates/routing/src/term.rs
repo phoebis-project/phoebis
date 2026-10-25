@@ -52,6 +52,7 @@ mod tests {
             ends_at,
             tier: None,
             usage_based: false,
+            plan: None,
             plan_ended_at: None,
         }
     }

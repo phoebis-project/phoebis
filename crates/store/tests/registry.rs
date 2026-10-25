@@ -2449,6 +2449,115 @@ fn the_term_classes_a_usage_based_seat_from_its_stored_tier_or_seat_tier_and_nev
     );
 }
 
+#[test]
+fn the_term_resolves_the_plan_from_the_organization_type_first_and_the_tier_second() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let profiles: [(&str, Option<&str>, &str, Option<&str>); 13] = [
+        (
+            "enterprise",
+            Some("claude_enterprise"),
+            "default_claude_max_5x",
+            None,
+        ),
+        ("free", Some("claude_free"), "default_claude_ai", None),
+        (
+            "max",
+            Some("claude_max"),
+            "default_claude_max_unnamed",
+            None,
+        ),
+        (
+            "max-20x",
+            Some("claude_max"),
+            "default_claude_max_20x",
+            None,
+        ),
+        ("max-5x", Some("claude_max"), "default_claude_max_5x", None),
+        ("pro", Some("claude_pro"), "default_claude_ai", None),
+        (
+            "seat-by-tier",
+            Some("claude_free"),
+            "default_claude_zero",
+            None,
+        ),
+        (
+            "seat-by-seat-tier",
+            Some("claude_enterprise"),
+            "default_claude_max_5x",
+            Some("enterprise_usage_based"),
+        ),
+        ("team", Some("claude_team"), "default_claude_ai", None),
+        ("untyped-20x", None, "default_claude_max_20x", None),
+        ("untyped-pro", None, "default_claude_ai", None),
+        ("untyped-unnamed", None, "default_claude_unnamed", None),
+        ("untyped-zero", None, "default_claude_zero", None),
+    ];
+    store
+        .insert_account(&account("bare", AccountKind::Oauth))
+        .unwrap();
+    for (id, organization_type, tier, seat_tier) in profiles {
+        store
+            .insert_account(&account(id, AccountKind::Oauth))
+            .unwrap();
+        let document = serde_json::json!({
+            "organization": {
+                "organization_type": organization_type,
+                "rate_limit_tier": tier,
+                "seat_tier": seat_tier,
+            },
+        });
+        store
+            .set_profile(
+                id,
+                &document.to_string(),
+                &SubscriptionRow {
+                    tier: Some(tier.into()),
+                    ..SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    }
+    let expected: Vec<(String, Option<String>)> = [
+        ("bare", None),
+        ("enterprise", Some("enterprise")),
+        ("free", Some("free")),
+        ("max", Some("max")),
+        ("max-20x", Some("max_20x")),
+        ("max-5x", Some("max_5x")),
+        ("pro", Some("pro")),
+        ("seat-by-seat-tier", Some("usage_based")),
+        ("seat-by-tier", Some("usage_based")),
+        ("team", Some("team")),
+        ("untyped-20x", Some("max_20x")),
+        ("untyped-pro", Some("pro")),
+        ("untyped-unnamed", None),
+        ("untyped-zero", Some("usage_based")),
+    ]
+    .into_iter()
+    .map(|(id, plan)| (id.to_string(), plan.map(String::from)))
+    .collect();
+    let loaded: Vec<(String, Option<String>)> = store
+        .load_registry()
+        .unwrap()
+        .terms
+        .into_iter()
+        .map(|term| (term.account_id, term.plan))
+        .collect();
+    let read: Vec<(String, Option<String>)> = expected
+        .iter()
+        .map(|(id, _)| {
+            let term = store.subscription_term(id).unwrap().unwrap();
+            (term.account_id, term.plan)
+        })
+        .collect();
+    assert_eq!(
+        (loaded, read),
+        (expected.clone(), expected),
+        "the type names the plan before the tier, the class reads above both, and no document reads none, at the \
+         load and through the term read alike"
+    );
+}
+
 fn has_windows_table(path: &std::path::Path) -> bool {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.query_row(

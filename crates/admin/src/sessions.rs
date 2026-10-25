@@ -324,11 +324,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             Some(BurnUnit::Usd) => rates.price_pin(BurnUnit::Usd, p).map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {
-                    let tier = state
-                        .store
-                        .subscription(&p.account_id)
-                        .map_err(crate::routes::store_failure)?
-                        .and_then(|s| s.tier);
+                    // The selector's own read of the plan, so a plan the cost model does not price (a free
+                    // organization) reads unpriced here as it does there.
+                    let tier = snapshot.priced_tier(&p.account_id).map(String::from);
                     tiers.insert(p.account_id.clone(), tier);
                 }
                 let tier = tiers.get(&p.account_id).and_then(Option::as_deref);

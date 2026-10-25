@@ -437,8 +437,8 @@ and a model's own week's, is the earliest of five hours from now, its reset and 
 five hours ahead at most. A 5-hour reading past its reset with no new reset looks five hours ahead too, since the window
 opens with the next request. `burn_average_seconds` (default 1800) is the time constant of each session's burn average,
 the figure the projection carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an
-account whose tier the profile has not named projects its prediction alone, and an API-key account has no plan window
-and no projection.
+account whose plan the cost model does not price (a free organization, or a tier the profile has not named) projects its
+prediction alone, and an API-key account has no plan window and no projection.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.
@@ -685,7 +685,7 @@ session by hand, from the Sessions view ([Sessions](console.md#sessions)) or
 
 With the pool's `slow_down` on, the router holds a slowed account's sessions before each request, so the account's
 5-hour window reaches its reset under `window_ceiling` instead of hitting it. At every selection of a pinned request on
-a subscription account whose tier the profile has named and whose 5-hour window has a reading, the router reads the
+a subscription account whose plan the cost model prices and whose 5-hour window has a reading, the router reads the
 window's stretch: the time between the instant the account's unheld demand would pass the ceiling and the reset,
 `R - (ceiling - U) / B` for the time `R` to the window's horizon, the window's prediction `U` and the demand `B` of the
 pool's sessions on it (see **The demand**, above), the demand's in-band hours weighed at one over the band factor where

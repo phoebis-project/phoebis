@@ -2308,7 +2308,9 @@ pub(crate) struct AccountProfile {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountSubscription {
-    /// `max`, `pro`, or null when the profile lacks it.
+    /// The plan the stored profile resolves to: `free`, `pro`, `max_5x`, `max_20x`, `max` (a Max organization whose
+    /// tier names neither size), `team`, `enterprise` or `usage_based`, read from the organization type first and the
+    /// rate-limit tier second, null while no profile document stands.
     pub plan: Option<String>,
     /// Null when the profile lacks it.
     pub tier: Option<String>,
@@ -2594,7 +2596,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             }
         })
         .map(|s| AccountSubscription {
-            plan: s.plan,
+            plan: term.plan.clone(),
             tier: s.tier,
             since: s.since,
             trial_ends_at: s.trial_ends_at,

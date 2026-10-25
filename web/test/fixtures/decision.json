@@ -97,7 +97,7 @@
         "account_id": "business",
         "incarnation": 1,
         "kind": "oauth",
-        "plan_tier": "default_claude_max_20x",
+        "plan_tier": "max_20x",
         "enabled": true,
         "state": "ready",
         "priority": 0,

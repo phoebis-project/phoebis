@@ -3932,6 +3932,63 @@ async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
     assert!(row(&r, &kept).await.kept_warm);
 }
 
+/// The unit and the tier of the first probe a plan-funded account on the Pro tier leaves unanswered, its stored profile
+/// naming `organization_type`, on the suite's own cost tables.
+async fn probe_on_the_pro_tier_of(organization_type: &str) -> (Option<String>, Option<String>) {
+    let mut r = rig(RigSpec {
+        tables: phoebis_ledger::test_tables::subscription_costs(),
+        tier: Some("default_claude_ai"),
+        ..plan_funded_spec()
+    })
+    .await;
+    let document = serde_json::json!({
+        "organization": {"organization_type": organization_type, "rate_limit_tier": "default_claude_ai"},
+    });
+    r.h.store
+        .set_profile(
+            "o",
+            &document.to_string(),
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_ai".into()),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    let body = opus_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "{organization_type}");
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    let probe = &payload["unanswered"][0];
+    (
+        probe["unit"].as_str().map(String::from),
+        probe["tier"].as_str().map(String::from),
+    )
+}
+
+/// A free organization reports the Pro tier and its plan prices no capacity, so its probe settles in dollars as an
+/// untiered account's does while a Pro organization's settles in the window share, and both records keep the raw tier
+/// their rows file under.
+#[tokio::test]
+async fn a_free_organizations_probe_settles_in_dollars_and_keeps_the_raw_tier_beside_a_pro_ones_window_share(
+) {
+    assert_eq!(
+        (
+            probe_on_the_pro_tier_of("claude_free").await,
+            probe_on_the_pro_tier_of("claude_pro").await,
+        ),
+        (
+            (Some("usd".into()), Some("default_claude_ai".into())),
+            (Some("window_share".into()), Some("default_claude_ai".into())),
+        ),
+        "the free organization's probe settles in dollars, the Pro one's in the window share, both on the stored tier"
+    );
+}
+
 /// A credit files beside its request's own row: a Haiku 5.5 request in January whose prompt passes that month's
 /// long-context threshold, kept warm on a Max 20x account, keys the credit under `long` and the account's tier, so the
 /// saving prices at the long-context cells and reaches the account's window shares.

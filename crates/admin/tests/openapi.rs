@@ -1167,6 +1167,27 @@ async fn the_account_declares_its_usage_based_class_and_the_overage_it_answers_n
 }
 
 #[tokio::test]
+async fn the_account_subscription_declares_the_resolved_plan_and_its_example_reads_max_20x() {
+    let (_app, _up, document) = document().await;
+    let plan = &document["components"]["schemas"]["AccountSubscription"]["properties"]["plan"];
+    let description = plan["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert!(
+        description.as_deref().is_some_and(|text| text.starts_with(
+            "The plan the stored profile resolves to: `free`, `pro`, `max_5x`, `max_20x`, `max`"
+        )),
+        "the member names the resolved plan's words: {plan}"
+    );
+    let (operation, status) = target(&document, "account");
+    assert_eq!(
+        example_of(operation, &status, "account")["subscription"]["plan"],
+        "max_20x",
+        "the account example reads the seed's Max 20x organization"
+    );
+}
+
+#[tokio::test]
 async fn the_account_and_its_edit_declare_the_canceled_flag_and_the_edit_its_three_refusals() {
     let (_app, _up, document) = document().await;
     let schemas = &document["components"]["schemas"];
