@@ -85,11 +85,10 @@ fn the_default_limits_are_the_specs() {
     assert_eq!(
         (
             timing.cold_probe_limit,
-            timing.failure_limit,
             timing.retry_ms,
             timing.retry_max_ms
         ),
-        (2, 3, 30_000, 300_000)
+        (2, 30_000, 300_000)
     );
     assert_eq!(
         (

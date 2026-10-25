@@ -40,29 +40,31 @@ impl RecipeState {
 pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
     use Reason::*;
     let state = match reason {
-        AwaitingCacheEvidence | AwaitingSelection | LeaseExpired | Probing | Scheduled => {
-            RecipeState::Retained
-        }
+        // A failed or canceled request leaves the last answered recipe armed, so its word says the prompt is kept.
+        AwaitingCacheEvidence
+        | AwaitingSelection
+        | LeaseExpired
+        | Probing
+        | RequestCanceled
+        | RequestFailed
+        | Scheduled => RecipeState::Retained,
         AwaitingRequest | FixedThinking | ForcedTool | HeadersTooLarge | InvalidCacheControl
         | InvalidModel | InvalidRequest | NoCacheEvidence | OwnerMismatch | RequestLimit
         | RequestTooLarge | StorageLimit | StructuredOutput | UnsupportedShape => {
             RecipeState::NotRetained
         }
-        // A probe that read no cache keeps the prompt and retries after its backoff, as the other retry causes do.
+        // A probe's transient failure, and a probe that read no cache, keep the prompt and retry on the ladder until
+        // the entry's expiry would come first.
         AffinityTooShort | Budget | Cooled | Horizon | IneligibleCredential | KeepaliveOff
-        | LedgerBehind | NoProbeCacheEvidence | Overage | Paused | PoolDisabled | Reauth
+        | LedgerBehind | NoProbeCacheEvidence | Overage | Paused | PoolDisabled
+        | ProbePoolExhausted | ProbeQuotaExhausted | ProbeTransportError | Reauth
         | RetryableProbeError | SlowProbe => RecipeState::Held,
         InvalidProbeUsage
         | MissingAccount
         | PartialCacheCoverage
         | ProbeAuthenticationError
-        | ProbePoolExhausted
-        | ProbeQuotaExhausted
         | ProbeRetryLimit
-        | ProbeTransportError
         | RepeatedColdProbe
-        | RequestCanceled
-        | RequestFailed
         | RequestRejected
         | UnexpectedOutput
         | UnsupportedProbe => RecipeState::Paused,
@@ -165,8 +167,9 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeV
         probes_today,
         session_id: session_id.into(),
         state: match recipe_state(agent.reason, agent.paused) {
-            // A refusal at the selection leaves a held word behind with nothing kept, and a held or retained state
-            // says the prompt is kept. A request still awaiting its selection or its evidence keeps its observation.
+            // A refusal at the selection leaves a held word behind with nothing kept, as a failed request that found
+            // no recipe armed leaves a retained one, and a held or retained state says the prompt is kept. A request
+            // still awaiting its selection or its evidence keeps its observation.
             RecipeState::Held | RecipeState::Retained if agent.current.is_none() => {
                 RecipeState::NotRetained
             }
@@ -224,7 +227,8 @@ impl Engine {
     }
 
     /// One row per agent that has sent a real request, whether or not it holds a recipe now: an ended or a refused
-    /// recipe keeps its row with the cause until the agent's session leaves the engine.
+    /// recipe keeps its row with the cause until the agent's session leaves the engine or, for a released record, until
+    /// the record leaves one cache TTL after its release.
     pub fn recipes(&self) -> Vec<RecipeView> {
         self.expire();
         let now = self.now();
@@ -333,10 +337,10 @@ mod tests {
             counts.into_iter().collect::<Vec<_>>(),
             [
                 ("ended", 16),
-                ("held", 14),
+                ("held", 17),
                 ("not_retained", 14),
-                ("paused", 14),
-                ("retained", 5)
+                ("paused", 9),
+                ("retained", 7)
             ]
         );
         // A probe that read no cache keeps the prompt and retries after its backoff, as the other retry causes do.

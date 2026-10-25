@@ -556,6 +556,8 @@ pub(crate) struct Agent {
     pub last_prefix: Option<(String, String)>,
     pub generation: u64,
     pub current: Option<Observation>,
+    /// Never saved: a restart keeps the current observation alone.
+    pub aside: Option<AsideRecipe>,
     /// The compaction open on the agent, held apart from `current` so none of its events moves the recipe. Never saved:
     /// a restart drops it with the events that would have completed it.
     pub compaction: Option<OpenCompaction>,
@@ -662,6 +664,7 @@ impl Agent {
             last_prefix: None,
             generation: 0,
             current: None,
+            aside: None,
             compaction: None,
             body_dirty: false,
             body_saved: true,
@@ -1099,6 +1102,24 @@ pub(crate) struct Observation {
     pub in_overage: bool,
 }
 
+/// The recipe a real request's arrival put aside, with the schedule and the error count it stood on and the model and
+/// account it was armed under, restored where the request fails or is canceled and dropped where it succeeds, is
+/// rejected, or the entry expired meanwhile. Its body stays counted in `Inner::retained` while it lives.
+pub(crate) struct AsideRecipe {
+    pub observation: Observation,
+    pub expires: Option<i64>,
+    pub retry_at: Option<i64>,
+    pub jitter_frac: f64,
+    pub ttl_ms: i64,
+    pub cache_started: i64,
+    pub failures: u32,
+    pub canonical_model: String,
+    pub entrypoint: Option<String>,
+    pub account: Option<String>,
+    pub pool_id: String,
+    pub key_generation: i64,
+}
+
 /// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
 /// the engine once the lock is released.
 pub(crate) struct Settlement {
@@ -1294,6 +1315,8 @@ pub(crate) struct Inner {
     /// observation's paths never see a compaction.
     pub compactions: HashMap<String, (SessionKey, String)>,
     pub reasons: BTreeMap<Reason, u64>,
+    /// Every body in memory, a recipe an arrival set aside beside the current ones, since `max_retained_bytes` bounds
+    /// memory.
     pub retained: usize,
     pub agents: usize,
     pub running: usize,
@@ -1573,6 +1596,102 @@ impl Inner {
         self.set_reason(key, agent_id, reason);
     }
 
+    /// `discard_keeping_unanswered` for an arrival, an armed recipe (unpaused, its entry ahead of `now`) set aside
+    /// instead of ended: its observation leaves `current` and `pending` with its size kept in `retained`, and waits with
+    /// its schedule and context for the completion to restore or drop it. A paused recipe and one that never armed
+    /// end as before. An older recipe set aside over a completion the engine missed leaves through the discard.
+    pub(crate) fn set_aside(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
+        let aside = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+            .filter(|agent| !agent.paused && agent.expires.is_some_and(|expires| expires > now))
+            .and_then(|agent| {
+                let observation = agent.current.take()?;
+                Some(AsideRecipe {
+                    observation,
+                    expires: agent.expires,
+                    retry_at: agent.retry_at,
+                    jitter_frac: agent.jitter_frac,
+                    ttl_ms: agent.ttl_ms,
+                    cache_started: agent.cache_started,
+                    failures: agent.failures,
+                    canonical_model: agent.canonical_model.clone(),
+                    entrypoint: agent.entrypoint.clone(),
+                    account: agent.account.clone(),
+                    pool_id: agent.pool_id.clone(),
+                    key_generation: agent.key_generation,
+                })
+            });
+        if let Some(aside) = &aside {
+            self.pending.remove(&aside.observation.id);
+        }
+        self.discard_keeping_unanswered(key, agent_id, Reason::AwaitingSelection);
+        if let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        {
+            agent.aside = aside;
+        }
+    }
+
+    /// The recipe the arrival set aside, taken out for the completion to restore, its body still counted in
+    /// `retained`.
+    pub(crate) fn take_aside(&mut self, key: &SessionKey, agent_id: &str) -> Option<AsideRecipe> {
+        self.sessions
+            .get_mut(key)?
+            .agents
+            .get_mut(agent_id)?
+            .aside
+            .take()
+    }
+
+    /// Puts the recipe `take_aside` took back into `current` with the schedule, the error count and the model and
+    /// account it stood on, where its entry is still ahead of `now`, and otherwise drops it, its size leaving
+    /// `retained`. Its id never goes back into `pending`: its own request ended before the one that set it aside
+    /// arrived, so the lapse, the eviction and the sweeps take it as any armed recipe. Answers whether it re-armed.
+    pub(crate) fn rearm_aside(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        aside: AsideRecipe,
+        now: i64,
+    ) -> bool {
+        let agent = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+            .filter(|_| aside.expires.is_some_and(|expires| expires > now));
+        let Some(agent) = agent else {
+            self.retained -= aside.observation.recipe.size;
+            return false;
+        };
+        agent.current = Some(aside.observation);
+        agent.expires = aside.expires;
+        agent.retry_at = aside.retry_at;
+        agent.jitter_frac = aside.jitter_frac;
+        agent.ttl_ms = aside.ttl_ms;
+        agent.cache_started = aside.cache_started;
+        agent.failures = aside.failures;
+        agent.canonical_model = aside.canonical_model;
+        agent.entrypoint = aside.entrypoint;
+        agent.account = aside.account;
+        agent.pool_id = aside.pool_id;
+        agent.key_generation = aside.key_generation;
+        // The next save seals the restored body in place of the failed request's.
+        agent.body_dirty = true;
+        self.touch_agent(key, agent_id);
+        true
+    }
+
+    /// Drops the recipe the arrival set aside, its size leaving `retained`.
+    pub(crate) fn drop_aside(&mut self, key: &SessionKey, agent_id: &str) {
+        if let Some(aside) = self.take_aside(key, agent_id) {
+            self.retained -= aside.observation.recipe.size;
+        }
+    }
+
     /// The entry a kept probe is judged against: the greatest `entry_expires` among the probes of its chain. The chain
     /// is the probe and each later kept probe of its lineage (model, speed, account), in exchange order, up to the
     /// first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
@@ -1674,6 +1793,9 @@ impl Inner {
         if wasted.is_some() {
             self.end_compaction(key, agent_id);
         }
+        // Whatever ends the observation leaves nothing for a recipe set aside to wait for, so its body leaves memory
+        // with it.
+        self.drop_aside(key, agent_id);
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -2666,9 +2788,9 @@ impl Engine {
                 .zip(observed.boundaries.last().cloned());
         }
         // A turn still pending here had no completion observed, since a success takes it off `pending` and a failure
-        // ends the observation, and the discard below ends it without one. It counts as the turn that answered, or the
-        // gap this arrival's coverage reads would run from a turn before it. A compaction ends no turn, so it returned
-        // above and leaves the open one to its own completion.
+        // ends the observation, and `set_aside` below ends it, or sets it aside, without one. It counts as the turn
+        // that answered, or the gap this arrival's coverage reads would run from a turn before it. A compaction ends no
+        // turn, so it returned above and leaves the open one to its own completion.
         let missed = inner.sessions[&key].agents[&agent_id]
             .current
             .as_ref()
@@ -2687,7 +2809,9 @@ impl Engine {
         // Taken before anything below overwrites it and consumed with the observation.
         let prior = prior_coverage(&inner.sessions[&key].agents[&agent_id], now);
         let poisoned = inner.gap_backlog > 0;
-        inner.discard_keeping_unanswered(&key, &agent_id, Reason::AwaitingSelection);
+        // The recipe set aside waits for this request's completion, so each return below that takes no observation
+        // drops it: nothing would complete to restore it.
+        inner.set_aside(&key, &agent_id, now);
         inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
         inner.touch_session(&key);
         let agent = inner
@@ -2698,6 +2822,7 @@ impl Engine {
             .get_mut(&agent_id)
             .unwrap();
         if agent.state == AgentState::Unknown {
+            inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
         }
@@ -2716,6 +2841,7 @@ impl Engine {
         agent.canonical_model = observed.canonical_model.clone();
         agent.key_generation = observed.key_generation;
         if inner.pending.len() >= limits.max_agents {
+            inner.drop_aside(&key, &agent_id);
             inner.set_reason(&key, &agent_id, Reason::RequestLimit);
             return;
         }
@@ -2727,6 +2853,7 @@ impl Engine {
         ) {
             Ok(recipe) => recipe,
             Err(reason) => {
+                inner.drop_aside(&key, &agent_id);
                 inner.set_reason(&key, &agent_id, recipe_reason(reason));
                 return;
             }
@@ -2735,6 +2862,11 @@ impl Engine {
         // prior arm happened to leave behind.
         recipe.static_hash = observed.static_hash.clone();
         recipe.tail_hash = observed.boundaries.last().cloned();
+        // The agent's own aside recipe yields first, so the bound reads as it would with that recipe ended, and the
+        // eviction never reaches it: an agent with a request open is no candidate.
+        if inner.retained + recipe.size > limits.max_retained_bytes {
+            inner.drop_aside(&key, &agent_id);
+        }
         if inner.retained + recipe.size > limits.max_retained_bytes
             && !inner.evict_for(limits.max_retained_bytes, recipe.size)
         {
@@ -3017,6 +3149,14 @@ impl Engine {
             Outcome::Rejected => Some(Reason::RequestRejected),
         };
         if let Some(reason) = reason {
+            // A failed or canceled turn leaves the last answered recipe armed as its arrival set it aside, and a
+            // rejected one is a pause, which `end_observation` below makes by dropping what the arrival set aside.
+            let aside = match reason {
+                Reason::RequestCanceled | Reason::RequestFailed => {
+                    inner.take_aside(&key, &agent_id)
+                }
+                _ => None,
+            };
             // A failed turn is no evidence about the cache, past a head or not, so it decides none of the probes it
             // kept and hands them back for the next turn to read. A label the turn found stays, and a probe that
             // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
@@ -3032,10 +3172,15 @@ impl Engine {
             }
             // A probe sent while this request was open pays for the request after it, whatever this one did.
             inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
+            if let Some(aside) = aside {
+                inner.rearm_aside(&key, &agent_id, aside, now);
+            }
             inner.set_reason(&key, &agent_id, reason);
             return;
         }
         inner.pending.remove(&complete.request_id);
+        // The answered turn's own recipe replaces the one its arrival set aside.
+        inner.drop_aside(&key, &agent_id);
         // Read from the observation's own snapshot of what the previous recipe had proved: a probe that ran
         // while this request was open, or a TTL this request's evidence shortens below, cannot reach into it.
         let credited = {

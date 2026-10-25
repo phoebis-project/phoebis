@@ -9,8 +9,8 @@ use common::*;
 use fake_upstream::{Respond, SseEvent};
 use phoebis_bus::Outcome;
 use phoebis_keepalive::{
-    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, FIVE_MINUTES_MS, MAIN_AGENT,
-    MAX_WORKERS, ONE_HOUR_MS,
+    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, FIVE_MINUTES_MS,
+    MAIN_AGENT, MAX_WORKERS, ONE_HOUR_MS,
 };
 use phoebis_relay::Accounting;
 use phoebis_store::AccountState;
@@ -984,9 +984,10 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     tokio::time::resume();
     r.engine.wait_idle().await;
     r.pump(None).await;
+    // The transport error's first rung would land at the five-minute entry's expiry, so the ladder pauses at once.
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbeTransportError, None)
+        (Reason::ProbeRetryLimit, None)
     );
     let text = r
         .metrics
@@ -1173,9 +1174,10 @@ async fn each_probe_counts_once_under_its_pool_as_landed_cold_or_failed() {
     );
     r.advance(270_000);
     r.step().await;
+    // The second probe's entry ends at 840 s, where the failure's first rung would land.
     assert_eq!(
         (r.status("main").probes, r.status("main").reason),
-        (3, Reason::RetryableProbeError)
+        (3, Reason::ProbeRetryLimit)
     );
     assert_eq!(
         series(&r, "phoebis_keepalive_probes_total"),
@@ -1285,14 +1287,15 @@ async fn probe_outcomes_are_classified() {
             Reason::PartialCacheCoverage,
             false,
         ),
+        // The 503's first rung would land at the five-minute entry's expiry, so the ladder pauses at once.
         (
             "server",
             json(
                 503,
                 r#"{"type":"error","error":{"type":"api_error","message":"x"}}"#,
             ),
-            Reason::RetryableProbeError,
-            true,
+            Reason::ProbeRetryLimit,
+            false,
         ),
         (
             "unsupported",
@@ -1339,7 +1342,8 @@ async fn probe_outcomes_are_classified() {
         (r.status("main").reason, r.status("main").next_probe_at),
         (Reason::ProbeAuthenticationError, None)
     );
-    // A 429 on every account is the relay's exhaustion 429: the same pause a single 429 after failover gets.
+    // A 429 on every account is the relay's exhaustion 429, read as a single 429 after failover is. Its first rung
+    // would land at the five-minute entry's expiry, so the ladder pauses at once.
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     r.up.push_credential_rule(
@@ -1356,17 +1360,14 @@ async fn probe_outcomes_are_classified() {
     r.step().await;
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbeQuotaExhausted, None)
+        (Reason::ProbeRetryLimit, None)
     );
     r.advance(5_000_000);
     r.step().await;
     assert_eq!(
-        r.engine
-            .reasons()
-            .get(&Reason::ProbeQuotaExhausted)
-            .copied(),
+        r.engine.reasons().get(&Reason::ProbeRetryLimit).copied(),
         Some(1),
-        "no probe ran again after a quota pause"
+        "no probe ran again after the ladder's pause"
     );
     r.observe("main").await;
     assert_eq!(
@@ -1395,8 +1396,9 @@ async fn over_budget(r: &Rig) {
     plant_spend(r, "over-budget", 5.01).await;
 }
 
-/// An exhaustion pauses the recipe until the next real request, while a gate hold keeps it armed for the tick that
-/// finds the hold gone: the `paused` bit tells the two apart, whatever the reason reads.
+/// An exhaustion whose first retry would land at the entry's expiry pauses the recipe until the next real request,
+/// while a gate hold keeps it armed for the tick that finds the hold gone: the `paused` bit tells the two apart,
+/// whatever the reason reads.
 #[tokio::test]
 async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() {
     let mut r = rig(RigSpec::default()).await;
@@ -1413,7 +1415,7 @@ async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() 
     let status = r.status("main");
     assert_eq!(
         (status.paused, status.next_probe_at, status.reason),
-        (true, None, Reason::ProbeQuotaExhausted),
+        (true, None, Reason::ProbeRetryLimit),
         "{status:?}"
     );
     // Past the accounts' reset the next real request selects one again.
@@ -1451,10 +1453,11 @@ async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() 
 }
 
 /// A pinned account that disconnects between admission and the probe's own selection leaves the pool with
-/// nothing to serve: the relay answers its untimed exhaustion, and the pause reads that reason rather than the
-/// authentication one a marked account gets.
+/// nothing to serve: the relay answers its untimed exhaustion, a transient cause rather than the authentication one a
+/// marked account gets, and on a five-minute entry its first retry would land at the expiry, so the ladder pauses
+/// at once.
 #[tokio::test]
-async fn an_exhaustion_503_pauses_under_its_own_reason() {
+async fn an_exhaustion_503_whose_first_retry_would_reach_the_expiry_pauses_under_the_retry_limit() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -1473,7 +1476,7 @@ async fn an_exhaustion_503_pauses_under_its_own_reason() {
     r.step().await;
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbePoolExhausted, None)
+        (Reason::ProbeRetryLimit, None)
     );
 }
 
@@ -1517,58 +1520,517 @@ fn a_probe_the_engine_ended_in_flight_is_filed_under_the_word_canceled() {
     );
 }
 
-#[tokio::test]
-async fn retries_back_off_by_the_timing_and_pause_at_the_failure_limit() {
-    let timing = KeepaliveTiming {
-        // A lead of two minutes leaves room for both retries before the entry expires at 300 s, past which none
-        // would be sent.
-        lead_5m_ms: 120_000,
-        ..RigSpec::default().timing
-    };
+fn server_error() -> Respond {
+    json(
+        503,
+        r#"{"type":"error","error":{"type":"api_error","message":"x"}}"#,
+    )
+}
+
+/// The rig's body under a one-hour marker, so its entry expires an hour after its request.
+fn hour_body() -> String {
+    BODY.replace(
+        r#""cache_control":{"type":"ephemeral"}"#,
+        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+    )
+}
+
+/// One account and a one-hour entry probed 900 s before it expires, room for the ladder's five rungs, under an idle
+/// window longer than the entry, so no ceiling ends the recipe before the ladder or the lapse does.
+fn hour_spec() -> RigSpec {
+    RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            enabled: true,
+            max_idle_seconds: 86_400,
+            ..KeepalivePolicy::default()
+        },
+        timing: KeepaliveTiming {
+            lead_1h_ms: 900_000,
+            ..RigSpec::default().timing
+        },
+        ..RigSpec::default()
+    }
+}
+
+/// `hour_spec` with no wait in place, so a 429 with a short `Retry-After` cools the account and reaches the probe as
+/// the pool's timed exhaustion, the header the cooldown's seconds, rather than as a retry the relay waits out.
+fn quota_spec() -> RigSpec {
+    RigSpec {
+        pool: PoolSpec {
+            failover: phoebis_store::Failover {
+                retry_in_place_seconds: 0,
+                ..phoebis_store::Failover::default()
+            },
+            ..PoolSpec::default()
+        },
+        ..hour_spec()
+    }
+}
+
+/// An API key account's 429 with `Retry-After`, which cools the account for those seconds and a second more.
+fn quota_429(retry_after_secs: u64) -> Respond {
+    Respond::Json {
+        status: 429,
+        headers: vec![("retry-after".into(), retry_after_secs.to_string())],
+        body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#.to_vec(),
+    }
+}
+
+/// The Sessions row of the rig's main agent.
+fn recipe_row(r: &Rig) -> phoebis_keepalive::RecipeView {
+    r.engine
+        .recipes()
+        .into_iter()
+        .find(|v| v.session_id == "session" && v.agent_id == MAIN_AGENT)
+        .expect("a row for main")
+}
+
+/// Moves the clock to the recipe's next probe and runs the tick that sends it.
+async fn step_to_the_next_probe(r: &mut Rig) {
+    let due = r
+        .status("main")
+        .next_probe_at
+        .expect("a probe is scheduled");
+    r.advance(due - r.now());
+    r.step().await;
+}
+
+/// The ladder over `hour_spec`'s entry from its first probe, every probe answered by `failure` and driven through
+/// `Engine::step`: each failure plans the next rung 30, 60, 120, 240 and then 300 s out while the rung lands before
+/// the expiry, the row reading `held` under `cause`, and the fifth retry's failure, whose 300 s rung would land 150 s
+/// past the expiry, pauses the recipe under `probe_retry_limit` 150 s before it.
+async fn climb_the_ladder(r: &mut Rig, failure: impl Fn() -> Respond, cause: Reason) {
+    let first = r.status("main").next_probe_at.expect("an armed recipe");
+    let expires = first + 900_000;
+    for (failures, wait) in [
+        (1, 30_000),
+        (2, 60_000),
+        (3, 120_000),
+        (4, 240_000),
+        (5, 300_000),
+    ] {
+        r.up.push_credential_rule(A, "/v1/messages", failure());
+        step_to_the_next_probe(r).await;
+        let status = r.status("main");
+        assert_eq!(
+            (
+                status.failures,
+                status.paused,
+                status.reason,
+                status.next_probe_at
+            ),
+            (failures, false, cause, Some(r.now() + wait)),
+            "failure {failures}: the next rung {wait} ms out, before the expiry at {expires}"
+        );
+        let row = recipe_row(r);
+        assert_eq!(
+            (row.state, row.cause),
+            (RecipeState::Held, cause),
+            "failure {failures}: the row reads held while the ladder runs"
+        );
+    }
+    r.up.push_credential_rule(A, "/v1/messages", failure());
+    step_to_the_next_probe(r).await;
     assert_eq!(
-        (timing.retry_ms, timing.retry_max_ms, timing.failure_limit),
-        (30_000, 300_000, 3),
+        r.now(),
+        first + 750_000,
+        "the fifth retry fails 750 s after the first probe"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.failures,
+            status.paused,
+            status.reason,
+            status.next_probe_at
+        ),
+        (6, true, Reason::ProbeRetryLimit, None),
+        "a 300 s rung would land 150 s past the expiry, so this failure pauses the recipe"
+    );
+    assert_eq!(
+        expires - r.now(),
+        150_000,
+        "the pause comes before the expiry"
+    );
+    let row = recipe_row(r);
+    assert_eq!(
+        (row.state, row.cause),
+        (RecipeState::Paused, Reason::ProbeRetryLimit)
+    );
+}
+
+#[tokio::test]
+async fn a_5xx_probe_retries_on_a_doubling_ladder_and_pauses_at_the_failure_whose_next_rung_would_reach_the_expiry(
+) {
+    let spec = hour_spec();
+    assert_eq!(
+        (spec.timing.retry_ms, spec.timing.retry_max_ms),
+        (30_000, 300_000),
         "the rig keeps the spec's backoff"
     );
+    let mut r = rig(spec).await;
+    r.observe_with("main", &hour_body()).await;
+    climb_the_ladder(&mut r, server_error, Reason::RetryableProbeError).await;
+}
+
+#[tokio::test]
+async fn a_quota_429_retries_on_the_same_ladder_with_the_row_held_under_probe_quota_exhausted() {
+    let mut r = rig(quota_spec()).await;
+    r.observe_with("main", &hour_body()).await;
+    climb_the_ladder(&mut r, || quota_429(1), Reason::ProbeQuotaExhausted).await;
+}
+
+/// The pool's exhaustion answers the first 429 with the two seconds its cooldown runs, shorter than the 30 s step,
+/// and the second with 90 s, longer than the 60 s step it replaces.
+#[tokio::test]
+async fn a_quota_429s_retry_after_longer_than_the_step_replaces_it() {
+    let mut r = rig(quota_spec()).await;
+    r.observe_with("main", &hour_body()).await;
+    r.up.push_credential_rule(A, "/v1/messages", quota_429(1));
+    step_to_the_next_probe(&mut r).await;
+    assert_eq!(
+        (r.status("main").failures, r.status("main").next_probe_at),
+        (1, Some(r.now() + 30_000)),
+        "a header shorter than the step leaves the step"
+    );
+    r.up.push_credential_rule(A, "/v1/messages", quota_429(89));
+    step_to_the_next_probe(&mut r).await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.failures,
+            status.paused,
+            status.reason,
+            status.next_probe_at
+        ),
+        (
+            2,
+            false,
+            Reason::ProbeQuotaExhausted,
+            Some(r.now() + 90_000)
+        ),
+        "the 90 s header replaces the 60 s step"
+    );
+}
+
+/// The ladder counts consecutive errors: an answered probe between two failures starts the count over, so the next
+/// failure waits the first rung again, while a real request that fails leaves the count where the ladder stood, so
+/// the failure after it waits the second rung.
+#[tokio::test]
+async fn an_answered_probe_resets_the_ladder_and_a_failed_request_leaves_it_where_it_stood() {
     let mut r = rig(RigSpec {
-        timing,
+        timing: KeepaliveTiming {
+            // A lead of two minutes leaves room for two rungs inside a five-minute entry.
+            lead_5m_ms: 120_000,
+            ..RigSpec::default().timing
+        },
         ..RigSpec::default()
     })
     .await;
     r.observe("main").await;
-    let server_error = || {
-        json(
-            503,
-            r#"{"type":"error","error":{"type":"api_error","message":"x"}}"#,
-        )
-    };
     r.up.push_credential_rule(A, "/v1/messages", server_error());
-    r.advance(180_000);
-    r.step().await;
+    step_to_the_next_probe(&mut r).await;
     assert_eq!(
         (r.status("main").failures, r.status("main").next_probe_at),
-        (1, Some(r.now() + 30_000)),
-        "30 s after the first failure"
+        (1, Some(r.now() + 30_000))
+    );
+    // The standing rule answers the retry.
+    step_to_the_next_probe(&mut r).await;
+    assert_eq!(
+        (r.status("main").failures, r.status("main").reason),
+        (0, Reason::Scheduled),
+        "the answered probe starts the count over"
     );
     r.up.push_credential_rule(A, "/v1/messages", server_error());
-    r.advance(30_000);
-    r.step().await;
+    step_to_the_next_probe(&mut r).await;
+    let rung = r.now() + 30_000;
+    assert_eq!(
+        (r.status("main").failures, r.status("main").next_probe_at),
+        (1, Some(rung)),
+        "the failure after an answered probe waits the first rung"
+    );
+    r.advance(10_000);
+    r.engine.observe(r.observed("failed", "main", BODY));
+    r.engine.observe(r.selected("failed", "a"));
+    r.engine
+        .observe(r.complete("failed", Outcome::Failed, None));
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.failures,
+            status.next_probe_at,
+            status.paused,
+            status.reason
+        ),
+        (1, Some(rung), false, Reason::RequestFailed),
+        "the failed request left the recipe on its rung with its count"
+    );
+    r.up.push_credential_rule(A, "/v1/messages", server_error());
+    step_to_the_next_probe(&mut r).await;
     assert_eq!(
         (r.status("main").failures, r.status("main").next_probe_at),
         (2, Some(r.now() + 60_000)),
-        "doubled after the second"
+        "the count the request left makes the next wait the second rung"
     );
-    r.up.push_credential_rule(A, "/v1/messages", server_error());
-    r.advance(60_000);
-    r.step().await;
+}
+
+/// A probe whose exchange the probe deadline ends is a transport error (status 0), which retries on the ladder.
+#[tokio::test]
+async fn a_probe_the_deadline_ends_retries_on_the_first_rung_under_probe_transport_error() {
+    let mut r = rig(hour_spec()).await;
+    r.observe_with("main", &hour_body()).await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Stall {
+            status: 200,
+            headers: vec![],
+            events: vec![],
+        },
+    );
+    let due = r.status("main").next_probe_at.unwrap();
+    r.advance(due - r.now());
+    r.engine.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    tokio::time::pause();
+    tokio::time::advance(phoebis_keepalive::PROBE_DEADLINE + std::time::Duration::from_secs(1))
+        .await;
+    tokio::time::resume();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    let status = r.status("main");
     assert_eq!(
         (
-            r.status("main").failures,
-            r.status("main").reason,
-            r.status("main").next_probe_at
+            status.failures,
+            status.paused,
+            status.reason,
+            status.next_probe_at
         ),
-        (3, Reason::ProbeRetryLimit, None)
+        (
+            1,
+            false,
+            Reason::ProbeTransportError,
+            Some(r.now() + 30_000)
+        )
     );
+    let row = recipe_row(&r);
+    assert_eq!(
+        (row.state, row.cause),
+        (RecipeState::Held, Reason::ProbeTransportError)
+    );
+    r.up.release();
+}
+
+/// A probe whose pool has no account left to select is answered the untimed exhaustion 503, which retries on the
+/// ladder under its own reason.
+#[tokio::test]
+async fn an_exhausted_selection_retries_on_the_first_rung_under_probe_pool_exhausted() {
+    let mut r = rig(hour_spec()).await;
+    r.observe_with("main", &hour_body()).await;
+    r.h.store
+        .set_state(
+            "a",
+            AccountState::Disconnected,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    step_to_the_next_probe(&mut r).await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.failures,
+            status.paused,
+            status.reason,
+            status.next_probe_at
+        ),
+        (1, false, Reason::ProbePoolExhausted, Some(r.now() + 30_000))
+    );
+    let row = recipe_row(&r);
+    assert_eq!(
+        (row.state, row.cause),
+        (RecipeState::Held, Reason::ProbePoolExhausted)
+    );
+}
+
+/// A probe answered with no cache evidence retries on the ladder too, and pauses where its next rung would reach the
+/// expiry. The cold limit is raised past the ladder's six probes, each of which reads nothing.
+#[tokio::test]
+async fn a_probe_with_no_cache_evidence_retries_on_the_ladder_to_the_expiry() {
+    let spec = hour_spec();
+    let mut r = rig(RigSpec {
+        timing: KeepaliveTiming {
+            cold_probe_limit: 10,
+            ..spec.timing
+        },
+        ..spec
+    })
+    .await;
+    r.observe_with("main", &hour_body()).await;
+    climb_the_ladder(&mut r, || probe_answer(0, 0), Reason::NoProbeCacheEvidence).await;
+}
+
+/// A probe whose answer lands with its refresh interval consumed retries after the first rung where that rung lands
+/// before the entry it wrote expires, and pauses under `probe_retry_limit` where the rung would reach it.
+#[tokio::test]
+async fn a_slow_probe_retries_on_the_first_rung_and_pauses_where_that_rung_would_reach_the_expiry()
+{
+    // The probe writes its own hour-long entry from its start, due 2,700 s in: one landing 2,701 s in leaves a
+    // 30 s rung before the expiry, one landing 3,580 s in does not.
+    for (late, paused) in [(2_701_000, false), (3_580_000, true)] {
+        let mut r = rig(hour_spec()).await;
+        r.observe_with("main", &hour_body()).await;
+        r.up.push_credential_rule(
+            A,
+            "/v1/messages",
+            Respond::Gated(Box::new(probe_answer(2_000, 0))),
+        );
+        let due = r.status("main").next_probe_at.unwrap();
+        r.advance(due - r.now());
+        r.engine.step().await;
+        wait_for(std::time::Duration::from_secs(5), || {
+            (r.up.requests().len() == 2).then_some(())
+        })
+        .await;
+        r.advance(late);
+        r.up.release();
+        r.engine.wait_idle().await;
+        r.pump(None).await;
+        let status = r.status("main");
+        let expected = if paused {
+            (1, true, Reason::ProbeRetryLimit, None)
+        } else {
+            (1, false, Reason::SlowProbe, Some(r.now() + 30_000))
+        };
+        assert_eq!(
+            (
+                status.failures,
+                status.paused,
+                status.reason,
+                status.next_probe_at
+            ),
+            expected,
+            "a landing {late} ms after the probe's start"
+        );
+    }
+}
+
+/// The structural errors are no passing fault, so each pauses the recipe at once though the entry leaves room for
+/// every rung of the ladder: a 400, a 401 (the relay's untimed exhaustion naming the account's mark), an answer
+/// without usage, one with output, one that read part of the prefix, and the second cold probe in a row.
+#[tokio::test]
+async fn a_structural_probe_error_pauses_the_recipe_at_once_with_the_ladder_left_unclimbed() {
+    for (name, respond, reason) in [
+        (
+            "unsupported",
+            json(
+                400,
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"x"}}"#,
+            ),
+            Reason::UnsupportedProbe,
+        ),
+        (
+            "authentication",
+            json(
+                401,
+                r#"{"type":"error","error":{"type":"authentication_error","message":"x"}}"#,
+            ),
+            Reason::ProbeAuthenticationError,
+        ),
+        (
+            "missing_usage",
+            json(200, r#"{"id":"m","type":"message","content":[]}"#),
+            Reason::InvalidProbeUsage,
+        ),
+        (
+            "output",
+            json(
+                200,
+                r#"{"id":"m","type":"message","content":[],"usage":{"cache_read_input_tokens":2000,"output_tokens":1}}"#,
+            ),
+            Reason::UnexpectedOutput,
+        ),
+        (
+            "partial",
+            probe_answer(100, 0),
+            Reason::PartialCacheCoverage,
+        ),
+    ] {
+        let mut r = rig(hour_spec()).await;
+        r.observe_with("main", &hour_body()).await;
+        r.up.push_credential_rule(A, "/v1/messages", respond);
+        step_to_the_next_probe(&mut r).await;
+        let status = r.status("main");
+        assert_eq!(
+            (
+                name,
+                status.failures,
+                status.paused,
+                status.reason,
+                status.next_probe_at
+            ),
+            (name, 0, true, reason, None),
+            "{status:?}"
+        );
+        let row = recipe_row(&r);
+        assert_eq!(
+            (row.state, row.cause),
+            (RecipeState::Paused, reason),
+            "{name}"
+        );
+    }
+    let mut r = rig(hour_spec()).await;
+    r.observe_with("main", &hour_body()).await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    step_to_the_next_probe(&mut r).await;
+    assert_eq!(
+        (r.status("main").cold, r.status("main").reason),
+        (1, Reason::Scheduled)
+    );
+    step_to_the_next_probe(&mut r).await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.cold,
+            status.failures,
+            status.paused,
+            status.reason,
+            status.next_probe_at
+        ),
+        (2, 0, true, Reason::RepeatedColdProbe, None),
+        "the cold limit pauses at once too"
+    );
+}
+
+/// A tick that comes past the entry's expiry with a rung still due finds the entry gone: no probe is sent, and the
+/// recipe lapses under `expired`.
+#[tokio::test]
+async fn a_tick_past_the_expiry_with_a_rung_still_due_sends_no_probe_and_lapses_the_recipe() {
+    let mut r = rig(hour_spec()).await;
+    r.observe_with("main", &hour_body()).await;
+    let expires = r.status("main").next_probe_at.unwrap() + 900_000;
+    r.up.push_credential_rule(A, "/v1/messages", server_error());
+    step_to_the_next_probe(&mut r).await;
+    assert_eq!(
+        (r.status("main").failures, r.status("main").next_probe_at),
+        (1, Some(r.now() + 30_000)),
+        "a rung is due"
+    );
+    let sent = r.up.requests().len();
+    r.advance(expires + 1_000 - r.now());
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.reason, status.paused, status.next_probe_at),
+        (Reason::Expired, false, None),
+        "{status:?}"
+    );
+    assert_eq!(r.up.requests().len(), sent, "no probe after the expiry");
 }
 
 #[tokio::test]

@@ -215,9 +215,11 @@ async fn the_day_counters_read_zero_after_midnight_without_a_probe_or_a_credit()
 async fn the_five_states_follow_the_table() {
     for (reason, state) in [
         (Reason::Scheduled, RecipeState::Retained),
+        (Reason::RequestFailed, RecipeState::Retained),
         (Reason::ForcedTool, RecipeState::NotRetained),
         (Reason::PoolDisabled, RecipeState::Held),
-        (Reason::ProbeQuotaExhausted, RecipeState::Paused),
+        (Reason::ProbeQuotaExhausted, RecipeState::Held),
+        (Reason::ProbeRetryLimit, RecipeState::Paused),
         (Reason::Released, RecipeState::Ended),
     ] {
         assert_eq!(recipe_state(reason, false), state, "{reason:?}");
@@ -257,7 +259,8 @@ async fn the_five_states_follow_the_table() {
     r.step().await;
     assert_eq!(
         read(&r, "main"),
-        (RecipeState::Paused, Reason::ProbeQuotaExhausted)
+        (RecipeState::Paused, Reason::ProbeRetryLimit),
+        "the 429's first rung would land at the entry's expiry"
     );
     r.engine
         .release("desktop", "session")
@@ -280,8 +283,8 @@ async fn a_probe_exhaustion_reads_paused_and_a_gate_hold_reads_held_until_the_ne
     let exhausted = row(&r, "main");
     assert_eq!(
         (exhausted.state, exhausted.cause, exhausted.next_probe_at),
-        (RecipeState::Paused, Reason::ProbeQuotaExhausted, None),
-        "{exhausted:?}"
+        (RecipeState::Paused, Reason::ProbeRetryLimit, None),
+        "the 429's first rung would land at the entry's expiry: {exhausted:?}"
     );
     // The accounts' cooldown holds the paused recipe at the next tick, and the hold re-arms nothing.
     r.advance_attended(1_000);
@@ -492,7 +495,7 @@ async fn a_paused_recipe_keeps_its_cause_through_a_disabled_pool() {
     let disabled = row(&r, "main");
     assert_eq!(
         (disabled.state, disabled.cause),
-        (RecipeState::Paused, Reason::ProbeQuotaExhausted),
+        (RecipeState::Paused, Reason::ProbeRetryLimit),
         "the pause already withholds every probe, so the disabled pool leaves its cause: {disabled:?}"
     );
     // Enabled again, the accounts' cooldown holds the recipe at the gate, and the pause bit keeps it `paused` under
@@ -521,7 +524,7 @@ async fn a_paused_recipe_drops_its_prompt_at_its_entrys_expiry_and_still_reads_p
     let paused = row(&r, "main");
     assert_eq!(
         (paused.state, paused.cause),
-        (RecipeState::Paused, Reason::ProbeQuotaExhausted),
+        (RecipeState::Paused, Reason::ProbeRetryLimit),
         "{paused:?}"
     );
     let probes = r.status("main").probes;
