@@ -1551,10 +1551,11 @@
   gap: 18px;
 }
 
-/* A link to a card or a key row lands it below the sticky top bar (52 px) rather than under it. */
+/* The sticky block's live height is the token, so with the reload banner drawn an anchored card or key row lands 16 px
+   below the banner and the bar rather than behind the banner. */
 .pool,
 .key-row {
-  scroll-margin-top: 68px;
+  scroll-margin-top: calc(var(--main-top) + 16px);
 }
 
 /* A badge is an atomic box the cell's ellipsis cannot reach, so in a fill cell it narrows with the cell and cuts its
@@ -4620,11 +4621,28 @@
   padding-left: 8px;
 }
 
+/* The Accounts in range card's account column reads its names at 375 px, where the eight figure columns would otherwise
+   leave it 24 px, and the table scrolls inside its wrap past that. The floor works as the Sessions table's does, its
+   figure scaled to the account names. */
+.accounts-range th.col-fill,
+.accounts-range td.col-fill {
+  min-width: 132px;
+}
+
 /* The Burn grid draws three plan cards beside the spend card, or two without a model week, and the Traffic grid seven,
    so an odd last card spans the row rather than leaving a half empty. */
 .burn-grid > .card:last-child:nth-child(odd),
 .traffic-grid > .card:last-child:nth-child(odd) {
   grid-column: 1 / -1;
+}
+
+/* Four burn cards (three plan cards and the spend card) sit two by two in the window widths where auto-fit draws three
+   340 px columns, 1344 px to 1701 px, so no card sits alone at a third of the row, and from 1702 px the four share one
+   row. Three cards keep the odd rule above. */
+@media (min-width: 1344px) and (max-width: 1701.98px) {
+  .burn-grid--four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* The Cache warming grid's five cards sit two to a row in `.grid-2`, which fits three 340 px columns and their two

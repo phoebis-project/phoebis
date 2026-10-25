@@ -2213,18 +2213,17 @@ textarea.input {
 
 /* A phone's bar holds the switch beside the title, Log out and the theme switch and no more: the legend's button gives
    way (the Settings page's Unit row keeps it), Log out shows its icon alone, and the controls close up, so the title
-   and every short label read whole. */
+   and every short label read whole. A title the bar cannot hold beside its controls wraps at its spaces rather than
+   pushing the bar past the window, and keeps each word whole, so a one-word title moves the controls right instead of
+   running under them. */
 @media (max-width: 599px) {
   .topbar {
     gap: 6px;
   }
 
   .topbar__right {
+    flex: none;
     gap: 5px;
-  }
-
-  .topbar__title {
-    white-space: nowrap;
   }
 
   .topbar .unit-legend__anchor {

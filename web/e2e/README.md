@@ -34,10 +34,11 @@ one top), the sidebar's Expert view row above the version line, the routing log'
 Account 178 px under 1420 px and 146 px from it, Model at 192 px from 1420 px alone with the model beneath the account
 under it, and Time the fill: on the three wide viewports the table its card's width with nothing to scroll sideways and
 Time the card less the other columns, 147 px at 1280 and 1440, with no request link under a time cut at 1920, and at 375
-the table at its 990 px minimum scrolling inside its wrap with the page's width recorded, each column as wide as its
-longest cell with no slack, the morning dated time under the 12-hour setting among Time's, a line cut on purpose behind
-an ellipsis, and again under the 7-day range on the state changes with each dated Time cell on one line), an account
-edit's Account cell under the 24-hour range on the registry and state changes (the link the cell reads off the change's
+the table at its 990 px minimum scrolling inside its wrap with the page's width the window's and its table card's, each
+column as wide as its longest cell with no slack, the morning dated time under the 12-hour setting among Time's, a line
+cut on purpose behind an ellipsis, and again under the 7-day range on the state changes with each dated Time cell on one
+line), an account edit's Account cell under the 24-hour range on the registry and state changes (the link the cell reads
+off the change's
 target, against the account link of a state change in type, ink, height, left edge and top, and against the pool's and
 the key's links of the other registry rows in all but their left edge, which their muted word moves), a cleared window's
 By chip under the 7-day range on the cleared and spent windows (against a spent window's chip in type, ink, height,
@@ -113,12 +114,14 @@ saving and Kept warm on one row at one top, the two saving tiles in the Probe co
 Saved by probes chart in the box and title type of the card beside it), the Cost tab under the mock's unpriced switch
 (mock pass, on loads of its own: the Cost tile's dash under the unpriced title in the type, ink and top of the Cost per
 request tile's first figure, and the Cost by card's note on a line of its own under the subtitle's text, at its left
-edge, in its type and ink, its text recorded), the burn cards (an odd last card spanning its row), the plan legend's
-estimated entry (a hollow swatch) and model unlisted entry, the placement and budget tables, the Analytics tables'
-columns, each read on the tab that draws it (the Traffic breakdown's group column the fill, Key on the misses-by-reason
-breakdown under its wrapped headers, Cache by model's width recorded under native with every column inside its wrap at
-1280 by 800 and in the mock pass a cost cell's billed line drawn, Rung on the placements table, Pool and Account on the
-member budgets, whose Spent column is as wide as its meter's 140 px floor), the request table's fit (in both passes the
+edge, in its type and ink, its text recorded), the burn cards (an odd last card spanning its row, and in the mock pass
+four cards two by two at 1440 by 900 under the key grouping), the plan legend's estimated entry (a hollow swatch) and
+model unlisted entry, the placement and budget tables, the Analytics tables' columns, each read on the tab that draws it
+(the Traffic breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Cache
+by model's width recorded under native with every column inside its wrap at 1280 by 800 and in the mock pass a cost
+cell's billed line drawn, Rung on the placements table, Pool and Account on the member budgets, whose Spent column is as
+wide as its meter's 140 px floor, and the Accounts in range card's account column at least 132 px at 375 by 800 with the
+table scrolling inside its wrap and the card as wide as the Pace card), the request table's fit (in both passes the
 default columns inside the card at 1280 by 800 with the Cost column whole, Time the one fill taking the card less the
 other columns, its floor the widest dated time the clock setting draws with the cell's padding, every id line the whole
 id cut by the room alone with at least twelve characters in view, and no Client text cut, again under the 7-day range
@@ -174,7 +177,10 @@ switch `phoebis.mockBuildMismatch` (mock pass, on loads of its own at 1280 by 80
 the Analytics view: the banner's top edge at the window's top, where the bar's sits with the switch off, the bar's top
 edge on the banner's bottom, the banner's paint opaque under its tint, the block's paint transparent with the switch off
 and opaque with it on, the sticky filter bar on the block's bottom and the section bar on the filter bar's bottom, and
-at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the fast lane, the request drawer, which
+at 1280 by 800 the Accounts list 20 px under the block, each edge within 1 px), the anchored pool card and key row under
+the reload banner (mock pass, on loads of its own under the mock's build switch, the Pools view at 1280 by 800 and the
+Keys view at 1280 by 400: the first card's or row's top edge 16 px under the sticky block's bottom once the view moves
+to its hash, within 1 px), the fast lane, the request drawer, which
 opens once the request list's shot is taken (its compact table with Time the fill as wide as its card at 1280 by 800 and
 1440 by 900 with every id whole in the mock pass, and at 375 by 800 under the list scrolling inside its card, its chips
 in the status badge's type, and the Estimated cost row's 20x equivalent chips and muted equivalent on one line each

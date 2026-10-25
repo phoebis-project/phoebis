@@ -1061,8 +1061,10 @@ function routingLogCells(kinds) {
     }
     longest.push([name, best?.[0] ?? null, column, best?.[1] ?? null]);
   }
+  const box = (el) => (el ? round(el.getBoundingClientRect().width) : null);
   return {
     account: width('account'),
+    card: box(table.closest('.card--table')),
     client: wrap.clientWidth,
     cut,
     document: { inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
@@ -1072,6 +1074,7 @@ function routingLogCells(kinds) {
     model: width('model'),
     modelUnder: rows.filter((tr) => [...tr.querySelectorAll('.routing-log__model-under')].some((el) => el.getClientRects().length > 0)).length,
     models: rows.filter((tr) => tr.querySelector('.routing-log__model-under') !== null).length,
+    page: box(table.closest('.routing-log')),
     probed,
     rows: rows.length,
     scroll: wrap.scrollWidth,
@@ -1086,16 +1089,16 @@ function routingLogCells(kinds) {
  * 1420 px alone, and Time, the fill, the rest. On the three wide viewports the table is as wide as its card with
  * nothing to scroll sideways and Time takes the card less the other columns within 1 px: 147 px at 1280 and 1440, and
  * at 1920 the room for each request id under the time, which no line there cuts. At 375 the table keeps its 990 px
- * minimum, Time 147 px, and scrolls inside its wrap, the document's width recorded. Each column from Time to Link holds
- * its longest cell (`routingLogCells`), with no slack, so a column narrower than it fails, Account aside: it cuts a
- * line past its width by design, and it fails under the longest account id with its padding. A line cut on purpose (the
- * request link under the time, the agent line under the session, an Account line past the column) that does not end
- * behind an ellipsis fails. From 1420 px the model stands in its own column alone, so an Account cell that draws it
- * beneath the account fails, and under 1420 px a row with a model that does not draw it there fails. The bare log is
- * read, then the log under the 7-day range on the state changes, where the mock story dates its Time cells on the first
- * page and a Time cell that breaks over two lines fails. The mock pass fails a 7-day page with no dated cell, and the
- * router's seed, which draws no row older than a day, records that the read stands down. The bare log loads again at
- * the pass's viewport after.
+ * minimum, Time 147 px, and scrolls inside its wrap, the page as wide as its table card and the document as wide as the
+ * window. Each column from Time to Link holds its longest cell (`routingLogCells`), with no slack, so a column narrower
+ * than it fails, Account aside: it cuts a line past its width by design, and it fails under the longest account id with
+ * its padding. A line cut on purpose (the request link under the time, the agent line under the session, an Account
+ * line past the column) that does not end behind an ellipsis fails. From 1420 px the model stands in its own column
+ * alone, so an Account cell that draws it beneath the account fails, and under 1420 px a row with a model that does not
+ * draw it there fails. The bare log is read, then the log under the 7-day range on the state changes, where the mock
+ * story dates its Time cells on the first page and a Time cell that breaks over two lines fails. The mock pass fails a
+ * 7-day page with no dated cell, and the router's seed, which draws no row older than a day, records that the read
+ * stands down. The bare log loads again at the pass's viewport after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -1146,6 +1149,8 @@ async function routingLogColumns(theme) {
         if (width < 900) {
           if (Math.abs(got.table - 990) > 0.5) say(`${where} the table is ${got.table}px, not its 990 px minimum`);
           if (got.scroll <= got.client) say(`${where} the table takes ${got.table}px of its ${got.client}px wrap without scrolling inside it`);
+          if (got.document.scroll > got.document.inner) say(`${where} the document needs ${got.document.scroll}px of the ${got.document.inner}px window, so it scrolls sideways`);
+          for (const what of compare(got.page === null ? null : { width: Math.round(got.page) }, got.card === null ? null : { width: Math.round(got.card) }, ['width'], `${where} the page against its table card`)) say(what);
         } else {
           if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
           if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
@@ -4696,6 +4701,48 @@ async function burnCards(theme) {
 }
 
 /**
+ * The Burn tab's four cards at 1440 by 900 under the key grouping, where `.grid-2` alone fits three columns: the three
+ * plan cards and Spend per minute sit two by two, two cards on each of two top edges, each as wide as half the grid's
+ * row less half its 18 px gap, and none spanning the row. Each card's top edge, left edge and width go to the
+ * measurements, and the viewport and the Traffic tab are the pass's again after.
+ */
+async function burnGridFour(theme) {
+  const say = (what) => failures.push(`${theme} /analytics burn grid at 1440 by 900: ${what}`);
+  try {
+    await page.setViewportSize({ height: 900, width: 1440 });
+    await settle();
+    if (!(await tabTo(theme, 'Burn'))) return;
+    const read = await page.evaluate(() => {
+      const grid = document.querySelector('.burn-grid');
+      if (!grid) return null;
+      const box = (c) => ({ left: Math.round(c.getBoundingClientRect().left), title: c.querySelector('.card__title')?.textContent?.trim() ?? '', top: Math.round(c.getBoundingClientRect().top), width: Math.round(c.getBoundingClientRect().width) });
+      return { cards: [...grid.children].map(box), row: Math.round(grid.getBoundingClientRect().width) };
+    });
+    measurements.push(`${theme} /analytics burn grid at 1440 by 900 ${JSON.stringify(read)}`);
+    if (read === null) {
+      say('no grid to measure');
+      return;
+    }
+    if (read.cards.length !== 4) {
+      say(`the grid draws ${read.cards.length} cards, not four`);
+      return;
+    }
+    const rows = Object.values(Object.groupBy(read.cards, (c) => c.top));
+    if (rows.length !== 2 || rows.some((r) => r.length !== 2)) say(`the four cards sit ${rows.map((r) => r.length).join(', ')} to a row, not two per row`);
+    const half = { width: Math.round((read.row - 18) / 2) };
+    for (const c of read.cards) {
+      for (const what of compare({ width: c.width }, half, ['width'], `${c.title} against half the ${read.row}px row less half the gap`)) say(what);
+      if (Math.abs(c.width - read.row) <= 1) say(`${c.title} spans the ${read.row}px row`);
+    }
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await tabTo(theme, 'Traffic');
+    await atRest();
+  }
+}
+
+/**
  * The 5-hour plan card's muted legend entries against their neighbors. The estimated entry draws its swatch hollow: a
  * transparent box with a border in its color, taller than the 2 px line swatch, the type its neighbor's. The model
  * unlisted entry reads against the entry before it, a planned line's, on type and swatch size, and, where an account
@@ -4886,6 +4933,43 @@ async function analyticsColumns(theme) {
     await tableColumns(theme, 'analytics', '.reconciliations-table', ['Upstream']);
   } finally {
     await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
+ * The Accounts in range card's account column at 375 by 800 on the Accounts tab: at least 132 px, so the account names
+ * read beside the eight figure columns, with the table scrolling inside its wrap and the card as wide as the Pace card
+ * above it, so the floor widens no card. The column, the table, the wrap's client and scroll widths and both cards'
+ * widths go to the measurements, and the viewport and the Traffic tab are the pass's again after.
+ */
+async function accountsRangeColumn(theme) {
+  const say = (what) => failures.push(`${theme} /analytics Accounts in range at 375 by 800: ${what}`);
+  try {
+    await page.setViewportSize({ height: 800, width: 375 });
+    await settle();
+    if (!(await tabTo(theme, 'Accounts'))) return;
+    const read = await page.evaluate(() => {
+      const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const width = (el) => (el ? Math.round(el.getBoundingClientRect().width * 10) / 10 : null);
+      const range = card('Accounts in range');
+      const column = range?.querySelector('th.col-fill');
+      const wrap = range?.querySelector('.table-wrap');
+      const table = wrap?.querySelector('table');
+      return column && wrap && table ? { card: width(range), client: wrap.clientWidth, column: width(column), pace: width(card('Pace')), scroll: wrap.scrollWidth, table: width(table) } : null;
+    });
+    measurements.push(`${theme} /analytics Accounts in range account column at 375 by 800 ${JSON.stringify(read)}`);
+    if (read === null) {
+      say('no Accounts in range table to measure');
+      return;
+    }
+    if (read.column < 132) say(`the account column is ${read.column}px, under its 132 px floor`);
+    if (read.scroll <= read.client) say(`the table takes ${read.table}px of its ${read.client}px wrap without scrolling inside it`);
+    for (const what of compare({ width: Math.round(read.card) }, read.pace === null ? null : { width: Math.round(read.pace) }, ['width'], 'the card against the Pace card')) say(what);
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await tabTo(theme, 'Traffic');
+    await atRest();
   }
 }
 
@@ -6596,6 +6680,72 @@ async function shellBanner(theme) {
     await page.evaluate((key) => localStorage.removeItem(key), BUILD_MISMATCH_SWITCH);
     await page.setViewportSize({ height: 800, width: 1280 });
     await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    await atRest();
+  }
+}
+
+/**
+ * An anchored pool card or key row under the reload banner, on loads of its own under the mock's build switch: the view
+ * loads with the banner drawn and the token past the bar's 52 px, then moves to the hash of its first card or row,
+ * which lands with its top edge 16 px under the sticky block's bottom, each side rounded, rather than behind the
+ * banner. The Pools view is read at 1280 by 800 and the Keys view at 1280 by 400, since at 800 px tall the six keys
+ * leave the page too short to scroll the first row to its margin. The view loads again without the switch at 1280 by
+ * 800, so the measures after it read the view as it first drew.
+ */
+async function anchoredRowUnderBanner(theme, path) {
+  const say = (what) => failures.push(`${theme} ${path} anchored row under the banner: ${what}`);
+  const { height, noun, row, wait } = path === '/pools' ? { height: 800, noun: 'card', row: '.pool', wait: '.pool .serving' } : { height: 400, noun: 'row', row: '.key-row', wait: '.card--table tbody tr' };
+  try {
+    await page.setViewportSize({ height, width: 1280 });
+    await page.evaluate((key) => localStorage.setItem(key, '1'), BUILD_MISMATCH_SWITCH);
+    await loadAtOrigin(path, wait);
+    const drawn = await page
+      .waitForFunction(() => document.querySelector('.main__top > .callout[role="status"]') !== null && parseFloat(getComputedStyle(document.querySelector('.main')).getPropertyValue('--main-top')) > 52, null, { timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!drawn) {
+      say('the switch on draws no banner');
+      return;
+    }
+    const id = await page.evaluate((selector) => document.querySelector(selector)?.id ?? '', row);
+    if (id === '') {
+      say(`no ${row} carries an id to anchor`);
+      return;
+    }
+    await page.evaluate((hash) => {
+      window.location.hash = hash;
+    }, id);
+    await advance(LOAD_MS);
+    const read = await page.evaluate(
+      ({ id, row }) => {
+        const el = [...document.querySelectorAll(row)].find((e) => e.id === id);
+        const main = document.querySelector('.main');
+        const block = document.querySelector('.main__top');
+        const round = (n) => Math.round(n * 10) / 10;
+        return {
+          banner: document.querySelector('.main__top > .callout[role="status"]') !== null,
+          block: block ? round(block.getBoundingClientRect().bottom) : null,
+          hash: location.hash,
+          margin: el ? getComputedStyle(el).scrollMarginTop : null,
+          room: Math.round(document.scrollingElement.scrollHeight - window.innerHeight),
+          scrolled: Math.round(document.scrollingElement.scrollTop),
+          token: main ? getComputedStyle(main).getPropertyValue('--main-top').trim() : null,
+          top: el ? round(el.getBoundingClientRect().top) : null,
+        };
+      },
+      { id, row },
+    );
+    measurements.push(`${theme} ${path} anchored ${noun} under the banner at 1280 by ${height} ${JSON.stringify(read)}`);
+    if (!read.banner) say(`the banner is gone once the view moves to #${id}`);
+    if (read.top === null || read.block === null) {
+      say(`the ${noun} #${id} or the sticky block is not drawn to measure`);
+      return;
+    }
+    for (const what of compare({ top: Math.round(read.top) }, { top: Math.round(read.block + 16) }, ['top'], `the ${noun} #${id}'s top edge against 16 px under the sticky block's bottom`)) say(what);
+  } finally {
+    await page.evaluate((key) => localStorage.removeItem(key), BUILD_MISMATCH_SWITCH);
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await loadAtOrigin(path, wait);
     await atRest();
   }
 }
@@ -10463,12 +10613,16 @@ try {
       await topBarFits(theme, view.path);
       if (view.path === '/guardrails') await barRow(theme, view.path);
       if (view.path === '/pools') await utilizationCeiling(theme);
+      if (view.path === '/pools' && mock) await anchoredRowUnderBanner(theme, view.path);
       if (view.path === '/') await topbarHeights(theme);
       if (view.path === '/keys') await keysLayout(theme);
+      if (view.path === '/keys' && mock) await anchoredRowUnderBanner(theme, view.path);
       if (view.path === '/keys') await dialogControls(theme);
       if (view.path === '/analytics') await burnLoneCard(theme);
+      if (view.path === '/analytics' && mock) await burnGridFour(theme);
       if (view.path === '/analytics') await warmingLoneCard(theme);
       if (view.path === '/analytics') await analyticsTiles(theme);
+      if (view.path === '/analytics') await accountsRangeColumn(theme);
       if (view.path === '/analytics') await analyticsEmptyRate(theme);
       // The chip line's dock and the bar's measure load their addresses themselves and leave the bare page.
       if (view.path === '/analytics') await stickyStrip(theme, true);

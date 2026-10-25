@@ -857,14 +857,16 @@ reads the latest weighed model of its model tier, with an "estimated" entry in t
 the tooltip's figures. A bucket whose traffic ran on a model of no known tier, or on a tier the cost model has no
 capacity for on that window, prices no share there and draws no point, under a "model unlisted" entry, and under Window
 shares an account whose tier the cost model does not size reads "tier unknown". Spend per minute charts the dollars
-alone, a subscription account's among them for its fast-mode and overage answers. The Meter reconciliation card stands
-between the charts and Member budgets, one row per completed 5-hour, 7-day or Fable window of an account, newest first:
-Upstream, Window, Ended, Rise (the rise the upstream's readings showed), Predicted (the share the router priced for its
-own requests in it, with the charts' `~` and its estimate hover where an attempt in it was priced at a model tier's
-estimate), Ratio, with a warning badge on a ratio under 0.8 or over 1.25 once the rise and the predicted share each
-reach 5%, and Requests. It reads the trailing 30 days under the Accounts filter whatever the range. The section closes
-on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a member carries, a member at its
-budget marked and one the ledger has not reported on reading "not reported".
+alone, a subscription account's among them for its fast-mode and overage answers. With the Model week card drawn, the
+four cards sit two by two in the window widths where three would otherwise share a row with the fourth alone (1344 px to
+1701 px). The Meter reconciliation card stands between the charts and Member budgets, one row per completed 5-hour,
+7-day or Fable window of an account, newest first: Upstream, Window, Ended, Rise (the rise the upstream's readings
+showed), Predicted (the share the router priced for its own requests in it, with the charts' `~` and its estimate hover
+where an attempt in it was priced at a model tier's estimate), Ratio, with a warning badge on a ratio under 0.8 or over
+1.25 once the rise and the predicted share each reach 5%, and Requests. It reads the trailing 30 days under the Accounts
+filter whatever the range. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row
+per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
+reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)

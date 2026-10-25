@@ -2633,7 +2633,7 @@ function BurnCharts({
     );
   };
   return (
-    <div className="grid-2 burn-grid">
+    <div className={windows.length + 1 === 4 ? 'grid-2 burn-grid burn-grid--four' : 'grid-2 burn-grid'}>
       {windows.map(planCard)}
       <ChartCard
         title="Spend per minute"
@@ -2981,6 +2981,7 @@ function AccountsSection({
         </ChartCard>
       </div>
       <BreakdownTable
+        className="accounts-range"
         title="Accounts in range"
         subtitle={`Totals for the selected range and accounts${otherFilters ? '. The key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
         error={error}
