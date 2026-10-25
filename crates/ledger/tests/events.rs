@@ -2738,6 +2738,21 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
                 end - 3_600_000,
                 end + DAY,
             ),
+            // The same pair the other way round, the poll's Fable reading the newer one.
+            weekly_sample(
+                "e",
+                "seven_day_fable",
+                Some(0.35),
+                end - 3_600_000,
+                end + DAY,
+            ),
+            weekly_sample(
+                "e",
+                "seven_day_overage_included",
+                Some(0.65),
+                end - 6 * 3_600_000,
+                end + DAY,
+            ),
             // A week that reset before the end left nothing the end cut short.
             weekly_sample(
                 "d",
@@ -2791,6 +2806,97 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
             ),
         ],
         "one row per open week, the head's week under the Fable id, and no reset after the end"
+    );
+    let reversed = db
+        .read_blocking(|c| {
+            unused_allowance(c, &["e".into()], now - 30 * DAY, now, &[("e".into(), end)])
+        })
+        .unwrap();
+    assert_eq!(
+        reversed,
+        vec![reset_row(
+            "e",
+            "seven_day_fable",
+            end,
+            1.0 - 0.35,
+            end - 3_600_000,
+            "term_ended"
+        )],
+        "the newer reading of the pair stands whichever key it carries"
+    );
+}
+
+#[test]
+fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let end = now - 10 * DAY;
+    let announced =
+        |window: &str, utilization_before: f64, reset_at: i64, at: i64, observed: &'static str| {
+            event_of(&RouterEvent::WindowReset {
+                account_id: "f".into(),
+                window: window.into(),
+                utilization_before,
+                reset_at,
+                next_reset: (observed == "sample").then_some(reset_at + 7 * DAY),
+                observed,
+                restored: false,
+                at,
+            })
+            .expect("a reset row")
+        };
+    for row in [
+        // A week that reset before the end, announced only after it.
+        announced(
+            "seven_day",
+            0.55,
+            end - 2 * 3_600_000,
+            end + 3 * 3_600_000,
+            "clock",
+        ),
+        // The week the end cut short, which the term end counts.
+        announced("seven_day_fable", 0.9, end, end, "sample"),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    db.insert_samples(
+        &[weekly_sample(
+            "f",
+            "seven_day_fable",
+            Some(0.75),
+            end - 3 * 3_600_000,
+            end,
+        )],
+        None,
+    )
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(c, &["f".into()], now - 30 * DAY, now, &[("f".into(), end)])
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            reset_row(
+                "f",
+                "seven_day",
+                end - 2 * 3_600_000,
+                1.0 - 0.55,
+                end + 3 * 3_600_000,
+                "clock"
+            ),
+            reset_row(
+                "f",
+                "seven_day_fable",
+                end,
+                1.0 - 0.75,
+                end - 3 * 3_600_000,
+                "term_ended"
+            ),
+        ],
+        "a week that reset before the end keeps its row whenever it was announced, and a reset at the end is the term \
+         end's row alone"
     );
 }
 

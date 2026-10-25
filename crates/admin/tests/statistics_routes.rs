@@ -2658,6 +2658,207 @@ async fn the_unused_allowance_route_groups_each_subscription_accounts_weekly_res
 }
 
 #[tokio::test]
+async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_flag_followed_it() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let trial_end = now - 10 * DAY;
+    let document = serde_json::json!({
+        "organization": {
+            "organization_type": "claude_pro",
+            "rate_limit_tier": "default_claude_ai",
+            "claude_code_trial_ends_at": jiff::Timestamp::from_millisecond(trial_end).unwrap().to_string(),
+        },
+    })
+    .to_string();
+    parts
+        .store
+        .set_profile(
+            "business",
+            &document,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_ai".into()),
+                trial_ends_at: Some(trial_end),
+                ..phoebis_store::SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    // The week open at the trial's end resets two days after it, and the plan carries on.
+    let week_reset = trial_end + 2 * DAY;
+    parts
+        .db
+        .insert_event(&EventRecord {
+            at: week_reset,
+            kind: "window_reset".into(),
+            account_id: Some("business".into()),
+            detail: Some(
+                serde_json::json!({
+                    "window": "seven_day",
+                    "utilization_before": 0.6,
+                    "reset_at": week_reset,
+                    "next_reset": week_reset + 7 * DAY,
+                    "observed": "sample",
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        })
+        .unwrap();
+    let flagged = now - 5 * DAY;
+    parts
+        .db
+        .insert_samples(
+            &[
+                (trial_end - DAY, 0.35, week_reset),
+                (flagged - DAY, 0.25, week_reset + 7 * DAY),
+            ]
+            .map(|(observed_at, utilization, reset_at)| {
+                phoebis_ledger::QuotaSampleRecord {
+                    account_id: "business".into(),
+                    bucket: phoebis_ledger::bucket_of(observed_at),
+                    window: "seven_day".into(),
+                    utilization: Some(utilization),
+                    reset_at: Some(reset_at),
+                    source: "poll".into(),
+                    observed_at: Some(observed_at),
+                }
+            }),
+            None,
+        )
+        .unwrap();
+    let (app, cookie) = (&parts.app, cookie.as_str());
+    let read = move || async move {
+        json(get(app, "/admin/analytics/unused_allowance", Some(cookie)).await).await
+    };
+    let reset = |reset_at: i64, share_left: f64, observed_at: i64, source: &str| {
+        serde_json::json!({
+            "reset_at": reset_at,
+            "share_left": share_left,
+            "observed_at": observed_at,
+            "source": source,
+        })
+    };
+    let carried_on = read().await;
+    assert_eq!(
+        carried_on["accounts"],
+        serde_json::json!([{
+            "account_id": "business",
+            "plan": "pro",
+            "tier": "default_claude_ai",
+            "windows": [{
+                "window": "seven_day",
+                "resets": [reset(week_reset, 1.0 - 0.6, week_reset, "sample")],
+                "total_share_left": 1.0 - 0.6,
+                "resets_counted": 1,
+            }],
+        }]),
+        "a trial end that passed while the plan carried on ends no week, and the later reset stays"
+    );
+    parts.store.set_plan_ended("business", flagged).unwrap();
+    parts.router.reload().await.unwrap();
+    let ended = read().await;
+    assert_eq!(
+        ended["accounts"][0]["windows"],
+        serde_json::json!([{
+            "window": "seven_day",
+            "resets": [
+                reset(flagged, 1.0 - 0.25, flagged - DAY, "term_ended"),
+                reset(week_reset, 1.0 - 0.6, week_reset, "sample"),
+            ],
+            "total_share_left": (1.0 - 0.25) + (1.0 - 0.6),
+            "resets_counted": 2,
+        }]),
+        "the plan-ended flag ends the week it falls in at the flag's instant"
+    );
+}
+
+#[tokio::test]
+async fn a_canceled_end_still_ahead_of_now_ends_no_week_in_a_range_that_reaches_past_it() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let end = now + 3 * HOUR;
+    parts
+        .store
+        .set_canceled("business", true, Some(end))
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    let reset_at = now - 3 * DAY;
+    parts
+        .db
+        .insert_event(&EventRecord {
+            at: reset_at,
+            kind: "window_reset".into(),
+            account_id: Some("business".into()),
+            detail: Some(
+                serde_json::json!({
+                    "window": "seven_day",
+                    "utilization_before": 0.5,
+                    "reset_at": reset_at,
+                    "next_reset": reset_at + 7 * DAY,
+                    "observed": "sample",
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        })
+        .unwrap();
+    // A reading of the week the end will cut short.
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(now - DAY),
+                window: "seven_day".into(),
+                utilization: Some(0.7),
+                reset_at: Some(reset_at + 7 * DAY),
+                source: "poll".into(),
+                observed_at: Some(now - DAY),
+            }],
+            None,
+        )
+        .unwrap();
+    let answer = json(
+        get(
+            &parts.app,
+            &format!(
+                "/admin/analytics/unused_allowance?range={},{}",
+                now - 30 * DAY,
+                now + DAY / 2
+            ),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            &answer["accounts"][0]["account_id"],
+            &answer["accounts"][0]["windows"],
+        ),
+        (
+            &serde_json::json!("business"),
+            &serde_json::json!([{
+                "window": "seven_day",
+                "resets": [{
+                    "reset_at": reset_at,
+                    "share_left": 1.0 - 0.5,
+                    "observed_at": reset_at,
+                    "source": "sample",
+                }],
+                "total_share_left": 1.0 - 0.5,
+                "resets_counted": 1,
+            }]),
+        ),
+        "an end past `now` ends no week yet, though the range reaches past it: {answer}"
+    );
+}
+
+#[tokio::test]
 async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

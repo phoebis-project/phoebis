@@ -7,12 +7,11 @@ use phoebis_routing::{SEVEN_DAY, SEVEN_DAY_FABLE};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection};
 
+// The relay hands the router the head's overage-included week as `seven_day_fable`, so the events name the Fable week
+// where the samples may name this key, and the read folds the two as the account view does (`account_window_id` in the
+// admin routes).
+use crate::quota::SEVEN_DAY_OVERAGE_INCLUDED;
 use crate::LedgerError;
-
-/// The head's overage-included week as the ledger stores it. The relay hands the router that reading as
-/// `seven_day_fable`, so the events name the Fable week where the samples may name this key, and the read folds the
-/// two as the account view does (`account_window_id` in the admin routes).
-const OVERAGE_INCLUDED_WEEK: &str = "seven_day_overage_included";
 
 /// One weekly reset an account met in range, or its term's end read as one: what the unused allowance route lists.
 #[derive(Clone, Debug, PartialEq)]
@@ -53,10 +52,10 @@ fn share_left(utilization: f64) -> f64 {
 /// `term_ends`. The read keeps the listed accounts, every account's rows where the list is empty, since the ledger
 /// holds no account kind: the caller lists the `oauth` accounts it answers for. A term end's row reads the last
 /// reading before the end of a week still open at it (its reset at or after the end), the head's overage-included
-/// week folded into `seven_day_fable` with the newer reading standing, and a reading with no utilization skipped. An
-/// event of such an account after its end is left out, so the week the end cut short counts once. Ordered by
-/// account, window, then `reset_at` newest first. No rollup and no stored figure: the history is the events the purge
-/// still holds.
+/// week folded into `seven_day_fable` with the newer reading standing, and a reading with no utilization skipped. A
+/// reading with no reset instant shows no open week. A reset of such an account at or after its end is left out, so
+/// the week the end cut short counts once. Ordered by account, window, then `reset_at` newest first. No rollup and no
+/// stored figure: the history is the events the purge still holds.
 pub fn unused_allowance(
     conn: &Connection,
     accounts: &[String],
@@ -103,10 +102,13 @@ pub fn unused_allowance(
         let Ok(detail) = serde_json::from_str::<ResetDetail>(&detail) else {
             continue;
         };
+        // An ended account's resets are left out by the reset's own instant: a late sample or a clock walk after a
+        // restart announces a week that reset before the end only after it, and the week the end cut short is the
+        // `term_ended` row's alone.
         if !is_weekly(&detail.window)
             || ends
                 .get(account_id.as_str())
-                .is_some_and(|&end_at| at > end_at)
+                .is_some_and(|&end_at| detail.reset_at >= end_at)
         {
             continue;
         }
@@ -140,7 +142,7 @@ pub fn unused_allowance(
         })?;
         for reading in found {
             let (window, utilization, observed_at) = reading?;
-            let window = if window == OVERAGE_INCLUDED_WEEK {
+            let window = if window == SEVEN_DAY_OVERAGE_INCLUDED {
                 SEVEN_DAY_FABLE.to_string()
             } else {
                 window

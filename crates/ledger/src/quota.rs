@@ -41,7 +41,7 @@ const WAKE_TOLERANCE: Duration = Duration::from_secs(1);
 pub const PROFILE_EVERY_POLLS: u32 = 12;
 
 /// The usage endpoint's key for the week the head reports as `7d_oi`.
-const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
+pub(crate) const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
 const OPEN_RUNS_POISONED: &str = "the poll backoff's open-run set poisoned by a prior panic";
 
