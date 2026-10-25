@@ -459,7 +459,8 @@ A session's runway on an account is the time until that account's projection, wi
 prompt as one cache write) added now and its burn added to the account's, reaches `window_ceiling`: none when the
 rewrite alone takes a window there, unbounded when nothing burns, and unbounded on the Sessions route and in the
 decision record's fit table where it reaches past the window's next reset, while the fit's verdict reads the computed
-figure against the horizon. The session fits the account when the runway reaches the horizon on every window its model
+figure against the horizon and the strategy's tie-break ranks by it. The session fits the account when the runway
+reaches the horizon on every window its model
 draws, `five_hour`, `seven_day` and the model's own week where it has one. An API-key account fits while its worst live
 rate-limit bucket reads under 1.0. A usage-based seat fits as an API-key account does: with no bucket to read, it has
 room.

@@ -18842,7 +18842,7 @@ fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
         gated_pin("w1", "b", 200.0),
         gated_pin("w2", "b", 400.0),
     ]);
-    st.record_sample("b", refreshing(0.3, T + HOUR, T + 3 * HOUR, T - 500));
+    st.record_sample("b", refreshing(0.3, T + HOUR, T + 72 * HOUR, T - 500));
     let row = burning("s1", "a", 100.0, true, T);
     let cause = MoveCause::Cooldown {
         scope: "account".into(),
@@ -18854,12 +18854,14 @@ fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
     assert_eq!(landed(d.result.clone()), ("b".into(), None));
     // b: 0.3 and the 200 000-token rewrite of 0.02 leave 0.63 of the window to the ceiling. The two pins on b burn
     // 0.00006 of it a second, and the row's own 0.00001 takes the total to 0.00007: 9 000 s, past the reset an hour
-    // out, and the week's runway passes its reset three hours out, so the runway reads unbounded.
+    // out, so the 5-hour window drops from the displayed runway, and the week, inside its reset 72 hours out, binds.
+    // At 0.1 of the week with the rewrite and each burn a sixth as large, the row's 0.00001 a second gives about
+    // 72 571 s where the median's 0.00003 would give about 56 444 s, so the figure proves the fit read the row's burn.
     let b = candidate(&d.record, "b");
     assert_eq!(
         (b.runway_ms, b.fit, b.binding.as_deref()),
-        (None, Some("fits"), None),
-        "a runway past each window's reset reads unbounded"
+        (Some(72_571_429), Some("fits"), Some("seven_day")),
+        "the week's runway reads the failed-over row's burn"
     );
     let reserve = line(&d.record, "reserve");
     assert!(
@@ -19742,7 +19744,9 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
     );
     let fit = line(&second.record, "fit");
     // b's 5-hour runway passes its reset, so its week, inside its reset 72 hours out, binds. Each of c's windows
-    // resets before the ceiling is reached, its 15 000 s past the 10 800 s to the 5-hour reset among them.
+    // resets before the ceiling is reached, its 15 000 s past the 10 800 s to the 5-hour reset among them. b's
+    // computed runway, about 37 500 s on its 5-hour window, is the longer against c's 15 000 s and is what the
+    // tie-break ranks by, while b displays its week since its 5-hour runway passes the reset.
     assert_eq!(
         (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
         (
