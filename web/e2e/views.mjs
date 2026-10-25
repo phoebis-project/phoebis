@@ -6879,6 +6879,41 @@ async function accountsCardToggles(theme) {
 }
 
 /**
+ * The plan badges' words on the Accounts list: the usage-based seat's row reads "Usage-based" and the plan-ended
+ * account's row its last plan's "Pro", each badge in the type and height of the first other row's at the same place in
+ * its row. The list sorts by label, so the seat's row comes first and the neighbor is the first row of neither account.
+ * The router's seed holds neither account, so only the story's pass reads them.
+ */
+async function accountBadges(theme) {
+  const say = (what) => failures.push(`${theme} /accounts: ${what}`);
+  const read = await page.evaluate(() => {
+    const SEAT = '/accounts/contract';
+    const SUNSET = '/accounts/sunset';
+    const badgeOf = (row) => {
+      const badge = row?.querySelector('.account-row__head .badge') ?? null;
+      if (!row || !badge) return null;
+      const b = badge.getBoundingClientRect();
+      return { fontSize: getComputedStyle(badge).fontSize, height: Math.round(b.height * 10) / 10, text: badge.textContent?.trim() ?? '', top: Math.round((b.top - row.getBoundingClientRect().top) * 10) / 10 };
+    };
+    const rows = [...document.querySelectorAll('a.account-row')];
+    return {
+      first: badgeOf(rows.find((r) => ![SEAT, SUNSET].includes(r.getAttribute('href') ?? ''))),
+      seat: badgeOf(rows.find((r) => r.getAttribute('href') === SEAT)),
+      sunset: badgeOf(rows.find((r) => r.getAttribute('href') === SUNSET)),
+    };
+  });
+  measurements.push(`${theme} /accounts plan badges ${JSON.stringify(read)}`);
+  if (read.seat?.text !== 'Usage-based') say(`the usage-based seat's row badges ${JSON.stringify(read.seat?.text ?? null)} where its plan reads Usage-based`);
+  if (read.sunset?.text !== 'Pro') say(`the plan-ended account's row badges ${JSON.stringify(read.sunset?.text ?? null)} where its last plan reads Pro`);
+  for (const [name, badge] of [
+    ['seat', read.seat],
+    ['plan-ended account', read.sunset],
+  ]) {
+    for (const what of compare(badge, read.first, ['fontSize', 'height', 'top'], `the ${name}'s plan badge against the first other row's`)) say(what);
+  }
+}
+
+/**
  * An account's fast lane against the card it sits in: on the account page the lane is a section of the Usage card as
  * extra usage is, with the same rule and spacing. Only an account with extra usage draws its section, so the check
  * compares where both are drawn and stands down where the neighbor is missing, as it does against the router's seed,
@@ -10672,6 +10707,7 @@ try {
         await settingsUnitLegend(theme);
       }
       if (view.path === '/accounts') {
+        if (mock) await accountBadges(theme);
         await tableColumns(theme, 'accounts', '.cooling-down table', ['Reason']);
         await fastLane(theme, view.path);
         await deleteAccountButton(theme);

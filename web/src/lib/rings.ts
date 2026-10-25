@@ -36,6 +36,11 @@ export function ringFigures(accounts: Account[], windowId: WindowId, costs: Subs
       leftOut.push({ id: a.id, label: a.label, reason: 'no subscription profile' });
       continue;
     }
+    // A free plan prices no capacity, so the account leaves the ring before the tier lookup, which would read its Pro tier.
+    if (a.subscription.plan === 'free') {
+      leftOut.push({ id: a.id, label: a.label, reason: 'Free plan, no priced capacity' });
+      continue;
+    }
     const tier = a.subscription.rateLimitTier;
     if (tierRow(costs, tier) === undefined) {
       leftOut.push({ id: a.id, label: a.label, reason: `tier ${tier} is not in the cost model` });

@@ -77,7 +77,8 @@ Accounts page (each bar's line inside its bar, a compact bar's projection in its
 and its horizon, and a whole bar's reset and projection as two parts, each part whole on its line), the usage-based
 seat's spend bar there at 1280 and 400 by 800 (mock pass: its row as wide as a window triple's beside it, from its left
 edge where the two share a column, the amount spent of the limit in its head, and its reset on one line inside the bar
-with the estimate's word muted and its sentence on hover), the account lines, the Quota cards' poll lines (short of the
+with the estimate's word muted and its sentence on hover), the plan badges' words on the seat's row and the plan-ended
+account's row against the first other row's, the account lines, the Quota cards' poll lines (short of the
 Refresh pill and inside the card, the backoff line in the serious ink, none wrapping, a failed poll's reason cut inside
 its line and whole in its title where a listed card draws one), the Quota cards' chips and reset cells (each chip and
 each reset cell without a projection on one line inside its column, a live label with its projection split between its

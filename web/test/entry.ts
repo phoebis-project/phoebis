@@ -1,6 +1,7 @@
 export * from '@/api/decode';
 export * from '@/api/fold';
 export * from '@/api/http';
+export { PLAN_WORDS } from '@/api/types';
 export { accountColor, accountSlots } from '@/components/charts/theme';
 export * from '@/lib/address';
 export * from '@/lib/analytics';
@@ -35,7 +36,7 @@ export * from '@/lib/tokenBar';
 export * from '@/lib/trend';
 export * from '@/lib/unit';
 export { MockApi } from '@/mock';
-export { ACCOUNTS } from '@/mock/accounts';
+export { ACCOUNTS, resolvedPlan } from '@/mock/accounts';
 export { burnOf, groupsOf } from '@/mock/analytics';
 export { slowedLongOf } from '@/mock/attention';
 export { leadOf } from '@/mock/lead';

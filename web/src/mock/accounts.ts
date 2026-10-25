@@ -1,5 +1,5 @@
 import { planName } from '@/api/decode';
-import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
+import type { Account, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
 import { endOf } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey } from '@/lib/windows';
 import { leadOf } from './lead';
@@ -76,7 +76,7 @@ export const SUNSET_WEEK_RESETS_IN = 4 * DAY - SUNSET_END_AGO;
 const SPEND_RESET_ESTIMATE = Date.UTC(new Date(NOW).getUTCFullYear(), new Date(NOW).getUTCMonth() + 1, 1);
 
 /** A story account as written: the account view's shape, its subscription's plan word left to the final map. */
-type Seed = Omit<Account, 'subscription'> & { subscription: (Omit<Subscription, 'plan'> & Partial<Pick<Subscription, 'plan'>>) | null };
+type Seed = Omit<Account, 'subscription'> & { subscription: Omit<Subscription, 'plan'> | null };
 
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
@@ -106,7 +106,7 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(58 * DAY),
     },
-    subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null },
+    subscription: { billingType: 'annual', organizationType: 'claude_max', rateLimitTier: 'default_claude_max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 5_380 },
     // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
     // scope alone) but which this account's own status folds in like any other cooldown. The fast-lane row ahead of
@@ -152,7 +152,7 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(30 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', rateLimitTier: 'default_claude_ai', since: ago(30 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY) },
     requests: { last24h: 0, last7d: 0, lifetime: 1_140 },
     cooldowns: [
       {
@@ -198,7 +198,7 @@ const SEEDS = [
       quarantined: true,
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(400 * DAY), trialEndsAt: null, endsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', rateLimitTier: 'default_claude_max_5x', since: ago(400 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 7_420 },
     cooldowns: [],
   },
@@ -226,7 +226,7 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(64 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 48 },
     cooldowns: [],
     slowDown: { factor: 0.5, holdMs: 120_000, since: ago(42 * MINUTE), speed: 0.5, stretchMs: 2_520_000, thresholdMs: 1_800_000 },
@@ -305,7 +305,7 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: null, trialEndsAt: null, endsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', rateLimitTier: 'default_claude_ai', since: null, trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 3_960 },
     cooldowns: [],
   },
@@ -352,7 +352,7 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(44 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(90 * DAY), trialEndsAt: null, endsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', rateLimitTier: 'default_claude_ai', since: ago(90 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
@@ -383,7 +383,7 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(52 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: null, rateLimitTier: 'default_claude_ai', since: ago(200 * DAY), trialEndsAt: null, endsAt: ago(SUNSET_END_AGO) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', rateLimitTier: 'default_claude_ai', since: ago(200 * DAY), trialEndsAt: null, endsAt: ago(SUNSET_END_AGO) },
     requests: { last24h: 0, last7d: 0, lifetime: 1_180 },
     cooldowns: [],
   },
@@ -418,14 +418,44 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(80 * DAY),
     },
-    subscription: { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', plan: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null },
+    subscription: { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
 ] satisfies Seed[];
 
+/** The word an organization type resolves to, the Max type's read by its tier. */
+const PLAN_OF_TYPE = new Map<string, PlanWord>([
+  ['claude_enterprise', 'enterprise'],
+  ['claude_free', 'free'],
+  ['claude_pro', 'pro'],
+  ['claude_team', 'team'],
+]);
+/** The sizes a Max organization's tier names, a tier naming neither reading `max`. */
+const MAX_OF_TIER = new Map<string, PlanWord>([
+  ['default_claude_max_20x', 'max_20x'],
+  ['default_claude_max_5x', 'max_5x'],
+]);
+/** The word a tier resolves to on its own, read for an organization type outside the five. */
+const PLAN_OF_TIER = new Map<string, PlanWord>([
+  ['default_claude_ai', 'pro'],
+  ['default_claude_max_20x', 'max_20x'],
+  ['default_claude_max_5x', 'max_5x'],
+  ['default_claude_zero', 'usage_based'],
+]);
+
+/** The resolved plan as the account view answers it: the usage-based class first, the organization type second, the
+ *  tier third, as the router resolves it. Null without a profile. */
+export function resolvedPlan(a: Pick<Seed, 'subscription' | 'usageBased'>): PlanWord | null {
+  const sub = a.subscription;
+  if (sub === null) return null;
+  if (a.usageBased) return 'usage_based';
+  if (sub.organizationType === 'claude_max') return MAX_OF_TIER.get(sub.rateLimitTier) ?? 'max';
+  return PLAN_OF_TYPE.get(sub.organizationType) ?? PLAN_OF_TIER.get(sub.rateLimitTier) ?? null;
+}
+
 export const ACCOUNTS: Account[] = SEEDS.map((a) => {
-  const subscription: Subscription | null = a.subscription && { ...a.subscription, plan: a.subscription.plan ?? null };
+  const subscription: Subscription | null = a.subscription && { ...a.subscription, plan: resolvedPlan(a) };
   // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
   const end = endOf({ ...a, subscription }, NOW);
   const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: leadOf(w, w.periodHours * HOUR, NOW, end) });

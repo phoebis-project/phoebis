@@ -80,13 +80,21 @@ export interface Credential {
   refreshTokenExpiresAt: string | null;
 }
 
+/**
+ * The resolved plan, one word the router resolves from the stored profile's organization type first and its rate-limit
+ * tier second, the usage-based class above both. The router stores whatever word it resolves, so a word added after
+ * these eight is kept as sent.
+ */
+export const PLAN_WORDS = ['enterprise', 'free', 'max', 'max_20x', 'max_5x', 'pro', 'team', 'usage_based'] as const;
+export type PlanWord = string;
+
 export interface Subscription {
   billingType: string;
   /** The operator's saved end, standing only while `Account.canceled` is set, and null otherwise. */
   endsAt: string | null;
   organizationType: string;
-  /** `max` or `pro` from the profile's account flags; null when the document reports neither. */
-  plan: 'max' | 'pro' | null;
+  /** The plan the router resolved from the profile's organization type and tier, null while no profile document stands. */
+  plan: PlanWord | null;
   rateLimitTier: string;
   /** Epoch milliseconds on the wire, decoded to the ISO string every other timestamp carries; null when the
    *  profile does not report it. */

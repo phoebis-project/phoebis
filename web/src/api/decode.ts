@@ -14,7 +14,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } 
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
-import { isFastScope, planLabel } from '@/lib/quota';
+import { isFastScope, planWordLabel } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
@@ -136,7 +136,7 @@ export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscr
     billingType: str(profile?.billing_type),
     endsAt: isoOrNull(sub?.ends_at),
     organizationType: str(profile?.organization_type),
-    plan: sub?.plan === 'max' || sub?.plan === 'pro' ? sub.plan : null,
+    plan: strOrNull(sub?.plan),
     rateLimitTier: str(sub?.tier ?? profile?.rate_limit_tier),
     since: isoOrNull(sub?.since),
     trialEndsAt: isoOrNull(sub?.trial_ends_at),
@@ -196,17 +196,9 @@ function fastLaneReading(v: unknown): FastLaneReading | null {
   return { observedAt: isoOr(r.observed_at, epoch), resetsAt: isoOrNull(r.resets_at), utilization: num(r.utilization) };
 }
 
-/** The plan's name: the tier's parsed label ("Max 20x", "Max 5x", "Pro") where the pattern parses it, else "Max" or
- *  "Pro" from the profile's flag, else null. */
-export function planName(sub: Subscription | null): string | null {
-  if (sub === null) return null;
-  // `planLabel` answers a tier its pattern does not match unchanged, so a changed answer is the parsed one.
-  const parsed = sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
-  if (parsed !== null && parsed !== sub.rateLimitTier) return parsed;
-  if (sub.plan === 'max') return 'Max';
-  if (sub.plan === 'pro') return 'Pro';
-  return null;
-}
+/** The plan's name: the resolved word's label through one table, a word the table lacks shown as sent, and null with
+ *  no word, since the tier names no plan on its own. */
+export const planName = (sub: Subscription | null): string | null => (sub === null || sub.plan === null ? null : planWordLabel(sub.plan));
 
 export function decodeCatalogModel(v: unknown): CatalogModel {
   const m = rec(v);

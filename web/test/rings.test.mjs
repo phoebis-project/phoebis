@@ -11,13 +11,13 @@ const TABLES = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', im
 const COSTS = d.decodeSubscriptionCosts(TABLES.subscription_costs.content);
 
 const window = (id, utilization, resetsInMs = 2 * HOUR) => ({ id, label: id, observedAt: new Date(NOW - 60_000).toISOString(), periodHours: id === '5h' ? 5 : 168, resetsAt: new Date(NOW + resetsInMs).toISOString(), utilization });
-const account = (id, rateLimitTier, windows, extra = {}) => ({
+const account = (id, rateLimitTier, windows, extra = {}, plan = null) => ({
   id,
   kind: 'oauth',
   label: id,
   planEndedAt: null,
   routingEnabled: true,
-  subscription: rateLimitTier === null ? null : { rateLimitTier },
+  subscription: rateLimitTier === null ? null : { plan, rateLimitTier },
   windows,
   ...extra,
 });
@@ -162,4 +162,15 @@ test('a usage-based seat is on no ring and in no left-out list, as an API-key ac
     assert.deepEqual(figures.rows.map((r) => r.id), ['primary'], `the ${id} ring`);
     assert.deepEqual(figures.leftOut, [], `the ${id} ring's left-out list`);
   }
+});
+
+test('a free plan is named under the ring with its reason and weighs nothing, while a Pro plan on the same tier weighs its capacity', () => {
+  // A free organization reports the tier the profile reports for Pro, so the plan word and not the tier decides.
+  const free = d.ringFigures([account('free', 'default_claude_ai', [window('5h', 0.5)], {}, 'free')], '5h', COSTS, NOW);
+  assert.deepEqual(free.rows, []);
+  assert.deepEqual(free.leftOut, [{ id: 'free', label: 'free', reason: 'Free plan, no priced capacity' }]);
+  assert.deepEqual([free.capacity, free.left], [0, 0]);
+  const pro = d.ringFigures([account('pro', 'default_claude_ai', [window('5h', 0.5)], {}, 'pro')], '5h', COSTS, NOW);
+  assert.deepEqual(pro.rows.map((r) => [r.id, r.weight]), [['pro', 0.05]], "Pro's 5 over the anchor's 100");
+  assert.deepEqual(pro.leftOut, []);
 });

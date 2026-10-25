@@ -429,13 +429,35 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([preview.email, preview.organization], ['operator+old@example.com', 'Personal']);
   });
 
+  test(`every subscription account's plan is the word the router resolves from its stored profile, and every record's candidate carries its account's word, at ${at}`, async () => {
+    const s = await story;
+    const oauth = s.accounts.filter((a) => a.kind === 'oauth');
+    for (const a of oauth) {
+      const plan = a.subscription?.plan ?? null;
+      assert.equal(plan, s.lib.resolvedPlan(a), `${a.id}'s plan`);
+      // An account with no stored profile, spare among them, has no word.
+      assert.ok(a.subscription === null ? plan === null : s.lib.PLAN_WORDS.includes(plan), `${a.id}'s word ${plan}`);
+    }
+    const word = Object.fromEntries(s.accounts.map((a) => [a.id, a.subscription?.plan ?? null]));
+    // The seat's usage-based class resolves above its Enterprise type, and sunset keeps its last plan's stored document.
+    assert.deepEqual([word.contract, word.sunset], ['usage_based', 'pro']);
+    const typed = (type) => oauth.filter((a) => a.subscription?.organizationType === type && !a.usageBased);
+    const sized = { default_claude_max_20x: 'max_20x', default_claude_max_5x: 'max_5x' };
+    assert.ok(typed('claude_pro').length > 0 && typed('claude_pro').every((a) => a.subscription.plan === 'pro'), 'the Pro organizations read pro');
+    assert.ok(typed('claude_max').length > 0 && typed('claude_max').every((a) => a.subscription.plan === (sized[a.subscription.rateLimitTier] ?? 'max')), "the Max organizations read their tier's size");
+    const candidates = (await decisionsOf(s)).flatMap((r) => r.candidates.map((c) => ({ c, r })));
+    const wrong = candidates.filter(({ c }) => c.planTier !== (c.kind === 'api_key' ? null : word[c.accountId])).map(({ c, r }) => `${r.requestId}/${r.seq} ${c.accountId} ${c.planTier}`);
+    assert.ok(candidates.length > 0, 'the story records candidates');
+    assert.deepEqual(wrong, [], "a candidate's plan word is its account's");
+  });
+
   test(`the story's usage-based seat reads its class and its spend window with no plan window, the one member of its pool behind the key fleet, at ${at}`, async () => {
     const s = await story;
     const seats = s.accounts.filter((a) => a.usageBased);
     assert.deepEqual(seats.map((a) => a.id), ['contract'], 'one usage-based account');
     const [seat] = seats;
     const firstOfNextMonth = (ms) => Date.UTC(new Date(ms).getUTCFullYear(), new Date(ms).getUTCMonth() + 1, 1);
-    assert.deepEqual([seat.kind, seat.status, seat.windows, seat.fableWindow, seat.overage, seat.plan], ['oauth', 'ready', [], null, null, null]);
+    assert.deepEqual([seat.kind, seat.status, seat.windows, seat.fableWindow, seat.overage, seat.plan], ['oauth', 'ready', [], null, null, 'Usage-based']);
     const { amounts } = seat.spend;
     assert.deepEqual(
       [amounts.usedMinor, amounts.limitMinor, amounts.exponent, seat.spend.utilization, seat.spend.resetSource, seat.spend.resetsAt],
@@ -443,7 +465,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       'the polled amounts, the share, and the reset estimated at 00:00 UTC on the first of the next month',
     );
     assert.ok(Date.parse(amounts.polledAt) < Date.parse(seat.spend.observedAt), 'a head read the share after the poll');
-    assert.deepEqual([seat.subscription.organizationType, seat.subscription.billingType, seat.subscription.rateLimitTier], ['claude_enterprise', 'stripe_subscription_contracted', 'default_claude_zero']);
+    assert.deepEqual(
+      [seat.subscription.organizationType, seat.subscription.billingType, seat.subscription.rateLimitTier, seat.subscription.plan],
+      ['claude_enterprise', 'stripe_subscription_contracted', 'default_claude_zero', 'usage_based'],
+      'the usage-based class resolves above the organization type',
+    );
     assert.deepEqual(s.pools.find((p) => p.id === 'contract')?.members.map((m) => [m.accountId, m.priority]), [['contract', 1]], "the pool's one member");
     assert.deepEqual(s.keys.filter((k) => k.poolId === 'contract').map((k) => k.id), ['fleet']);
     const rows = s.requests.filter((r) => r.keyId === 'fleet');
@@ -2337,8 +2363,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const flag = Date.parse(a.planEndedAt);
     assert.equal(end, s.now - 3 * DAY, 'the saved end three days back');
     assert.ok(end < flag && flag < s.now, `the flag at ${a.planEndedAt} after the end at ${a.subscription.endsAt} and before now`);
-    // The router keeps the last plan's stored document when a profile read finds no plan, so the badge reads that plan.
-    assert.deepEqual([a.subscription.organizationType, a.subscription.rateLimitTier, a.subscription.plan, a.plan], ['claude_pro', 'default_claude_ai', null, 'Pro']);
+    // The router keeps the last plan's stored document when a profile read finds no plan, so the word it resolves and the
+    // badge read that plan.
+    assert.deepEqual([a.subscription.organizationType, a.subscription.rateLimitTier, a.subscription.plan, a.plan], ['claude_pro', 'default_claude_ai', 'pro', 'Pro']);
     assert.deepEqual([a.windows, a.fableWindow], [[], null], 'the route answers no window for a flagged account');
     // The poll pauses at the flag, so the read that set it is the last attempt, and the last clean poll came one poll
     // interval before the end.

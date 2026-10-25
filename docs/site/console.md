@@ -146,8 +146,9 @@ reference" link that opens the dialog on Tiers and peak band. Each subscription 
 capacity on the window from the subscription cost model and listed with its own remaining share, the most of its window
 left first, the ring's center reads the share "of capacity left", and the line under it reads
 `{n} of {m} {tier} windows left`, such as 0.39 of 1.30 Max 20x windows. A window whose reset has passed with no reading
-since counts as a full allowance, and an account whose tier the model does not size, or has no capacity for on the
-window, is named under the ring with the reason. Without a subscription account the card reads "No subscription
+since counts as a full allowance, and an account on a free plan, one whose tier the model does not size, or one that has
+no capacity for on the window, is named under the ring with the reason. Without a subscription account the card reads
+"No subscription
 accounts" and "A subscription account reports the window this card draws.", and with none sized "No listed account's
 tier is sized for the 5-hour window." (or 7-day). Each account keeps one color across the Dashboard, the Quota view and
 the Analytics, in the order of its id, the eight colors cycling past eight accounts, and an account the registry does
@@ -230,7 +231,8 @@ estimates it as 00:00 UTC on the first of the next month, and the line reads `re
 muted ink, with `resets {time} (estimated: no reset header has been seen for this window yet)` on hover. The "Extra
 usage" chip reads `off`, `not in use`, `in use` or `not reported`, with the month's spend against its limit while extra
 usage is enabled and the reading carries the amounts, in the serious tone while requests bill as extra usage, and the
-provider's reason inside the line with the whole message on hover. The chips name the plan by its tier ("Plan"), when
+provider's reason inside the line with the whole message on hover. The chips name the plan the router resolved from the
+organization type and the tier ("Plan", reading "Free", "Pro", "Max 20x" or "Usage-based", the tier on hover), when
 the plan of an account marked canceled ends (in the serious tone inside a week), and when a trial ends ("Trial"). The
 poll reading says when the poll last asked the endpoint and how it answered, with the whole message and the backoff on
 hover, and "Refresh" reads this account's endpoint now. A card that shows an error, whose last poll failed, or that is
@@ -269,8 +271,9 @@ they stay while an account opens. Auto reload starts at 5 s and waits while a di
 or while its save runs, and while it is off the page reads the list every 2 s after a pairing's confirm, with the same
 wait, until the account's first reading lands or 30 s pass. The six labels, with the state each stands for, are Cooling
 down (`cooldown`), Needs funding (`funding_required`), Paused (`paused`), Needs re-auth (`reauth_required`), Ready
-(`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan by its tier ("Max 20x",
-"Max 5x", "Pro", "Team" and the other tiers the provider reports, none on an API-key row), the status badge with the
+(`ready`) and Not paired (`unpaired`). A row reads the label with a badge that names the plan the router resolved from
+the organization type and the tier ("Free", "Pro", "Max 5x", "Max 20x", "Max", "Team", "Enterprise" or "Usage-based",
+none on an API-key row), the status badge with the
 speed chip beside it on a slowed account, the email, `pool {id}` or "no pool", "Overage" while requests bill as extra
 usage and "extra usage on" while it is enabled and unused. The pane reads "The router holds no account yet" with "Add
 account" before the first account, "No accounts match" with "Clear the search or the status filter." under a filter, and
@@ -293,8 +296,9 @@ it." The actions, with the dialog each opens:
 | "Disconnect" | "Disconnect account" | `Deletes {label}'s credential. Pool memberships and request history stay, and re-pairing stores the credential again.` |
 | "Delete account" | "Delete account" | `Removes {label} from its pool and deletes it. Request history stays in the ledger.` |
 
-"Identity" lists, for a subscription account, Type ("OAuth login"), Plan by its tier with its start (`Max 20x since
-{date}`), Rate-limit tier (`{tier}, usage-based` on a usage-based seat), Ends where known, Plan ended where set, Trial
+"Identity" lists, for a subscription account, Type ("OAuth login"), Plan, the plan the router resolved, with its start
+(`Max 20x since {date}`), Rate-limit tier (`{tier}, usage-based` on a usage-based seat), Ends where known, Plan ended
+where set, Trial
 ends where known, Organization and Billing type, and "Edit end" opens the end editor: the checkbox "Canceled", the field
 `Ends ({zone})`, whose label names the browser's time zone, with the hint "The date the plan's billing settings show as
 its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.", Save and
@@ -1184,7 +1188,9 @@ candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and 
 Shed station's Windows group reads the slow-down's `speed`, the share of it the holds apply as `ramp`, and the speed the
 holds `realized`, in the order the engine applies them.
 
-"Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath,
+"Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath
+(the plan the router resolved from the organization type and the tier, "Free" among its words, or the tier word of a
+record from before),
 Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the reset, the
 reading's source and age), or on a usage-based seat whose record carries its spend reading one cell across the three,
 `spend 41%` over its reset with `estimated` under it where the router estimated the reset, Projection and Runway, In

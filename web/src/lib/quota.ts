@@ -1,16 +1,39 @@
-import type { Account, AccountSlowDown, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, Spend, WindowId } from '@/api/types';
+import type { Account, AccountSlowDown, ExtraUsage, PLAN_WORDS, PlanWord, PollOutcome, QuotaPoll, RateLimitWindow, Spend, WindowId } from '@/api/types';
+import { own } from '@/lib/analytics';
 import { fmtAbsolute, fmtPct, fmtRelative, instant } from '@/lib/format';
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
-/** `default_claude_max_5x` reads as "Max 5x" and `default_claude_ai`, the tier the profile reports for Pro, as "Pro";
- *  anything else is shown as sent. */
+/**
+ * A tier's label, for the cost reference's tiers, the rings' anchor and reasons, and an older decision record's tier
+ * word: `default_claude_max_5x` reads as "Max 5x" and `default_claude_ai`, the tier the profile reports for Pro, as
+ * "Pro", and anything else is shown as sent.
+ */
 export function planLabel(tier: string): string {
   const m = /^(?:default_)?claude_(ai|max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
   if (!m) return tier;
   const name = m[1] === 'ai' ? 'Pro' : m[1][0].toUpperCase() + m[1].slice(1);
   return m[2] ? `${name} ${m[2]}x` : name;
 }
+
+/**
+ * The label of each resolved plan word. The map is keyed by string, since `PlanWord` is a string the strict compiler
+ * cannot index an eight-key Record with, and the literal still satisfies the eight words, so a word of `PLAN_WORDS`
+ * without a label fails the build.
+ */
+export const PLAN_WORD_LABEL: Readonly<Record<string, string>> = {
+  enterprise: 'Enterprise',
+  free: 'Free',
+  max: 'Max',
+  max_20x: 'Max 20x',
+  max_5x: 'Max 5x',
+  pro: 'Pro',
+  team: 'Team',
+  usage_based: 'Usage-based',
+} satisfies Record<(typeof PLAN_WORDS)[number], string>;
+
+/** A resolved plan word's label, a word the table lacks shown as sent. */
+export const planWordLabel = (word: PlanWord): string => (own(PLAN_WORD_LABEL, word) ? PLAN_WORD_LABEL[word] : word);
 
 /** Remaining share drives the color: green at 50% and above, amber at 20% and above, red below. */
 export function meterTone(remaining: number): MeterTone {

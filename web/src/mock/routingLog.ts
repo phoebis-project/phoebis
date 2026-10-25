@@ -549,7 +549,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       // The spare rate: the share left per hour to the deadline less the burn the account's sessions already spend.
       pace: pool.strategy === 'pace' ? { burn: paceBurn, deadline: deadlineMs === null ? null : iso(deadlineMs), end: paid || endsAt === null ? null : iso(endsAt), hours: hours === null ? null : Math.round(hours * 10) / 10, remaining, reset, score: hours === null ? remaining : round5(remaining / hours - paceBurn), window: paid ? null : windowName } : null,
       partition: null,
-      planTier: sub?.rateLimitTier ?? null,
+      planTier: sub?.plan ?? null,
       prefix: { ...NO_PREFIX, ...spec.prefix?.[a.id] },
       priority: m.priority,
       rank: null,

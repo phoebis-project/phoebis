@@ -5,7 +5,7 @@ import { moveLabel, own } from './analytics';
 import { compareByModelTier } from './costs';
 import type { ChipText } from './filterBar';
 import { equivalentWord, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, shortModel } from './format';
-import { planLabel, POLL_OUTCOME_LABEL } from './quota';
+import { PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
 
@@ -1262,8 +1262,11 @@ const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ([
 const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 'not needed' };
 const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };
 
-/** The plan beneath a member's account: `Max 20x`, `Pro`, `API key`. */
-const planWord = (c: RecordCandidate) => (c.kind === 'api_key' ? 'API key' : c.planTier === null ? 'OAuth' : planLabel(c.planTier));
+/**
+ * The plan beneath a member's account: `Max 20x`, `Free`, `API key`. The record's resolved word reads through the label
+ * table, and an older record's tier word through `planLabel`.
+ */
+const planWord = (c: RecordCandidate) => (c.kind === 'api_key' ? 'API key' : c.planTier === null ? 'OAuth' : own(PLAN_WORD_LABEL, c.planTier) ? PLAN_WORD_LABEL[c.planTier] : planLabel(c.planTier));
 
 /** The member's prefix entry: the match on the rung the outcome names, else the deepest entry a gate refused. */
 function prefixEntryOf(c: RecordCandidate, record: DecisionRecord): PrefixEntry | null {

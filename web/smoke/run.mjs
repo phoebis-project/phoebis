@@ -1497,10 +1497,11 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
       .map((c) => [...c.childNodes].map((n) => n.textContent?.trim()).filter(Boolean).join(' '));
   // The story ends secondary's trial eight days after the anchor and the page reads it a moment later, so the whole
   // days still to run are seven.
-  const drawn = { nightly: chipsOf('nightly'), primary: chipsOf('primary'), secondary: chipsOf('secondary'), studio: chipsOf('studio') };
-  const wanted = { nightly: ['Plan Max 5x'], primary: ['Plan Max 20x'], secondary: ['Plan Pro', 'Trial ends in 7 days'], studio: ['Plan Max 5x'] };
+  // The contract seed is a usage-based seat, whose class resolves its plan above its Enterprise type.
+  const drawn = { contract: chipsOf('contract'), nightly: chipsOf('nightly'), primary: chipsOf('primary'), secondary: chipsOf('secondary'), studio: chipsOf('studio') };
+  const wanted = { contract: ['Plan Usage-based'], nightly: ['Plan Max 5x'], primary: ['Plan Max 20x'], secondary: ['Plan Pro', 'Trial ends in 7 days'], studio: ['Plan Max 5x'] };
   results.push({
-    name: '/quota each card names its plan by the tier with no start date, and counts down the trial where the profile reports one',
+    name: '/quota each card names the plan the router resolved with no start date, and counts down the trial where the profile reports one',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn), JSON.stringify(wanted)],
   });
@@ -1681,8 +1682,8 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     results.push({ name: '/quota draws the reason the provider gave for its extra usage inside the Extra usage line, whole in its title', ok: line?.querySelector('.qcard__extra-reason')?.textContent?.includes('Payment method declined') === true && line.getAttribute('title')?.includes('Payment method declined') === true, missing: [line?.outerHTML.slice(0, 200) ?? 'no line on studio'] });
   }
   {
-    // The Plan chip leads the chips row on every card, and studio, with no subscription block under the override, and
-    // contract, an Enterprise seat whose profile names no plan, keep the place empty.
+    // The Plan chip leads the chips row on every card, and studio, with no subscription block under the override, keeps
+    // the place empty. The contract seed, an Enterprise seat, reads the plan its usage-based class resolves.
     const firsts = cards.map((c) => {
       const first = c.querySelector('.qcard__chips')?.firstElementChild;
       const what = !first ? 'no chips row' : first.classList.contains('chip--empty') ? 'empty' : (first.querySelector('.chip__label')?.textContent?.trim() ?? first.textContent?.trim());
@@ -1690,7 +1691,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
     });
     results.push({
       name: '/quota every card draws the chips row led by the Plan chip, and a card whose account reports no plan holds the empty slot first',
-      ok: firsts.some(([name]) => name === 'studio') && firsts.every(([name, what]) => what === (name === 'studio' || name === 'contract' ? 'empty' : 'Plan')),
+      ok: firsts.some(([name]) => name === 'studio') && firsts.some(([name]) => name === 'contract') && firsts.every(([name, what]) => what === (name === 'studio' ? 'empty' : 'Plan')),
       missing: firsts.map(([name, what]) => `${name}: ${what}`),
     });
   }
@@ -2460,6 +2461,8 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
         overageWords(row?.querySelector('.account-row__foot')?.textContent ?? '').length === 0,
       missing: [JSON.stringify(compact), row?.querySelector('.account-row__foot')?.textContent ?? 'no row'],
     });
+    const plan = row?.querySelector('.account-row__head .badge')?.textContent?.trim() ?? 'no badge';
+    results.push({ name: "/accounts the usage-based seat's row badges the plan its class resolves, Usage-based", ok: plan === 'Usage-based', missing: [plan] });
     const detail = page.container.querySelector('.detail');
     const cardOf = (title) => [...(detail?.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
     const usage = cardOf('Usage');
@@ -3815,6 +3818,8 @@ expect('/accounts/secondary', m.text(), [
     const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
     const sentence = usage?.querySelector('p.muted')?.textContent?.trim() ?? 'no sentence';
     const row = identityRows(page).find((r) => r.label === 'Plan ended');
+    const plan = identityRows(page).find((r) => r.label === 'Plan');
+    const tier = identityRows(page).find((r) => r.label === 'Rate-limit tier');
     const badge = page.container.querySelector('a.account-row[href="/accounts/sunset"] .account-row__head .badge')?.textContent?.trim() ?? 'no badge';
     const count = page.container.querySelector('.filter-bar__count')?.textContent?.trim() ?? 'no count';
     results.push({
@@ -3827,6 +3832,12 @@ expect('/accounts/secondary', m.text(), [
         badge === 'Pro' &&
         count === `${story.length} accounts`,
       missing: [sentence, JSON.stringify(row ?? null), badge, `${count} of ${story.length} accounts`],
+    });
+    // The seed's stored document is its last plan's, claude_pro under default_claude_ai, which resolves pro.
+    results.push({
+      name: '/accounts/sunset the Plan row reads the last plan with its start and the tier on hover, and the Rate-limit tier row the tier as sent',
+      ok: /^Pro since \S/.test(plan?.value ?? '') && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai',
+      missing: [JSON.stringify(plan ?? null), JSON.stringify(tier ?? null)],
     });
     page.unmount();
   }
@@ -10731,9 +10742,9 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     const native = readRow();
     const titled = (nativeCell.title ?? '').split(', ');
     results.push({
-      name: "/requests the drawer's cost row of a subscription row reads the equivalent chips in order with the dollars after them, and its title names the account tier by its plan and the two revisions in force",
-      ok: native.chips.length >= 2 && JSON.stringify(native.chips) === JSON.stringify(titled.slice(0, -1)) && native.equivalent === titled[titled.length - 1] && native.ends && sharedRow.tier !== null && native.title === `Account tier ${planLabel(sharedRow.tier)}. ${inForce}`,
-      missing: [sharedRow.id, JSON.stringify(native), nativeCell.title ?? 'no title', `Account tier ${planLabel(sharedRow.tier)}. ${inForce}`],
+      name: "/requests the drawer's cost row of a subscription row reads the equivalent chips in order with the dollars after them, and its title names the account tier as the attempt stored it and the two revisions in force",
+      ok: native.chips.length >= 2 && JSON.stringify(native.chips) === JSON.stringify(titled.slice(0, -1)) && native.equivalent === titled[titled.length - 1] && native.ends && sharedRow.tier !== null && native.title === `Account tier ${sharedRow.tier}. ${inForce}`,
+      missing: [sharedRow.id, JSON.stringify(native), nativeCell.title ?? 'no title', `Account tier ${sharedRow.tier}. ${inForce}`],
     });
     await chooseUnit(m, 'share');
     const share = readRow();
@@ -10749,7 +10760,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
       await chooseUnit(m, position);
       dollars[position] = readRow();
     }
-    const tiered = `Account tier ${planLabel(sharedRow.tier)}. ${inForce}`;
+    const tiered = `Account tier ${sharedRow.tier}. ${inForce}`;
     const equivalentRow = { chips: [], ends: false, equivalent: 'equivalent', figure: titled[titled.length - 1], title: tiered };
     const dashRow = { chips: [], ends: false, equivalent: null, figure: '-', title: `${NOTHING_BILLED_TITLE}. ${tiered}` };
     results.push({
@@ -10770,7 +10781,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
     await chooseUnit(m, 'usd');
     const usd = readValue();
     await chooseUnit(m, 'native');
-    const tiered = [fallbackRow.tier === null ? null : `Account tier ${planLabel(fallbackRow.tier)}`, inForceAt(fallbackRow.at)].filter((part) => part !== null).join('. ');
+    const tiered = [fallbackRow.tier === null ? null : `Account tier ${fallbackRow.tier}`, inForceAt(fallbackRow.at)].filter((part) => part !== null).join('. ');
     results.push({
       name: "/requests the drawer's cost row of an estimated subscription row reads its dollar equivalent with the tilde and the estimate under All in dollars, and an unmarked dash under Billed dollars",
       ok: /^~\$[\d,.]+ equivalent$/.test(all.figure ?? '') && all.title === `${tiered}. ${ESTIMATED_TITLE}.` && usd.figure === '-' && usd.title === `${NOTHING_BILLED_TITLE}. ${tiered}`,
@@ -15903,6 +15914,19 @@ m.unmount();
       missing: [`${droppedId ?? 'no member'}: ${unread?.children[2]?.textContent ?? 'no row'}`],
     });
     dropped.page.unmount();
+  }
+  {
+    // The contract seed is a usage-based seat, whose record carries the plan word its class resolves, so the table names
+    // its plan under the account as its Accounts badge does.
+    const { card, page, record } = await story('req_c94d1e07-b35');
+    const seat = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === 'contract');
+    const word = seat?.children[0]?.querySelector('.sub')?.textContent ?? 'no row';
+    results.push({
+      name: "/routing-log the candidate table names a usage-based seat's plan under its account, Usage-based",
+      ok: record?.candidates.some((c) => c.accountId === 'contract' && c.planTier === 'usage_based') === true && word === 'Usage-based',
+      missing: [word, JSON.stringify(record?.candidates.map((c) => [c.accountId, c.planTier]) ?? null)],
+    });
+    page.unmount();
   }
   {
     // The card the log opens first is a renewal, and the fast failover's record lists the member it placed third.
