@@ -81,6 +81,9 @@ pub struct SelectRequest {
     pub folded_model: String,
     pub candidates: Vec<Candidate>,
     pub portable: bool,
+    /// The account that issued the fallback credit token the body carries, as the relay's store remembers it, `None`
+    /// for a body without a token or a token the store does not hold.
+    pub credit_account: Option<CreditAccount>,
     pub attempted: Vec<String>,
     pub now: i64,
     /// When the relay received the request, the same on every selection of it: a pin's cycle is read from its
@@ -137,6 +140,14 @@ pub struct SelectRequest {
     /// The relay's estimate of the body's prompt tokens from its bytes (canonical bytes over four, the byte
     /// estimate the static affinity entries carry): a fresh session's rewrite, since it has no pin to read one from.
     pub body_tokens: u64,
+}
+
+/// The account that issued a fallback credit token, under the incarnation that answered the refusal: a holder created
+/// again under the same id is another account, which the credit does not reach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreditAccount {
+    pub account_id: String,
+    pub incarnation: u64,
 }
 
 /// The pin a failover took off its account, handed to the selection that lands the session again.
@@ -1288,6 +1299,16 @@ impl Recorder {
             .iter_mut()
             .find(|c| c.account_id == account_id)
     }
+
+    /// The credit placement shows under the `pin` step, which step 1 has already pushed: its verdict reads `match`
+    /// and it gains the `credit` fact, so the record keeps its stations and its verdict words.
+    fn credit_placed(&mut self, account_id: &str) {
+        if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
+            pin.verdict = "match";
+            pin.facts
+                .push(Fact::text("credit", account_id).about(account_id));
+        }
+    }
 }
 
 fn run(
@@ -1532,6 +1553,18 @@ fn run(
         standing,
     );
     let in_set = |set: &[&Candidate], id: &str| set.iter().any(|c| c.account_id == id);
+    // A fallback credit token is good on the organization that issued it alone, so the body carrying one goes to that
+    // account ahead of the moves and the strategy, which would place it where the upstream refuses the token.
+    let credit = credit_candidate(
+        request,
+        &eligible,
+        pin.as_ref().map(|current| current.account_id.as_str()),
+        state,
+        pool,
+    );
+    if let Some(candidate) = credit {
+        rec.credit_placed(&candidate.account_id);
+    }
 
     // A probe warms the pin it was sent for. With that member at its spend budget, disabled by the operator, past
     // its subscription's end, or already tried by this probe there is nothing to warm, and a placement on a
@@ -1673,6 +1706,25 @@ fn run(
             };
             for rule in RULES {
                 rec.step(rule, "not_run", vec![Fact::text("reason", reason)]);
+            }
+        } else if let Some(candidate) = credit {
+            for rule in RULES {
+                rec.step(rule, "not_run", vec![Fact::text("reason", "credit")]);
+            }
+            if candidate.account_id == current.account_id {
+                // The pin renews in place at step 5, which reads the account's pace as a pinned turn does.
+                rec.slow_down =
+                    slow_down_read(state, snapshot, pool, &current.account_id, request.now);
+            } else {
+                // Handed to the placement as a fired move hands its source, so the new row carries its burn and its
+                // last prompt. No move reason names a credit, so the write reads `created`.
+                state.remove_pin(&current.key());
+                writes.push(StateWrite::DeletePin(current.key()));
+                if mark_holds(&current) {
+                    rec.mark_cleared = Some(mark_cleared_of(&current, "moved", None, request.now));
+                }
+                moving = Some(current.clone());
+                moved_off = true;
             }
         } else {
             // The account's pace, read and written once ahead of the rules, so the shed rule and the hold read one
@@ -2032,19 +2084,36 @@ fn run(
     );
     let affinity_handle = state.affinity();
     let affinity_guard = affinity_handle.read().expect("affinity lock poisoned");
-    let placed = placement_of(
-        state,
-        snapshot,
-        pool,
-        request,
-        moving.as_ref(),
-        &affinity_guard,
-        &allowed,
-        window,
-        own_key.as_ref(),
-        rec,
-    );
-    let (chosen, tier, placement) = if let Some((candidate, placement)) = placed {
+    let placed = match credit {
+        Some(_) => None,
+        None => placement_of(
+            state,
+            snapshot,
+            pool,
+            request,
+            moving.as_ref(),
+            &affinity_guard,
+            &allowed,
+            window,
+            own_key.as_ref(),
+            rec,
+        ),
+    };
+    let (chosen, tier, placement) = if let Some(candidate) = credit {
+        // Every station the console draws is recorded, the rungs and the pick naming the credit as their reason.
+        for rung in ["rung:content", "rung:with_main", "rung:static"] {
+            rec.step(rung, "none", vec![Fact::text("reason", "credit")]);
+        }
+        rec.step(
+            "pick",
+            "chosen",
+            vec![
+                account_fact(&candidate.account_id),
+                Fact::text("reason", "credit"),
+            ],
+        );
+        (candidate, None, None)
+    } else if let Some((candidate, placement)) = placed {
         (candidate, None, Some(placement))
     } else {
         // The runway breaks the strategy's tie for a move and a failed-over request alone: a fresh session, held at
@@ -2293,9 +2362,10 @@ fn run(
         })
         .collect();
     trace_skipped.extend(skipped);
-    if placement.is_some() {
-        // Rung 3 and `with_main` choose from `allowed`, ahead of step 6's own partitions, so the account they
-        // land on can already carry a partition's label here; the placement itself is proof enough that it serves.
+    if placement.is_some() || credit.is_some() {
+        // Rung 3 and `with_main` choose from `allowed` and the credit placement from the eligible set, each ahead of
+        // step 6's own partitions, so the account they land on can already carry a partition's label here. The
+        // placement itself is proof enough that it serves.
         trace_skipped.retain(|s| s.account_id != chosen.account_id);
     }
     (
@@ -5459,6 +5529,30 @@ fn blocked(
     }
 }
 
+/// The candidate a fallback credit token places the request on: the issuer `credit_account` names, among the eligible
+/// set under the incarnation that answered the refusal, and under its in-flight cap unless the live pin is already
+/// there, since a renewal reads no cap. A count creates no pin and follows its pin, a probe warms the pin it was sent
+/// for, and a non-portable request keeps its binding, so none of them reads a credit.
+fn credit_candidate<'a>(
+    request: &SelectRequest,
+    eligible: &[&'a Candidate],
+    pinned: Option<&str>,
+    state: &RoutingState,
+    pool: &PoolRow,
+) -> Option<&'a Candidate> {
+    let credit = request.credit_account.as_ref()?;
+    if request.count || request.probe || !request.portable {
+        return None;
+    }
+    let candidate = eligible
+        .iter()
+        .copied()
+        .find(|c| c.account_id == credit.account_id && c.incarnation == credit.incarnation)?;
+    let renews = pinned == Some(candidate.account_id.as_str());
+    (renews || state.in_flight().account(&candidate.account_id) < pool.failover.in_flight_cap)
+        .then_some(candidate)
+}
+
 /// A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary
 /// (rung 3, always, bypassing the cap as a pin renewal does, since a tail match is the conversation's own
 /// account); else, behind the class knob, the parent agent's pin (`with_main`, bypassing the cap the same way,
@@ -7162,6 +7256,16 @@ impl Readings<'_> {
     fn pick_fact(&self) -> Vec<SummaryFact> {
         let text =
             |key: &'static str, value: String| summary_fact(key, FactValue::Text(value), "text");
+        // The credit placed the request ahead of the strategy, which ranked no candidate.
+        if self
+            .walk
+            .iter()
+            .filter(|w| w.step == "pin")
+            .flat_map(|w| &w.facts)
+            .any(|f| f.key == "credit")
+        {
+            return vec![text("pick", "credit".into())];
+        }
         // Read off the accounts tried rather than the wire attempt: a retry in place advances the attempt on one
         // account, and a credential failure moves on to the next without advancing it.
         let chosen = self.outcome.account_id.as_deref();
@@ -7606,6 +7710,7 @@ mod banded_tests {
             folded_model: model.into(),
             candidates: Vec::new(),
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now: T,
             received_at: T,

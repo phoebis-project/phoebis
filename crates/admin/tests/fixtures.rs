@@ -608,6 +608,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             folded_model: "claude-sonnet-5".into(),
             candidates,
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now,
             received_at: now,
@@ -696,6 +697,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             )
             .expect("the pool's model rules allow claude-sonnet-5-5"),
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now,
             received_at: now,
@@ -1378,6 +1380,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 folded_model: model.into(),
                 candidates,
                 portable: true,
+                credit_account: None,
                 attempted: Vec::new(),
                 now: placed_at,
                 received_at: placed_at,
@@ -2191,6 +2194,7 @@ fn asked(
         )
         .expect("the pool's model rules allow claude-sonnet-5"),
         portable: true,
+        credit_account: None,
         attempted: Vec::new(),
         now: common::NOW,
         received_at: common::NOW,

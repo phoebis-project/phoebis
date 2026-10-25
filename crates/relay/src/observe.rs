@@ -6,6 +6,8 @@ use axum::http::{header, HeaderMap};
 use phoebis_bus::{header_published, ResponseFacts, Usage};
 use serde_json::Value;
 
+use crate::credit::{digest_of, CreditDigest};
+
 /// The caller's headers as the bus carries them: everything the denylist does not name, which is what a
 /// keepalive recipe replays. A request the relay inflated is published as the plain body it holds, so a recipe
 /// replays plain: with `inflated` its `content-encoding` line is left out.
@@ -30,6 +32,8 @@ pub(crate) fn wants_stream(body: &[u8]) -> bool {
 pub(crate) struct Answer {
     pub usage: Usage,
     pub response: ResponseFacts,
+    /// The digest of `stop_details.fallback_credit_token`, taken here so the bytes never leave the read.
+    pub credit_digest: Option<CreditDigest>,
 }
 
 /// The usage block, the cache diagnostics beside it, and what the answer says about itself, from one parse.
@@ -41,6 +45,7 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
     let empty = || Answer {
         usage: Usage::default(),
         response: ResponseFacts::default(),
+        credit_digest: None,
     };
     let Ok(root) = serde_json::from_slice::<Value>(body) else {
         return empty();
@@ -118,7 +123,15 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
         refusal_category: text(details.and_then(|d| d.get("category"))),
         refusal_recommended_model: text(details.and_then(|d| d.get("recommended_model"))),
     };
-    Answer { usage, response }
+    let credit_digest = details
+        .and_then(|d| d.get("fallback_credit_token"))
+        .and_then(Value::as_str)
+        .map(digest_of);
+    Answer {
+        usage,
+        response,
+        credit_digest,
+    }
 }
 
 /// A `content_block_delta` whose delta is tool input, which is what the keepalive view counts as tool use.

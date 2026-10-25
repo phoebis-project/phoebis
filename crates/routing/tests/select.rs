@@ -2,15 +2,15 @@ use phoebis_routing::{
     cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, shed_dwell_ms,
     warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain, AffinityMap,
     AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit, CandidateFacts, ChainFacts,
-    ClientClass, CohortHold, CreditsState, Decided, DecisionRecord, EvidenceSource, Exhaustion,
-    FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldWait, LaneFacts,
-    LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef,
-    PinShed, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
-    RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
-    SharePricer, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample,
-    WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
-    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
+    ClientClass, CohortHold, CreditAccount, CreditsState, Decided, DecisionRecord, EvidenceSource,
+    Exhaustion, FactEntity, FactValue, FailedOver, HeadMark, HoldFacts, HoldOutcome, HoldWait,
+    LaneFacts, LongContextRates, MemberSpend, MigrateReason, MoveCause, OverageEvidence,
+    PinKeyFacts, PinRef, PinShed, Placement, RateTable, Rates, RefusalFacts, RefusedRequest,
+    RegimeRates, RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest,
+    SelectResult, SharePricer, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite,
+    UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -417,6 +417,7 @@ fn select_request(
         folded_model: model.into(),
         candidates: resolve(s, key, model, model).unwrap(),
         portable,
+        credit_account: None,
         attempted: attempted.iter().map(|a| a.to_string()).collect(),
         now,
         received_at: now,
@@ -1092,6 +1093,292 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
         ..request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_000)
     };
     assert_eq!(picked(&select(&mut st, &s, &fresh, &mut rng()).0), "b");
+}
+
+const CREDIT_MODEL: &str = "claude-sonnet-5";
+
+/// Two accounts under Pace, `a` read at a tenth of its windows and `b` at half, so the strategy favors `a`.
+fn credit_pool() -> (RegistrySnapshot, RoutingState) {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", sample(0.1, 0.1, 1));
+    st.record_sample("b", sample(0.5, 0.5, 1));
+    (s, st)
+}
+
+/// `req` carrying a fallback credit token the relay's store names `account_id` under `incarnation` for.
+fn credited(req: SelectRequest, account_id: &str, incarnation: u64) -> SelectRequest {
+    SelectRequest {
+        credit_account: Some(CreditAccount {
+            account_id: account_id.into(),
+            incarnation,
+        }),
+        ..req
+    }
+}
+
+/// `req`'s decision and the one without its token, each on a fresh `credit_pool` state `prepare` readies, so a case
+/// reads whether the token left the walk as it was.
+fn with_and_without_credit(
+    req: &SelectRequest,
+    prepare: impl Fn(&mut RoutingState),
+) -> (Decided, Decided) {
+    let decide_on = |req: &SelectRequest| {
+        let (s, mut st) = credit_pool();
+        prepare(&mut st);
+        decide(&mut st, &s, req, &mut rng())
+    };
+    let without = SelectRequest {
+        credit_account: None,
+        ..req.clone()
+    };
+    (decide_on(req), decide_on(&without))
+}
+
+/// A line's facts as their keys and values, so a mismatch prints the whole line.
+fn keyed(step: &WalkStep) -> Vec<(&str, &FactValue)> {
+    step.facts.iter().map(|f| (f.key, &f.value)).collect()
+}
+
+fn credit_reason() -> FactValue {
+    FactValue::Text("credit".into())
+}
+
+#[test]
+fn a_body_carrying_a_known_credit_token_lands_on_the_issuing_account_ahead_of_pace() {
+    let (s, mut st) = credit_pool();
+    let fresh = request(&s, None, CREDIT_MODEL, true, &[], 1_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &fresh, &mut rng()).0),
+        "a",
+        "the strategy favors a"
+    );
+    let req = credited(
+        request(&s, Some("s-credit"), CREDIT_MODEL, true, &[], 1_000),
+        "b",
+        1,
+    );
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("expected a selection, got {:?}", d.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated, sel.trace.tier),
+        ("b", None, None),
+        "the credit applies on the account that issued it"
+    );
+    let pin = line(&d.record, "pin");
+    assert_eq!(pin.verdict, "match", "{:?}", pin.facts);
+    assert_eq!(fact_of(pin, "credit", "b"), &FactValue::Text("b".into()));
+    for rung in ["rung:content", "rung:with_main", "rung:static"] {
+        let step = line(&d.record, rung);
+        assert_eq!(
+            (step.verdict, keyed(step)),
+            ("none", vec![("reason", &credit_reason())]),
+            "{rung}"
+        );
+    }
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        (
+            pick.verdict,
+            fact_of(pick, "account_id", "b"),
+            fact(pick, "reason")
+        ),
+        ("chosen", &FactValue::Text("b".into()), &credit_reason())
+    );
+    assert!(
+        d.writes.iter().any(|w| matches!(
+            w,
+            StateWrite::UpsertPin(p) if p.account_id == "b" && p.session_id == "s-credit"
+        )),
+        "the agent's pin is written on b: {:?}",
+        d.writes
+    );
+    assert_eq!(
+        d.summary
+            .fact
+            .iter()
+            .find(|f| f.key == "pick")
+            .map(|f| &f.value),
+        Some(&credit_reason()),
+        "the summary names the credit as what placed the request"
+    );
+}
+
+#[test]
+fn a_credit_token_naming_a_cooled_account_leaves_the_walk_as_it_was() {
+    let (s, _) = credit_pool();
+    let req = credited(
+        request(&s, Some("s-cooled"), CREDIT_MODEL, true, &[], 1_000),
+        "b",
+        1,
+    );
+    let (with, without) = with_and_without_credit(&req, |st| {
+        st.record_cooldown(cooled(
+            "b",
+            "account",
+            1_000 + HOUR,
+            "five_hour",
+            "rate_limit",
+        ));
+    });
+    assert_eq!(picked(&with.result), "a");
+    assert_eq!(
+        (&with.result, &with.record.walk),
+        (&without.result, &without.record.walk),
+        "a cooled issuer takes no credit"
+    );
+}
+
+#[test]
+fn a_credit_token_naming_an_account_that_does_not_take_the_model_leaves_the_walk_as_it_was() {
+    let (s, _) = credit_pool();
+    let mut req = credited(
+        request(&s, Some("s-model"), CREDIT_MODEL, true, &[], 1_000),
+        "b",
+        1,
+    );
+    req.candidates.retain(|c| c.account_id != "b");
+    let (with, without) = with_and_without_credit(&req, |_| {});
+    assert_eq!(picked(&with.result), "a");
+    assert_eq!(
+        (&with.result, &with.record.walk),
+        (&without.result, &without.record.walk),
+        "an issuer that is no candidate for the model takes no credit"
+    );
+}
+
+#[test]
+fn a_credit_token_hands_a_live_pin_on_another_account_to_the_issuing_account() {
+    let (s, mut st) = credit_pool();
+    let opening = request(&s, Some("s-handed"), CREDIT_MODEL, true, &[], 1_000);
+    assert_eq!(picked(&select(&mut st, &s, &opening, &mut rng()).0), "a");
+    let req = credited(
+        request(&s, Some("s-handed"), CREDIT_MODEL, true, &[], 2_000),
+        "b",
+        1,
+    );
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("expected a selection, got {:?}", d.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", None),
+        "no move reason names a credit"
+    );
+    for rule in [
+        "move:spent",
+        "move:overage",
+        "move:return_to_plan",
+        "move:drain",
+        "move:shed",
+    ] {
+        let step = line(&d.record, rule);
+        assert_eq!(
+            (step.verdict, keyed(step)),
+            ("not_run", vec![("reason", &credit_reason())]),
+            "{rule}"
+        );
+    }
+    assert!(
+        d.writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::DeletePin(k) if *k == pin_key("s-handed"))),
+        "the row on a leaves as a move's source does: {:?}",
+        d.writes
+    );
+    assert_eq!(pinned(&st, "s-handed").account_id, "b");
+    assert_eq!(
+        d.record.outcome.pin_written.as_ref().map(|p| p.action),
+        Some("created")
+    );
+}
+
+#[test]
+fn a_credit_token_naming_an_issuer_created_again_under_its_id_leaves_the_walk_as_it_was() {
+    let (s, _) = credit_pool();
+    // The snapshot's `b` is incarnation 1, so the entry recorded under 2 names another holder of the id.
+    let req = credited(
+        request(&s, Some("s-fenced"), CREDIT_MODEL, true, &[], 1_000),
+        "b",
+        2,
+    );
+    let (with, without) = with_and_without_credit(&req, |_| {});
+    assert_eq!(picked(&with.result), "a");
+    assert_eq!(
+        (&with.result, &with.record.walk),
+        (&without.result, &without.record.walk),
+        "the credit reaches the incarnation that answered the refusal alone"
+    );
+}
+
+#[test]
+fn a_credit_token_naming_the_live_pins_account_renews_the_pin_with_the_moves_not_run() {
+    let (s, mut st) = credit_pool();
+    // `b` leads at the opening, so the session's pin lands there, and `a` leads from then on.
+    st.record_sample("a", sample(0.5, 0.5, 2));
+    st.record_sample("b", sample(0.1, 0.1, 2));
+    let opening = request(&s, Some("s-renewed"), CREDIT_MODEL, true, &[], 1_000);
+    let SelectResult::Selected(placed) = select(&mut st, &s, &opening, &mut rng()).0 else {
+        panic!("expected a selection")
+    };
+    assert_eq!(placed.account.id, "b");
+    st.record_sample("a", sample(0.1, 0.1, 3));
+    st.record_sample("b", sample(0.5, 0.5, 3));
+    let fresh = request(&s, None, CREDIT_MODEL, true, &[], 2_000);
+    assert_eq!(
+        picked(&select(&mut st, &s, &fresh, &mut rng()).0),
+        "a",
+        "the strategy favors a"
+    );
+    let req = credited(
+        request(&s, Some("s-renewed"), CREDIT_MODEL, true, &[], 2_000),
+        "b",
+        1,
+    );
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let SelectResult::Selected(sel) = &d.result else {
+        panic!("expected a selection, got {:?}", d.result)
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.trace.renewed,
+            sel.pin.as_ref().map(|p| p.epoch)
+        ),
+        ("b", true, placed.pin.as_ref().map(|p| p.epoch)),
+        "the pin renews in place"
+    );
+    for rule in [
+        "move:spent",
+        "move:overage",
+        "move:return_to_plan",
+        "move:drain",
+        "move:shed",
+    ] {
+        let step = line(&d.record, rule);
+        assert_eq!(
+            (step.verdict, keyed(step)),
+            ("not_run", vec![("reason", &credit_reason())]),
+            "{rule}"
+        );
+    }
+    assert!(
+        !d.writes
+            .iter()
+            .any(|w| matches!(w, StateWrite::DeletePin(_))),
+        "{:?}",
+        d.writes
+    );
+    let pin = line(&d.record, "pin");
+    assert_eq!(pin.verdict, "match");
+    assert_eq!(fact_of(pin, "credit", "b"), &FactValue::Text("b".into()));
 }
 
 #[test]

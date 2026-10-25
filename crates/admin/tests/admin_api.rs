@@ -5939,6 +5939,7 @@ async fn main_turn(
             folded_model: "claude-sonnet-5".into(),
             candidates,
             portable: true,
+            credit_account: None,
             attempted: Vec::new(),
             now: at,
             received_at: at,

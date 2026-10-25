@@ -10,6 +10,7 @@ mod casing;
 mod catalog;
 mod chains;
 mod classify;
+mod credit;
 mod dispatch;
 mod drift;
 mod errors;

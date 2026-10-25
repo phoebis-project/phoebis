@@ -158,6 +158,7 @@ fn request(
         )
         .unwrap(),
         portable: true,
+        credit_account: None,
         attempted: vec![],
         now,
         received_at: now,
@@ -1136,6 +1137,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             )
             .unwrap(),
             portable: true,
+            credit_account: None,
             attempted: vec![],
             now,
             received_at: now,
@@ -1276,6 +1278,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             )
             .unwrap(),
             portable: true,
+            credit_account: None,
             attempted: vec![],
             now: 1_000,
             received_at: 1_000,

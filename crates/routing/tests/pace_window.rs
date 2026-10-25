@@ -98,6 +98,7 @@ fn request(s: &RegistrySnapshot, model: &str, now: i64) -> SelectRequest {
         folded_model: model.into(),
         candidates: resolve(s, key, model, model).unwrap(),
         portable: true,
+        credit_account: None,
         attempted: Vec::new(),
         now,
         received_at: now,

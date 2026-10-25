@@ -58,6 +58,7 @@ use crate::classify::{
     classify, error_message, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict,
     MARGIN_MS,
 };
+use crate::credit::CreditStore;
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
@@ -261,6 +262,9 @@ pub struct Relay {
     /// The connections the pool opened for this relay's checkouts, as against the idle ones it reused.
     #[cfg(feature = "debug-hooks")]
     connections_opened: std::sync::atomic::AtomicUsize,
+    /// The issuer of each fallback credit token a refusal carried, by the token's digest, which places the next body
+    /// carrying the token on the account whose organization takes it.
+    credits: Arc<CreditStore>,
     /// The decoders built for the hold's reads of a response.
     #[cfg(feature = "debug-hooks")]
     pub(crate) decoders_built: Arc<std::sync::atomic::AtomicU64>,
@@ -350,6 +354,7 @@ impl Relay {
             clock,
             #[cfg(feature = "debug-hooks")]
             connections_opened: std::sync::atomic::AtomicUsize::new(0),
+            credits: Arc::new(CreditStore::new()),
             #[cfg(feature = "debug-hooks")]
             decoders_built: Arc::default(),
             drift: DriftGuard,
@@ -2143,6 +2148,9 @@ impl Relay {
                     folded_model: identity.folded_model.clone(),
                     candidates: candidates.clone(),
                     portable,
+                    credit_account: facts
+                        .credit_digest
+                        .and_then(|digest| self.credits.issuer(&digest, now)),
                     attempted: attempted.clone(),
                     now,
                     received_at: trace.received_at,
@@ -3645,6 +3653,7 @@ impl Relay {
                             guards,
                             head: &head,
                             held,
+                            incarnation: ctx.account.incarnation,
                             keep_alive: reusable,
                             on_error,
                             on_message_id,
@@ -3708,6 +3717,7 @@ impl Relay {
                     guards,
                     head: &head,
                     held: Some(held.inspect),
+                    incarnation: ctx.account.incarnation,
                     keep_alive: false,
                     on_error: None,
                     on_message_id: None,
@@ -3769,6 +3779,7 @@ impl Relay {
                 guards,
                 head: &head,
                 held: None,
+                incarnation: ctx.account.incarnation,
                 keep_alive: reusable,
                 on_error: None,
                 on_message_id: None,
@@ -4588,6 +4599,7 @@ impl Relay {
             mut guards,
             head,
             held,
+            incarnation,
             keep_alive,
             on_error,
             on_message_id,
@@ -4660,7 +4672,9 @@ impl Relay {
                 trace: trace.detached(),
                 clock: self.clock.clone(),
                 outcome: outcome.clone(),
+                incarnation,
                 catalog: self.catalog.clone(),
+                credits: self.credits.clone(),
                 parser,
                 held,
                 on_error,
@@ -4820,6 +4834,8 @@ struct Forward<'a, C> {
     head: &'a ResponseHead,
     /// The pre-commit hold's read of a held stream, whose parser the bus copy goes on with.
     held: Option<Inspect>,
+    /// The serving account's incarnation, which a refusal's fallback credit token is recorded under.
+    incarnation: u64,
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
     on_error: Option<OnError>,
