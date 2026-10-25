@@ -1145,6 +1145,61 @@ async fn a_restored_released_record_leaves_at_the_first_tick_past_its_saved_leav
     );
 }
 
+/// A saved released record whose leave passed while the router was down is left out at the load, as the first tick's
+/// sweep would have removed it, so it takes no slot of the agent cap: with two such records saved beside main and a
+/// live agent, the live agent loads under a cap of three, and a new agent registers at once.
+#[tokio::test]
+async fn a_saved_released_record_whose_leave_passed_while_the_router_was_down_does_not_load() {
+    let mut r = rig(on_disk()).await;
+    agent_start(&mut r, "worker").unwrap();
+    r.engine.flush_persisted().await;
+    // Saved after the worker, so the load reaches the released records before it.
+    r.advance_attended(1_000);
+    for sub in ["sub-a", "sub-b"] {
+        agent_start(&mut r, sub).unwrap();
+        r.state(sub, "released");
+    }
+    r.engine.flush_persisted().await;
+    r.advance(3_600_000);
+    r.engine = r
+        .restart_with_limits(KeepaliveLimits {
+            max_agents: 3,
+            ..KeepaliveLimits::default()
+        })
+        .await;
+    r.engine.load_persisted().await;
+    let loaded =
+        |r: &Rig, agent: &str| r.engine.agent_status("desktop", "session", agent).is_some();
+    assert_eq!(
+        (
+            loaded(&r, "sub-a"),
+            loaded(&r, "sub-b"),
+            loaded(&r, "worker"),
+            r.engine.stats().agents
+        ),
+        (false, false, true, 2),
+        "the released records do not load, and the live worker loads under the cap"
+    );
+    r.reregister();
+    assert_eq!(
+        agent_start(&mut r, "other"),
+        Ok(()),
+        "a new agent registers under the cap at once"
+    );
+    assert_eq!(r.engine.stats().agents, 3);
+    r.engine.flush_persisted().await;
+    let mut saved: Vec<String> = saved_agents(&r)
+        .into_iter()
+        .map(|agent| agent.agent_id)
+        .collect();
+    saved.sort();
+    assert_eq!(
+        saved,
+        vec!["main", "other", "worker"],
+        "the released records' rows left the registry"
+    );
+}
+
 /// A saved released record whose payload carries no leave loads with none and stays past the hour a leave would have
 /// ended, as serde reads a missing `Option` member.
 #[tokio::test]

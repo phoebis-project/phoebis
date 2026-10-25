@@ -1,6 +1,9 @@
 //! The keepalive mod's one route: a JSON report under the router key, scoped to that key, answered with the
 //! acknowledgment the mod reconciles from or with a code and the status it carries.
 mod common;
+use std::collections::BTreeMap;
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::http::Request;
 use common::*;
@@ -9,6 +12,7 @@ use http_body_util::BodyExt;
 use phoebis_keepalive::{
     keepalive_router, AgentState, CompanionState, Event, EventError, ParkKind, Reason, EVENTS_PATH,
 };
+use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, RulesMode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -1117,7 +1121,7 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
     );
     r.advance_attended(270_000);
     r.engine.step().await;
-    wait_for(std::time::Duration::from_secs(5), || {
+    wait_for(Duration::from_secs(5), || {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
@@ -1141,18 +1145,13 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
             .is_none(),
         "the sweep after the result removes the record"
     );
-    let wasted = wait_for(std::time::Duration::from_secs(30), || {
+    let wasted = wait_for(Duration::from_secs(30), || {
         let rows =
             r.db.read_blocking(|c| {
-                phoebis_ledger::read_rollups(
-                    c,
-                    phoebis_ledger::hour_of(NOW) - 3_600,
-                    i64::MAX,
-                    &phoebis_ledger::RollupSelect::default(),
-                )
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
             })
             .unwrap();
-        let mut reasons: std::collections::BTreeMap<String, u64> = Default::default();
+        let mut reasons: BTreeMap<String, u64> = Default::default();
         for row in rows.iter().filter(|row| row.kind == "probe") {
             for (reason, count) in &row.wasted_probe_reasons {
                 *reasons.entry(reason.clone()).or_default() += count;
@@ -1163,8 +1162,42 @@ async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_res
     .await;
     assert_eq!(
         wasted,
-        std::collections::BTreeMap::from([("released".to_string(), 1)]),
+        BTreeMap::from([("released".to_string(), 1)]),
         "the late result settles under the release"
+    );
+}
+
+/// A session's end keeps the leave of a record the mod released before it, so that record leaves one cache TTL after
+/// the mod's release, while main, which the end released, leaves one cache TTL after the end.
+#[tokio::test]
+async fn a_session_end_keeps_the_leave_of_a_record_the_mod_released_before_it() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "worker", None).unwrap();
+    let released_at = r.now();
+    r.state("worker", "released");
+    r.advance_attended(1_000);
+    r.event(session_end("session")).unwrap();
+    assert_eq!(
+        (saved_leave(&r, "worker"), saved_leave(&r, "main")),
+        (
+            json!(released_at + 3_600_000),
+            json!(released_at + 1_000 + 3_600_000)
+        ),
+        "the end writes main's leave and keeps the worker's from the mod's release"
+    );
+    r.advance(3_599_000);
+    r.step().await;
+    assert!(
+        r.engine
+            .agent_status("desktop", "session", "worker")
+            .is_none(),
+        "the sweep at the mod's release plus one cache TTL removes the record"
+    );
+    assert!(
+        r.engine
+            .agent_status("desktop", "session", "main")
+            .is_some(),
+        "main stays until its own leave"
     );
 }
 

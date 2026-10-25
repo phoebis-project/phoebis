@@ -357,7 +357,10 @@ impl Inner {
                     agent.set_state(AgentState::Released);
                     // A session's end is no return, so main's window ends with it.
                     agent.close_idle_episode();
-                    self.release_record(&key, agent_id, now, snapshot);
+                    // The leave counts from the first release, so a record the mod released before the end keeps it.
+                    if agent.leaves_at.is_none() {
+                        self.release_record(&key, agent_id, now, snapshot);
+                    }
                 }
                 let session = self.sessions.get_mut(&key).unwrap();
                 session.ended = true;

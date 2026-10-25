@@ -1131,6 +1131,14 @@ impl Inner {
                     self.file_removed_agent(stored.clone(), agent_row.agent_id);
                     continue;
                 };
+                // The sweep has not run yet at the load, and a leave that passed while the router was down is already
+                // due, so the record goes here, before the cap read below can give it a live agent's slot.
+                if agent.state == AgentState::Released
+                    && agent.leaves_at.is_some_and(|at| at <= now)
+                {
+                    self.file_removed_agent(stored.clone(), agent_row.agent_id);
+                    continue;
+                }
                 // Read off the row rather than the opened body, so a blob that no longer opens is cleared by the
                 // agent's next save.
                 agent.body_saved = agent_row.body_size > 0;
