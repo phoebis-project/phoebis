@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 // Every clock time below is read in UTC whatever the host's zone; `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
@@ -347,17 +350,26 @@ const ROUTER_WALK_KEYS = [
   'winding_down', 'window', 'window_share_fast',
 ];
 
-test("every walk key the router writes reads words of its own, the pick's ties as tied and its draw as drawn", () => {
-  assert.deepEqual([d.keyWord('ties'), d.keyWord('drawn')], ['tied', 'drawn']);
-  // The list is read again off the crate's source and the fixtures, so a key the router gains fails here rather than
-  // reading through the underscore fallback. A key written over two lines counts, and so does a partition's name.
-  const src = new URL('../../crates/routing/src/', import.meta.url);
+/**
+ * The keys a crate's source writes on a walk line, read off every .rs file under it, its modules' directories
+ * included, so the walk-key case and the regression case read one derivation. A key written over two lines counts, and
+ * so does a partition's name. `src` is a directory URL ending in a slash.
+ */
+const walkKeysOf = (src) => {
   const written = new Set();
-  for (const file of readdirSync(src).filter((f) => f.endsWith('.rs'))) {
+  for (const file of readdirSync(src, { recursive: true }).filter((f) => f.endsWith('.rs'))) {
     const text = readFileSync(new URL(file, src), 'utf8');
     for (const m of text.matchAll(/Fact::[a-z_]+\(\s*"([a-z_0-9]+)"/g)) written.add(m[1]);
     for (const m of text.matchAll(/narrow\(\s*[^)]*?"([a-z_0-9]+)"/g)) written.add(m[1]);
   }
+  return written;
+};
+
+test("every walk key the router writes reads words of its own, the pick's ties as tied and its draw as drawn", () => {
+  assert.deepEqual([d.keyWord('ties'), d.keyWord('drawn')], ['tied', 'drawn']);
+  // The list is read again off the crate's source and the fixtures, so a key the router gains fails here rather than
+  // reading through the underscore fallback.
+  const written = walkKeysOf(new URL('../../crates/routing/src/', import.meta.url));
   const fixtures = new URL('./fixtures/', import.meta.url);
   const walked = (o) => (Array.isArray(o) ? o.flatMap(walked) : o !== null && typeof o === 'object' ? [...(Array.isArray(o.walk) ? o.walk.flatMap((s) => (s.facts ?? []).map((f) => f.key)) : []), ...Object.values(o).flatMap(walked)] : []);
   for (const file of readdirSync(fixtures).filter((f) => f.endsWith('.json'))) for (const key of walked(JSON.parse(readFileSync(new URL(file, fixtures), 'utf8')))) written.add(key);
@@ -366,6 +378,20 @@ test("every walk key the router writes reads words of its own, the pick's ties a
   // names itself.
   const drawnOtherwise = new Set(['account_id', 'hash', 'score', 'standing']);
   assert.deepEqual(ROUTER_WALK_KEYS.filter((key) => !drawnOtherwise.has(key) && !d.own(d.WALK_KEY, key)), []);
+});
+
+test("the walk-key read reaches a key written in a module's own directory", () => {
+  // The routing crate keeps its modules flat, so a synthetic source with keys no file of the tree writes proves the
+  // read descends into a module's directory.
+  const dir = mkdtempSync(join(tmpdir(), 'walk-keys-'));
+  try {
+    writeFileSync(join(dir, 'lib.rs'), 'fn flat() -> Fact {\n    Fact::text("flat_probe_key", "x")\n}\n');
+    mkdirSync(join(dir, 'nested'));
+    writeFileSync(join(dir, 'nested', 'inner.rs'), 'fn inner() -> Fact {\n    Fact::number(\n        "nested_probe_key",\n        1.0,\n    )\n}\n');
+    assert.deepEqual([...walkKeysOf(pathToFileURL(`${dir}/`))].sort(), ['flat_probe_key', 'nested_probe_key']);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
 });
 
 test('a fact value is drawn by its unit', () => {

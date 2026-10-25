@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, CACHE_MISS_LABEL, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandRuns, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, equivalentShort, ESTIMATED_TITLE, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtEquivalent, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWindows, fullWindowsAWeek, GROUPED_SHARE_NOTE, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_7D_SUBSET, NATIVE_SUBSET, nextLocalChange, ONE_ACCOUNT_SHARE_NOTE, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, regimeNames, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, SHARE_NOTE, shareLabel, shareOf, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weightOrFallback, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a window priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced on this window: its model has no tier the cost model weighs';
@@ -12304,7 +12304,7 @@ m.unmount();
   const param = (page, name) => new URLSearchParams(page.location().search).get(name);
   const served = (r) => r?.attempts.at(-1)?.cacheMissReason ?? null;
   // The known reasons in their reading order, the comparison still running left out, in the library's labels.
-  const KNOWN = ['none', 'model_changed', 'system_changed', 'tools_changed', 'messages_changed', 'previous_message_not_found', 'unavailable', 'not_requested'].map((reason) => CACHE_MISS_LABEL[reason]);
+  const KNOWN = CACHE_MISS_REASONS.filter((reason) => reason !== 'pending').map(missLabel);
 
   const reasonCheck = '/requests the Cache miss reason filter stands in the Outcome group of Add filter and offers the known reasons in their reading order';
   const page = await mount('/requests', { now: CLOCK_ORIGIN });
@@ -19281,7 +19281,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
   }
   const bars = [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
-  const labels = ['History edited', 'Model changed', 'No divergence', 'Not requested', 'Pending', 'Previous message not found', 'System prompt changed', 'Tools changed', 'Unavailable'];
+  const labels = CACHE_MISS_REASONS.map(missLabel);
   results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 9 && labels.every((l) => bars.includes(l)), missing: bars });
   const counts = [...(missCard()?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
   results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 9 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
@@ -19291,17 +19291,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
   results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
   // The panel names a reason by its label and its links by the name the beta sent.
-  const reasonOf = {
-    'History edited': 'messages_changed',
-    'Model changed': 'model_changed',
-    'No divergence': 'none',
-    'Not requested': 'not_requested',
-    Pending: 'pending',
-    'Previous message not found': 'previous_message_not_found',
-    'System prompt changed': 'system_changed',
-    'Tools changed': 'tools_changed',
-    Unavailable: 'unavailable',
-  };
+  const reasonOf = Object.fromEntries(CACHE_MISS_REASONS.map((reason) => [missLabel(reason), reason]));
   const countOf = (el) => Number(el?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? NaN);
   {
     const toggleKey = async (value) => {
@@ -19459,14 +19449,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   await tab(m, 'Cache');
   // The table heads each reason with a short word and the panel's full label on the word's title.
-  const shortWords = ['History', 'Model', 'None', 'Not requested', 'Pending', 'No previous', 'System', 'Tools', 'Unavailable'];
+  const shortWords = CACHE_MISS_REASONS.map(missShort);
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
   results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: shortWords.every((w) => reasonTable.includes(w)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
   {
     const table = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'));
     const body = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? ''));
-    const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested', 'Pending'];
-    const shortOrder = ['None', 'Model', 'System', 'Tools', 'History', 'No previous', 'Unavailable', 'Not requested', 'Pending'];
+    const order = CACHE_MISS_REASONS.map(missLabel);
+    const shortOrder = CACHE_MISS_REASONS.map(missShort);
     const ths = [...(table?.querySelectorAll('thead th') ?? [])];
     const heads = ths.map((th) => th.textContent?.trim());
     const titles = ths.slice(1, -1).map((th) => th.querySelector('span[title]')?.getAttribute('title') ?? null);
