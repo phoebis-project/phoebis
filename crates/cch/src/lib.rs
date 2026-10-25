@@ -83,19 +83,20 @@ fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
     for (depth, key) in path.iter().enumerate() {
         let last = depth + 1 == path.len();
         if let Ok(index) = key.parse::<usize>() {
-            if !s.eat(b'[') {
+            if s.body.get(s.pos) != Some(&b'[') {
                 return None;
             }
-            s.inside(|s| {
-                for _ in 0..index {
-                    s.value(false).ok()?;
-                    s.ws();
-                    if !s.eat(b',') {
-                        return None;
-                    }
+            // Counted until the scanner is dropped, since the rest of the path and the caller's read stand inside
+            // this array.
+            s.enter().ok()?;
+            s.pos += 1;
+            for _ in 0..index {
+                s.value(false).ok()?;
+                s.ws();
+                if !s.eat(b',') {
+                    return None;
                 }
-                Some(())
-            })?;
+            }
             s.ws();
         } else {
             scan_object(s, |member| member == key.as_bytes())?;
@@ -110,15 +111,18 @@ fn walk_to_last_segment(s: &mut Scanner<'_>, path: &[&str]) -> Option<bool> {
 
 /// Walks the object at `s`'s current position (its opening `{` not yet eaten), calling `matches` with each
 /// member's key bytes in turn. Stops on the first member `matches` answers true for, `s` left positioned right
-/// after that member's colon, its value not yet read; returns the key's opening quote. `None` on a syntax
+/// after that member's colon, its value not yet read. Returns the key's opening quote. `None` on a syntax
 /// error, or an object that closes with no match. The one object-member scan every span helper walks through,
-/// so a fix to key matching lands once. The object counts as one level while its members are skipped, as `sign`'s
-/// walk counts it, so a span helper gives up on a skipped member of the root at the depth `sign` refuses.
+/// so a fix to key matching lands once. The object counts as one level for as long as the scanner stands inside
+/// it, as `sign`'s walk counts it, so it stays counted on a match while the caller reads the member's value, and a
+/// span helper gives up on a member at the depth `sign` refuses.
 fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> Option<usize> {
-    if !s.eat(b'{') {
+    if s.body.get(s.pos) != Some(&b'{') {
         return None;
     }
-    s.inside(|s| loop {
+    s.enter().ok()?;
+    s.pos += 1;
+    loop {
         s.ws();
         let member_start = s.pos;
         let (ks, ke) = s.string().ok()?;
@@ -133,9 +137,10 @@ fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> O
         s.value(false).ok()?;
         s.ws();
         if !s.eat(b',') {
+            s.leave();
             return None;
         }
-    })
+    }
 }
 
 /// Hands `visit` each top-level member's key in body order, decoded, until `visit` answers true. Keys are
@@ -327,22 +332,22 @@ pub fn array_member_span(body: &[u8], path: &[&str], index: usize) -> Option<(us
     if !walk_to_last_segment(&mut s, path)? {
         return None;
     }
-    if !s.eat(b'[') {
+    if s.body.get(s.pos) != Some(&b'[') {
         return None;
     }
-    s.inside(|s| {
-        for _ in 0..index {
-            s.value(false).ok()?;
-            s.ws();
-            if !s.eat(b',') {
-                return None;
-            }
-        }
-        s.ws();
-        let start = s.pos;
+    s.enter().ok()?;
+    s.pos += 1;
+    for _ in 0..index {
         s.value(false).ok()?;
-        Some((start, s.pos))
-    })
+        s.ws();
+        if !s.eat(b',') {
+            return None;
+        }
+    }
+    s.ws();
+    let start = s.pos;
+    s.value(false).ok()?;
+    Some((start, s.pos))
 }
 
 /// The position of the closing `]` of the array at `path` when it holds no element, or `None` when it holds one
@@ -506,9 +511,11 @@ fn block_array(
     if s.body.get(s.pos) != Some(&b'[') {
         return s.value(false);
     }
+    s.enter()?;
     s.pos += 1;
     s.ws();
     if s.eat(b']') {
+        s.leave();
         return Ok(());
     }
     loop {
@@ -527,6 +534,7 @@ fn block_array(
         }
         break;
     }
+    s.leave();
     Ok(())
 }
 
@@ -539,9 +547,11 @@ fn block_object(
     inner: bool,
     keys: Keys,
 ) -> Result<(), CchError> {
+    s.enter()?;
     s.pos += 1;
     s.ws();
     if s.eat(b'}') {
+        s.leave();
         return Ok(());
     }
     loop {
@@ -573,6 +583,7 @@ fn block_object(
         }
         break;
     }
+    s.leave();
     Ok(())
 }
 
@@ -587,9 +598,11 @@ fn message_array(
     if s.body.get(s.pos) != Some(&b'[') {
         return s.value(false);
     }
+    s.enter()?;
     s.pos += 1;
     s.ws();
     if s.eat(b']') {
+        s.leave();
         return Ok(());
     }
     loop {
@@ -608,6 +621,7 @@ fn message_array(
         }
         break;
     }
+    s.leave();
     Ok(())
 }
 
@@ -616,9 +630,11 @@ fn message_object(
     spans: &mut Vec<(usize, usize)>,
     keys: Keys,
 ) -> Result<(), CchError> {
+    s.enter()?;
     s.pos += 1;
     s.ws();
     if s.eat(b'}') {
+        s.leave();
         return Ok(());
     }
     loop {
@@ -643,6 +659,7 @@ fn message_object(
         }
         break;
     }
+    s.leave();
     Ok(())
 }
 
@@ -988,6 +1005,19 @@ impl<'a> Scanner<'a> {
             false
         }
     }
+    /// Counts the bracket at `pos` a walker eats itself, refusing it where `value` would: the container counts toward
+    /// the depth for as long as the scanner stands inside it.
+    fn enter(&mut self) -> Result<(), CchError> {
+        if self.depth + 1 >= MAX_DEPTH {
+            return Err(CchError::TooDeep(self.pos));
+        }
+        self.depth += 1;
+        Ok(())
+    }
+    /// Counts back out at the container's closing bracket.
+    fn leave(&mut self) {
+        self.depth -= 1;
+    }
     /// Runs `walk` one level down, for a walker that eats a container's opening bracket itself rather than
     /// entering it through `value`, so the container counts toward the depth `value` checks, and on every way out
     /// the depth is back where it was.
@@ -1000,8 +1030,8 @@ impl<'a> Scanner<'a> {
     fn value(&mut self, collect: bool) -> Result<(), CchError> {
         self.ws();
         match self.body.get(self.pos) {
-            // The one place either container is entered from, so counting here bounds the recursion for the
-            // collecting and the non-collecting walk alike.
+            // The container counts for as long as the scanner stands inside it, arrays and objects alike, which
+            // bounds the recursion for the collecting and the non-collecting walk.
             Some(b'{') | Some(b'[') => {
                 if self.depth + 1 >= MAX_DEPTH {
                     return Err(CchError::TooDeep(self.pos));
@@ -1263,31 +1293,68 @@ mod tests {
         );
     }
 
-    /// `depth` nested arrays around a number, the element of an array a walker eats the `[` of itself. The walker
-    /// counts that array as `value` counts each container it enters, so it refuses the element at the depth a read
-    /// of the whole array through `value` refuses it, with no top-level key walk ahead of it.
+    /// `depth` nested arrays around a number, the element of a container a walker eats the bracket of itself. The
+    /// walker counts each container it stands inside as `value` counts each container it enters, so it refuses the
+    /// element at the depth a read of the whole body through `value` refuses it, the root included.
     fn arrays(depth: usize) -> String {
         format!("{}1{}", "[".repeat(depth), "]".repeat(depth))
     }
 
+    fn serde_reads(body: &[u8]) -> bool {
+        serde_json::from_slice::<serde_json::Value>(body).is_ok()
+    }
+
+    fn scanner_at(body: &[u8], bracket: usize, depth: usize) -> Scanner<'_> {
+        Scanner {
+            body,
+            pos: bracket,
+            depth,
+            edits: Vec::new(),
+        }
+    }
+
     #[test]
     fn the_array_element_span_counts_the_array_it_walks_toward_the_depth_bound() {
-        let body = format!(r#"{{"system":[{}]}}"#, arrays(MAX_DEPTH - 1)).into_bytes();
+        let body = |depth: usize| format!(r#"{{"system":[{}]}}"#, arrays(depth)).into_bytes();
+        let at_the_bound = body(MAX_DEPTH - 2);
+        assert!(!serde_reads(&at_the_bound));
         assert_eq!(
-            array_member_span(&body, &["system"], 0),
+            array_member_span(&at_the_bound, &["system"], 0),
             None,
-            "the walked array and the arrays of its element reach the bound"
+            "the root, the walked array and the arrays of its element reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 3);
+        assert!(serde_reads(&under_it));
+        assert!(
+            array_member_span(&under_it, &["system"], 0).is_some(),
+            "one level less reads as serde reads it"
         );
     }
 
     #[test]
     fn a_numeric_path_segment_counts_the_array_it_skips_through_toward_the_depth_bound() {
-        let body =
-            format!(r#"{{"system":[{},{{"text":"x"}}]}}"#, arrays(MAX_DEPTH - 1)).into_bytes();
+        let body = |depth: usize| {
+            format!(r#"{{"system":[{},{{"text":"x"}}]}}"#, arrays(depth)).into_bytes()
+        };
+        let path = ["system", "1", "text"];
+        let at_the_bound = body(MAX_DEPTH - 2);
+        assert!(!serde_reads(&at_the_bound));
         assert_eq!(
-            string_member_span(&body, &["system", "1", "text"]),
+            string_member_span(&at_the_bound, &path),
             None,
-            "the walked array and the arrays of the skipped element reach the bound"
+            "the root, the walked array and the arrays of the skipped element reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 3);
+        assert!(serde_reads(&under_it));
+        assert!(
+            string_member_span(&under_it, &path).is_some(),
+            "one level less reads as serde reads it"
+        );
+        let mut s = scanner_at(&under_it, 0, 0);
+        assert_eq!(walk_to_last_segment(&mut s, &path), Some(true));
+        assert_eq!(
+            s.depth, 3,
+            "the root, the walked array and the element stand counted at the member's value"
         );
     }
 
@@ -1296,11 +1363,19 @@ mod tests {
     #[test]
     fn the_empty_array_end_behind_a_numeric_segment_counts_the_skipped_array_toward_the_depth_bound(
     ) {
-        let body = format!(r#"{{"system":[{},[]]}}"#, arrays(MAX_DEPTH - 1)).into_bytes();
+        let body = |depth: usize| format!(r#"{{"system":[{},[]]}}"#, arrays(depth)).into_bytes();
+        let at_the_bound = body(MAX_DEPTH - 2);
+        assert!(!serde_reads(&at_the_bound));
         assert_eq!(
-            empty_array_member_end(&body, &["system", "1"]),
+            empty_array_member_end(&at_the_bound, &["system", "1"]),
             None,
-            "the walked array and the arrays of the skipped element reach the bound"
+            "the root, the walked array and the arrays of the skipped element reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 3);
+        assert!(serde_reads(&under_it));
+        assert!(
+            empty_array_member_end(&under_it, &["system", "1"]).is_some(),
+            "one level less reads as serde reads it"
         );
     }
 
@@ -1324,6 +1399,184 @@ mod tests {
         assert!(
             matches!(first_system_block_member_count(&under_it, "text"), Ok(1)),
             "one level less reads as serde reads it"
+        );
+    }
+
+    /// The nesting sits past the numeric segment, in the element the path walks into, so the refusal reaches
+    /// serde's depth only while the segment's array stays counted under the rest of the walk.
+    #[test]
+    fn a_numeric_path_segment_keeps_its_array_counted_while_the_path_walks_on_inside_it() {
+        let body = |depth: usize| {
+            format!(r#"{{"system":[1,{{"pad":{},"text":"x"}}]}}"#, arrays(depth)).into_bytes()
+        };
+        let path = ["system", "1", "text"];
+        let at_the_bound = body(MAX_DEPTH - 3);
+        assert!(!serde_reads(&at_the_bound));
+        assert_eq!(
+            string_member_span(&at_the_bound, &path),
+            None,
+            "the root, the walked array, the element and the arrays of its skipped member reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 4);
+        assert!(serde_reads(&under_it));
+        assert!(
+            string_member_span(&under_it, &path).is_some(),
+            "one level less reads as serde reads it"
+        );
+        let mut s = scanner_at(&under_it, 0, 0);
+        assert_eq!(walk_to_last_segment(&mut s, &path), Some(true));
+        assert_eq!(
+            s.depth, 3,
+            "the root, the walked array and the element stand counted at the member's value"
+        );
+    }
+
+    #[test]
+    fn a_matched_member_is_read_inside_every_object_on_its_path_toward_the_depth_bound() {
+        let body = |depth: usize| format!(r#"{{"a":{{"b":{}}}}}"#, arrays(depth)).into_bytes();
+        let path = ["a", "b"];
+        let at_the_bound = body(MAX_DEPTH - 2);
+        assert!(!serde_reads(&at_the_bound));
+        assert_eq!(
+            object_member_span(&at_the_bound, &path),
+            None,
+            "the root, the inner object and the arrays of the matched member reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 3);
+        assert!(serde_reads(&under_it));
+        assert!(
+            object_member_span(&under_it, &path).is_some(),
+            "one level less reads as serde reads it"
+        );
+        let mut s = scanner_at(&under_it, 0, 0);
+        assert!(scan_object(&mut s, |key| key == b"a").is_some());
+        assert_eq!(
+            s.depth, 1,
+            "the object stays counted while the matched member's value is read"
+        );
+        let mut s = scanner_at(br#"{"a":1}"#, 0, 0);
+        assert_eq!(scan_object(&mut s, |key| key == b"b"), None);
+        assert_eq!(
+            s.depth, 0,
+            "an object that closes with no match counts back out"
+        );
+    }
+
+    #[test]
+    fn a_system_block_array_counts_its_bracket_toward_the_depth_bound() {
+        let body = |depth: usize| format!(r#"{{"system":[{}]}}"#, arrays(depth)).into_bytes();
+        let at_the_bound = body(MAX_DEPTH - 2);
+        assert!(!serde_reads(&at_the_bound));
+        assert!(
+            matches!(
+                cache_control_spans(&at_the_bound),
+                Err(CchError::TooDeep(_))
+            ),
+            "the root, the system array and the arrays of its element reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 3);
+        assert!(serde_reads(&under_it));
+        assert!(
+            matches!(cache_control_spans(&under_it), Ok(spans) if spans.is_empty()),
+            "one level less reads as serde reads it"
+        );
+        let mut s = scanner_at(&under_it, br#"{"system":"#.len(), 1);
+        block_array(&mut s, &mut Vec::new(), false, Keys::Raw).unwrap();
+        assert_eq!(
+            s.depth, 1,
+            "the walk counts back out at the closing bracket"
+        );
+    }
+
+    #[test]
+    fn a_system_block_object_counts_its_bracket_toward_the_depth_bound() {
+        let body =
+            |depth: usize| format!(r#"{{"system":[{{"x":{}}}]}}"#, arrays(depth)).into_bytes();
+        let at_the_bound = body(MAX_DEPTH - 3);
+        assert!(!serde_reads(&at_the_bound));
+        assert!(
+            matches!(
+                cache_control_spans(&at_the_bound),
+                Err(CchError::TooDeep(_))
+            ),
+            "the root, the system array, the block and the arrays of its member reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 4);
+        assert!(serde_reads(&under_it));
+        assert!(
+            matches!(cache_control_spans(&under_it), Ok(spans) if spans.is_empty()),
+            "one level less reads as serde reads it"
+        );
+        let mut s = scanner_at(&under_it, br#"{"system":["#.len(), 2);
+        block_object(&mut s, &mut Vec::new(), false, Keys::Raw).unwrap();
+        assert_eq!(
+            s.depth, 2,
+            "the walk counts back out at the closing bracket"
+        );
+    }
+
+    #[test]
+    fn a_messages_array_counts_its_bracket_toward_the_depth_bound() {
+        let body = |depth: usize| format!(r#"{{"messages":[{}]}}"#, arrays(depth)).into_bytes();
+        let at_the_bound = body(MAX_DEPTH - 2);
+        assert!(!serde_reads(&at_the_bound));
+        assert!(
+            matches!(
+                cache_control_spans(&at_the_bound),
+                Err(CchError::TooDeep(_))
+            ),
+            "the root, the messages array and the arrays of its element reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 3);
+        assert!(serde_reads(&under_it));
+        assert!(
+            matches!(cache_control_spans(&under_it), Ok(spans) if spans.is_empty()),
+            "one level less reads as serde reads it"
+        );
+        let mut s = scanner_at(&under_it, br#"{"messages":"#.len(), 1);
+        message_array(&mut s, &mut Vec::new(), Keys::Raw).unwrap();
+        assert_eq!(
+            s.depth, 1,
+            "the walk counts back out at the closing bracket"
+        );
+    }
+
+    #[test]
+    fn a_message_object_counts_its_bracket_toward_the_depth_bound() {
+        let body =
+            |depth: usize| format!(r#"{{"messages":[{{"x":{}}}]}}"#, arrays(depth)).into_bytes();
+        let at_the_bound = body(MAX_DEPTH - 3);
+        assert!(!serde_reads(&at_the_bound));
+        assert!(
+            matches!(
+                cache_control_spans(&at_the_bound),
+                Err(CchError::TooDeep(_))
+            ),
+            "the root, the messages array, the message and the arrays of its member reach the bound"
+        );
+        let under_it = body(MAX_DEPTH - 4);
+        assert!(serde_reads(&under_it));
+        assert!(
+            matches!(cache_control_spans(&under_it), Ok(spans) if spans.is_empty()),
+            "one level less reads as serde reads it"
+        );
+        let mut s = scanner_at(&under_it, br#"{"messages":["#.len(), 2);
+        message_object(&mut s, &mut Vec::new(), Keys::Raw).unwrap();
+        assert_eq!(
+            s.depth, 2,
+            "the walk counts back out at the closing bracket"
+        );
+    }
+
+    /// An empty `system` or `tools` is common, and a walk that counted into it and never out would read every later
+    /// member one level nearer the bound.
+    #[test]
+    fn an_empty_block_array_counts_back_out_of_its_bracket() {
+        let mut s = scanner_at(b"[]", 0, 1);
+        block_array(&mut s, &mut Vec::new(), false, Keys::Raw).unwrap();
+        assert_eq!(
+            s.depth, 1,
+            "the walk counts back out at the closing bracket"
         );
     }
 
