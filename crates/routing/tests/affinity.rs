@@ -272,7 +272,7 @@ fn a_link_only_refresh_of_an_entry_written_before_the_lane_existed_adopts_its_la
     }]);
     map.record(&AffinityReport {
         lane: fast.clone(),
-        ..report("k", "a", "s1", &["b1"], 2_000)
+        ..report("k", "a", "b1", &["b1"], 2_000)
     });
     let entry = map.entry("claude-sonnet-5", "b1").unwrap();
     assert_eq!(
