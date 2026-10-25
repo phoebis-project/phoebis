@@ -79,9 +79,8 @@ pub struct AffinityReport {
     pub canonical_model: String,
     /// The writing request's lane.
     pub lane: String,
-    /// The conversation the request belonged to, its session id. A report without one is rooted at its first
-    /// message boundary.
-    pub root: Option<String>,
+    /// The conversation the request belonged to, its session id, which the contract guarantees of every request.
+    pub root: String,
     pub static_boundaries: Arc<[String]>,
     pub message_boundaries: Arc<[String]>,
     /// Parallel to `static_boundaries`: the estimated token size of the blocks each boundary covers, as the
@@ -314,13 +313,7 @@ impl AffinityMap {
     /// Upserts the report's boundaries; answers the rows to persist (new or moved).
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
-        let root = report.root.clone().unwrap_or_else(|| {
-            report
-                .message_boundaries
-                .first()
-                .cloned()
-                .unwrap_or_default()
-        });
+        let root = report.root.as_str();
         // The upstream's own TTL beats the marker's for the boundaries the response wrote, when every marker of the
         // request carried one TTL and the split says the cache wrote at the other: the markers are what the request
         // asked, the split is what the cache holds. A request with markers at both TTLs keeps each tier's marker,
@@ -360,7 +353,7 @@ impl AffinityMap {
                 AffinityChain::Message,
                 ordinal(index),
                 report,
-                &root,
+                root,
                 message_confirmed,
                 message_ttl,
                 report.prefix_tokens,
@@ -380,7 +373,7 @@ impl AffinityMap {
                     AffinityChain::Static,
                     ordinal(index),
                     report,
-                    &root,
+                    root,
                     static_confirmed,
                     static_ttl,
                     size,
@@ -604,7 +597,7 @@ mod tests {
             key_generation: 0,
             canonical_model: "m".into(),
             lane: crate::lane_key("m", "standard", "none", "-"),
-            root: None,
+            root: "s".into(),
             static_boundaries: Arc::from([]),
             message_boundaries: Arc::from(["b1".to_string(), "b2".to_string()]),
             static_sizes: Vec::new(),
@@ -935,16 +928,16 @@ mod tests {
     }
 
     #[test]
-    fn a_report_with_no_root_and_no_message_boundaries_records_nothing() {
+    fn a_report_with_no_message_boundaries_records_nothing() {
         let mut map = AffinityMap::default();
-        let report_without_root = AffinityReport {
+        let without_boundaries = AffinityReport {
             message_boundaries: Arc::from([]),
             ..report("k", "a", 1_000)
         };
-        let rows = map.record(&report_without_root);
+        let rows = map.record(&without_boundaries);
         assert!(
             rows.is_empty(),
-            "no root can be named, so nothing is recorded"
+            "a report with no boundary names no entry, so nothing is recorded under its root"
         );
         assert!(map.is_empty());
     }

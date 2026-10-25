@@ -3873,7 +3873,9 @@ impl Relay {
         if ctx.trace.kind == Kind::CountTokens {
             return None;
         }
-        let root = ctx.identity.session_id.clone();
+        // The contract refuses a request without a session id at admission, before this path, so one that reached it
+        // would record no affinity rather than panic.
+        let root = ctx.identity.session_id.clone()?;
         // An auxiliary request leaves no content entry: the client's quota probe has one message every probe of
         // the key shares, so an entry under it would read the next session's probe as a fork of this one. Its
         // static boundaries still land, a cache of their own the next probe of the same shape reads.

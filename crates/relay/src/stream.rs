@@ -256,8 +256,8 @@ pub(crate) struct AffinityFacts {
     /// The request is the client's own classifier call, so its usage report charges no plan window.
     pub classifier: bool,
     pub lane: String,
-    /// The identity's session id, `None` for a request with no identity.
-    pub root: Option<String>,
+    /// The identity's session id, which the contract guarantees.
+    pub root: String,
     pub static_boundaries: Arc<[String]>,
     pub static_sizes: Vec<u64>,
     pub message_boundaries: Arc<[String]>,

@@ -3836,7 +3836,7 @@ mod tests {
             key_generation: 1,
             canonical_model: model.into(),
             lane: crate::lane_key(model, "standard", "none", "-"),
-            root: None,
+            root: "s".into(),
             static_boundaries: std::sync::Arc::from([]),
             message_boundaries: std::sync::Arc::from(["b1".to_string()]),
             static_sizes: Vec::new(),

@@ -218,7 +218,7 @@ fn affinity_report(
         key_generation: s.key("k").unwrap().created_at,
         canonical_model: "claude-sonnet-5".into(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        root: None,
+        root: "s".into(),
         static_boundaries: Arc::from([]),
         message_boundaries: Arc::from(["b1".to_string()]),
         static_sizes: Vec::new(),
@@ -7993,6 +7993,7 @@ async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
     .unwrap();
     let seq = handle
         .report(Report::Affinity(AffinityReport {
+            root: "b1".into(),
             message_id: Some("msg_01".into()),
             ..affinity_report(&handle, "a", 1_000)
         }))
@@ -8007,8 +8008,6 @@ async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
     // The caller's reading answers an incarnation the snapshot never held, so only the handle's own reading of
     // the snapshot decides which entries the walk accepts.
     let stale = |_: &str| Some(2_u64);
-    // A report without a session roots its entries at its first boundary, so a one-boundary lookup names that
-    // boundary as its root.
     let query = |hash: &str| {
         let message_boundaries = [hash.to_string()];
         handle.predecessor(&PredecessorQuery {
@@ -8029,6 +8028,7 @@ async fn the_handles_predecessor_reads_the_snapshots_incarnation() {
 
     handle.affinity().write().unwrap().record(&AffinityReport {
         incarnation: 2,
+        root: "c1".into(),
         message_boundaries: Arc::from(["c1".to_string()]),
         message_id: Some("msg_c1".into()),
         ..affinity_report(&handle, "a", 2_000)
@@ -10464,7 +10464,7 @@ async fn the_purge_groups_expired_entries_per_root() {
     for (root, chain) in [("s1", &["x1", "x2", "x3"][..]), ("s2", &["y1"][..])] {
         handle
             .report(Report::Affinity(AffinityReport {
-                root: Some(root.into()),
+                root: root.into(),
                 message_boundaries: Arc::from(
                     chain.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
                 ),
@@ -10532,6 +10532,7 @@ async fn an_expiry_reports_the_depth_the_entry_was_written_at_when_its_chain_is_
     };
     handle
         .report(Report::Affinity(AffinityReport {
+            root: "b1".into(),
             message_boundaries: chain(&["b1", "b2", "b3"]),
             ..affinity_report(&handle, "a", 1_000)
         }))
@@ -10544,6 +10545,7 @@ async fn an_expiry_reports_the_depth_the_entry_was_written_at_when_its_chain_is_
     now.store(1_600, Ordering::SeqCst);
     handle
         .report(Report::Affinity(AffinityReport {
+            root: "b1".into(),
             message_boundaries: chain(&["b2"]),
             ..affinity_report(&handle, "a", 1_600)
         }))
@@ -12064,7 +12066,17 @@ async fn a_wall_read_by_a_head_that_names_no_reset_is_stored_under_the_stored_re
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // Held, so no clock walk announces the passed reset between the move past it and the sample that reads it
+    // passed.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
     let mut events = handle.subscribe_events();
     let reset = 10 * HOUR;
     handle

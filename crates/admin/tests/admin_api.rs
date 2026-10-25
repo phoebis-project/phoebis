@@ -6696,7 +6696,7 @@ async fn report_prefix(
                 key_generation: common::generation(&parts.store, "desktop"),
                 canonical_model: model.into(),
                 lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
-                root: Some(session.into()),
+                root: session.into(),
                 static_boundaries: std::sync::Arc::from([]),
                 message_boundaries: std::sync::Arc::from([format!(
                     "{session}-{agent}-{model}-{account}"
