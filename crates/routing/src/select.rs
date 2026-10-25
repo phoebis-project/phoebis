@@ -6534,7 +6534,8 @@ fn candidate_facts(
     let sample = state.sample(id);
     let mut windows = BTreeMap::new();
     let mut burn = BTreeMap::new();
-    if kind != Some(AccountKind::ApiKey) {
+    // A usage-based seat draws no plan window, so its facts list none, its spend window drawn below.
+    if kind != Some(AccountKind::ApiKey) && !snapshot.usage_based(id) {
         let projections = projections_of(
             state,
             snapshot,

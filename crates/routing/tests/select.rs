@@ -13026,6 +13026,41 @@ fn a_usage_based_seats_candidate_facts_carry_the_spend_entry_estimated_under_no_
 }
 
 #[test]
+fn a_usage_based_seats_candidate_facts_list_its_spend_entry_and_no_plan_window_while_a_plan_member_lists_its_windows(
+) {
+    // The plan readings a seat read before it converted, which the routing state keeps across the class.
+    let plan_readings = || with_fable(sample(0.2, 0.3, T - 500), 0.4, None);
+    let s = spend_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", plan_readings());
+    st.record_sample("b", plan_readings());
+    st.record_credits("b", credits(true, None, Some(0.4), T - 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    let windows = |account: &str| -> Vec<String> {
+        candidate(&d.record, account)
+            .windows
+            .keys()
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        windows("b"),
+        ["spend"],
+        "the seat lists no plan window, its spend window drawn"
+    );
+    assert_eq!(
+        windows("a"),
+        [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE],
+        "the plan member lists its three plan windows"
+    );
+}
+
+#[test]
 fn a_fast_request_on_a_usage_based_seat_at_its_cap_reads_the_credits_obstacle_until_the_reset_and_places_past_it(
 ) {
     let s = spend_pool(vec![("b", 0)]);

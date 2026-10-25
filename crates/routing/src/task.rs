@@ -417,6 +417,9 @@ impl RegimeRates {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
     pub dollars: RateTable,
+    /// The 5-hour share per token of the pin's row under its regime, the table `BurnUnit::table` reads for
+    /// `WindowShare` when `price_pin` prices a pin. The router's own burn reads price in dollars alone, so the admin's
+    /// Sessions pricing is the reader in production, while the fit and the pace read the per-window map.
     pub five_hour: RegimeRates,
     /// Dollars per token at the fast cells, the table a pin's fast usage prices through. A row without fast cells
     /// carries its own standard and long-context rates here, as the ledger builds it, so a fast answer on such a
