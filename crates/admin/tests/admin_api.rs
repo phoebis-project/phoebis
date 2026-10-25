@@ -1710,7 +1710,8 @@ async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_
     );
 
     // Built again over the same store, with the same rows in its ledger: the router's memory of the head's reset is
-    // gone, so the reset reads the estimate while every member the ledger answers stands.
+    // gone, so the reset reads the estimate while the share stands, read from the credits row the rebuilt router
+    // loaded, or from the ledger's head row where the writer had not landed it.
     let again = common::admin_parts_full_on(parts.store.clone()).await;
     for row in &rows {
         again.db.insert_samples(&[], Some(row)).unwrap();
@@ -1723,7 +1724,7 @@ async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_
             "amounts": amounts, "utilization": 0.42, "resets_at": month_end(), "reset_source": "estimated",
             "observed_at": headed_bucket
         }),
-        "after a restart the amounts and the newest row's share stand, the reset the estimate: {restarted}"
+        "after a restart the amounts and the share stand, the reset the estimate: {restarted}"
     );
     assert_eq!(
         again

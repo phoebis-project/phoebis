@@ -2403,8 +2403,8 @@ pub(crate) struct Spend {
     /// Null while no polled row of the last day carries the amounts.
     pub amounts: Option<SpendAmounts>,
     /// The share as a fraction: the router's wherever it holds a reading of the seat, else the stored `utilization` of
-    /// the newest row of any source that carries one. Null where the one read carries none and once the reset the
-    /// share was read under has passed, the amounts drawn with no meter then.
+    /// the newest row of the last day, of any source, that carries one. Null where the share it reads is none and once
+    /// the reset the share was read under has passed, the amounts drawn with no meter then.
     pub utilization: Option<f64>,
     /// Epoch milliseconds: the window's reset as the router reads it, the estimate where the router answers none.
     pub resets_at: i64,

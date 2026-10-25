@@ -1754,7 +1754,7 @@ impl RoutingState {
     }
 
     /// The head reset a reading at `observed_at` was taken under: the newest head's reset where that head was observed
-    /// at or before the reading, else `None`, so a poll between two heads lapses at the first head's reset.
+    /// at or before the reading, else `None`, so a poll that lands between two heads lapses at the first head's reset.
     fn head_reset_for(&self, account_id: &str, observed_at: i64) -> Option<i64> {
         self.spend_head(account_id)
             .filter(|(_, held_at)| *held_at <= observed_at)

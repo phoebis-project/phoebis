@@ -1075,9 +1075,9 @@ spend share at one or more the seat leaves the eligible set for every model, a l
 spend window's reset, which is the reset a head's `anthropic-ratelimit-unified-overage-reset` names while that is ahead,
 else 00:00 UTC on the first of the next calendar month. The share expires at the reset it was read under, a head's reset
 where the router holds one observed at or before the reading and that reset is still ahead of the reading, and the
-estimate over the reading's instant otherwise. The account view reads the same lapse from the router wherever it holds
-the reading, so once that reset passes with no newer poll or head the hold lifts, and the window is drawn with its
-amounts and no meter until the next reading. The fast lane's credits read follows the same expiry: past the reset
+estimate over the reading's instant otherwise, so once that reset passes with no newer poll or head the hold lifts, and
+the window is drawn with its amounts and no meter until the next reading. The account view reads the same lapse from the
+router wherever the router holds the reading. The fast lane's credits read follows the same expiry: past the reset
 `org_spend_cap_reached` refuses none of the seat's fast requests, while the poll's own reason and a disabled flag still
 do.
 
