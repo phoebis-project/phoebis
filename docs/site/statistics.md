@@ -142,7 +142,7 @@ carries the body's `spend` figures where the body has the object: the cap and th
 currency and its exponent. A usage-based seat's head row carries no in-use flag, since the seat's overage family is its
 spend window. The account view and the Dashboard answer the head's `seven_day_overage_included` and the poll's
 `seven_day_fable` under the one id `seven_day_fable`, the newest reading winning, while the ledger keeps the head's key
-as stored. The head's overage-included week is read as the Fable week until a second model week arrives by head, since
+as stored. The head's overage-included week is read as the 7-day Fable until a second model week arrives by head, since
 the upstream's name for it is generic.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
@@ -689,20 +689,20 @@ and it opens the Analytics view on the account with the Burn section in view.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is
-announced once per reset cycle, since a newer head of the same cycle within two points of 1.0 after it neither clears
-nor repeats it, and two points cover a head, which reads the share up to a point under the poll's whole percent, with
-one point of room. A head that names no reset, taken before the announced reset, is of the announced cycle, so within
-the two points it neither clears nor repeats the wall, and the cycle that holds a head within the two points runs from
-the instant the wall was announced, or from the reset's passing for a wall that goes on past its reset. The ledger folds
-the four routing conditions from its events once an hour and at start into one table, which the gauge and
-`GET /admin/attention` read, so a condition clears at the first fold whose trailing day holds none of its events. The
-subject is the account, and the item dates from the oldest wall of the day. The detail counts the walls, names their
-windows and the settings `shed_cap` and `window_ceiling`, and names one figure by the trigger of the newest shedding
-round on the wall's window within that window's length before the wall: after a projection round the projection error,
-one less the round's projection, after a slow-down round the time the wall arrived before the reset (0 at or after it),
-and neither with no round. The ledger also keeps each account's longest early wall of the hour under a slow-down round,
-so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on the account's spent
-windows since the condition began.
+announced once per reset cycle, since a newer head or poll of the same cycle within two points of 1.0 after it neither
+clears nor repeats it, and two points cover a head, which reads the share up to a point under the poll's whole percent,
+with one point of room. A head or a poll that names no reset, taken before the announced reset, is of the announced
+cycle, so within the two points it neither clears nor repeats the wall, and the cycle that holds a head or a poll within
+the two points runs from the instant the wall was announced, from the stored instant of a wall a restart restored, or
+from the reset's passing for a wall that goes on past its reset. The ledger folds the four routing conditions from its
+events once an hour and at start into one table, which the gauge and `GET /admin/attention` read, so a condition clears
+at the first fold whose trailing day holds none of its events. The subject is the account, and the item dates from the
+oldest wall of the day. The detail counts the walls, names their windows and the settings `shed_cap` and
+`window_ceiling`, and names one figure by the trigger of the newest shedding round on the wall's window within that
+window's length before the wall: after a projection round the projection error, one less the round's projection, after a
+slow-down round the time the wall arrived before the reset (0 at or after it), and neither with no round. The ledger
+also keeps each account's longest early wall of the hour under a slow-down round, so the figure outlives the trailing
+day. The item opens the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour, until a `window_cleared` event on the same account and window follows that spent

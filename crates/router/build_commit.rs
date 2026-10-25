@@ -12,7 +12,8 @@ use std::process::Command;
 pub fn build_commit(dir: &Path, forced: Option<&str>) -> (String, Vec<PathBuf>) {
     // The ui crate's build script calls this helper and hands the bundle build the value it answers, so the header,
     // the `build` members and the bundle's commit read one value. A blank value reads as unset, so a workflow that
-    // exports it empty still falls to git.
+    // exports it empty still falls to git. The console's own bundle build reads the variable by the same rule where it
+    // runs alone.
     let forced = forced
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());

@@ -295,7 +295,7 @@ under it as `{kind} {subject} since {HH:MM}`, in the items' order, or reads `att
 Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24
 hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is
 off on it), the member's eligibility, the five-hour and seven-day windows in whole percent (`-` with no sample) and the
-Fable week when the account has one, then the nearest reset as `resets {HH:MM}` or, under a cooldown, `until {HH:MM}
+7-day Fable when the account has one, then the nearest reset as `resets {HH:MM}` or, under a cooldown, `until {HH:MM}
 {reason}`, with the scope ahead of the reason (`fast`, `fast_credits`, `model:{canonical}`) when the cooldown holds less
 than the whole account. A member in the `disconnected` or `reauth_required` state prints `-` under both windows, since
 the router answers it none. A usage-based seat prints its spend window in place of the windows, after its eligibility

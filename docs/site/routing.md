@@ -128,10 +128,10 @@ strategy overrides it. The pool dialog's "Prioritize subscription accounts" togg
 
 Each strategy's rule, as the pool dialog's Strategy hint states it:
 
-**`pace`**: Pace scores each member by its spare rate: the allowance left in the window it reads, the model's own Fable
-week where the model has one, else the 7-day window, per hour until that window resets or the subscription ends, less
-what its sessions burn of that window an hour, within the first priority tier that has an eligible account. An API-key
-member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random.
+**`pace`**: Pace scores each member by its spare rate: the allowance left in the window it reads, the model's own 7-day
+Fable window where the model has one, else the 7-day window, per hour until that window resets or the subscription ends,
+less what its sessions burn of that window an hour, within the first priority tier that has an eligible account. An
+API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random.
 
 **`priority`**: Within the first priority tier that has an eligible account, any of them at random.
 
@@ -375,7 +375,7 @@ ascending, then, under `prefer_plan`, an account not in overage before one in ov
 with a spent window joins the overage group with the flag on, and with it off sorts behind every account that is not,
 whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's sample as a
 window map: a subscription account scores by its spare rate, the remaining allowance in its own window (the model's own
-Fable week where the model has one, else the 7-day window) over the hours to the earlier of that window's reset and the
+7-day Fable where the model has one, else the 7-day window) over the hours to the earlier of that window's reset and the
 account's end ([Subscription end](#subscription-end)), less the burn of the sessions already pinned to the account on
 that window, in share per hour. The burn it subtracts is the burn those sessions would make unheld (see **The demand**,
 below), so an account calm only because the slow-down holds its sessions reads as full. An account at 0.3 used with two
@@ -465,10 +465,9 @@ prompt as one cache write) added now and its burn added to the account's, reache
 rewrite alone takes a window there, unbounded when nothing burns, and unbounded on the Sessions route and in the
 decision record's fit table where it reaches past the window's next reset, while the fit's verdict reads the computed
 figure against the horizon and the strategy's tie-break ranks by it. The session fits the account when the runway
-reaches the horizon on every window its model
-draws, `five_hour`, `seven_day` and the model's own week where it has one. An API-key account fits while its worst live
-rate-limit bucket reads under 1.0. A usage-based seat fits as an API-key account does: with no bucket to read, it has
-room.
+reaches the horizon on every window its model draws, `five_hour`, `seven_day` and the model's own week where it has one.
+An API-key account fits while its worst live rate-limit bucket reads under 1.0. A usage-based seat fits as an API-key
+account does: with no bucket to read, it has room.
 
 A move or a placement books its rewrite and its burn on the destination as a reservation, which the destination's
 prediction and burn count until the request's usage replaces it, the request ends without usage, or the reservation
@@ -587,7 +586,7 @@ warm. A pin a former pool left on the account is outside the round until it ends
 pin whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan
 window, so the pin has no share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A
 session that returns to standard requests brings its pin back with the plan burn it still carries. A pin whose model
-does not draw the window that fired is out of the round too (`off_window`), so a Fable-week round walks the account's
+does not draw the window that fired is out of the round too (`off_window`), so a 7-day Fable round walks the account's
 Fable sessions alone and an Opus session on the account is neither counted nor moved by it. The round then walks the
 pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A pin with a
 standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The pool's last
@@ -1009,20 +1008,19 @@ With every account in the pool rate limited, the answer is `429` `accounts_exhau
 `anthropic-ratelimit-unified-representative-claim` naming the window. A cooldown that came from a bare `Retry-After` is
 rendered as `five_hour`, because the client treats an unknown claim as no claim. A usage-based seat held out by its
 spend cap names the window `spend`, which the client arms no continue on, as suits a wait that can run to the month's
-end. With every account at its in-flight cap
-past the hold, the answer is `429` `accounts_at_cap` with a `Retry-After` of at most 19 seconds ([in-flight
-caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a pool whose
-accounts are all paused, the answer is `503` `accounts_unavailable` with no `retry-after`. A request whose key moved to
-another pool between its admission and its selection gets the same `503` with `Retry-After: 1` rather than being
-dispatched under the old pool's policy: the router logs a warning naming the key, both pools and the obstacle
-`pool_moved`, the request row reads rejected rather than exhausted, and the next request admits under the new pool. A
-request admitted under a key that was deleted, or deleted and created again under its id, before it was routed is
-refused with the `401` admission answers a key the registry does not hold ([What the proxy
-accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget answers `429` with
-the `overage` claim, the same one an account in overage carries ([Pools](#pools)), and a probe pinned to a member at its
-budget is answered with the end of the latest period whose budget is reached as its reset, whatever its siblings hold. A
-probe whose pinned account is disabled, past its subscription's end, or a member with a budget while the ledger is
-degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one that already tried its
+end. With every account at its in-flight cap past the hold, the answer is `429` `accounts_at_cap` with a `Retry-After`
+of at most 19 seconds ([in-flight caps](#in-flight-caps)), since the pool frees on its own. For anything only an
+operator can clear, such as a pool whose accounts are all paused, the answer is `503` `accounts_unavailable` with no
+`retry-after`. A request whose key moved to another pool between its admission and its selection gets the same `503`
+with `Retry-After: 1` rather than being dispatched under the old pool's policy: the router logs a warning naming the
+key, both pools and the obstacle `pool_moved`, the request row reads rejected rather than exhausted, and the next
+request admits under the new pool. A request admitted under a key that was deleted, or deleted and created again under
+its id, before it was routed is refused with the `401` admission answers a key the registry does not hold ([What the
+proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget answers `429`
+with the `overage` claim, the same one an account in overage carries ([Pools](#pools)), and a probe pinned to a member
+at its budget is answered with the end of the latest period whose budget is reached as its reset, whatever its siblings
+hold. A probe whose pinned account is disabled, past its subscription's end, or a member with a budget while the ledger
+is degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one that already tried its
 pinned account while a sibling could take it, where moving would otherwise land the pin on that sibling. Such a probe
 never moves the pin, and its request row reads rejected rather than exhausted, so the `pool_exhausted` condition of the
 `phoebis_attention` gauge does not count it. A probe that already tried its pinned account with no sibling to take it
@@ -1104,8 +1102,8 @@ the flag when `extra_usage.is_enabled` is true and the 5-hour or 7-day utilizati
 both shared windows are below 1.0. An account with extra usage enabled keeps serving with the flag set once its plan
 quota empties, so `prefer_plan` and `never` act through this flag rather than through a cooldown. Once the
 organization's spend cap is reached it answers `429` with the overage window rejected and the claim
-`seven_day_overage_included`. Both shared windows still read healthy, so for a model with a week of its own (the Fable
-week) the oauth table's model-scoped rows, which stand ahead of the shared row, take that rejection and cool that model
+`seven_day_overage_included`. Both shared windows still read healthy, so for a model with a week of its own (the 7-day
+Fable) the oauth table's model-scoped rows, which stand ahead of the shared row, take that rejection and cool that model
 alone, and for any other model it cools the account.
 
 Whether the flag still counts is one rule every reader applies alike, the selector and the keepalive scheduler included:
