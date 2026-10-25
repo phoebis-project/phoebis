@@ -1884,7 +1884,7 @@ mod tests {
         let lines: Vec<&str> = screen.lines().collect();
         assert_eq!(
             block(&lines, "accounts in no pool"),
-            ["  Direct  ready"],
+            ["  Direct  ready", "  Free    ready"],
             "{screen}"
         );
     }
