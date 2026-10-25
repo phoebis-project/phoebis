@@ -351,39 +351,39 @@ def missing(paths):
     return bool(absent)
 
 
+def check_quoted_block(fence, title, kind, source, page_md):
+    """The page's quoted block under `fence` against `source`, line for line, a trailing newline aside: the messages
+    both checks answer, `kind` the word the closing-fence message names."""
+    if missing([source, page_md]):
+        return 1
+    expected = source.read_text(encoding="utf-8").splitlines()
+    lines = page_md.read_text(encoding="utf-8").splitlines()
+    opens = [i for i, line in enumerate(lines) if line.strip() == fence]
+    if len(opens) != 1:
+        print(f"{page_md.name}: {len(opens)} fenced blocks titled {title}, expected one")
+        return 1
+    start = opens[0] + 1
+    close = next((i for i in range(start, len(lines)) if lines[i].strip() == "```"), None)
+    if close is None:
+        print(f"{page_md.name}:{start + 1}: the {kind} block has no closing fence")
+        return 1
+    quoted = lines[start:close]
+    for offset, (page, file) in enumerate(zip(quoted, expected)):
+        if page != file:
+            print(f"{page_md.name}:{start + offset + 1}: differs from {source.name}:{offset + 1}: {page!r} vs {file!r}")
+            return 1
+    if len(quoted) != len(expected):
+        print(f"{page_md.name}:{start + 1}: the block has {len(quoted)} lines and {source.name} {len(expected)}")
+        return 1
+    return 0
+
+
 EXAMPLE_FENCE = '```yaml title="deploy/config.example.yaml"'
 
 
 def check_example(example_yaml, installation_md):
     """The installation page's quoted example against the file, line for line, a trailing newline aside."""
-    if missing([example_yaml, installation_md]):
-        return 1
-    expected = example_yaml.read_text(encoding="utf-8").splitlines()
-    lines = installation_md.read_text(encoding="utf-8").splitlines()
-    opens = [i for i, line in enumerate(lines) if line.strip() == EXAMPLE_FENCE]
-    if len(opens) != 1:
-        print(f"{installation_md.name}: {len(opens)} fenced blocks titled deploy/config.example.yaml, expected one")
-        return 1
-    start = opens[0] + 1
-    close = next((i for i in range(start, len(lines)) if lines[i].strip() == "```"), None)
-    if close is None:
-        print(f"{installation_md.name}:{start + 1}: the example block has no closing fence")
-        return 1
-    quoted = lines[start:close]
-    for offset, (page, file) in enumerate(zip(quoted, expected)):
-        if page != file:
-            print(
-                f"{installation_md.name}:{start + offset + 1}: differs from {example_yaml.name}:{offset + 1}:"
-                f" {page!r} vs {file!r}"
-            )
-            return 1
-    if len(quoted) != len(expected):
-        print(
-            f"{installation_md.name}:{start + 1}: the block has {len(quoted)} lines and"
-            f" {example_yaml.name} {len(expected)}"
-        )
-        return 1
-    return 0
+    return check_quoted_block(EXAMPLE_FENCE, "deploy/config.example.yaml", "example", example_yaml, installation_md)
 
 
 UNIT_FENCE = '```ini title="deploy/phoebis.service"'
@@ -391,34 +391,7 @@ UNIT_FENCE = '```ini title="deploy/phoebis.service"'
 
 def check_unit(unit_file, installation_md):
     """The installation page's quoted unit against the file, line for line, a trailing newline aside."""
-    if missing([unit_file, installation_md]):
-        return 1
-    expected = unit_file.read_text(encoding="utf-8").splitlines()
-    lines = installation_md.read_text(encoding="utf-8").splitlines()
-    opens = [i for i, line in enumerate(lines) if line.strip() == UNIT_FENCE]
-    if len(opens) != 1:
-        print(f"{installation_md.name}: {len(opens)} fenced blocks titled deploy/phoebis.service, expected one")
-        return 1
-    start = opens[0] + 1
-    close = next((i for i in range(start, len(lines)) if lines[i].strip() == "```"), None)
-    if close is None:
-        print(f"{installation_md.name}:{start + 1}: the unit block has no closing fence")
-        return 1
-    quoted = lines[start:close]
-    for offset, (page, file) in enumerate(zip(quoted, expected)):
-        if page != file:
-            print(
-                f"{installation_md.name}:{start + offset + 1}: differs from {unit_file.name}:{offset + 1}:"
-                f" {page!r} vs {file!r}"
-            )
-            return 1
-    if len(quoted) != len(expected):
-        print(
-            f"{installation_md.name}:{start + 1}: the block has {len(quoted)} lines and"
-            f" {unit_file.name} {len(expected)}"
-        )
-        return 1
-    return 0
+    return check_quoted_block(UNIT_FENCE, "deploy/phoebis.service", "unit", unit_file, installation_md)
 
 
 CHECK_CONFIG_ARM = "Some(Command::CheckConfig) => {"

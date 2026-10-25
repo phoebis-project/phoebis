@@ -1374,12 +1374,9 @@ fn open_request_with(r: &Rig, id: &str, body: &str, read: u64, write: u64) {
     ));
 }
 
-/// A probe sent while a request streams can pause the agent on its answer, and a later attempt of that request then
-/// reports its usage under the pause. The observation records the TTL that usage settled on all the same, so the
-/// request's credit books an hour recipe's count under the hour, where a TTL of zero would file it under five minutes.
-#[tokio::test]
-async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credit_at_the_ttl_it_settled_on(
-) {
+/// The rig after the two requests, the covering probe, the pausing probe and the retry whose first stream event
+/// carries `start`, for the two cases that read the credit it books.
+async fn paused_retry(start: phoebis_bus::Usage) -> Rig {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -1413,13 +1410,7 @@ async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credi
         selected.attempt = 2;
     }
     r.engine.observe(retry);
-    let mut start = message_start(
-        "second",
-        phoebis_bus::Usage {
-            cache_read_tokens: Some(2_000),
-            ..Default::default()
-        },
-    );
+    let mut start = message_start("second", start);
     if let phoebis_bus::Event::ResponseChunk(chunk) = &mut start {
         chunk.attempt = 2;
     }
@@ -1430,6 +1421,20 @@ async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credi
         complete.attempt = 2;
     }
     r.engine.observe(done);
+    r
+}
+
+/// A probe sent while a request streams can pause the agent on its answer, and a later attempt of that request then
+/// reports its usage under the pause. The observation records the TTL that usage settled on all the same, so the
+/// request's credit books an hour recipe's count under the hour, where a TTL of zero would file it under five minutes.
+#[tokio::test]
+async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credit_at_the_ttl_it_settled_on(
+) {
+    let r = paused_retry(phoebis_bus::Usage {
+        cache_read_tokens: Some(2_000),
+        ..Default::default()
+    })
+    .await;
     let rows = final_rollups(&r).await;
     let credit = inference_rows(&rows);
     assert_eq!(
@@ -1448,56 +1453,13 @@ async fn a_request_whose_usage_arrives_while_its_agent_is_paused_books_its_credi
 /// read alone would settle on the recipe's hour.
 #[tokio::test]
 async fn a_paused_requests_credit_books_at_the_shorter_ttl_an_earlier_phase_settled_on() {
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        ..RigSpec::default()
+    let r = paused_retry(phoebis_bus::Usage {
+        cache_read_tokens: Some(2_000),
+        cache_write_5m_tokens: Some(100),
+        cache_write_1h_tokens: Some(0),
+        ..Default::default()
     })
     .await;
-    let hour = priced_body().replace(
-        r#""cache_control":{"type":"ephemeral"}"#,
-        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
-    );
-    open_request_with(&r, "first", &hour, 0, 2_000);
-    r.engine.observe(completed(&r, "first", 0));
-    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000);
-    r.advance_attended(3_600_000 - 360_000);
-    r.step().await;
-    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
-    r.advance_attended(420_000);
-    open_request_with(&r, "second", &hour, 2_000, 0);
-    // The probe due while the second request streams reads half the prefix back, which pauses the agent.
-    r.up.push_credential_rule(A, "/v1/messages", probe_answer(1_000, 1_000));
-    r.advance_attended(3_600_000 - 360_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").paused),
-        (2, true),
-        "the probe sent while the second request streamed paused the agent"
-    );
-    let mut retry = r.selected("second", "a");
-    if let phoebis_bus::Event::AccountSelected(selected) = &mut retry {
-        selected.attempt = 2;
-    }
-    r.engine.observe(retry);
-    let mut start = message_start(
-        "second",
-        phoebis_bus::Usage {
-            cache_read_tokens: Some(2_000),
-            cache_write_5m_tokens: Some(100),
-            cache_write_1h_tokens: Some(0),
-            ..Default::default()
-        },
-    );
-    if let phoebis_bus::Event::ResponseChunk(chunk) = &mut start {
-        chunk.attempt = 2;
-    }
-    r.engine.observe(start);
-    assert!(r.status("main").paused, "the usage arrived under the pause");
-    let mut done = completed(&r, "second", 2_000);
-    if let phoebis_bus::Event::RequestComplete(complete) = &mut done {
-        complete.attempt = 2;
-    }
-    r.engine.observe(done);
     let rows = final_rollups(&r).await;
     let credit = inference_rows(&rows);
     assert_eq!(

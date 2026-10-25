@@ -294,7 +294,8 @@ echo "$out" | grep -q "2 fenced blocks titled deploy/config.example.yaml" || fai
 out=$(python3 "$check" example "$tmp/example/gone.yaml" "$tmp/example/page.md" 2>&1) && fail "an example file that does not exist passed"
 echo "$out" | grep -q "gone.yaml is missing" || fail "the missing example file did not report: $out"
 
-# The quoted unit: equal passes, a drifted line names both line numbers, and a page without the block fails.
+# The quoted unit: equal passes, a block one line short names both lengths, a drifted line names both line numbers,
+# and a page without the block fails.
 mkdir -p "$tmp/unit"
 printf '[Service]\n# a comment\nUMask=0077\n' > "$tmp/unit/phoebis.service"
 cat > "$tmp/unit/page.md" <<'MD'
@@ -310,6 +311,9 @@ python3 "$check" unit "$tmp/unit/phoebis.service" "$tmp/unit/page.md" >/dev/null
 sed -i 's/^UMask=0077$/UMask=0022/' "$tmp/unit/page.md"
 out=$(python3 "$check" unit "$tmp/unit/phoebis.service" "$tmp/unit/page.md" 2>&1) && fail "a drifted unit line passed"
 echo "$out" | grep -q "page.md:6: differs from phoebis.service:3" || fail "the drifted line did not name both line numbers: $out"
+printf '# Page\n\n```ini title="deploy/phoebis.service"\n[Service]\n# a comment\n```\n' > "$tmp/unit/page.md"
+out=$(python3 "$check" unit "$tmp/unit/phoebis.service" "$tmp/unit/page.md" 2>&1) && fail "a unit block one line short of the file passed"
+echo "$out" | grep -q "page.md:4: the block has 2 lines and phoebis.service 3" || fail "the short unit block did not report both lengths: $out"
 printf '# Page\n\nno block\n' > "$tmp/unit/page.md"
 out=$(python3 "$check" unit "$tmp/unit/phoebis.service" "$tmp/unit/page.md" 2>&1) && fail "a page without the unit block passed"
 echo "$out" | grep -q "0 fenced blocks titled deploy/phoebis.service" || fail "the missing unit block did not report: $out"

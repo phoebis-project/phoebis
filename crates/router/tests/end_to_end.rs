@@ -80,9 +80,12 @@ async fn logged_in(client: &reqwest::Client, session_url: &str) {
     }
 }
 
-/// How many ports one test process draws from: fifty slices of 200 fill `20_000..30_000`, all of it below the
-/// kernel's ephemeral range (`net.ipv4.ip_local_port_range`, 32768 upward on Linux).
+/// How many ports one test process draws from.
 const PORT_SPAN: u16 = 200;
+
+/// How many slices one host's test processes spread over: fifty slices of `PORT_SPAN` fill `20_000..30_000`, all of
+/// it below the kernel's ephemeral range.
+const SLICES: u32 = 50;
 
 /// Where the kernel's own ephemeral range starts (`net.ipv4.ip_local_port_range`, 32768 upward on Linux). The
 /// allocator's whole span must stay below it.
@@ -97,7 +100,7 @@ fn slice_base(residue: u32) -> u16 {
 
 /// The first port of this process's slice, spread by pid so two test processes rarely share one.
 fn port_base() -> u16 {
-    slice_base(std::process::id() % 50)
+    slice_base(std::process::id() % SLICES)
 }
 
 /// A port no other test in this binary is handed, from a 200-port slice below the range the kernel picks
@@ -106,7 +109,7 @@ fn port_base() -> u16 {
 /// Rests on one precondition, asserted below: the cursor advances fewer than `PORT_SPAN` times in one
 /// process, one advance per draw and one per port a fake upstream holds.
 ///
-/// Two processes whose pids are congruent modulo 50 share a slice, and a draw inside the probe-to-bind
+/// Two processes whose pids are congruent modulo `SLICES` share a slice, and a draw inside the probe-to-bind
 /// window can collide. The default cargo runner never runs two of these binaries at once, so the window is
 /// left open. A parallel runner would need a per-slice lock file under `target/` held for the process's
 /// lifetime, taken before the first draw.
@@ -136,26 +139,26 @@ fn free_port() -> u16 {
 fn every_pid_slice_stays_below_the_ephemeral_range() {
     // Checked once rather than per residue: even the highest slice never reaches the kernel's own range.
     assert!(
-        20_000u32 + 50 * PORT_SPAN as u32 <= EPHEMERAL_FLOOR as u32,
+        20_000u32 + SLICES * PORT_SPAN as u32 <= EPHEMERAL_FLOOR as u32,
         "the allocator's full span reaches the kernel's ephemeral range"
     );
     // Arithmetic only: a live draw per residue would draw from the counter every other test in this process
     // shares, which is the bug this test used to cause.
-    for residue in 0..50u32 {
+    for residue in 0..SLICES {
         let base = slice_base(residue);
         assert!(
             base as u32 >= 20_000,
             "residue {residue} starts below the allocator's floor: base {base}"
         );
         assert!(
-            base as u32 + PORT_SPAN as u32 <= 20_000 + 50 * PORT_SPAN as u32,
+            base as u32 + PORT_SPAN as u32 <= 20_000 + SLICES * PORT_SPAN as u32,
             "residue {residue} pushes its slice past the allocator's own span: base {base}"
         );
     }
     // One live draw, which cannot wrap the shared counter by itself, proves free_port actually lands inside
     // this process's own slice.
     let port = free_port();
-    let base = slice_base(std::process::id() % 50);
+    let base = slice_base(std::process::id() % SLICES);
     assert!(
         (base..base + PORT_SPAN).contains(&port),
         "{port} is outside this process's slice ({base}..{})",
