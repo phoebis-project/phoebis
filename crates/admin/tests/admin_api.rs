@@ -2419,6 +2419,56 @@ async fn the_request_list_filters_on_the_serving_attempts_stop_reason_and_refusa
     );
 }
 
+/// The writer stamps a row from the rig's clock, so the clock set past `to` before the write lands a row received
+/// inside the range after the range's end.
+#[tokio::test]
+async fn the_request_list_answers_a_fixed_end_watermark_past_to_and_a_live_one_at_to() {
+    use common::{get, json, login, wait_json};
+    use phoebis_ledger::{Record, RequestRecord};
+    use std::sync::atomic::Ordering;
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let (from, to) = (common::NOW - 5_000, common::NOW);
+    let written_at = common::NOW + 5_000;
+    parts.clock_cell.store(written_at, Ordering::SeqCst);
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-late".into(),
+            received_at: to - 1_000,
+            finished_at: Some(to - 500),
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    });
+    let range = format!("/admin/requests?from={from}&to={to}");
+    let fixed = wait_json(&parts.app, &format!("{range}&fixed_end=1"), &cookie, |v| {
+        v["requests"].as_array().is_some_and(|rows| rows.len() == 1)
+    })
+    .await;
+    assert_eq!(
+        fixed["landed_through"].as_i64(),
+        Some(written_at),
+        "the fixed-end read answers the late row's stamp, past to {to}: {fixed}"
+    );
+    let live = json(get(&parts.app, &range, Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            live["requests"].as_array().map(Vec::len),
+            live["landed_through"].as_i64()
+        ),
+        (Some(1), Some(to)),
+        "the same range read live keeps its watermark at to: {live}"
+    );
+}
+
 #[tokio::test]
 async fn a_confirm_on_a_slot_sealed_under_another_key_answers_409_naming_the_account() {
     use common::{get, json, login, post};

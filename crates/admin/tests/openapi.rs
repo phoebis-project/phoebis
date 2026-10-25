@@ -1786,6 +1786,31 @@ async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_
     );
 }
 
+/// The query check proves the name is declared, and the console reads the flag's meaning from the document alone.
+#[tokio::test]
+async fn the_request_list_declares_the_fixed_end_flag_that_lets_its_watermark_pass_to() {
+    let (_app, _up, document) = document().await;
+    let parameters = document["paths"]["/admin/requests"]["get"]["parameters"]
+        .as_array()
+        .expect("the request list's parameters");
+    let fixed_end = parameters
+        .iter()
+        .find(|parameter| parameter["name"] == "fixed_end")
+        .unwrap_or_else(|| panic!("the request list declares fixed_end: {parameters:?}"));
+    assert_eq!(fixed_end["in"], "query", "{fixed_end}");
+    let description = fixed_end["description"]
+        .as_str()
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+    assert_eq!(
+        description.as_deref(),
+        Some(
+            "`true`/`1`: the range's end is fixed, so `landed_through` may pass `to` and a poll over the range reads \
+             a row that landed after the end once. Leave it off for a live range."
+        ),
+        "{fixed_end}"
+    );
+}
+
 #[test]
 fn every_module_that_reads_a_query_is_in_the_query_check() {
     let checked: BTreeSet<&str> = QUERY_MODULES.iter().map(|(m, _)| *m).collect();

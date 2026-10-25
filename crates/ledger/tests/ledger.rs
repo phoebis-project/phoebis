@@ -2587,6 +2587,79 @@ async fn a_read_bounded_by_to_caps_its_watermark_there_so_a_later_poll_reads_a_r
     up.shutdown().await;
 }
 
+/// A fixed range's `to` never moves, so no later bound reaches past it and the watermark may pass it. The writer
+/// stamps the row from its clock, after `to`, where a capped watermark would hand the row back to every poll.
+#[tokio::test]
+async fn a_fixed_end_read_lets_its_watermark_pass_to_so_a_row_that_landed_after_the_end_is_read_once(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let to = NOW + 1_000;
+    h.clock.store(NOW + 3_000, Ordering::SeqCst);
+    h.ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                id: "late".into(),
+                received_at: NOW + 500,
+                ..Default::default()
+            },
+            attempts: Vec::new(),
+            bodies: None,
+        })
+        .await;
+    ledgered(&h, "late").await;
+    let stamp = landed_at(&h.db, "late").unwrap();
+    assert!(
+        stamp > to,
+        "the row lands at {stamp}, past the range's to {to}"
+    );
+    let page = |filter: RequestFilter| {
+        h.db.read(move |c| {
+            phoebis_ledger::list_request_page(c, &filter, &LiveKeys::default(), None, 10)
+        })
+    };
+    let ids = |page: &phoebis_ledger::RequestPage| -> Vec<String> {
+        page.rows.iter().map(|(r, _)| r.id.clone()).collect()
+    };
+    let capped = page(RequestFilter {
+        to: Some(to),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        (ids(&capped), capped.landed_through),
+        (vec!["late".to_string()], to),
+        "a live range's watermark stops at its to"
+    );
+    let fixed = page(RequestFilter {
+        to: Some(to),
+        fixed_end: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        (ids(&fixed), fixed.landed_through),
+        (vec!["late".to_string()], stamp),
+        "a fixed range's watermark is the late row's own stamp"
+    );
+    let next = page(RequestFilter {
+        landed_after: Some(fixed.landed_through),
+        to: Some(to),
+        fixed_end: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        (ids(&next), next.landed_through),
+        (Vec::<String>::new(), stamp),
+        "the next poll reads no row and keeps the stamp, so the late row was read once"
+    );
+    up.shutdown().await;
+}
+
 #[test]
 fn the_account_filter_reads_the_serving_attempt_as_the_rollups_file_it() {
     let db = LedgerDb::open_in_memory().unwrap();

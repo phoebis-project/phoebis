@@ -60,8 +60,9 @@ pub(crate) struct RequestList {
     /// Set only while a row lies beyond the page. A page of exactly `limit` rows with none beyond answers null.
     pub next_cursor: Option<String>,
     /// The newest write instant among the rows the filters admit at this read, `to` included, the `landed_after` passed
-    /// where none above it has landed, and 0 where neither is set, never past a `to` the query names, since a row
-    /// received after `to` lands after it. Pass it as `landed_after` to read what landed since.
+    /// where none above it has landed, and 0 where neither is set, never past a `to` the query names unless
+    /// `fixed_end` is set, since a row received after `to` lands after it and a fixed range's poll reads a late row
+    /// once. Pass it as `landed_after` to read what landed since.
     pub landed_through: i64,
 }
 
@@ -885,6 +886,9 @@ pub(crate) struct RequestsQuery {
     pub held: Option<bool>,
     /// `true`/`1`.
     pub include_probes: Option<bool>,
+    /// `true`/`1`: the range's end is fixed, so `landed_through` may pass `to` and a poll over the range reads a row
+    /// that landed after the end once. Leave it off for a live range.
+    pub fixed_end: Option<bool>,
     /// Default 50, clamped to 1 through 500.
     pub limit: Option<u32>,
     /// `<received_at>:<id>`.
@@ -953,6 +957,7 @@ pub(crate) async fn list(
         include_probes: q
             .get("include_probes")
             .is_some_and(|v| v == "true" || v == "1"),
+        fixed_end: q.get("fixed_end").is_some_and(|v| v == "true" || v == "1"),
         cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
         efforts: list_param(&q, "efforts"),
         request_classes: list_param(&q, "request_classes"),
