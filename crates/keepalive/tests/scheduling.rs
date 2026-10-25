@@ -808,7 +808,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
 }
 
 /// While the ledger is degraded the selector cannot trust a budgeted member's spend and refuses a probe pinned there
-/// as `budget_unknown`. That clears once the ledger recovers, so the agent retries rather than pausing as exhausted.
+/// as `budget_unknown`. That clears once the ledger recovers, so the agent retries.
 #[tokio::test]
 async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers() {
     let mut r = armed(RigSpec {

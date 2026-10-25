@@ -892,6 +892,58 @@ async fn a_failed_request_decides_none_of_the_probes_it_kept_and_leaves_them_to_
     }
 }
 
+/// A canceled request between two probes restores the recipe, and the restored recipe's next probe reads the entry
+/// back, so the first probe's chain runs on through it. The tick at the first probe's own entry's end at 570 s
+/// settles nothing, and a warm turn at 600 s inside the second probe's entry is credited with neither probe wasted.
+#[tokio::test]
+async fn a_canceled_request_between_two_probes_leaves_the_first_to_the_chain_the_restored_recipe_extends(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request_as(&r, "first", OTHER_CLIENT, 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+    r.advance_attended(10_000);
+    open_request_as(&r, "canceled", OTHER_CLIENT, 0, 2_000);
+    r.engine
+        .observe(r.complete("canceled", phoebis_bus::Outcome::Canceled, None));
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.next_probe_at, status.reason),
+        (Some(NOW + 540_000), Reason::RequestCanceled),
+        "the cancel restored the recipe on the first probe's entry"
+    );
+    r.advance_attended(260_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.unanswered, status.next_probe_at, status.reason),
+        (2, Some(NOW + 810_000), Reason::Scheduled),
+        "the kept probe and the restored recipe's probe, which read the entry back 540 s in and kept it to 840 s"
+    );
+    r.advance_attended(30_000);
+    r.step().await;
+    r.engine.flush_persisted().await;
+    r.advance_attended(30_000);
+    open_request_as(&r, "warm", OTHER_CLIENT, 2_000, 0);
+    r.engine.observe(completed(&r, "warm", 2_000));
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the tick at 570 s settled nothing and the warm turn answered both probes"
+    );
+}
+
 /// The rig's body with `content` as its one message, so the upstream stub tells one turn's probe from another's.
 fn body_saying(content: &str) -> String {
     BODY.replace(r#""content":"hello""#, &format!(r#""content":"{content}""#))

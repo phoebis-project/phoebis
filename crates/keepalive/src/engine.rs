@@ -1599,7 +1599,8 @@ impl Inner {
     /// `discard_keeping_unanswered` for an arrival, an armed recipe (unpaused, its entry ahead of `now`) set aside
     /// instead of ended: its observation leaves `current` and `pending` with its size kept in `retained`, and waits with
     /// its schedule and context for the completion to restore or drop it. A paused recipe and one that never armed
-    /// end as before. An older recipe set aside over a completion the engine missed leaves through the discard.
+    /// end through the discard. An older recipe set aside over a completion the engine missed leaves through the
+    /// discard.
     pub(crate) fn set_aside(&mut self, key: &SessionKey, agent_id: &str, now: i64) {
         let aside = self
             .sessions
@@ -1693,11 +1694,12 @@ impl Inner {
     }
 
     /// The entry a kept probe is judged against: the greatest `entry_expires` among the probes of its chain. The chain
-    /// is the probe and each later kept probe of its lineage (model, speed, account), in exchange order, up to the
+    /// is the probe and each later probe of its lineage (model, speed, account) in `kept`, in exchange order, up to the
     /// first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
     /// read nothing or only part of the prefix found the entry gone, whole or in part, and wrote a new one, which
     /// starts a chain of its own. The read is tested beside `covered`, since the landing marks a cold complete rewrite
-    /// covered too.
+    /// covered too. The chain also runs through the lineage's unanswered probes, which the sweep hands in beside the
+    /// kept ones, since the recipe a failed turn re-arms keeps probing the entry its kept probes paid for.
     fn chain_expires(kept: &[Kept], probe: &Kept) -> i64 {
         let mut later: Vec<&Kept> = kept
             .iter()
@@ -1859,7 +1861,9 @@ impl Inner {
     /// Settles every kept probe whose `pending` label is set and whose chain's last entry (`chain_expires`) ended at or
     /// before `now` under that label, on each agent with no request open, and touches each agent it settled for the
     /// next save, which releases the settlements. A probe whose own entry ended inside a live chain waits with the
-    /// chain, so a turn inside the chain's last entry still answers every probe of it.
+    /// chain, so a turn inside the chain's last entry still answers every probe of it. The chain runs through the
+    /// agent's unanswered probes of the lineage too, since the recipe a failed turn re-arms keeps probing, which is the
+    /// chain `decide_against` judges once the next arrival moves those probes into `kept`. Only kept probes settle.
     pub(crate) fn settle_lapsed_pending(&mut self, now: i64) {
         let open = &self.pending;
         let mut settled: Vec<(SessionKey, String)> = Vec::new();
@@ -1873,10 +1877,16 @@ impl Inner {
                 {
                     continue;
                 }
+                let chain: Vec<Kept> = agent
+                    .kept
+                    .iter()
+                    .cloned()
+                    .chain(agent.unanswered.iter().map(|probe| Kept::of(agent, probe)))
+                    .collect();
                 let chain_ends: Vec<i64> = agent
                     .kept
                     .iter()
-                    .map(|probe| Self::chain_expires(&agent.kept, probe))
+                    .map(|probe| Self::chain_expires(&chain, probe))
                     .collect();
                 if !agent
                     .kept
@@ -3160,7 +3170,8 @@ impl Engine {
             // A failed turn is no evidence about the cache, past a head or not, so it decides none of the probes it
             // kept and hands them back for the next turn to read. A label the turn found stays, and a probe that
             // carries none takes `expired`, which the lapse sweep settles it under when its chain's last entry ends if
-            // no turn reads it first, as its recipe's own lapse would have.
+            // no turn reads it first, as its recipe's own lapse would have. The sweep reads that chain through the
+            // restored recipe's probes, so a kept probe whose entry they read back waits for the turn that reads them.
             if let Some(agent) = inner
                 .sessions
                 .get_mut(&key)

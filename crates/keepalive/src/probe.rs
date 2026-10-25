@@ -892,8 +892,8 @@ impl Inner {
             _ => {}
         }
         if status == 429 && error_code == Some("accounts_at_cap") {
-            // Retrying, not pausing: the pool is momentarily full, not out of quota, and a slot frees up in
-            // seconds, so `RetryableProbeError` ("retrying") is the honest label rather than the quota one.
+            // The pool is momentarily full and a slot frees up in seconds, so `RetryableProbeError` ("retrying") is
+            // the honest label.
             self.retry(
                 key,
                 agent_id,

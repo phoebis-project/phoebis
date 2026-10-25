@@ -2280,8 +2280,8 @@ fn held_stream() -> Respond {
     }
 }
 
-/// A pool at its cap answers a probe `429 accounts_at_cap` with `Retry-After` the bound: momentarily full,
-/// never out of quota, so the engine retries at the header's seconds rather than pausing under a quota reason.
+/// A pool at its cap answers a probe `429 accounts_at_cap` with `Retry-After` the bound: the pool is momentarily
+/// full, so the engine retries at the header's seconds.
 #[tokio::test]
 async fn a_probe_refused_by_a_full_pool_retries_after_the_header_rather_than_pausing() {
     let mut r = rig(RigSpec {
