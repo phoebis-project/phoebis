@@ -488,6 +488,22 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`the story's usage-based seat knows its allowance as an API key does, and the walk's spent rule reads it as holding allowance, at ${at}`, async () => {
+    const all = await decisionsOf(await story);
+    const records = all.filter((r) => r.candidates.some((c) => c.accountId === 'contract'));
+    assert.ok(records.length > 0, 'a record names the seat');
+    for (const r of records) {
+      const seat = r.candidates.find((c) => c.accountId === 'contract');
+      // The engine's paid-source arm knows the allowance of a source read by its spend or its worst bucket, never by a
+      // plan window.
+      assert.equal(seat.allowanceKnown, true, `${r.requestId}/${r.seq}'s seat`);
+      // The spent rule's holds_allowance counts a plan window the seat lacks as untouched, so the seat holds allowance.
+      assert.ok(['five_hour', 'seven_day', 'seven_day_fable'].every((w) => (seat.windows[w]?.utilization ?? 0) < 1), `${r.requestId}/${r.seq}'s windows ${Object.keys(seat.windows).join(', ')}`);
+    }
+    const keys = all.flatMap((r) => r.candidates.filter((c) => c.kind === 'api_key'));
+    assert.ok(keys.length > 0 && keys.every((c) => c.allowanceKnown), 'every API key candidate knows its allowance');
+  });
+
   test(`no account bills overage beside the provider's reason for no longer funding it, at ${at}`, async () => {
     const s = await story;
     for (const a of s.accounts) {
@@ -1083,6 +1099,30 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const last = Date.parse(history.find((h) => h.windowId === w.id).samples.at(-1).at);
       return opened <= last && last < reset && read < reset ? [] : [`${w.id}: the period ${iso(opened)} to ${iso(reset)}, the last sample ${iso(last)}, the reading ${iso(read)}`];
     });
+    assert.deepEqual(off, []);
+  });
+
+  test(`every account's samples end at its last reading on the utilization it answers, at ${at}`, async () => {
+    const s = await story;
+    // The last reading: the last clean poll where every poll after it failed, the reading an unpaired account keeps
+    // from before its disconnect, else now.
+    const endOf = (a) => {
+      const u = a.usage;
+      const last = u?.poll?.lastOutcome === 'failed' ? u.poll.lastCleanAt : a.status === 'unpaired' ? u?.fetchedAt : null;
+      return iso(last ? Date.parse(last) : s.now);
+    };
+    const off = [];
+    let read = 0;
+    for (const a of s.accounts) {
+      const windows = [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])];
+      for (const h of await s.api.getQuotaHistory(a.id)) {
+        read += 1;
+        const w = windows.find((x) => x.id === h.windowId);
+        const last = h.samples.at(-1);
+        if (!w || !last || last.at !== endOf(a) || Math.abs(last.utilization - w.utilization) > 0.001) off.push(`${a.id} ${h.windowId}: the last sample ${last?.at} at ${last?.utilization}, the reading ${endOf(a)} at ${w?.utilization}`);
+      }
+    }
+    assert.ok(read > 0, 'the story samples its windows');
     assert.deepEqual(off, []);
   });
 
@@ -1843,6 +1883,28 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([...seen].sort(), ['pace', 'priority', 'round_robin']);
   });
 
+  test(`every chosen pick line writes its tier as the engine's list of three whole numbers' digits, and no fact holds a slash-joined triple, at ${at}`, async () => {
+    const records = await decisionsOf(await story);
+    const triple = /^\d+\/\d+\/\d+$/;
+    let picked = 0;
+    for (const r of records) {
+      const id = `${r.requestId}/${r.seq}`;
+      // An exhausted record's pick names none and writes the strategy alone, so the chosen picks are the ones carrying
+      // the tier.
+      const pick = r.walk.find((s) => s.step === 'pick' && s.verdict === 'chosen');
+      if (pick) {
+        picked += 1;
+        const tiers = pick.facts.filter((f) => f.key === 'tier').map((f) => f.value);
+        assert.equal(tiers.length, 1, `${id}: one tier fact`);
+        const [tier] = tiers;
+        assert.ok(Array.isArray(tier) && tier.length === 3 && tier.every((x) => typeof x === 'string' && /^\d+$/.test(x)), `${id}: the tier ${JSON.stringify(tier)}`);
+      }
+      const joined = r.walk.flatMap((s) => s.facts.flatMap((f) => (Array.isArray(f.value) ? f.value : [f.value]).filter((x) => typeof x === 'string' && triple.test(x)).map((x) => `${s.step} ${f.key} ${x}`)));
+      assert.deepEqual(joined, [], `${id}: a slash-joined triple`);
+    }
+    assert.ok(picked > 0, 'a record picks');
+  });
+
   test(`one story placement ties two tier mates on Pace and the runway keeps one, so no draw was left, at ${at}`, async () => {
     const s = await story;
     const narrowed = (await decisionsOf(s)).filter((r) => s.lib.STORY_IDS.has(r.requestId) && r.walk.some((w) => w.step === 'pick' && w.facts.some((f) => f.key === 'by_runway')));
@@ -2150,7 +2212,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`the story writes nightly's failed usage poll, legacy's at the poll's cadence until its refresh failed, and one stream cut after its head with their detail members, at ${at}`, async () => {
+  test(`the story writes nightly's failed usage poll, legacy's at the poll's cadence until its refresh failed, reserve's at the cadence to its last attempt, and one stream cut after its head with their detail members, at ${at}`, async () => {
     const s = await story;
     const log = await logOf(s);
     const polls = log.filter((row) => row.type === 'event' && row.kind === 'poll_failed');
@@ -2172,7 +2234,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(slots.length > 0);
     assert.deepEqual(own.map((p) => p.at), slots, "legacy's failed polls");
     for (const p of own) assert.deepEqual(p.detail, poll.detail, `${p.at} reads the 503 nightly's poll read`);
-    assert.equal(polls.length, 1 + slots.length, 'no other account failed a poll');
+    // A 503 holds nothing back, so reserve's poll asked at every slot after its last clean read and failed each time,
+    // its last attempt among them, and no slot has come since.
+    const reserve = s.accounts.find((a) => a.id === 'reserve');
+    const lastAttempt = Date.parse(reserve.usage.poll.lastAttemptAt);
+    const reserveSlots = [];
+    for (let t = Date.parse(reserve.usage.poll.lastCleanAt) + CADENCE; t <= lastAttempt; t += CADENCE) reserveSlots.push(iso(t));
+    const reserved = polls.filter((p) => p.accountId === 'reserve').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    assert.deepEqual(reserved.map((p) => p.at), reserveSlots, "reserve's failed polls");
+    assert.equal(reserved.at(-1)?.at, reserve.usage.poll.lastAttemptAt, 'the last row is the last attempt');
+    for (const p of reserved) assert.deepEqual(p.detail, poll.detail, `${p.at} reads the 503 nightly's poll read`);
+    // Reserve's six: its seed's last clean read 35 minutes back and its last attempt 5 minutes back.
+    assert.equal(polls.length, 1 + slots.length + 6, 'no other account failed a poll');
     // The poll's last attempt is the slot whose acquisition ran the refresh that failed, after the last 503.
     const last = Date.parse(legacy.usage.poll.lastAttemptAt);
     assert.ok(last <= Date.parse(lapsed.at) && last > Date.parse(own.at(-1).at), `the last attempt at ${legacy.usage.poll.lastAttemptAt}`);

@@ -448,26 +448,29 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
   const start = NOW - HISTORY_SPAN;
   const currentStart = resetsAtMs - periodMs;
   const peakFor = new Map<number, number>();
-  for (let t = start; t <= endMs; t += SAMPLE_STEP) {
+  for (let t = start; t < endMs; t += SAMPLE_STEP) {
     const windowIndex = Math.floor((t - currentStart) / periodMs);
     const windowStart = currentStart + windowIndex * periodMs;
     let peak = peakFor.get(windowIndex);
     if (peak === undefined) {
-      // The live window must end exactly at the reported utilization; older
-      // windows get their own random shape.
+      // The live window is the one the samples end in. Its last point is the reading itself at `endMs`, as the router's
+      // last reading is, and the points before it climb a peak scaled to meet the reading there, floored so a window
+      // read early in its period does not scale its earlier points past what they could reach. Older windows get their
+      // own random shape.
       if (windowIndex === 0) {
-        const phaseNow = (NOW - currentStart) / periodMs;
-        peak = target / Math.max(0.05, climb(phaseNow));
+        const phaseEnd = (endMs - currentStart) / periodMs;
+        peak = target / Math.max(0.05, climb(phaseEnd));
       } else {
         peak = rng.float(0.25, 1.0) * (rng.chance(0.15) ? 0.35 : 1);
       }
       peakFor.set(windowIndex, peak);
     }
     const phase = (t - windowStart) / periodMs;
-    const jitter = windowIndex === 0 && t > NOW - SAMPLE_STEP ? 0 : rng.float(-0.012, 0.012);
+    const jitter = rng.float(-0.012, 0.012);
     const value = Math.max(0, Math.min(1, peak * climb(phase) + jitter));
     samples.push({ at: iso(t), utilization: Math.round(value * 1000) / 1000 });
   }
+  samples.push({ at: iso(endMs), utilization: Math.round(target * 1000) / 1000 });
   return samples;
 }
 

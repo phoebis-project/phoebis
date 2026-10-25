@@ -1446,8 +1446,9 @@ export class MockApi implements Api {
     const twice = repeatedId(ownIds);
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
     const current = this.keys[idx];
-    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
+    // The route reads the pool before it compares the edit's stamp, so a stale edit onto a missing pool answers 404.
     if (!this.pools.some((p) => p.id === rest.poolId)) return Promise.reject(new ApiError(404, 'pool not found', null));
+    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
     // The pool the key lands in, a new one on a move, with the key's own list as the edit leaves it.
     const own = ownIds ?? this.guardrailRefs('keys', id).map((r) => r.id);
     const bound = boundRefusal(rest.poolId, this.guardrailRefs('pools', rest.poolId).map((r) => r.id), [[id, own]]);

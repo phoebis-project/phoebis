@@ -257,6 +257,14 @@ test('a pool or key save over a revision the row no longer carries is refused as
   await assert.rejects(() => api.updateKey('laptop', edit, key.revision), staleAs(KEY_STALE), 'the stamp moved past the sent token');
 });
 
+test("a stale key edit onto a pool that does not exist answers the route's 404, since the route reads the pool before it compares the stamp", async () => {
+  const api = await signedIn();
+  const key = await storyKey(api, 'laptop');
+  const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
+  await assert.rejects(() => api.updateKey('laptop', { ...edit, poolId: 'ghost' }, key.revision + 1), refusedAs(404, 'pool not found'));
+  assert.deepEqual(await storyKey(api, 'laptop'), key, 'a refused edit stores nothing');
+});
+
 test('a pool or key save opened before a guardrail-side attachment is refused as stale, and a reread lists the guardrail', async () => {
   const api = await signedIn();
   const pool = (await api.listPools()).find((p) => p.id === 'all');

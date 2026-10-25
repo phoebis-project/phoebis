@@ -528,7 +528,9 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     const paceBurn = paid ? 0 : (burn[windowName] ?? 0);
     return {
       accountId: a.id,
-      allowanceKnown: a.kind === 'api_key' || windows.five_hour !== undefined,
+      // A paid source, an API key or a usage-based seat, knows its allowance, as the engine's paid-source arm answers,
+      // since its reading is the spend or the worst bucket, never a plan window.
+      allowanceKnown: isPaidSource(a) || windows.five_hour !== undefined,
       binding: null,
       budget,
       burn,
@@ -685,7 +687,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const dwellMs = pool.returnToPlanDwellSeconds * 1_000;
   const windows = drawnWindows(r.canonicalModel);
   const holdsAllowance = (c: RecordCandidate) => c.kind === 'api_key' || windows.every((w) => (c.windows[w]?.utilization ?? 0) < 1);
-  const allowanceKnown = (c: RecordCandidate) => c.kind === 'api_key' || windows.every((w) => c.windows[w] !== undefined);
+  const allowanceKnown = (c: RecordCandidate) => isPaidSource(accountOf.get(c.accountId)!) || windows.every((w) => c.windows[w] !== undefined);
   const siblings = candidates.filter((c) => c.obstacle === null && c.accountId !== source?.accountId);
   const lines: WalkStep[] = [];
   const no = (i: number, facts: WalkFact[]) => lines.push(step(`move:${RULES[i]}`, 'no', facts));
@@ -1266,7 +1268,8 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
         pool.strategy === 'round_robin'
           ? [fact('turn', `${member(spec.accountId)?.rank ?? 1} of ${ranks.length}`), fact('drawn', false)]
           : [fact('ties', ties.map((c) => c.accountId)), ...(byRunway.length > 0 ? [fact('by_runway', byRunway.map((c) => c.accountId))] : []), fact('drawn', (byRunway.length > 0 ? byRunway : ties).length > 1)];
-      walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.join('/')), ...scores, ...draw]));
+      // The tier as the engine writes it, a list of three strings.
+      walk.push(step('pick', 'chosen', [fact('strategy', pool.strategy), fact('tier', tier.map(String)), ...scores, ...draw]));
     }
   }
   if (spec.kind === 'held' && spec.hold && !resetHold && !slowHold && !rewriteHold) {
@@ -2332,6 +2335,18 @@ function legacyPolls(): EventSeed[] {
 }
 
 /**
+ * Reserve's polls after its last clean read: a 503 holds nothing back, so the poll asked at every slot and the
+ * endpoint answered 503 each time, up to and including its last attempt.
+ */
+function reservePolls(): EventSeed[] {
+  const poll = accountOf.get('reserve')?.usage?.poll;
+  if (!poll?.lastCleanAt || !poll.lastAttemptAt) return [];
+  const slots: number[] = [];
+  for (let at = Date.parse(poll.lastCleanAt) + POLL_INTERVAL_MS; at <= Date.parse(poll.lastAttemptAt); at += POLL_INTERVAL_MS) slots.push(at);
+  return slots.map((at) => ({ accountId: 'reserve', at: iso(at), detail: { ...USAGE_503 }, kind: 'poll_failed' }));
+}
+
+/**
  * Primary's plan read as ended by the profile read a usage 403 made due, and found again by the next profile read a
  * minute later. While the flag stands the routing reads the account as past its end, so the two sit in a minute of
  * the morning no decision places on it.
@@ -2508,6 +2523,7 @@ function buildEvents(): RoutingEvent[] {
     // next poll reads clean.
     { accountId: 'nightly', at: iso(t(12, 26, 40)), detail: USAGE_503, kind: 'poll_failed' },
     ...legacyPolls(),
+    ...reservePolls(),
     { accountId: 'research', at: iso(t(12, 41, 7)), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(t(12, 41, 7)) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     { accountId: 'overflow', at: iso(t(11, 30, 12)), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },

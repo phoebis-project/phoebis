@@ -15111,6 +15111,29 @@ m.unmount();
     }
   }
   {
+    // The pick line writes the tier as the engine's list of three digit strings, which the card draws as the words of
+    // the chosen member's tier: the Pick station's second line and its popover's tier row, on the tie's failover.
+    const name = "/routing-log the Pick station draws the pick line's tier list as the chosen member's tier words";
+    const id = 'req_8c41f2d7-a93';
+    const record = await api.getDecision(id, 2);
+    if (record === null) results.push({ name, ok: false, missing: ['no failover of the story at 08:16'] });
+    else {
+      const { card, page } = await story(id, 2);
+      const fact = record.walk.find((s) => s.step === 'pick' && s.verdict === 'chosen')?.facts.find((f) => f.key === 'tier')?.value;
+      const tier = record.candidates.find((c) => c.accountId === record.outcome.accountId)?.tier ?? [];
+      const word = tier[0] === 2 ? 'keys' : tier[0] === 1 || tier[2] === 1 ? 'overage' : 'plan';
+      const second = stationsOf(card).find((s) => s.id === 'pick')?.second ?? [];
+      const popover = await popoverOf(page, stationButton(card, 'pick'));
+      const row = popoverRowOf(popover, 'tier');
+      results.push({
+        name,
+        ok: Array.isArray(fact) && JSON.stringify(fact) === JSON.stringify(tier.map(String)) && JSON.stringify(row) === JSON.stringify([`tier ${word} P${tier[1]}`]) && JSON.stringify(second) === JSON.stringify([`Pace P${tier[1]}`]),
+        missing: [`fact ${JSON.stringify(fact)}`, `tier ${JSON.stringify(tier)}`, `row ${JSON.stringify(row)}`, `second ${JSON.stringify(second)}`, rowsRead(popover)],
+      });
+      page.unmount();
+    }
+  }
+  {
     // The router's usage poll asks every five minutes and asks no account it has to pair again, so legacy writes one
     // failed poll per slot from its last clean poll until the refresh that lapsed it, read off the mock's legacy seed.
     const legacy = (await api.listAccounts()).find((a) => a.id === 'legacy');
@@ -15126,6 +15149,24 @@ m.unmount();
       name: "/routing-log lists legacy's failed polls at the poll's five-minute cadence from its last clean poll until its refresh lapsed",
       ok: slots > 0 && polls.length === slots && listed === slots && polls.every((e) => e.detail.status === 503 && e.detail.endpoint === 'usage' && Date.parse(e.at) < Date.parse(lapsed.at)),
       missing: [`${polls.length} rows, ${listed} drawn, ${slots} slots`, ...polls.map((e) => e.at)],
+    });
+  }
+  {
+    // A 503 holds nothing back, so reserve's poll failed at every five-minute slot after its last clean poll, its last
+    // attempt among them: six rows off the mock's reserve seed, its last clean poll 35 minutes back and its last
+    // attempt 5 minutes back.
+    const reserve = (await api.listAccounts()).find((a) => a.id === 'reserve');
+    const clean = Date.parse(reserve?.usage?.poll?.lastCleanAt ?? '');
+    const last = Date.parse(reserve?.usage?.poll?.lastAttemptAt ?? '');
+    const range = { from: iso(CLOCK_ORIGIN - 7 * DAY), limit: 200, to: iso(CLOCK_ORIGIN) };
+    const polls = (await api.listRoutingLog({ ...range, accountIds: ['reserve'], kinds: ['poll_failed'] })).rows;
+    const page = await mount(`/routing-log?accounts=reserve&kinds=poll_failed&from=${iso(clean)}&to=${iso(CLOCK_ORIGIN)}`, { now: CLOCK_ORIGIN });
+    const listed = trs(page).length;
+    page.unmount();
+    results.push({
+      name: "/routing-log lists reserve's failed polls at the poll's five-minute cadence from its last clean poll to its last attempt",
+      ok: polls.length === 6 && listed === 6 && polls.every((e, i) => e.detail.status === 503 && e.detail.endpoint === 'usage' && Date.parse(e.at) === last - i * 5 * MINUTE && Date.parse(e.at) > clean),
+      missing: [`${polls.length} rows, ${listed} drawn`, `clean ${iso(clean)}, last attempt ${iso(last)}`, ...polls.map((e) => e.at)],
     });
   }
   {
