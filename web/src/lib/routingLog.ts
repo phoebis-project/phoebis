@@ -1381,8 +1381,16 @@ export function paceHeader(record: DecisionRecord): string {
   return (pace?.burn ?? null) === null ? `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour` : `Spare rate, ${wordOf(PACE_WINDOW_WORD, id)} per hour`;
 }
 
+/**
+ * The score's unit is the record's, read off the pick step's `score` fact about the candidate (`percent` for a seat
+ * whose share lapsed, `percent_per_hour` otherwise), and a record with no pick step reads the plan unit
+ * `percent_per_hour`.
+ */
+const scoreUnit = (c: RecordCandidate, record: DecisionRecord): FactUnit =>
+  (record.walk.find((s) => s.step === 'pick')?.facts.find((f) => f.key === 'score' && f.accountId === c.accountId)?.unit as FactUnit | null | undefined) ?? 'percent_per_hour';
+
 /** A Pace cell's hover: the share left, the hours it is spread over and the rate, or an API key's share alone. */
-function paceTitle(c: RecordCandidate, now: number): string | null {
+function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): string | null {
   const p = c.pace;
   if (p === null) return null;
   if (c.kind === 'api_key') return `${fmtPct(p.remaining)} of its worst live bucket left. Scored by the remaining share alone, with no division by hours.`;
@@ -1394,7 +1402,7 @@ function paceTitle(c: RecordCandidate, now: number): string | null {
   const over = p.hours === null ? '' : ` over ${p.hours < 1 ? `${Math.round(p.hours * 60)} min` : `${Math.round(p.hours)} h`}`;
   // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
   const deadline = p.deadline === null ? ' with no reset read' : ` to ${p.reset !== null && msOf(p.reset) === msOf(p.deadline) ? 'its reset' : "its subscription's end"} at ${formatFact(p.deadline, 'time', now)}`;
-  const score = formatFact(p.score, 'percent_per_hour', now);
+  const score = formatFact(p.score, scoreUnit(c, record), now);
   // A version 1 record read no burn, and its score was the share left an hour above the pace floor.
   const burn = p.burn ?? null;
   if (burn === null) return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${score}. Inside its tier, the highest above the pace floor wins.`;
@@ -1461,8 +1469,8 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
   return {
     account: accountChip(c.accountId),
     inFlight: `${c.inFlight} of ${c.inFlightCap}`,
-    pace: c.pace === null ? '-' : c.kind === 'api_key' || spend ? `${fmtPct(c.pace.remaining)} left` : formatFact(c.pace.score, 'percent_per_hour', now),
-    paceTitle: paceTitle(c, now),
+    pace: c.pace === null ? '-' : c.kind === 'api_key' || spend ? `${fmtPct(c.pace.remaining)} left` : formatFact(c.pace.score, scoreUnit(c, record), now),
+    paceTitle: paceTitle(c, record, now),
     plan: planWord(c),
     prefix: { hash: entry, until: entry === null ? null : warmUntil(entry, now) },
     projection: projectionLines(c, record, now),

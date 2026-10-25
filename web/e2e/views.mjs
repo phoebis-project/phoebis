@@ -10306,6 +10306,52 @@ async function forkLink(theme) {
   else if (read.current !== 'true' || read.marked !== 1 || !read.inView) say(`following the fork link leaves its base ${JSON.stringify(read)}`);
 }
 
+/** The finished session's line, and the Agents tile's hover's tail on subagents released under a live session. */
+const RELEASED_LINE = 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.';
+const RELEASED_HOVER = 'which draw no line and keep their slot for one cache TTL after the release, then leave the engine.';
+
+/**
+ * The session the mod released whole, listed under the finished filter alone and found by its Cache warming badge: its
+ * open detail's line reads the records' leave in the type of the detail's cell, and the Agents tile's hover names the
+ * same leave. In the mock pass alone, whose story holds such a session, on a load of its own after the view's shot, so
+ * that shot keeps the bare view.
+ */
+async function sessionsReleasedLine(theme) {
+  const say = (what) => failures.push(`${theme} /sessions released line: ${what}`);
+  await loadAtOrigin('/sessions?finished=1', '.sessions-table');
+  const rows = page.locator('.sessions-table > tbody > tr.srow');
+  const index = await page.evaluate(() => {
+    const warming = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim()).indexOf('Cache warming');
+    return [...document.querySelectorAll('.sessions-table > tbody > tr.srow')].findIndex((tr) => tr.children[warming]?.querySelector('.badge')?.textContent?.trim() === 'released');
+  });
+  if (index < 0) {
+    say('the finished filter lists no session the mod released whole');
+    return;
+  }
+  await rows.nth(index).locator('.srow__chevron').click();
+  await settle();
+  const read = await rows.nth(index).evaluate((tr) => {
+    const type = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { color: s.color, fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight };
+    };
+    const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+    const line = detail?.querySelector('.agents__released') ?? null;
+    const tile = [...document.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Agents');
+    return {
+      cell: type(detail?.querySelector(':scope > td')),
+      hover: tile?.querySelector('.stat__value [title]')?.getAttribute('title') ?? null,
+      line: line === null ? null : { ...type(line), text: line.textContent?.trim() ?? null },
+    };
+  });
+  measurements.push(`${theme} /sessions released line ${JSON.stringify(read)}`);
+  if (read.line?.text !== RELEASED_LINE) say(`the open detail reads ${JSON.stringify(read.line?.text ?? null)}, not ${JSON.stringify(RELEASED_LINE)}`);
+  // The hover composes the records' count and the hidden rows around this sentence, so its tail is read alone.
+  if (!(read.hover ?? '').includes(RELEASED_HOVER)) say(`the Agents tile's hover reads ${JSON.stringify(read.hover)}, without ${JSON.stringify(RELEASED_HOVER)}`);
+  failures.push(...compare(read.line, read.cell, ['fontFamily', 'fontSize', 'lineHeight'], `${theme} /sessions released line: the line against the detail's cell`));
+}
+
 /**
  * A console served over plain HTTP has no `navigator.clipboard`: the accessor lives on the prototype, so it is
  * deleted there, and a copy listener records what the page had selected at each copy instant, for the measures that
@@ -10702,6 +10748,7 @@ try {
       if (view.path === '/routing-log') await freshRowTint(theme, view.path);
       if (view.path === '/routing-log' && mock) await routingLogPickLine(theme);
       if (view.path === '/sessions') await forkLink(theme);
+      if (view.path === '/sessions' && mock) await sessionsReleasedLine(theme);
       if (view.path === '/settings') await copyFallback(theme);
       // The pool chip's measure and the bar's load their addresses themselves and leave the bare view.
       if (view.path === '/keys') await keysPoolSelect(theme);

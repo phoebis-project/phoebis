@@ -786,6 +786,12 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ verdict: 'source', windows: { five_hour: window5h(1, ms(15, 42)), seven_day: window5h(0.5, null) } }), ['source', '5h spent', null]);
 });
 
+test("the candidate's Runway reads unbounded where the gate read a fit and no runway, none at 0 and a dash where it read no fit", () => {
+  // The record leaves the runway out both where no burn bounds it and where it passes the binding window's reset.
+  const runway = (o) => d.candidateCells(candidate(o), record(), NOW).runway;
+  assert.deepEqual([runway({ fit: 'fits', runwayMs: null }), runway({ fit: 'least_bad', runwayMs: 0 }), runway({ fit: null, runwayMs: null })], ['unbounded', 'none', '-']);
+});
+
 test('the outcome rows read the cache tier off the deepest map entry and pending before it', () => {
   const rows = (r, row) => d.outcomeRows(r, NOW, row).map((line) => [line.label, texts(line.chips)]);
   const answered = record({
@@ -1635,4 +1641,21 @@ test("a usage-based candidate's Pace cell reads its remaining allowance, and the
   );
   const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
   assert.equal(d.paceHeader(record({ candidates: [seat, plan] })), 'Spare rate, 7-day per hour', 'the seat listed first names no window, so the next subscription candidate heads the column');
+});
+
+test("a Pace cell and its title read the score in the unit the record's pick step gives it, the plan unit with no pick step", () => {
+  // A seat whose share lapsed carries no spend entry, so it reads by the plan arm, while the engine scores it as a paid
+  // source: a percent with a burn of 0.
+  const lapsed = candidate({ accountId: 'seat', pace: { burn: 0, deadline: null, end: null, hours: null, remaining: 0.9, reset: null, score: 0.42, window: null }, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: {} });
+  const picked = (c, facts) => d.candidateCells(c, record({ candidates: [c], walk: [wstep('pick', 'chosen', facts)] }), NOW);
+  const seat = picked(lapsed, [wfact('score', 0.42, 'percent', 'seat')]);
+  assert.ok(seat.paceTitle.includes(': 42%.') && !seat.paceTitle.includes('42.00 %/h'), `the seat's title reads its score as a percent: ${seat.paceTitle}`);
+  assert.equal(seat.pace, '42%', 'the cell reads the unit its title reads');
+  const other = picked(lapsed, [wfact('score', 0.42, 'percent', 'primary')]);
+  assert.deepEqual([other.pace, other.paceTitle.includes(': 42.00 %/h.')], ['42.00 %/h', true], 'a score fact about another member leaves the plan unit');
+  const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
+  const rate = picked(plan, [wfact('score', 0.006, 'percent_per_hour', 'primary')]);
+  assert.deepEqual([rate.pace, rate.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], 'a plan candidate reads its spare rate');
+  const bare = d.candidateCells(lapsed, record({ candidates: [lapsed] }), NOW);
+  assert.deepEqual([bare.pace, bare.paceTitle.includes(': 42.00 %/h.')], ['42.00 %/h', true], 'a record with no pick step reads the plan unit');
 });

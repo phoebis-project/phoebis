@@ -91,10 +91,13 @@ const sessionSpec: ({
   // Seen by the router but with nothing in the ledger, so the per-row jump to
   // analytics has no traffic to land on.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
+  // A session the mod released whole, whose lines' last uses, minutes back, date the release inside all's one-hour
+  // cache TTL, since the router lists a released record for one TTL after its release and then not at all.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'idle', agents: 3, companion: 'reporting', released: true, sessionId: RELEASED_SESSION_ID },
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-6', state: 'busy', agents: 1, companion: 'reporting', sessionId: CLIENT_SESSION_ID },
-  // The two sessions the Sessions view's default filters hide: one the mod ended, which keeps its lines, and one no
-  // companion reports, last used two hours ago, past the view's one-hour age.
+  // The two sessions the Sessions view's default filters hide: one the mod ended, which keeps its lines, its released
+  // subagents' last probes dating their release inside all's one-hour cache TTL, and one no companion reports, last
+  // used two hours ago, past the view's one-hour age.
   {
     keyId: 'desktop',
     accountId: 'nightly',
@@ -163,7 +166,8 @@ const sessionSpec: ({
     },
   },
   // A session the mod released whole after a probe and one more turn, both past all's ten-minute affinity window, so
-  // the router expired its pin and only the released line stays listed.
+  // the router expired its pin and only the released line stays listed, the turn dating its release inside all's
+  // one-hour cache TTL.
   {
     keyId: 'desktop',
     accountId: 'primary',
@@ -440,7 +444,9 @@ const WRITTEN_SESSION = 9;
  * lifecycle word, three of them released, one by the session's end, which the view keeps listed, and an id of the
  * length Claude Code gives a subagent. The list's order (a released row first, the parked row before the idle one, and
  * the idle row's last request newer than the drawn busy row's) differs from the lifecycle order main, busy, idle,
- * parked, so lines drawn in the list's order read differently from lines sorted into it.
+ * parked, so lines drawn in the list's order read differently from lines sorted into it. Each released row's last probe
+ * dates its release inside the pool's cache TTL, since the router lists a released record for one TTL after the
+ * release and then not at all.
  */
 const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
   { agentId: 'e7c1', agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(4 * MINUTE), lastRequestAt: ago(9 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
@@ -450,7 +456,11 @@ const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
   { agentId: 'c3a9', agentState: 'released', cause: 'session_ended', deadline: null, lastProbeAt: ago(6 * MINUTE), lastRequestAt: ago(11 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
 ];
 
-/** What every line of a session the mod released whole reads, written over the drawn row. */
+/**
+ * What every line of a session the mod released whole reads, written over the drawn row. The row keeps its last request
+ * and probe, the later of which dates the release inside the pool's cache TTL, since the router lists a released record
+ * for one TTL after the release.
+ */
 const RELEASED_BY_THE_MOD: Partial<KeepaliveRecipe> = { agentState: 'released', cause: 'agent_released', deadline: null, nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null };
 /**
  * What a subagent reads once its compaction completed: the engine stopped its recipe, and no probe goes out until the

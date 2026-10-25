@@ -391,7 +391,7 @@ export function SessionsPage() {
             o && rows ? (
               <span
                 className="nowrap"
-                title={`The rows shown hold ${fmtInt(agentRecords)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine.` : ''}${hiddenTitle === undefined ? '' : ` ${hiddenTitle}.`}`}
+                title={`The rows shown hold ${fmtInt(agentRecords)} agent records against the cap.${hidden > 0 ? ` ${fmtInt(hidden)} of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine.` : ''}${hiddenTitle === undefined ? '' : ` ${hiddenTitle}.`}`}
               >
                 {`${fmtInt(Math.max(0, agentRecords - hidden))} of ${fmtInt(o.limits.agents.max)}`}
               </span>
@@ -802,7 +802,7 @@ function SessionRows({
             )}
             {/* A finished session keeps its lines, so the sentence stands above them. */}
             {row.finished && shown.length > 0 && (
-              <p className="agents__released">The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.</p>
+              <p className="agents__released">The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.</p>
             )}
             {shown.length > 0 && (
               <div className={companion ? 'agents agents--context' : 'agents'}>

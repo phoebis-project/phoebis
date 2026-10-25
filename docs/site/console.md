@@ -969,15 +969,16 @@ recipe." with the disclosure "How pins and recipes work", whose paragraph says w
 reference" link that opens the dialog on Plan rates. The tiles read Sessions (`{n} of {max}`, the rows the filters keep
 against the engine's cap), Agents (`{n} of {max}` with `{n} busy, {n} idle, {n} parked`, both over the agents of the
 rows the filters keep: the figure leaves out the subagents the mod released while their session lives, which draw no
-line and keep their slot until the session leaves, named on hover, and counts them while Released agents draws them),
-Retained (`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h" (a bar by outcome and `{n} ok ({pct}),
-{n} migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h" ("misses cache warming exists to
-prevent") and "Bus gaps" ("times the keepalive engine missed bus events"). While the filters hide rows, the Sessions and
-Agents tiles name them on hover, `{k} sessions hidden by the filters`. A tile whose read failed draws a dash with the
-reason on hover, and Try again under the tiles reads them again. Auto reload starts at 5 s and reads the sessions, the
-recipes and the tiles at that one interval, and it waits while the Cost reference dialog, the Release question or a
-row's menu is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's words under [The
-mod](keepalive.md#the-mod) and the recipe's states under [The five states](keepalive.md#the-five-states).
+line and keep their slot for one cache TTL after the release, then leave the engine, named on hover, and counts them
+while Released agents draws them), Retained (`{n} MiB of {max} MiB`, "prompts kept for probes"), "Cache probes, 24h" (a
+bar by outcome and `{n} ok ({pct}), {n} migrated, {n} held, {n} skipped, {n} failed`), "Expired between turns, 24h"
+("misses cache warming exists to prevent") and "Bus gaps" ("times the keepalive engine missed bus events"). While the
+filters hide rows, the Sessions and Agents tiles name them on hover, `{k} sessions hidden by the filters`. A tile whose
+read failed draws a dash with the reason on hover, and Try again under the tiles reads them again. Auto reload starts at
+5 s and reads the sessions, the recipes and the tiles at that one interval, and it waits while the Cost reference
+dialog, the Release question or a row's menu is open. The probes and the recipe are explained on
+[Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the recipe's states under [The five
+states](keepalive.md#the-five-states).
 
 The card "Sessions" ("One row per session. Open a row for the cache-warming recipe each agent carries") offers "Expand
 all" or "Collapse all". The Session column is always drawn, and the twelve others, which the bar's Columns control shows
@@ -1019,10 +1020,10 @@ them. A session no companion reports draws neither column. State reads the recip
 retained`, `paused` or `retained`) with the cause beside it and the sentence of each on hover, and under them the mod's
 lifecycle word for the agent with a parked agent's park kind and its deadline or wake time (`parked · background ·
 deadline in 1h 12m`). A finished session, listed under Finished sessions, reads "The mod released every agent of this
-session. Their records keep their slots of the cap until the session leaves the engine." above its lines, which keep
-their ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the engine last read, and its
-Agents cell counts the lines drawn. A session the mod released whole keeps its released badge. A session without a
-recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
+session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine." above
+its lines, which keep their ended state with the TTL, Last request, Last probe, Next probe and Probes / credited the
+engine last read, and its Agents cell counts the lines drawn. A session the mod released whole keeps its released badge.
+A session without a recipe reads "no recipe" and `Nothing is scheduled because {reason}.`
 
 ### The cost reference
 
@@ -1185,44 +1186,44 @@ holds `realized`, in the order the engine applies them.
 Tier (`plan P0`, `overage P0`, `keys P1`), 5h, 7d and Fable as three lines each (the utilization, the reset, the
 reading's source and age), or on a usage-based seat whose record carries its spend reading one cell across the three,
 `spend 41%` over its reset with `estimated` under it where the router estimated the reset, Projection and Runway, In
-flight against the cap, the Pace score, Prefix, and Verdict. A usage-based seat with no reading, its share lapsed, draws
-the three "not reported" cells as an account with no window does. The rows list the chosen, renewed or held-on member
-first, then a move's source and its other destinations, then the ranked members by rank, then the eligible ones the
-strategy did not rank, then the ones a partition or a check dropped with their obstacle. Projection reads one line per
-window the candidate reports, the projection at the window's horizon, `5h 99% at 18:20` where the horizon is the reset
-and `7d 41% in 5 h` where it falls earlier, and Runway a span (`2 h 10 min`), `none` or `unbounded`, each a dash for a
-candidate the gate did not read. The Projection cell's hover names the demand where it differs from the burn the window
-sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the candidate's slow-down factor. The Pace score stands under
-a header naming the window it read, `Spare rate, 7-day per hour` or `Spare rate, 7-day Fable per hour` (`Pace` where no
-subscription candidate names one, and `Pace, 7-day left per hour` on a version 1 record), each cell's hover reading
-`{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of burn: {rate}.` (or `to its
-subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.` The pick line names the
-accounts whose scores tied, the runway that narrowed them where it did, and whether the draw chose among more than one.
-Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of $5.00`), whose hover says why
-the member was passed over, and beside it a badge for a destination the gate read that did not fit, `rewrite only` or
-`least bad` in the warning tone and `ending` neutral. Three folds, "Request facts", "Pin and warmth" (a record that pins
-nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and `Settings
-in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence re-reads the
-pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account it left,
-`shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The settings
-fold lists the pool's twenty-four settings in the card's order with Load shedding and Slow-down reading `on` or `off`,
-Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key and its
-pool had left the registry". A refused record, which no pool setting entered, draws no settings fold. A record written
-before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and the
-five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
-twenty-four, each marked `(then)`, the three settings it carried that a later record does not. "Outcome" lists the pin
-written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
-(`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading `for the reset at
-{time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips `speed 0.5x`, `stretch
-42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the rewrite in flight of
-{request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a Cause on a failover's landing
-or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown, `re-auth required by credential refused` for a
-mark), the answer an exhaustion or a refusal gave, and the spend against a budget. With four entries or more, the
-cache-map row draws one chip per tier with its count and depth range, such as `message ×11 depth 1 to 11`, then its
-three deepest message depths, and its control "All {n} entries" lists every entry until "Latest 3" folds them again. The
-foot offers the three widenings after "Widen to", this minute, this session and this account, names the record's version
-as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A record the retention purged reads "The
-record left with the retention", and one still loading "Loading the record".
+flight against the cap, the Pace score, Prefix, and Verdict. A usage-based seat with no reading, its share lapsed or not
+yet read, draws the three "not reported" cells as an account with no window does. The rows list the chosen, renewed or
+held-on member first, then a move's source and its other destinations, then the ranked members by rank, then the
+eligible ones the strategy did not rank, then the ones a partition or a check dropped with their obstacle. Projection
+reads one line per window the candidate reports, the projection at the window's horizon, `5h 99% at 18:20` where the
+horizon is the reset and `7d 41% in 5 h` where it falls earlier, and Runway a span (`2 h 10 min`), `none` or
+`unbounded`, each a dash for a candidate the gate did not read. The Projection cell's hover names the demand where it
+differs from the burn the window sees, `demand 12.86 %/h over burn 6.43 %/h at 0.5x`, with the candidate's slow-down
+factor. The Pace score stands under a header naming the window it read, `Spare rate, 7-day per hour` or `Spare rate,
+7-day Fable per hour` (`Pace` where no subscription candidate names one, and `Pace, 7-day left per hour` on a version 1
+record), each cell's hover reading `{pct} of the 7-day window left over {n} h to its reset at {time}, less {burn} of
+burn: {rate}.` (or `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate wins.`
+The pick line names the accounts whose scores tied, the runway that narrowed them where it did, and whether the draw
+chose among more than one. Verdict carries the one chip that decided it (`429 on 5h until 14:55`, `budget $1.10 of
+$5.00`), whose hover says why the member was passed over, and beside it a badge for a destination the gate read that did
+not fit, `rewrite only` or `least bad` in the warning tone and `ending` neutral. Three folds, "Request facts", "Pin and
+warmth" (a record that pins nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and
+Slowed until) and `Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too,
+since the fence re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark
+names the account it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with
+the instant. The settings fold lists the pool's twenty-four settings in the card's order with Load shedding and
+Slow-down reading `on` or `off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at
+once` at 0, or "The key and its pool had left the registry". A refused record, which no pool setting entered, draws no
+settings fold. A record written before a setting existed reads `not recorded` for it, Load shedding and Window ceiling
+on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record, and a version 1
+record lists after the twenty-four, each marked `(then)`, the three settings it carried that a later record does not.
+"Outcome" lists the pin written, the reservation (the account, the share per window and the expiry), the cache-map
+entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold,
+reading `for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the
+chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or `for the
+rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a Cause on
+a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown, `re-auth required by
+credential refused` for a mark), the answer an exhaustion or a refusal gave, and the spend against a budget. With four
+entries or more, the cache-map row draws one chip per tier with its count and depth range, such as `message ×11 depth 1
+to 11`, then its three deepest message depths, and its control "All {n} entries" lists every entry until "Latest 3"
+folds them again. The foot offers the three widenings after "Widen to", this minute, this session and this account,
+names the record's version as `Record v{n}`, and "Copy as JSON" copies the record route's answer whole. A record the
+retention purged reads "The record left with the retention", and one still loading "Loading the record".
 
 An event row opens to a panel of pairs: When to the second, the account and the pool as links, then the kind's own
 pairs. An event that names a request ends with "Source request", which opens the log on that request a quarter hour
@@ -1288,7 +1289,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
 | window cleared | A quota window read under its limit again after a reading at the limit, with the readings before and after and the reset unchanged. |
 | window reset | A quota window reset, with the reading before it. |
-| window spent | A response head, the poll or the prediction read a quota window at its limit, once per reset cycle: a newer head of the same cycle within two points of 1.0 after it neither clears nor repeats it, and a head naming no reset, taken before the announced reset, is of the same cycle. |
+| window spent | A response head, the poll or the prediction read a quota window at its limit, once per reset cycle: a newer head or poll reading of the same cycle within two points of 1.0 after it neither clears nor repeats it, a head naming no reset, taken before the announced reset, is of the same cycle, and the cycle runs from the instant the wall was announced or, for a wall restored at a start, from the stored reading's instant. |
 
 Other views open the log on what they show: a Requests row and its drawer on the request a quarter hour either side, the
 Sessions row menu's "View in routing log" on the session's decisions an hour either side of its last request, a pool

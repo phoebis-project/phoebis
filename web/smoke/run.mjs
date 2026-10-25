@@ -21556,7 +21556,7 @@ const CARD_VIEWS = [
   // reads the defaults, and the chip line's clear returns to it. Each view is read on the story's instant, so a row's
   // age is its seed's. The row idle for two hours is found by the id the mock's seeds write out for it.
   const TWO_HOURS_ID = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
-  const RELEASED_SENTENCE = 'The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.';
+  const RELEASED_SENTENCE = 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.';
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
   const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
@@ -21602,7 +21602,7 @@ const CARD_VIEWS = [
       bare.sessionsValue === '21 of 128' &&
       bare.sessionsTile === AWAY &&
       bare.agentsTile === AWAY &&
-      bare.agentsTitle === `The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. ${AWAY}.`,
+      bare.agentsTitle === `The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. ${AWAY}.`,
     missing: [String(bare.sessionsValue), String(bare.sessionsTile), String(bare.agentsTile), String(bare.agentsTitle)],
   });
   {
@@ -21973,7 +21973,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       ok:
         JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
         JSON.stringify([ov.agents.busy, ov.agents.idle, ov.agents.parked]) === JSON.stringify([9, 9, 4]) &&
-        agentsTitle === 'The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot until their session leaves the engine. 8 sessions hidden by the filters.' &&
+        agentsTitle === 'The rows shown hold 32 agent records against the cap. 2 of them are subagents the mod released while their session lives, which draw no line and keep their slot for one cache TTL after the release, then leave the engine. 8 sessions hidden by the filters.' &&
         want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
       missing: [...strip.map((t) => t.join(' | ')), `overview ${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`, agentsTitle || 'no Agents title'],
     });
@@ -22258,7 +22258,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
         ok:
           id !== undefined &&
           bare === undefined &&
-          read.text === 'The mod released every agent of this session. Their records keep their slots of the cap until the session leaves the engine.' &&
+          read.text === 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.' &&
           read.sentences === 1 &&
           read.above &&
           read.lines === 3 &&

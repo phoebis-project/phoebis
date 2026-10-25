@@ -35,6 +35,19 @@ const lastUseOf = (r) => Math.max(...[r.lastRequestAt, r.lastProbeAt].flatMap((x
  * affinity window, since the mod's release ends the keepalive record and leaves the pin until the router expires it.
  */
 const pinnedRecipesOf = (s, recipes) => recipes.filter((r) => r.agentState !== 'released' || s.now - lastUseOf(r) <= affinityOf(s, r));
+const TTL_MS = { '1h': HOUR, '5m': 5 * 60_000 };
+/**
+ * The longest cache TTL of the pool a recipe's key routes through, the span the router lists a released record for
+ * after its release: the main TTL of each rule set its members' kinds bring where the policy is on, and both TTLs where
+ * it leaves the markers as sent, as the mock's `composedFor` reads the policy.
+ */
+const longestTtlOf = (s, r) => {
+  const pool = s.pools.find((p) => p.id === s.keys.find((k) => k.id === r.keyId)?.poolId);
+  if (!pool.cacheTtl.enabled) return TTL_MS['1h'];
+  const kinds = pool.members.map((m) => m.kind);
+  const mains = [...(kinds.includes('oauth') ? [pool.cacheTtl.plan.main] : []), ...(kinds.includes('api_key') ? [pool.cacheTtl.metered.main] : [])];
+  return Math.max(...mains.map((t) => TTL_MS[t]));
+};
 
 /**
  * The story's refusals, each seed flagged as the ledger's landing would flag it: the earlier runner's two sends on ci
@@ -912,6 +925,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of others) assert.deepEqual([r.agentState, r.cause, r.state, r.nextProbeAt], ['released', 'agent_released', 'ended', null], `${r.agentId} reads as a released agent`);
     for (const r of lines) assert.ok(r.lastProbeAt !== null && r.probesToday > 0, `${r.agentId} keeps its probe facts`);
     assert.equal(row.agents, lines.length, 'the row counts every record');
+  });
+
+  test(`every released line dates its release inside its pool's longest cache TTL, past which the router lists it no more, at ${at}`, async () => {
+    const s = await story;
+    // The story writes no release instant, so a line's last use, its last request or its last probe, stands in for it.
+    const released = (await s.api.listKeepaliveRecipes()).filter((r) => r.agentState === 'released');
+    assert.ok(released.length > 0, 'the story holds released lines');
+    for (const r of released) {
+      const age = s.now - lastUseOf(r);
+      assert.ok(age >= 0 && age < longestTtlOf(s, r), `${r.keyId} ${r.sessionId} ${r.agentId} dates its release ${age / 60_000} min back, past its pool's ${longestTtlOf(s, r) / 60_000} min`);
+    }
   });
 
   test(`the session idle for two hours is pinned with no companion and reads its last use two hours back, at ${at}`, async () => {

@@ -243,16 +243,18 @@ agent lines, the fork badge's face (under the session id, in the row's badge fac
 and whole), the session row's chevron (14 px square at the icon's 1.75 stroke), the Sessions tiles in error (mock pass,
 on loads of its own under the mock's sessions failure switch: the Sessions and Agents tiles a dash over "could not load"
 titled with the read's message, in the box, the value's line and the note's line of the Retained tile beside them, which
-keeps its figure, and the notice under the tiles naming the sessions), the fork link, which is followed once the session
-list's shot is taken, the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the Settings
-view's own load, and on a Key created dialog's secret in the mock pass, on a load of its own), the login screen's Stay
-logged in row (on both logins, the light theme's and the dark one's after the Log out: the secret field's, the row's,
-its box's, its label's and its hint's edges inside the card recorded, asserting nothing)). A check that opens an editor,
-a dialog or a row closes it again before the view's shot, and one that turns a column on turns it off again. The recent
-requests' table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows read their
-5-hour equivalent in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap
-there, and its width under Window shares, where the cell keeps its two-line shares, is recorded beside it. The script
-exits non-zero with the list of failures when any of that does not hold.
+keeps its figure, and the notice under the tiles naming the sessions), the released session's line and the Agents tile's
+hover, their words against the detail's type (mock pass, on a load of its own under the finished filter once the session
+list's shot is taken), the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied
+on the Settings snippet with the clipboard API removed, on the Settings view's own load, and on a Key created dialog's
+secret in the mock pass, on a load of its own), the login screen's Stay logged in row (on both logins, the light theme's
+and the dark one's after the Log out: the secret field's, the row's, its box's, its label's and its hint's edges inside
+the card recorded, asserting nothing)). A check that opens an editor, a dialog or a row closes it again before the
+view's shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the router pass
+and recorded in the mock pass, whose story's subscription rows read their 5-hour equivalent in the Cost cell, wider than
+the card leaves at 1280 by 800, so the table scrolls inside its wrap there, and its width under Window shares, where the
+cell keeps its two-line shares, is recorded beside it. The script exits non-zero with the list of failures when any of
+that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
