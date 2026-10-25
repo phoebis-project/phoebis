@@ -129,11 +129,12 @@ export function burnWords(w: Pick<RateLimitWindow, 'burn'>): string | null {
 
 export const isSubscription = (account: Pick<Account, 'kind'>) => account.kind === 'oauth';
 /**
- * Whether the Quota page lists the account. It lists a subscription account that is paired and not awaiting
- * re-authentication.
+ * Whether the Quota page lists the account. It lists a subscription account that is paired, not awaiting
+ * re-authentication and whose plan has not ended. The flag alone decides the third: a saved end that has passed counts
+ * for nothing on its own, since the router sets the flag once a profile read finds no plan.
  */
-export const isQuotaListed = (account: Pick<Account, 'kind' | 'status'>): boolean =>
-  isSubscription(account) && account.status !== 'reauth_required' && account.status !== 'unpaired';
+export const isQuotaListed = (account: Pick<Account, 'kind' | 'planEndedAt' | 'status'>): boolean =>
+  isSubscription(account) && account.status !== 'reauth_required' && account.status !== 'unpaired' && account.planEndedAt === null;
 
 /** The fast lane's two cooldown scopes, its rate limit's and its usage-credits refusal's: each holds fast-mode
  *  requests alone, so neither cools the account's standard traffic. */

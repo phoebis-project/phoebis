@@ -2364,6 +2364,15 @@ function planRows(account: Account): EventSeed[] {
 }
 
 /**
+ * The plan-ended account's one row: the profile read found the free organization its canceled plan left, at the
+ * instant the account's flag names, and no read since found a plan, so no `plan_restored` follows.
+ */
+function planEndedRow(account: Account): EventSeed[] {
+  if (account.planEndedAt === null) return [];
+  return [{ accountId: account.id, at: account.planEndedAt, detail: { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'profile', subscription_status: 'canceled' }, kind: 'plan_ended' }];
+}
+
+/**
  * The events beside the decisions: every pin event and model answer the requests' windows hold, the pins the
  * placements created, the cooldowns the attempts' answers set, and the story's own rows, at least one of every kind.
  */
@@ -2570,6 +2579,7 @@ function buildEvents(): RoutingEvent[] {
     // Drawn at the instant it fires: the subscription's end less the pool's wind-down, which is still ahead.
     { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'canceled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
     ...planRows(primary),
+    ...planEndedRow(accountOf.get('sunset')!),
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
@@ -2623,9 +2633,10 @@ const order = (a: RoutingLogPage['rows'][number], b: RoutingLogPage['rows'][numb
  * The merged page by the route's rules. The range runs from an hour back by default. An absent `kinds` is every
  * decision and event, the probe decisions among them, and `kinds` names exactly what it lists, `probe` for a probe's
  * decision of any kind. `accounts` matches a decision's source too. `limit + 1` rows are read so a cursor
- * is offered only when a next page exists, and the counts come under a request filter.
+ * is offered only when a next page exists, and the counts come under a request filter. The events are the story's and
+ * the rows a mock's writes recorded since, which `written` holds.
  */
-export function listRoutingLog(query: RoutingLogQuery, now: number): RoutingLogPage {
+export function listRoutingLog(query: RoutingLogQuery, now: number, written: readonly RoutingEvent[] = []): RoutingLogPage {
   const from = query.from ? Date.parse(query.from) : now - HOUR;
   const to = query.to ? Date.parse(query.to) : now;
   // An empty list is no filter, as the client omits it from the query.
@@ -2644,7 +2655,7 @@ export function listRoutingLog(query: RoutingLogQuery, now: number): RoutingLogP
       (!query.accountIds?.length || query.accountIds.some((id) => id === s.accountId || id === s.fromAccountId)) &&
       (kinds === undefined || (kinds.includes(s.kind) && !s.probe) || (kinds.includes('probe') && s.probe)),
   );
-  const events = ROUTING_EVENTS.filter(
+  const events = [...ROUTING_EVENTS, ...written].filter(
     (e) =>
       within(e.at) &&
       (e.id !== LATE_EVENT_ID || now >= LATE_EVENT_AT) &&

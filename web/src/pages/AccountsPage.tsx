@@ -651,7 +651,13 @@ function AccountDetail({ account, awaitingReading, now, onBusyChange, onToast, o
 
         <Card title="Usage" subtitle="Remaining share of each window" className="card--fill">
           {!account.usageBased && account.windows.length === 0 && !account.fableWindow ? (
-            awaitingReading ? <p className="muted">The first quota reading is in flight.</p> : <p className="muted">This account does not report quota windows.</p>
+            awaitingReading ? (
+              <p className="muted">The first quota reading is in flight.</p>
+            ) : account.planEndedAt !== null ? (
+              <p className="muted">{`No quota window is read since the plan ended ${fmtRelative(account.planEndedAt, now)}.`}</p>
+            ) : (
+              <p className="muted">This account does not report quota windows.</p>
+            )
           ) : (
             <WindowTriple account={account} now={now} others />
           )}

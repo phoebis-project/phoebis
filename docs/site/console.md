@@ -177,16 +177,17 @@ pins as `active pins across {n} accounts` and the agents as Agents, Busy, Idle a
 ![The Quota view: the Quota windows section](assets/quota-windows-light.png#only-light)
 ![The Quota view: the Quota windows section](assets/quota-windows-dark.png#only-dark)
 
-The Quota view covers the subscription accounts that are paired and not awaiting re-authentication, since an API-key
-account has no quota window. Its bar offers "Refresh all", which reads the endpoint of each of those accounts and whose
-hover reads "reads the endpoint now unless the account is backing off, and records the reading as the scheduled poll
-does", and at the right edge the split Refresh button, whose body reads the account list again ("Reads the list again
-now"), and the count of those accounts, `{n} accounts`, followed in the critical ink by those needing attention, `, {n}
-need attention`. Auto reload starts at 5 s. A section bar shows one of two sections at a time: Accounts, where the view
-opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. A card's reading is the router's
-reported sample where the router holds one for the window and the ledger's [quota sample](statistics.md#quota-samples)
-otherwise. The router answers no quota window for an account in the `disconnected` or `reauth_required` state, whatever
-reading it held before, so no view draws one for it.
+The Quota view covers the subscription accounts that are paired, not awaiting re-authentication and whose plan has not
+ended, since an API-key account has no quota window. Its bar offers "Refresh all", which reads the endpoint of each of
+those accounts and whose hover reads "reads the endpoint now unless the account is backing off, and records the reading
+as the scheduled poll does", and at the right edge the split Refresh button, whose body reads the account list again
+("Reads the list again now"), and the count of those accounts, `{n} accounts`, followed in the critical ink by those
+needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section bar shows one of two sections at a time:
+Accounts, where the view opens, and Quota windows, which a link or a reload with `#quota-windows` lands on. A card's
+reading is the router's reported sample where the router holds one for the window and the ledger's [quota
+sample](statistics.md#quota-samples) otherwise. The router answers no quota window for an account in the `disconnected`
+or `reauth_required` state or whose plan ended (its `plan_ended_at` set), whatever reading it held before, so no view
+draws one for it.
 
 Accounts draws a card per account, sorted "Default order", "Soonest recovery", "5-hour pace", "7-day pace" or "7-day
 Fable pace", every card with the same slots in the same order: the header with the label (the email on hover) and the
@@ -299,24 +300,25 @@ ends where known, Organization and Billing type, and "Edit end" opens the end ed
 its end. An annual plan is marked canceled in its final month only. The time is in this browser's zone.", Save and
 Cancel, and "Reload" where the row changed under the editor. Beside the saved end the row answers `plan_ended_at`, the
 instant a profile read found the account's organization holding no plan, which the router reads as an end that has
-passed until a profile read or a pairing finds a plan again ([Account states](pairing.md#account-states)). The card
-closes on "Renewal date is not reported by the provider." For an API-key account it lists Type ("API key") and Windows
-("None reported, billed per token"). "Usage" ("Remaining share of each window") draws the three windows as the Quota
-view does, or a usage-based seat's spend bar, "Spend limit" with `{used} of {limit}` over its meter and its reset line,
-the speed chip beside the 5-hour bar's label on a slowed account, "Extra usage this month" on every account but a
-usage-based seat, with an "in use" badge and its amounts and spend meter where the reading carries them, the reason the
-provider gave for disabling extra usage, and a "Fast mode" line with the share of the fast lane's input and output
-buckets used and a chip while the fast lane cools, or reads "This account does not report quota windows." ("No spend
-reading yet" on a usage-based seat), or "The first quota reading is in flight." from a pairing's confirm until the
-account's first reading lands, where a usage-based seat reads "No spend reading yet". "7-day trend" ("Utilization of
-each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a subscription account, or "No
-samples yet" with "Quota samples appear after the first successful quota fetch." "Cooling down" lists Scope ("Whole
-account", "Fast mode", "Fast mode credits" or the model), Reason and Until with a Clear button per row, or "Nothing
-cooling down", and Clear asks "Clear cooldown": "The account becomes eligible immediately. If the account is still rate
-limited, the next request re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads "Not a member of a
-pool." "Credential" lists Access token, Refresh token, Last refresh and Last error for a subscription account, and
-Secret ("stored encrypted at rest") and Last error for an API-key account. "Requests" reads Last 24h, Last 7d and
-Lifetime, with a "Routing log" link that opens the log on the account's rows over the last hour.
+passed until a profile read or a pairing finds a plan again, and the Quota view leaves the account out while the flag
+stands ([Account states](pairing.md#account-states)). The card closes on "Renewal date is not reported by the provider."
+For an API-key account it lists Type ("API key") and Windows ("None reported, billed per token"). "Usage" ("Remaining
+share of each window") draws the three windows as the Quota view does, or a usage-based seat's spend bar, "Spend limit"
+with `{used} of {limit}` over its meter and its reset line, the speed chip beside the 5-hour bar's label on a slowed
+account, "Extra usage this month" on every account but a usage-based seat, with an "in use" badge and its amounts and
+spend meter where the reading carries them, the reason the provider gave for disabling extra usage, and a "Fast mode"
+line with the share of the fast lane's input and output buckets used and a chip while the fast lane cools, or reads
+"This account does not report quota windows." ("No spend reading yet" on a usage-based seat, or "No quota window is read
+since the plan ended {ago}." on an account whose plan ended), or "The first quota reading is in flight." from a
+pairing's confirm until the account's first reading lands, where a usage-based seat reads "No spend reading yet". "7-day
+trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of a
+subscription account, or "No samples yet" with "Quota samples appear after the first successful quota fetch." "Cooling
+down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the model), Reason and Until with a Clear button
+per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The account becomes eligible immediately. If the
+account is still rate limited, the next request re-enters cooldown." "Pool" links the pool with `priority {n}`, or reads
+"Not a member of a pool." "Credential" lists Access token, Refresh token, Last refresh and Last error for a subscription
+account, and Secret ("stored encrypted at rest") and Last error for an API-key account. "Requests" reads Last 24h, Last
+7d and Lifetime, with a "Routing log" link that opens the log on the account's rows over the last hour.
 
 "Catalog" opens `Catalog of {label}`: `As of {ago}` with "Refresh", and the models as Model, Name, Released, Input
 tokens, Output tokens and Effort levels, or "The upstream lists no models."
@@ -1272,7 +1274,7 @@ Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 | pin released | An operator released a session's pin by hand. |
 | plan ended | A profile read found the account's organization holding no plan, so the account is flagged plan ended, with the read's source (the profile read, or the usage 403 that made it due) and the profile's organization type, rate-limit tier and subscription status. |
 | plan restored | The account's plan-ended flag cleared, with its source (a profile read that found a plan, or a pairing confirm) and the profile's organization type, rate-limit tier and subscription status. |
-| poll backoff ended | The usage poll answered cleanly again after backing off. |
+| poll backoff ended | The usage poll answered cleanly again after backing off, or the account's plan ended while a run was open. |
 | poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
 | poll failed | The usage or the profile endpoint answered a passing fault, with the endpoint, the status or the transport failure and the text. |
 | refresh failed | An access-token refresh failed. |

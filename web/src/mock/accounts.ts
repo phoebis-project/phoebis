@@ -1,5 +1,5 @@
 import { planName } from '@/api/decode';
-import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, WindowId } from '@/api/types';
+import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
 import { endOf } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey } from '@/lib/windows';
 import { leadOf } from './lead';
@@ -59,15 +59,31 @@ const RESERVE_CLEAN_AGO = 35 * MINUTE;
 /** Reserve's last poll, the sixth 503 at the poll's five-minute cadence since the clean one. */
 const RESERVE_POLLED_AGO = 5 * MINUTE;
 
+/** How long before now sunset's saved end passed. */
+export const SUNSET_END_AGO = 3 * DAY;
+/**
+ * Sunset's last clean poll, one poll interval before its end, so its reading is a sample strictly before the end and a
+ * read of the last sample before the end finds it.
+ */
+export const SUNSET_LAST_POLL_AGO = SUNSET_END_AGO + 5 * MINUTE;
+/** How long before now the profile read that found sunset's organization holding no plan set the flag. */
+export const SUNSET_FLAGGED_AGO = 4 * HOUR;
+/** When the 7-day window the end fell in resets: four days after the end, a day ahead of now, the window having
+ *  started three days before the end. */
+export const SUNSET_WEEK_RESETS_IN = 4 * DAY - SUNSET_END_AGO;
+
 /** The reset the router estimates while no head has named the spend window's: 00:00 UTC on the first of next month. */
 const SPEND_RESET_ESTIMATE = Date.UTC(new Date(NOW).getUTCFullYear(), new Date(NOW).getUTCMonth() + 1, 1);
+
+/** A story account as written: the account view's shape, its subscription's plan word left to the final map. */
+type Seed = Omit<Account, 'subscription'> & { subscription: (Omit<Subscription, 'plan'> & Partial<Pick<Subscription, 'plan'>>) | null };
 
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
 // `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold. The
 // pools' member lists hold every membership and the mock reads an account's pool off them at each answer, so no
 // entry seeds one and a member write moves it.
-export const ACCOUNTS: Account[] = ([
+const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'primary',
@@ -340,6 +356,37 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
+  // The story's plan-ended account, a Pro login in no pool whose operator canceled it. Its saved end passed three days
+  // ago and a profile read four hours ago found its organization holding no plan, so the router answers no window for
+  // it, its poll has asked it nothing since the flag, and its 7-day trend ends at its last clean poll. The router keeps
+  // the last plan's stored document, which the subscription block reads. The windows are that poll's reading, which
+  // the final map empties as the route does: the end lies inside both, the 5-hour one three hours old at the end and
+  // resetting two hours after it, the 7-day one three days old at the end and resetting four days after it.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'sunset',
+    kind: 'oauth',
+    label: 'sunset',
+    email: 'operator+sunset@example.com',
+    status: 'ready',
+    routingEnabled: true,
+    canceled: true,
+    planEndedAt: ago(SUNSET_FLAGGED_AGO),
+    windows: [win('5h', 0.12, -(SUNSET_END_AGO - 2 * HOUR), SUNSET_LAST_POLL_AGO, null), win('7d', 0.46, SUNSET_WEEK_RESETS_IN, SUNSET_LAST_POLL_AGO, null)],
+    fableWindow: null,
+    extraUsage: null,
+    fastLane: null,
+    credential: {
+      accessTokenExpiresAt: ahead(4 * HOUR + 50 * MINUTE),
+      lastError: null,
+      lastRefreshAt: ago(3 * HOUR + 10 * MINUTE),
+      quarantined: false,
+      refreshTokenExpiresAt: ahead(52 * DAY),
+    },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: null, rateLimitTier: 'default_claude_ai', since: ago(200 * DAY), trialEndsAt: null, endsAt: ago(SUNSET_END_AGO) },
+    requests: { last24h: 0, last7d: 0, lifetime: 1_180 },
+    cooldowns: [],
+  },
   // An Enterprise contract seat, which the router classes usage-based from its tier: no plan window, and its spend
   // billed in dollars at API rates against the monthly limit. The poll read the amounts ten minutes ago and a head
   // moved the share since, and with no head naming the reset yet the router estimates it.
@@ -375,11 +422,14 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
-] satisfies Account[]).map((a) => {
+] satisfies Seed[];
+
+export const ACCOUNTS: Account[] = SEEDS.map((a) => {
+  const subscription: Subscription | null = a.subscription && { ...a.subscription, plan: a.subscription.plan ?? null };
   // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
-  const end = endOf(a, NOW);
+  const end = endOf({ ...a, subscription }, NOW);
   const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: leadOf(w, w.periodHours * HOUR, NOW, end) });
-  return { ...a, fableWindow: a.fableWindow === null ? null : led(a.fableWindow), plan: planName(a.subscription), pool: null, usage: usageOf(a), windows: a.windows.map(led) };
+  return { ...a, fableWindow: a.fableWindow === null ? null : led(a.fableWindow), plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: a.planEndedAt === null ? a.windows.map(led) : [] };
 });
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
@@ -401,6 +451,20 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
       fetchedAt: ago(LEGACY_CLEAN_AGO),
       heldUntil: null,
       poll: { backoffSince: null, lastAttemptAt: iso(LEGACY_LAPSED_AT), lastCleanAt: ago(LEGACY_CLEAN_AGO), lastError: 'acquire: account has to be paired again', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+      status: 'success',
+    };
+  }
+  // The poll sends an account whose plan ended no usage request, so it has asked sunset nothing since the flag: the
+  // read that set it stands as the last attempt, under the words the usage service records for the pause, while the
+  // snapshot keeps the reading of the last clean poll before the end.
+  if (a.id === 'sunset') {
+    return {
+      ...QUOTA_SNAPSHOT_SAMPLE,
+      accountId: a.id,
+      error: null,
+      fetchedAt: ago(SUNSET_LAST_POLL_AGO),
+      heldUntil: null,
+      poll: { backoffSince: null, lastAttemptAt: ago(SUNSET_FLAGGED_AGO), lastCleanAt: ago(SUNSET_LAST_POLL_AGO), lastError: 'plan ended', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
       status: 'success',
     };
   }
@@ -498,10 +562,13 @@ function carryLegacyEdges(account: (typeof ACCOUNTS)[number], w: RateLimitWindow
   });
 }
 
-export const QUOTA_HISTORY: QuotaHistory[] = ACCOUNTS.flatMap((account, i) =>
-  [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => ({
-    accountId: account.id,
+/** The windows an account's samples are built from: the literal's, since a flagged account answers none. */
+const windowsReadOf = (seed: Seed): RateLimitWindow[] => [...seed.windows, ...(seed.fableWindow ? [seed.fableWindow] : [])];
+
+export const QUOTA_HISTORY: QuotaHistory[] = SEEDS.flatMap((seed, i) =>
+  windowsReadOf(seed).map((w) => ({
+    accountId: seed.id,
     windowId: w.id,
-    samples: carryLegacyEdges(account, w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(account))),
+    samples: carryLegacyEdges(ACCOUNTS[i], w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(ACCOUNTS[i]))),
   })),
 );

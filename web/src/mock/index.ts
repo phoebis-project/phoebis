@@ -6,7 +6,7 @@ import { decodeStreamCut } from '@/api/decode';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
-  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestEvent, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestEvent, RequestLog, RequestPage, RequestQuery, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
@@ -397,13 +397,16 @@ const budgetUntilOf = (member: BudgetedSeed, now: number): string | null =>
     })
     .reduce<string | null>((latest, s) => (latest === null || Date.parse(s.periodEnd ?? '') > Date.parse(latest) ? s.periodEnd : latest), null);
 
+/** Whether the router reads the account's term as over: canceled with its saved end passed, or flagged plan ended. */
+const termEnded = (a: Account, now: number): boolean => (a.canceled && a.subscription?.endsAt != null && Date.parse(a.subscription.endsAt) <= now) || (a.planEndedAt !== null && Date.parse(a.planEndedAt) <= now);
+
 /**
- * The pool route's reading of a member, in its order: paused or not ready is unavailable, then an account-wide
- * cooldown, then a spend at or past either of the member's budgets inside the period it was reported for, then
- * overage the router observed under a policy that admits none.
+ * The pool route's reading of a member, in its order: paused, not ready or past its term is unavailable, then an
+ * account-wide cooldown, then a spend at or past either of the member's budgets inside the period it was reported for,
+ * then overage the router observed under a policy that admits none.
  */
 const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: BudgetedSeed): MemberEligibility => {
-  if (!a || !a.routingEnabled || FLAGGED.includes(a.status)) return 'unavailable';
+  if (!a || !a.routingEnabled || FLAGGED.includes(a.status) || termEnded(a, Date.now())) return 'unavailable';
   if (a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.until) > Date.now())) return 'cooldown';
   if (budgetUntilOf(member, Date.now()) !== null) return 'budget';
   if (policy === 'never' && a.overage?.inUse) return 'overage';
@@ -533,6 +536,8 @@ export class MockApi implements Api {
   // The settings name the bundle's own commit as a router built from it would. The banner reads the build off an
   // answer's header through `call` alone, which the mock never goes through, so it draws none whatever this holds.
   private settings: Settings = decodeSettings({ ...SETTINGS_WIRE, about: { ...SETTINGS_WIRE.about, build: __PHOEBIS_BUILD__ } });
+  /** The routing log rows this mock's writes recorded, after the story's, as the ledger appends them. */
+  private written: RoutingEvent[] = [];
 
   private token(n: number) {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
@@ -783,6 +788,13 @@ export class MockApi implements Api {
       const row = this.newAccountRow({ id: pairing.accountId, kind: 'oauth', label: pairing.label, secret: null }, 'ready', 'operator+new@example.com');
       // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
       this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) } }];
+    }
+    // The router's confirm clears a plan-ended flag, since the confirmed profile holds a plan, and records the plan
+    // found again under the pairing's source. The mock's profile is the stored document, so the row carries its words.
+    if (held !== undefined && held.planEndedAt !== null) {
+      this.putAccount({ ...held, planEndedAt: null });
+      const detail = { organization_type: held.subscription?.organizationType ?? null, rate_limit_tier: held.subscription?.rateLimitTier ?? null, source: 'pairing', subscription_status: 'active' };
+      this.written.push({ type: 'event', accountId: held.id, actor: null, agentId: null, at: iso(mockClock.now()), detail, id: ROUTING_EVENTS.length + this.written.length + 1, keyId: null, kind: 'plan_restored', model: null, poolId: null, requestId: null, sessionId: null });
     }
     this.firstPolls.set(pairing.accountId, mockClock.now());
     return latency({ accountId: pairing.accountId, firstPollInFlight: true, status: 'confirmed' }, 250);
@@ -1246,7 +1258,7 @@ export class MockApi implements Api {
     const unknown = query.kinds?.find((k) => !ROUTING_LOG_KINDS.includes(k));
     if (unknown !== undefined) return Promise.reject(new ApiError(400, `unknown kind ${unknown}`, null));
     if (query.limit !== undefined && !(Number.isInteger(query.limit) && query.limit >= 1 && query.limit <= 200)) return Promise.reject(new ApiError(400, 'limit is 1 to 200', null));
-    return latency(listRoutingLog(query, Date.now()));
+    return latency(listRoutingLog(query, Date.now(), this.written));
   }
 
   listSessions() {

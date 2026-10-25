@@ -3536,6 +3536,39 @@ async function quotaChips(theme) {
 }
 
 /**
+ * The Quota cards leave out the story's plan-ended account, sunset, which the Accounts list shows: no card names it,
+ * the bar's `{n} accounts` counts the cards, and the first card stands level with its neighbor on the same row, two
+ * cards a row at 1280 px, so the grid closes over the account it leaves out. The read visits the Accounts list and
+ * loads the view again as it first drew, so the measures after it and the shot read it unmoved. The router's seed has
+ * no subscription account, so only the story's pass has cards to read.
+ */
+async function quotaCards(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const read = await page.evaluate(() => {
+    const box = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { height: Math.round(r.height * 10) / 10, top: Math.round(r.top * 10) / 10, width: Math.round(r.width * 10) / 10 };
+    };
+    const cards = [...document.querySelectorAll('.qcard')];
+    return { count: document.querySelector('.filter-bar__count')?.textContent?.trim() ?? null, first: box(cards[0]), names: cards.map((c) => c.querySelector('.qcard__name')?.textContent?.trim() ?? ''), neighbour: box(cards[1]) };
+  });
+  let listed;
+  try {
+    await loadAtOrigin('/accounts', '.detail__head');
+    listed = await page.evaluate(() => [...document.querySelectorAll('a.account-row .account-row__name')].map((n) => n.textContent?.trim() ?? ''));
+  } finally {
+    await loadAtOrigin('/quota', '.quota-section#accounts');
+  }
+  const counted = Number(/^(\d+) accounts?\b/.exec(read.count ?? '')?.[1] ?? NaN);
+  measurements.push(`${theme} /quota cards ${JSON.stringify({ ...read, listed })}`);
+  if (!listed.includes('sunset')) say("the Accounts list shows no sunset, the story's plan-ended account, to leave out");
+  if (read.names.includes('sunset')) say('a card names sunset, whose plan ended');
+  if (counted !== read.names.length) say(`the bar counts ${JSON.stringify(read.count)} over ${read.names.length} cards`);
+  for (const what of compare(read.first, read.neighbour, ['height', 'top', 'width'], 'the first card against its neighbor on the same row')) say(what);
+}
+
+/**
  * The chart's now share as the page writes it, the last factor of the now line's calc, read in the page on the line.
  * Both timeline measures read the share here, so a calc of another form reads NaN in both.
  */
@@ -10684,6 +10717,8 @@ try {
         await pagerControls(theme, view.path);
       }
       if (view.path === '/quota') {
+        // First, since it loads the view again, which the measures after it and the shot then read as it first drew.
+        if (mock) await quotaCards(theme);
         await quotaChips(theme);
         await quotaPollLines(theme);
         await quotaCardHeights(theme);

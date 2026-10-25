@@ -15,6 +15,7 @@ const account = (id, rateLimitTier, windows, extra = {}) => ({
   id,
   kind: 'oauth',
   label: id,
+  planEndedAt: null,
   routingEnabled: true,
   subscription: rateLimitTier === null ? null : { rateLimitTier },
   windows,

@@ -258,10 +258,14 @@ test('the 5-hour timeline draws fewer cells at one width under the 12-hour setti
   assert.equal(d.CELL_MIN_PX['12h'].full, 53, 'two 12:00 AM labels keep the 24-hour spacing');
 });
 
-test('the Quota page lists a subscription account that is paired and not awaiting re-authentication, and no API-key account', () => {
-  for (const status of ['cooldown', 'funding_required', 'paused', 'ready']) assert.equal(d.isQuotaListed({ kind: 'oauth', status }), true, `a subscription account reading ${status}`);
-  for (const status of ['reauth_required', 'unpaired']) assert.equal(d.isQuotaListed({ kind: 'oauth', status }), false, `a subscription account reading ${status}`);
-  assert.equal(d.isQuotaListed({ kind: 'api_key', status: 'ready' }), false, 'an API-key account');
+test('the Quota page lists a subscription account that is paired, not awaiting re-authentication and whose plan has not ended, and no API-key account', () => {
+  for (const status of ['cooldown', 'funding_required', 'paused', 'ready']) assert.equal(d.isQuotaListed({ kind: 'oauth', planEndedAt: null, status }), true, `a subscription account reading ${status}`);
+  for (const status of ['reauth_required', 'unpaired']) assert.equal(d.isQuotaListed({ kind: 'oauth', planEndedAt: null, status }), false, `a subscription account reading ${status}`);
+  assert.equal(d.isQuotaListed({ kind: 'api_key', planEndedAt: null, status: 'ready' }), false, 'an API-key account');
+  const ended = '2026-09-16T10:30:00.000Z';
+  assert.equal(d.isQuotaListed({ kind: 'oauth', planEndedAt: ended, status: 'ready' }), false, 'the plan-ended flag alone withholds the Quota page');
+  assert.equal(d.isQuotaListed({ canceled: true, kind: 'oauth', planEndedAt: null, status: 'ready', subscription: { endsAt: '2026-09-13T14:30:00.000Z' } }), true, 'a saved end that has passed counts for nothing on its own');
+  assert.equal(d.isQuotaListed({ kind: 'oauth', planEndedAt: ended, status: 'cooldown' }), false, 'a flagged account in cooldown');
 });
 
 const SPEND_NOW = Date.UTC(2026, 8, 16, 14, 30);

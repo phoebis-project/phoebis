@@ -420,7 +420,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     assert.deepEqual(
       s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.email),
-      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+reserve@example.com', 'operator+contract@example.com'],
+      // The sunset seed's address follows reserve's, as its row does in the story.
+      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com', 'operator+reserve@example.com', 'operator+sunset@example.com', 'operator+contract@example.com'],
       'every subscription keeps the identity it last paired with',
     );
     const pairing = await s.api.startPairing({ accountId: 'legacy' });
@@ -1135,15 +1136,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const last = u?.poll?.lastOutcome === 'failed' ? u.poll.lastCleanAt : a.status === 'unpaired' ? u?.fetchedAt : null;
       return iso(last ? Date.parse(last) : s.now);
     };
+    // A flagged account answers no window, so its series read against the readings of the sunset seed's literal,
+    // `win('5h', 0.12, ...)` and `win('7d', 0.46, ...)`, the last clean poll's before the end.
+    const SEEDED = { sunset: { '5h': 0.12, '7d': 0.46 } };
     const off = [];
     let read = 0;
     for (const a of s.accounts) {
       const windows = [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])];
       for (const h of await s.api.getQuotaHistory(a.id)) {
         read += 1;
-        const w = windows.find((x) => x.id === h.windowId);
+        const reading = windows.find((x) => x.id === h.windowId)?.utilization ?? SEEDED[a.id]?.[h.windowId];
         const last = h.samples.at(-1);
-        if (!w || !last || last.at !== endOf(a) || Math.abs(last.utilization - w.utilization) > 0.001) off.push(`${a.id} ${h.windowId}: the last sample ${last?.at} at ${last?.utilization}, the reading ${endOf(a)} at ${w?.utilization}`);
+        if (reading === undefined || !last || last.at !== endOf(a) || Math.abs(last.utilization - reading) > 0.001) off.push(`${a.id} ${h.windowId}: the last sample ${last?.at} at ${last?.utilization}, the reading ${endOf(a)} at ${reading}`);
       }
     }
     assert.ok(read > 0, 'the story samples its windows');
@@ -2304,7 +2308,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`the story ends a subscribed account's plan and restores it a minute later with the profile's members, in a minute that places nothing on it and polls nothing there, at ${at}`, async () => {
     const s = await story;
     const log = await logOf(s);
-    const rows = log.filter((row) => row.type === 'event' && (row.kind === 'plan_ended' || row.kind === 'plan_restored')).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    const rows = log.filter((row) => row.type === 'event' && row.accountId === 'primary' && (row.kind === 'plan_ended' || row.kind === 'plan_restored')).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
     assert.deepEqual(rows.map((e) => [e.kind, e.accountId]), [['plan_ended', 'primary'], ['plan_restored', 'primary']]);
     const [ended, restored] = rows;
     assert.equal(Date.parse(restored.at) - Date.parse(ended.at), 60_000);
@@ -2321,6 +2325,41 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const within = (row) => Date.parse(row.at) >= Date.parse(ended.at) && Date.parse(row.at) <= Date.parse(restored.at);
     const there = log.filter((row) => within(row) && (row.type === 'decision' ? row.accountId === account.id || row.fromAccountId === account.id : row.accountId === account.id && row.kind.startsWith('poll_')));
     assert.deepEqual(there.map((row) => `${row.type} ${row.kind} ${row.at}`), []);
+  });
+
+  test(`the story holds one plan-ended account, ready in no pool, whose saved end passed before a profile read set the flag, with no window, a paused poll and its trend up to its last clean poll, at ${at}`, async () => {
+    const s = await story;
+    const flagged = s.accounts.filter((a) => a.planEndedAt !== null);
+    assert.deepEqual(flagged.map((a) => [a.id, a.kind]), [['sunset', 'oauth']], 'one subscription account carries the flag');
+    const [a] = flagged;
+    assert.deepEqual([a.pool, a.status, a.canceled], [null, 'ready', true], 'ready and canceled in no pool');
+    const end = Date.parse(a.subscription.endsAt);
+    const flag = Date.parse(a.planEndedAt);
+    assert.equal(end, s.now - 3 * DAY, 'the saved end three days back');
+    assert.ok(end < flag && flag < s.now, `the flag at ${a.planEndedAt} after the end at ${a.subscription.endsAt} and before now`);
+    // The router keeps the last plan's stored document when a profile read finds no plan, so the badge reads that plan.
+    assert.deepEqual([a.subscription.organizationType, a.subscription.rateLimitTier, a.subscription.plan, a.plan], ['claude_pro', 'default_claude_ai', null, 'Pro']);
+    assert.deepEqual([a.windows, a.fableWindow], [[], null], 'the route answers no window for a flagged account');
+    // The poll pauses at the flag, so the read that set it is the last attempt, and the last clean poll came one poll
+    // interval before the end.
+    const poll = a.usage.poll;
+    assert.deepEqual([poll.lastOutcome, poll.lastError, poll.nextAttemptAt, poll.lastAttemptAt], ['failed', 'plan ended', null, a.planEndedAt]);
+    assert.equal(Date.parse(poll.lastCleanAt), end - 5 * 60_000, 'the last clean poll one poll interval before the end');
+    const history = await s.api.getQuotaHistory(a.id);
+    assert.deepEqual(
+      history.map((h) => [h.windowId, h.samples.at(-1)?.at]),
+      [
+        ['5h', poll.lastCleanAt],
+        ['7d', poll.lastCleanAt],
+      ],
+      'the 5-hour and 7-day trends end at the last clean poll',
+    );
+    const log = await logOf(s);
+    const own = log.filter((row) => row.type === 'event' && row.accountId === a.id && (row.kind === 'plan_ended' || row.kind === 'plan_restored'));
+    // The profile read found the free organization the canceled plan left, and no read since found a plan.
+    assert.deepEqual(own.map((e) => [e.kind, e.at, e.detail]), [['plan_ended', a.planEndedAt, { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'profile', subscription_status: 'canceled' }]]);
+    const decided = log.filter((row) => row.type === 'decision' && (row.accountId === a.id || row.fromAccountId === a.id));
+    assert.deepEqual(decided.map((row) => `${row.kind} ${row.at}`), [], 'no decision touches an account in no pool');
   });
 
   test(`a booking a request ended without usage expires once at the request's end, with the cause its end carries, at ${at}`, async () => {

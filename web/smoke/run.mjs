@@ -1375,12 +1375,12 @@ const quotaSection = async (page, label) => {
 };
 /**
  * The rows the Quota page lists, spelled out here rather than read from the page's own predicate: a subscription
- * account whose status reads neither `reauth_required` nor `unpaired`.
+ * account whose status reads neither `reauth_required` nor `unpaired` and whose plan-ended flag is clear.
  */
-const quotaListed = (a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired';
+const quotaListed = (a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired' && a.planEndedAt === null;
 m = await mount('/quota');
 // secondary's backoff and reserve's failed poll are the listed rows needing attention, legacy's failing poll leaving
-// with its card.
+// with its card. The sunset seed's plan ended, so its card and its place in the count leave too.
 expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).length} accounts`, '2 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'polled', 'rate limited', 'backing off']);
 /**
  * The story's count on the bar, `{n} accounts, {n} need attention`, as its two figures. A funding_required account
@@ -1415,16 +1415,22 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
   });
 }
 {
-  // The page leaves out a disconnected account and one awaiting re-authentication whatever its row carries: legacy
-  // holds the windows of its last clean read and spare those of its last poll before the disconnect, yet neither draws
-  // a card. The timeline's lanes are read on the Quota windows section below, and the Accounts view's rows and spare's
-  // detail in the Accounts block.
+  // The page leaves out a disconnected account, one awaiting re-authentication and one whose plan ended whatever its
+  // row carries: legacy holds the windows of its last clean read and spare those of its last poll before the
+  // disconnect, yet neither draws a card, and the route answers no window for the sunset seed, a ready account whose
+  // plan ended. The timeline's lanes are read on the Quota windows section below, and the Accounts view's rows and
+  // spare's and sunset's details in the Accounts block.
   const left = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && !quotaListed(a));
   const leftLabels = left.map((a) => a.label).sort();
   const cards = [...m.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? '');
   results.push({
-    name: '/quota draws no card for a disconnected account or one awaiting re-authentication, though their rows hold windows',
-    ok: JSON.stringify(leftLabels) === JSON.stringify(['legacy', 'spare']) && left.every((a) => a.windows.length > 0) && cards.length > 0 && !cards.some((c) => leftLabels.includes(c)),
+    name: '/quota draws no card for a disconnected account, one awaiting re-authentication or one whose plan ended, though the first two hold windows',
+    ok:
+      JSON.stringify(leftLabels) === JSON.stringify(['legacy', 'spare', 'sunset']) &&
+      left.every((a) => (a.planEndedAt === null ? a.windows.length > 0 : a.windows.length === 0 && a.status === 'ready')) &&
+      cards.length > 0 &&
+      !cards.some((c) => leftLabels.includes(c)) &&
+      !m.text().includes('sunset'),
     missing: [`left out ${JSON.stringify(leftLabels)}`, `windows ${JSON.stringify(left.map((a) => a.windows.length))}`, `cards ${JSON.stringify(cards)}`],
   });
 }
@@ -1912,7 +1918,7 @@ const quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.conta
 }
 {
   // The story holds more than one subscription account, so the plural is what this can read, and the count comes from
-  // the list rather than a literal.
+  // the list rather than a literal, which leaves the sunset seed out while its plan-ended flag stands.
   const subscriptions = (await api.listAccounts()).filter(quotaListed);
   // The bar's count slot, read without its attention part, which the critical ink's span carries.
   const slot = m.container.querySelector('.filter-bar__count');
@@ -2013,9 +2019,10 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
 }
 {
-  // legacy and spare hold windows, yet the timeline draws no lane for either.
+  // legacy and spare hold windows, yet the timeline draws no lane for either, and none for the sunset seed, whose plan
+  // ended.
   const lanes = [...m.container.querySelectorAll('.lane .lane__name')].map((n) => n.textContent?.trim() ?? '');
-  results.push({ name: '/quota#quota-windows draws no lane for a disconnected account or one awaiting re-authentication', ok: lanes.length > 0 && !lanes.includes('legacy') && !lanes.includes('spare'), missing: lanes });
+  results.push({ name: '/quota#quota-windows draws no lane for a disconnected account, one awaiting re-authentication or one whose plan ended', ok: lanes.length > 0 && !lanes.includes('legacy') && !lanes.includes('spare') && !lanes.includes('sunset'), missing: lanes });
 }
 {
   // The fill is the window's used share placed from the window's start and cut to the drawn bar, so the expectation
@@ -2531,10 +2538,11 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
         meter?.getAttribute('aria-valuenow') === '59' && meter.getAttribute('title') === 'Spend limit: 59% left, $1,025.00 of $2,500.00' && card?.querySelector('.qcard__extra') === null && !/pace/.test(card?.textContent ?? ''),
       missing: [JSON.stringify(chips), line?.textContent ?? 'no line', line?.getAttribute('title') ?? '', meter?.getAttribute('title') ?? 'no meter', card?.querySelector('.qcard__extra') ? 'an Extra usage line' : 'no Extra usage line'],
     });
-    // Soonest recovery reads each card's earliest reset ahead, the seat's its spend window's.
+    // Soonest recovery reads each card's earliest reset ahead, the seat's its spend window's. The page lists no card for
+    // the sunset seed, whose plan ended.
     const ahead = (a) => [...a.windows.map((w) => w.resetsAt), ...(a.spend ? [a.spend.resetsAt] : [])].flatMap((at) => (at === null ? [] : [Date.parse(at)])).filter((t) => t > CLOCK_ORIGIN);
     const soonest = (a) => (ahead(a).length ? Math.min(...ahead(a)) : Number.POSITIVE_INFINITY);
-    const listed = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired');
+    const listed = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && a.status !== 'reauth_required' && a.status !== 'unpaired' && a.planEndedAt === null);
     const want = [...listed].sort((a, b) => soonest(a) - soonest(b)).map((a) => a.label);
     await changeSelect(page, page.container.querySelector('.quota-sort select'), 'soonest');
     const order = [...page.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim());
@@ -3778,9 +3786,10 @@ expect('/accounts/secondary', m.text(), [
     missing: [value('Ends')?.textContent ?? 'no Ends row', value('Trial ends')?.textContent ?? 'no Trial ends row'],
   });
 }
-// The Identity list draws a Plan ended row only while a profile read's instant stands on the account, and no story
-// account's plan has ended. An answer that carries the instant draws the row after Ends, the relative instant with the
-// absolute on hover as the Ends row prints its own, and the row leaves once a read answers the flag cleared.
+// The Identity list draws a Plan ended row only while a profile read's instant stands on the account, and the sunset
+// seed is the one story account whose plan has ended. An answer that carries the instant draws the row after Ends, the
+// relative instant with the absolute on hover as the Ends row prints its own, and the row leaves once a read answers
+// the flag cleared.
 {
   const identityRows = (page) => {
     const identity = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
@@ -3794,8 +3803,33 @@ expect('/accounts/secondary', m.text(), [
     if (identityRows(walk).some((r) => r.label === 'Plan ended')) drawn.push(account.id);
   }
   walk.unmount();
-  const flagged = story.filter((a) => a.planEndedAt !== null).map((a) => `${a.id} ended ${a.planEndedAt}`);
-  results.push({ name: '/accounts no story account carries an ended plan, so no Identity list draws a Plan ended row', ok: story.length > 0 && flagged.length === 0 && drawn.length === 0, missing: [...flagged, ...drawn] });
+  const flagged = story.filter((a) => a.planEndedAt !== null).map((a) => a.id);
+  results.push({ name: '/accounts one story account carries an ended plan, and its Identity list alone draws a Plan ended row', ok: JSON.stringify(flagged) === JSON.stringify(['sunset']) && JSON.stringify(drawn) === JSON.stringify(['sunset']), missing: [`flagged ${JSON.stringify(flagged)}`, `drawn ${JSON.stringify(drawn)}`] });
+  {
+    // The sunset seed's profile read found no plan four hours before the mock's load, after its saved end three days
+    // back, so the route answers no window for it: its Usage card names the ended plan, its row's badge reads the last
+    // plan its stored document keeps, and the list counts it with every other account.
+    const sunset = story.find((a) => a.id === 'sunset');
+    const page = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
+    const ago = sunset ? fmtRelative(sunset.planEndedAt, CLOCK_ORIGIN) : 'no sunset';
+    const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+    const sentence = usage?.querySelector('p.muted')?.textContent?.trim() ?? 'no sentence';
+    const row = identityRows(page).find((r) => r.label === 'Plan ended');
+    const badge = page.container.querySelector('a.account-row[href="/accounts/sunset"] .account-row__head .badge')?.textContent?.trim() ?? 'no badge';
+    const count = page.container.querySelector('.filter-bar__count')?.textContent?.trim() ?? 'no count';
+    results.push({
+      name: '/accounts/sunset an account whose plan ended names it on its Usage card beside its Plan ended row, its row badged with the last plan',
+      ok:
+        sentence.startsWith('No quota window is read since the plan ended') &&
+        sentence === `No quota window is read since the plan ended ${ago}.` &&
+        row?.value === ago &&
+        row?.title === fmtAbsolute(sunset.planEndedAt) &&
+        badge === 'Pro' &&
+        count === `${story.length} accounts`,
+      missing: [sentence, JSON.stringify(row ?? null), badge, `${count} of ${story.length} accounts`],
+    });
+    page.unmount();
+  }
   // Three hours before the anchor, which the smoke's UTC zone prints as 11:30 on the hover.
   const endedAt = new Date(CLOCK_ORIGIN - 3 * 3_600_000).toISOString();
   const { listAccounts } = api;
@@ -6235,7 +6269,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex'];
+    // The pool's members by priority, then every other account by label, the sunset seed in no pool last.
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -6245,7 +6280,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -7598,6 +7633,7 @@ m.unmount();
   const unchecked = !(dlg?.textContent ?? '').includes('is not an account') && members?.querySelector('.members-table') === null;
   retry?.click();
   await m.settle(600);
+  // The pool's members by priority, then every other account by label, the sunset seed in no pool last.
   const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: "/pools a failed accounts read holds the dialog's save without naming a member",
@@ -7607,7 +7643,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -7630,13 +7666,14 @@ m.unmount();
   read.release();
   await m.settle(600);
   read.restore();
+  // The pool's members by priority, then every other account by label, the sunset seed in no pool last.
   const labels = rows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: '/pools while the accounts read is out the stored members draw unmarked and hold nothing',
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -16055,9 +16092,9 @@ m.unmount();
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
       poll_failed: (e) => ({ Endpoint: [e.detail.endpoint], Error: [e.detail.error], Status: [String(e.detail.status)] }),
       mark_cleared: (e) => ({ Marked: [hhmm(e.detail.marked_at), `on ${e.detail.marked_on}`], Reason: [e.detail.reason] }),
-      // Primary's ended plan and its return a minute later: the read's source in the console's words and the profile's
-      // three members as text, read off the mock's two seeds.
-      plan_ended: () => ({ 'Organization type': ['claude free'], 'Rate-limit tier': ['default claude ai'], Source: ['usage 403'], 'Subscription status': ['canceled'] }),
+      // The newest ended plan, the sunset seed's, and primary's return: the read's source in the console's words and
+      // the profile's three members as text, read off the mock's two seeds.
+      plan_ended: () => ({ 'Organization type': ['claude free'], 'Rate-limit tier': ['default claude ai'], Source: ['profile read'], 'Subscription status': ['canceled'] }),
       plan_restored: () => ({ 'Organization type': ['claude max'], 'Rate-limit tier': ['default claude max 20x'], Source: ['profile read'], 'Subscription status': ['active'] }),
       registry_changed: (e) => (e.detail.diff?.secret_replaced === true ? { Secret: ['replaced'] } : {}),
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),

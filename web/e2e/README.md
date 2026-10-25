@@ -95,7 +95,9 @@ chip on one row, every day cell's short labels whole, no bar's label cut and not
 under the 12-hour setting in the 5-hour zoom at 340 and 400 by 900 and 1280 by 800 (mock pass, on loads of its own: as
 many cells as the largest divisor of twelve whose cell holds "12 AM" in the sub's face, every cell's labels whole and a
 short hour's full time on its title), the Quota cards' one height (the head's and the foot's rules at one offset on
-every card), every Quota card's meters at least 120 px wide, its window cells inside its padding, its chip column as
+every card), the cards leaving out the plan-ended account the list shows (mock pass: no card naming it, their count on
+the bar, the first card against its neighbor on its row), every Quota card's meters at least 120 px wide, its window
+cells inside its padding, its chip column as
 wide as its widest chip and its reset column as wide as its widest label within its 150 px bound, a split label read by
 its wider part, at 1280 by 800 with two cards in a row in the mock pass and in a window that sets two cards on the card
 grid's floor (an expired line among its cells where a listed card draws one, and one card in a row 1 px narrower), and

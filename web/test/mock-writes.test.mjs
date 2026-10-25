@@ -97,6 +97,8 @@ test('a new pool reads each member the way the pool route does', async () => {
     secondary: 'cooldown',
     spare: 'unavailable',
     studio: 'eligible',
+    // The sunset seed's plan ended, which the route reads as a term past its end.
+    sunset: 'unavailable',
   });
   // Funded again, the flagged account serves; the account the router reads in overage is an obstacle only under a
   // policy that admits none.
@@ -566,6 +568,26 @@ test('a pairing started for a new account writes its row at the confirm and none
   await assert.rejects(() => api.confirmPairing(raced.id), refusedAs(409, 'an account with this id exists'), 'a confirm whose id a create took meanwhile is refused');
   assert.deepEqual(await storyAccount(api, 'fresh3'), taken, 'the created row is unchanged, unpaired and without an email');
   assert.equal((await api.listAccounts()).length, before + 2, 'the confirmed row and the created row are the two that landed');
+});
+
+test('a confirmed re-pair clears a plan-ended flag and records the plan found again under the pairing, and one of an unflagged account records nothing', async () => {
+  const api = await signedIn();
+  const repair = async (accountId) => {
+    const started = await api.startPairing({ accountId });
+    await api.completePairing(started.id, { code: 'code', state: started.state });
+    await api.confirmPairing(started.id);
+  };
+  const flagged = await storyAccount(api, 'sunset');
+  assert.notEqual(flagged.planEndedAt, null, 'the story flags sunset plan ended');
+  await repair('sunset');
+  assert.equal((await storyAccount(api, 'sunset')).planEndedAt, null, 'the confirm clears the flag');
+  await repair('reserve');
+  const { rows } = await api.listRoutingLog({ kinds: ['plan_restored'] });
+  // The confirmed profile names the plan the stored document holds, as the router writes the row from the profile.
+  assert.deepEqual(
+    rows.map((e) => [e.kind, e.accountId, e.detail]),
+    [['plan_restored', 'sunset', { organization_type: flagged.subscription.organizationType, rate_limit_tier: flagged.subscription.rateLimitTier, source: 'pairing', subscription_status: 'active' }]],
+  );
 });
 
 test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect moves the account\'s revision, so an edit read before it is refused as stale', async () => {
