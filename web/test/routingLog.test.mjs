@@ -1643,19 +1643,32 @@ test("a usage-based candidate's Pace cell reads its remaining allowance, and the
   assert.equal(d.paceHeader(record({ candidates: [seat, plan] })), 'Spare rate, 7-day per hour', 'the seat listed first names no window, so the next subscription candidate heads the column');
 });
 
-test("a Pace cell and its title read the score in the unit the record's pick step gives it, the plan unit with no pick step", () => {
+test("a Pace cell and its title read the score in the unit the record's pick step gives it, else the unit its pace's shape names", () => {
   // A seat whose share lapsed carries no spend entry, so it reads by the plan arm, while the engine scores it as a paid
-  // source: a percent with a burn of 0.
+  // source: a percent with a burn of 0, and a pace with neither hours nor window.
   const lapsed = candidate({ accountId: 'seat', pace: { burn: 0, deadline: null, end: null, hours: null, remaining: 0.9, reset: null, score: 0.42, window: null }, planTier: 'default_claude_zero', priority: 1, tier: [0, 1, 0], windows: {} });
-  const picked = (c, facts) => d.candidateCells(c, record({ candidates: [c], walk: [wstep('pick', 'chosen', facts)] }), NOW);
+  const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
+  const picked = (c, facts, candidates = [c]) => d.candidateCells(c, record({ candidates, walk: [wstep('pick', 'chosen', facts)] }), NOW);
   const seat = picked(lapsed, [wfact('score', 0.42, 'percent', 'seat')]);
   assert.ok(seat.paceTitle.includes(': 42%.') && !seat.paceTitle.includes('42.00 %/h'), `the seat's title reads its score as a percent: ${seat.paceTitle}`);
   assert.equal(seat.pace, '42%', 'the cell reads the unit its title reads');
-  const other = picked(lapsed, [wfact('score', 0.42, 'percent', 'primary')]);
-  assert.deepEqual([other.pace, other.paceTitle.includes(': 42.00 %/h.')], ['42.00 %/h', true], 'a score fact about another member leaves the plan unit');
-  const plan = candidate({ pace: { burn: 0.004, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.006, window: 'seven_day' } });
+  // The engine writes score facts for the members of the pick's first tier alone, so a seat ranked behind a plan
+  // member finds none about itself.
+  const lower = { ...lapsed, tier: [2, 1, 0] };
+  const below = picked(lower, [wfact('score', 0.006, 'percent_per_hour', 'primary')], [plan, lower]);
+  assert.deepEqual([below.pace, below.paceTitle.includes(': 42%.')], ['42%', true], `a seat below the pick's tier reads the percent its pace names, not another member's unit: ${below.paceTitle}`);
+  const later = { ...plan, priority: 2, tier: [0, 2, 0] };
+  const behind = picked(later, [wfact('score', 0.42, 'percent', 'seat')], [lapsed, later]);
+  assert.deepEqual([behind.pace, behind.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], "a plan member below a seat's tier reads the plan unit its pace names");
   const rate = picked(plan, [wfact('score', 0.006, 'percent_per_hour', 'primary')]);
   assert.deepEqual([rate.pace, rate.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], 'a plan candidate reads its spare rate');
+  const planBare = d.candidateCells(plan, record({ candidates: [plan] }), NOW);
+  assert.deepEqual([planBare.pace, planBare.paceTitle.includes(': 0.60 %/h.')], ['0.60 %/h', true], 'a plan member on a record with no pick step reads the plan unit off its hours and window');
   const bare = d.candidateCells(lapsed, record({ candidates: [lapsed] }), NOW);
-  assert.deepEqual([bare.pace, bare.paceTitle.includes(': 42.00 %/h.')], ['42.00 %/h', true], 'a record with no pick step reads the plan unit');
+  assert.deepEqual([bare.pace, bare.paceTitle.includes(': 42%.')], ['42%', true], 'a lapsed seat on a record with no pick step reads the percent its pace names');
+  // A version 1 record as the decoder gives one: no burn, the pace's hours always written, and no window on a record
+  // from before the engine named it.
+  const old = candidate({ pace: { burn: null, deadline: null, end: null, hours: 66, remaining: 0.66, reset: null, score: 0.01, window: null } });
+  const v1 = d.candidateCells(old, record({ candidates: [old], settings: LEGACY_SETTINGS, version: 1 }), NOW);
+  assert.deepEqual([v1.pace, v1.paceTitle.includes(': 1.00 %/h.')], ['1.00 %/h', true], 'a version 1 plan member reads the plan unit');
 });

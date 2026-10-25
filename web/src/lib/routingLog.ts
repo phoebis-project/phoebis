@@ -1382,12 +1382,19 @@ export function paceHeader(record: DecisionRecord): string {
 }
 
 /**
- * The score's unit is the record's, read off the pick step's `score` fact about the candidate (`percent` for a seat
- * whose share lapsed, `percent_per_hour` otherwise), and a record with no pick step reads the plan unit
- * `percent_per_hour`.
+ * The score's unit is the record's: the pick step's `score` fact about the candidate where one names it, else the
+ * pace's own shape. The engine writes score facts for the pick's first tier alone, so a seat on a renewal, a rung
+ * placement or a lower tier finds none, and its paid arm writes a pace with neither hours nor window (`percent`) where
+ * a plan pace carries both (`percent_per_hour`). A version 1 record reads the plan unit, since its plan pace always
+ * carried its hours.
  */
-const scoreUnit = (c: RecordCandidate, record: DecisionRecord): FactUnit =>
-  (record.walk.find((s) => s.step === 'pick')?.facts.find((f) => f.key === 'score' && f.accountId === c.accountId)?.unit as FactUnit | null | undefined) ?? 'percent_per_hour';
+const scoreUnit = (c: RecordCandidate, record: DecisionRecord): FactUnit => {
+  const fact = record.walk.find((s) => s.step === 'pick')?.facts.find((f) => f.key === 'score' && f.accountId === c.accountId);
+  const unit = unitOf(fact?.unit ?? null);
+  if (unit !== null) return unit;
+  // A pace built by hand without the window key names no window, as a null one does.
+  return c.pace !== null && c.pace.hours === null && (c.pace.window ?? null) === null ? 'percent' : 'percent_per_hour';
+};
 
 /** A Pace cell's hover: the share left, the hours it is spread over and the rate, or an API key's share alone. */
 function paceTitle(c: RecordCandidate, record: DecisionRecord, now: number): string | null {
