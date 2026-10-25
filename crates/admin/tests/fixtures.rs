@@ -1246,8 +1246,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         bodies: None,
     });
     // A request the usage-based seat served, billed in dollars under the seat's own funding word, so the request rows
-    // carry the attempt's class with one true. In no session, so the list's first rows keep their places and the
-    // session rows their counts. The seat has no plan window, so its attempt carries no 5-hour reading.
+    // carry the attempt's class with one true. Older than the list's first rows and in no session, so the list's first
+    // rows keep their places and the session rows their counts. The seat has no plan window, so its attempt carries no
+    // 5-hour reading.
     let seat_at = refused_at - 600;
     parts.ledger.record(Record::Request {
         request: RequestRecord {

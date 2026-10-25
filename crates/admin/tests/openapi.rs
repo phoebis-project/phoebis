@@ -1786,6 +1786,33 @@ async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_
     );
 }
 
+/// The query check compares names per module, and the breakdown's query declares the same seven names, so it would pass
+/// a refusal count operation that left its own query out of the document.
+#[tokio::test]
+async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads() {
+    let (_app, _up, document) = document().await;
+    let parameters = document["paths"]["/admin/analytics/refusal_categories"]["get"]["parameters"]
+        .as_array()
+        .expect("the refusal count operation's parameters");
+    let names: BTreeSet<&str> = parameters
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from([
+            "accounts",
+            "include_probes",
+            "keys",
+            "kinds",
+            "models",
+            "pools",
+            "range"
+        ]),
+        "the refusal count operation's query"
+    );
+}
+
 /// The query check proves the name is declared, and the console reads the flag's meaning from the document alone.
 #[tokio::test]
 async fn the_request_list_declares_the_fixed_end_flag_that_lets_its_watermark_pass_to() {

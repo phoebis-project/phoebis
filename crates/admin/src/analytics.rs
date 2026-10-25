@@ -1108,15 +1108,18 @@ pub(crate) async fn reconciliations(
 pub(crate) struct RefusalCategories {
     pub from: i64,
     pub to: i64,
+    /// One row per category among the refused requests in range, the largest count first and then the category.
     pub rows: Vec<RefusalCategoryRow>,
 }
 
+/// One category's refused requests over the range.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RefusalCategoryRow {
     /// The category the upstream's `stop_details` named, `-` for a refusal with none.
     #[schema(example = "-")]
     pub category: String,
+    /// The requests whose serving attempt the upstream refused under the category.
     pub requests: u64,
 }
 
