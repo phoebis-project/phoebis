@@ -79,6 +79,7 @@ pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(analytics::refusal_categories))
         .routes(routes!(analytics::rewrites))
         .routes(routes!(analytics::series))
+        .routes(routes!(analytics::unused_allowance))
         .routes(routes!(attention::show))
         .routes(routes!(dashboard::show))
         .routes(routes!(guardrails::list, guardrails::create))

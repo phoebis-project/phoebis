@@ -1,6 +1,7 @@
 //! The statistics ledger: `ledger.sqlite`, written by one task from what the bus and the router publish, and
 //! read by the admin routes and the metrics listener.
 
+mod allowance;
 mod assemble;
 mod bodies;
 mod db;
@@ -24,6 +25,7 @@ mod schema;
 mod task;
 mod usage;
 
+pub use allowance::{unused_allowance, AllowanceReset};
 pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{
     run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,

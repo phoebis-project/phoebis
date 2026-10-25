@@ -163,6 +163,13 @@ five-minute slot when the hold is shorter. Each 429 is logged as a warning namin
 answered it, `the {endpoint} endpoint rate-limited the account`, and the next clean answer returns the account to the
 five minutes. A transport failure or another error keeps the cadence. The other accounts keep theirs throughout.
 
+The router announces a plan window's reset as a `window_reset` event with the utilization the window held before it and
+whether a sample showed the reset or the clock walk found it, and `GET /admin/analytics/unused_allowance` reads those
+events for the weekly windows, `seven_day` and each model week, as the share of the allowance each subscription account
+left unused at its resets in range (the default range 30 days), with an account's term end inside a week read as a reset
+of that week from its last reading before the end. The history reaches as far as the events the hourly purge still
+holds, which `stats.retention_days` bounds, so a longer retention shows more weeks.
+
 ## Pricing
 
 A request's cost is an estimate at list prices per million tokens, computed from its token counts when a page or a route

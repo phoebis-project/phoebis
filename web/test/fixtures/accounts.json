@@ -185,7 +185,7 @@
         "kind": "oauth",
         "label": "Free",
         "enabled": true,
-        "canceled": false,
+        "canceled": true,
         "plan_ended_at": null,
         "state": "ready",
         "funding_retry_at": null,
@@ -203,7 +203,7 @@
           "quarantined": false
         },
         "lifecycle_generation": 1,
-        "revision": 4294967297,
+        "revision": 4294967298,
         "cooldowns": [],
         "overage": null,
         "profile": {
@@ -219,7 +219,7 @@
           "tier": "default_claude_ai",
           "since": null,
           "trial_ends_at": null,
-          "ends_at": null
+          "ends_at": 1791029800000
         },
         "windows": [],
         "slow_down": null,

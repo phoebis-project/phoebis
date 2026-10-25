@@ -549,6 +549,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
+    // The free organization's term ended eight days ago, inside a week its reading below names, so the unused
+    // allowance capture carries a term end. Set ahead of the pool's creation, whose reload brings it to the snapshot.
+    const DAY: i64 = 86_400_000;
+    let free_end = now - 8 * DAY;
+    parts
+        .store
+        .set_canceled("free-org", true, Some(free_end))
+        .unwrap();
     // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
@@ -1021,6 +1029,39 @@ async fn every_route_is_captured_and_holds_its_shape() {
         agent_id: None,
         request_id: Some("r-failover".into()),
     }));
+    // Two weeks of `business`'s 7-day window, one reset the clock walk found, and one Fable week, so the unused
+    // allowance capture carries both `observed` words. Days back, so the routing log's hour and the failover's window
+    // hold none of them.
+    for (window, utilization_before, at, observed) in [
+        ("seven_day", 0.62, now - 7 * DAY, "sample"),
+        ("seven_day", 0.85, now - 14 * DAY, "clock"),
+        ("seven_day_fable", 0.4, now - 10 * DAY, "sample"),
+    ] {
+        parts.ledger.record(Record::Event(EventRecord {
+            at,
+            kind: "window_reset".into(),
+            account_id: Some("business".into()),
+            detail: Some(j!({ "window": window, "utilization_before": utilization_before, "reset_at": at, "next_reset": at + 7 * DAY, "observed": observed }).to_string()),
+            ..Default::default()
+        }));
+    }
+    // The free organization's last reading of the week its term end cut short.
+    let free_read_at = free_end - 3 * DAY;
+    parts
+        .db
+        .insert_samples(
+            &[QuotaSampleRecord {
+                account_id: "free-org".into(),
+                bucket: phoebis_ledger::bucket_of(free_read_at),
+                window: "seven_day".into(),
+                utilization: Some(0.3),
+                reset_at: Some(free_end + 4 * DAY),
+                source: "poll".into(),
+                observed_at: Some(free_read_at),
+            }],
+            None,
+        )
+        .unwrap();
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
@@ -1818,6 +1859,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (
             "analytics_series_accounts",
             "/admin/analytics/series?range=24h&group_by=account",
+        ),
+        (
+            "analytics_unused_allowance",
+            "/admin/analytics/unused_allowance",
         ),
         ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),

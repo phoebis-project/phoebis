@@ -75,6 +75,7 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("analytics_refusal_categories", &[400, 500]),
     ("analytics_rewrites", &[400, 500]),
     ("analytics_series", &[400, 500]),
+    ("analytics_unused_allowance", &[400, 500]),
     ("attention_show", &[500]),
     ("dashboard_show", &[500]),
     ("guardrails_list", &[500]),
@@ -140,6 +141,7 @@ const EXAMPLE_FILES: &[&str] = &[
     "analytics_rewrites",
     "analytics_series",
     "analytics_series_accounts",
+    "analytics_unused_allowance",
     "attention",
     "dashboard",
     "guardrails",
@@ -204,6 +206,10 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
     ("analytics_rewrites", Some(("analytics_rewrites", 200))),
     ("analytics_series", Some(("analytics_series", 200))),
     ("analytics_series_accounts", Some(("analytics_series", 200))),
+    (
+        "analytics_unused_allowance",
+        Some(("analytics_unused_allowance", 200)),
+    ),
     ("attention", Some(("attention_show", 200))),
     ("dashboard", Some(("dashboard_show", 200))),
     ("decision", Some(("request_decision", 200))),
@@ -586,8 +592,8 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        57,
-        "the admin listener's 57 paths"
+        58,
+        "the admin listener's 58 paths"
     );
     assert_eq!(
         phoebis_admin::path_count(),
@@ -596,8 +602,8 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         operations(&document).len(),
-        70,
-        "the admin listener's 70 operations"
+        71,
+        "the admin listener's 71 operations"
     );
 }
 
@@ -761,8 +767,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        47,
-        "46 success answers and the replay's held answer"
+        48,
+        "47 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a
@@ -1810,6 +1816,37 @@ async fn the_refusal_count_operation_declares_the_range_and_the_filters_it_reads
             "range"
         ]),
         "the refusal count operation's query"
+    );
+}
+
+/// The query check compares names per module, and the other analytics queries declare `range` and `accounts`, so it
+/// would pass an unused allowance operation that left its own query out. Its default differs from theirs, and the
+/// description is where the document says so.
+#[tokio::test]
+async fn the_unused_allowance_operation_declares_the_account_filter_and_the_range_with_its_thirty_day_default(
+) {
+    let (_app, _up, document) = document().await;
+    let parameters = document["paths"]["/admin/analytics/unused_allowance"]["get"]["parameters"]
+        .as_array()
+        .expect("the unused allowance operation's parameters");
+    let names: BTreeSet<&str> = parameters
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from(["accounts", "range"]),
+        "the unused allowance operation's query"
+    );
+    let range = parameters
+        .iter()
+        .find(|parameter| parameter["name"] == "range")
+        .expect("the range parameter");
+    assert!(
+        range["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("Default `30d`")),
+        "{range}"
     );
 }
 

@@ -64,8 +64,8 @@ Each operation names its request (path segments, query parameters, or body field
             probes' waste, files under the kind and the class its record carries: `billed` for an API key account, \
             `usage_based` for a usage-based seat, else `fast` for a fast recipe, else `plan`. Absent keeps every \
             row. The two subsets partition the rows). `/accounts` takes `range` alone. `GET /admin/analytics/budgets`, \
-            `/burn`, `/placements`, `/reconciliations`, and `/rewrites`, elsewhere under this tag, take their own \
-            request shapes."),
+            `/burn`, `/placements`, `/reconciliations`, `/refusal_categories`, `/rewrites`, and `/unused_allowance`, \
+            elsewhere under this tag, take their own request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
         (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \
@@ -883,6 +883,7 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("analytics_rewrites", "200"),
     fixture!("analytics_series", "200"),
     fixture!("analytics_series_accounts", "200"),
+    fixture!("analytics_unused_allowance", "200"),
     fixture!("attention", "200"),
     fixture!("dashboard", "200"),
     fixture!("guardrails", "200"),

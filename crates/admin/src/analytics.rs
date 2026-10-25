@@ -267,6 +267,19 @@ pub(crate) struct RefusalCategoriesQuery {
     pub include_probes: Option<bool>,
 }
 
+/// `GET /admin/analytics/unused_allowance`'s query.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct UnusedAllowanceQuery {
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `30d`,
+    /// since a week's reset is the unit.
+    pub range: Option<String>,
+    /// A comma-separated list. Absent answers every subscription account with a weekly reset in range.
+    pub accounts: Option<String>,
+}
+
 pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
     tracing::warn!(%error, "an admin read failed in the ledger");
     failure(StatusCode::INTERNAL_SERVER_ERROR, "ledger failure")
@@ -1170,6 +1183,155 @@ pub(crate) async fn refusal_categories(
     Json(RefusalCategories { from, to, rows }).into_response()
 }
 
+/// The weekly allowance each subscription account left unused at its resets in range, read off the stored
+/// `window_reset` events, which the request retention bounds.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UnusedAllowance {
+    pub from: i64,
+    pub to: i64,
+    /// One entry per subscription account with at least one weekly reset in range, ordered by `account_id`.
+    pub accounts: Vec<UnusedAllowanceAccount>,
+}
+
+/// One subscription account's weekly windows over the range.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UnusedAllowanceAccount {
+    pub account_id: String,
+    /// The account's resolved plan word as `subscription.plan` answers it, null while no profile document stands.
+    pub plan: Option<String>,
+    /// The stored rate-limit tier, null as on the account.
+    pub tier: Option<String>,
+    /// One per weekly window the account's resets name, `seven_day` first.
+    pub windows: Vec<UnusedAllowanceWindow>,
+}
+
+/// One weekly window's resets over the range.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UnusedAllowanceWindow {
+    /// `seven_day` or `seven_day_<model>`.
+    #[schema(example = "seven_day")]
+    pub window: String,
+    /// Newest first.
+    pub resets: Vec<UnusedAllowanceReset>,
+    /// The listed `share_left` values summed.
+    pub total_share_left: f64,
+    /// The count of `resets`.
+    pub resets_counted: u64,
+}
+
+/// One reset of the window, or the account's term end read as one.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UnusedAllowanceReset {
+    /// The window's reset instant, epoch milliseconds, the term's end for a `term_ended` row.
+    pub reset_at: i64,
+    /// The fraction of the window left unused at the reset, `1 - utilization_before` clamped to the unit interval.
+    pub share_left: f64,
+    /// The instant the share was read: the event's instant for a `sample` or `clock` reset (a clock reading up to one
+    /// poll interval old), the sample's own instant for `term_ended`.
+    pub observed_at: i64,
+    /// `sample` for a reset a usage sample showed, `clock` for the clock walk's reset (its reading up to one poll
+    /// interval old), `term_ended` for the account's term ending inside the week.
+    #[schema(example = "sample")]
+    pub source: String,
+}
+
+/// Read the weekly allowance each subscription account left unused.
+#[utoipa::path(
+    get,
+    path = "/admin/analytics/unused_allowance",
+    operation_id = "analytics_unused_allowance",
+    tag = "Analytics",
+    params(UnusedAllowanceQuery),
+    responses(
+        (status = 200, description = "The weekly resets over the range, per account and window.", body = UnusedAllowance),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 500, response = LedgerFailure),
+    ),
+)]
+pub(crate) async fn unused_allowance(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let now = (state.clock)();
+    let (from, to) = match parse_range(Some(q.get("range").map_or("30d", String::as_str)), now) {
+        Ok(r) => r,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+    };
+    let listed = list(&q, "accounts");
+    let snapshot = state.router.snapshot();
+    let mut oauth: Vec<String> = snapshot
+        .accounts()
+        .filter(|a| a.kind == AccountKind::Oauth && (listed.is_empty() || listed.contains(&a.id)))
+        .map(|a| a.id.clone())
+        .collect();
+    oauth.sort();
+    // An empty list reads every account's rows in the ledger, a deleted or an API key account's among them, so a filter
+    // that names no subscription account answers without the read.
+    if oauth.is_empty() {
+        return Json(UnusedAllowance {
+            from,
+            to,
+            accounts: Vec::new(),
+        })
+        .into_response();
+    }
+    // The term is read at the range's start, so a trial end inside the range counts. An end still ahead of `now`
+    // ends no week yet, and a custom range may reach a day past it.
+    let term_ends: Vec<(String, i64)> = oauth
+        .iter()
+        .filter_map(|id| {
+            let end = term::end_of(snapshot.term(id)?, from)?;
+            (from <= end && end <= to.min(now)).then(|| (id.clone(), end))
+        })
+        .collect();
+    let rows = match state
+        .ledger
+        .db()
+        .read(move |c| phoebis_ledger::unused_allowance(c, &oauth, from, to, &term_ends))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return ledger_failure(e),
+    };
+    let mut by_account: BTreeMap<String, BTreeMap<String, Vec<UnusedAllowanceReset>>> =
+        BTreeMap::new();
+    for row in rows {
+        by_account
+            .entry(row.account_id)
+            .or_default()
+            .entry(row.window)
+            .or_default()
+            .push(UnusedAllowanceReset {
+                reset_at: row.reset_at,
+                share_left: row.share_left,
+                observed_at: row.observed_at,
+                source: row.source,
+            });
+    }
+    let accounts = by_account
+        .into_iter()
+        .map(|(account_id, windows)| UnusedAllowanceAccount {
+            plan: snapshot.plan(&account_id).map(String::from),
+            tier: snapshot.tier(&account_id).map(String::from),
+            account_id,
+            windows: windows
+                .into_iter()
+                .map(|(window, resets)| UnusedAllowanceWindow {
+                    window,
+                    total_share_left: resets.iter().map(|r| r.share_left).sum(),
+                    resets_counted: resets.len() as u64,
+                    resets,
+                })
+                .collect(),
+        })
+        .collect();
+    Json(UnusedAllowance { from, to, accounts }).into_response()
+}
+
 /// The rewrite tokens per bucket, the moves over the range and the slow-down's held time per bucket.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -1353,7 +1515,7 @@ pub(crate) async fn guardrails(
 mod tests {
     use super::{
         AnalyticsAccounts, Budgets, Burn, GuardrailCounts, Placements, Reconciliations,
-        RefusalCategories, Rewrites, WindowSample,
+        RefusalCategories, Rewrites, UnusedAllowance, WindowSample,
     };
     use crate::openapi::round_trip::{fixture, round_trips};
     use crate::openapi::{BreakdownRow, SeriesPointView};
@@ -1399,6 +1561,7 @@ mod tests {
         for stem in ["analytics_series", "analytics_series_accounts"] {
             round_trips::<SeriesTwin>(stem);
         }
+        round_trips::<UnusedAllowance>("analytics_unused_allowance");
         // Each window is a sample or null, as `windows_schema` declares, so every window of every hour is read as
         // the nullable sample and the mirror is proved on the ones that hold one.
         let accounts = fixture("analytics_accounts");
