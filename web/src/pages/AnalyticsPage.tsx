@@ -662,7 +662,7 @@ export function AnalyticsPage() {
               </BarChart>
             </ChartCard>
 
-            <Card title="Errors by code" subtitle="Non-200 responses in range, the refused requests left out">
+            <Card title="Errors by code" subtitle="Failed and incomplete responses in range, the refused requests left out">
               {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
             </Card>
 

@@ -4674,7 +4674,7 @@ async function costUnpricedNote(theme) {
       say('under the unpriced switch no Cost by card draws the unpriced note');
       return;
     }
-    if (!/^(\d+ groups|[^,]+(, [^,]+){0,2}) unpriced in \d+ buckets?, drawn as (a gap|gaps)$/.test(read.note.text)) say(`the ${read.card} card's note reads ${JSON.stringify(read.note.text)}`);
+    if (!/^(\d+ groups|[^·]+( · [^·]+){0,2}) unpriced in \d+ buckets?, drawn as (a gap|gaps)$/.test(read.note.text)) say(`the ${read.card} card's note reads ${JSON.stringify(read.note.text)}`);
     if (read.note.below !== true) say(`the ${read.card} card's note does not sit on a line under its subtitle's text`);
     for (const what of compare(read.note, read.subtitle, ['color', 'family', 'left', 'size', 'weight'], `the ${read.card} card's note against its subtitle`)) say(what);
   } finally {
@@ -4728,6 +4728,28 @@ async function burnCards(theme) {
   } finally {
     await tabTo(theme, 'Traffic');
   }
+}
+
+/**
+ * The Errors by code card's subtitle on the Traffic tab: its words, since the card counts a cut stream's status-200
+ * rows too, in the type and ink of the subtitle of Refusals by code, the card after it.
+ */
+async function errorsSubtitle(theme) {
+  if (!(await tabTo(theme, 'Traffic'))) return;
+  const read = await page.evaluate(() => {
+    const subtitle = (title) => {
+      const card = [...document.querySelectorAll('#traffic .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+      const el = card?.querySelector('.card__subtitle') ?? null;
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { color: s.color, family: s.fontFamily, size: s.fontSize, text: el.textContent?.trim() ?? '', weight: s.fontWeight };
+    };
+    return { errors: subtitle('Errors by code'), refusals: subtitle('Refusals by code') };
+  });
+  measurements.push(`${theme} /analytics Errors by code subtitle ${JSON.stringify(read)}`);
+  const words = 'Failed and incomplete responses in range, the refused requests left out';
+  if (read.errors?.text !== words) failures.push(`${theme} /analytics: the Errors by code subtitle reads ${JSON.stringify(read.errors?.text ?? null)}, not ${JSON.stringify(words)}`);
+  failures.push(...compare(read.errors, read.refusals, ['color', 'family', 'size', 'weight'], `${theme} /analytics: the Errors by code subtitle against the Refusals by code subtitle`));
 }
 
 /**
@@ -10552,6 +10574,7 @@ try {
         await analyticsTables(theme);
         await analyticsColumns(theme);
         await trafficCards(theme);
+        await errorsSubtitle(theme);
         await costSplitRings(theme);
         await nativeCostTable(theme);
         await analyticsTabs(theme);

@@ -115,28 +115,29 @@ Saved by probes chart in the box and title type of the card beside it), the Cost
 (mock pass, on loads of its own: the Cost tile's dash under the unpriced title in the type, ink and top of the Cost per
 request tile's first figure, and the Cost by card's note on a line of its own under the subtitle's text, at its left
 edge, in its type and ink, its text recorded), the burn cards (an odd last card spanning its row, and in the mock pass
-four cards two by two at 1440 by 900 under the key grouping), the plan legend's estimated entry (a hollow swatch) and
-model unlisted entry, the placement and budget tables, the Analytics tables' columns, each read on the tab that draws it
-(the Traffic breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Cache
-by model's width recorded under native with every column inside its wrap at 1280 by 800 and in the mock pass a cost
-cell's billed line drawn, Rung on the placements table, Pool and Account on the member budgets, whose Spent column is as
-wide as its meter's 140 px floor, and the Accounts in range card's account column at least 132 px at 375 by 800 with the
-table scrolling inside its wrap and the card as wide as the Pace card), the request table's fit (in both passes the
-default columns inside the card at 1280 by 800 with the Cost column whole, Time the one fill taking the card less the
-other columns, its floor the widest dated time the clock setting draws with the cell's padding, every id line the whole
-id cut by the room alone with at least twelve characters in view, and no Client text cut, again under the 7-day range
-read a day and an hour on, where every Time cell prints its date on one line inside its cell, and there under the
-12-hour setting, the table carrying its 12-hour class and, where the set runs past the card, scrolling inside its wrap
-with Time at its floor), its sizes (at 1440 by 900 inside the card with every id whole in the mock pass, and at 375 by
-800 at its narrowest with Time at its floor, scrolling inside its wrap with the page as wide as the window), its columns
-(Time the fill, the Status, Attempts and links cells wrapping), its text at 1920 by 1080 in the mock pass (no client
-class or agent type cut, each read on its own span, and every id whole), the usage-based Cost cell (mock pass:
-`usage-based` under its dollars in the tag, size, weight and ink of a billed row's funding word, its hover `Billed in
-dollars: usage-based`), the table with Time turned off (`table--no-fill` at its content width at 1280 by 800 and 1920 by
-1080), the Cache warming grid (an odd last card spanning its row, its title in the type of the card before it), the
-Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming
-tiles rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on its row spanning the
-grid and a last card that shares its row on its neighbor's top edge, each figure and card recorded), the Traffic table
+four cards two by two at 1440 by 900 under the key grouping), the Errors by code card's subtitle (its text, in the type
+and ink of the Refusals by code card's subtitle), the plan legend's estimated entry (a hollow swatch) and model unlisted
+entry, the placement and budget tables, the Analytics tables' columns, each read on the tab that draws it (the Traffic
+breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Cache by model's
+width recorded under native with every column inside its wrap at 1280 by 800 and in the mock pass a cost cell's billed
+line drawn, Rung on the placements table, Pool and Account on the member budgets, whose Spent column is as wide as its
+meter's 140 px floor, and the Accounts in range card's account column at least 132 px at 375 by 800 with the table
+scrolling inside its wrap and the card as wide as the Pace card), the request table's fit (in both passes the default
+columns inside the card at 1280 by 800 with the Cost column whole, Time the one fill taking the card less the other
+columns, its floor the widest dated time the clock setting draws with the cell's padding, every id line the whole id cut
+by the room alone with at least twelve characters in view, and no Client text cut, again under the 7-day range read a
+day and an hour on, where every Time cell prints its date on one line inside its cell, and there under the 12-hour
+setting, the table carrying its 12-hour class and, where the set runs past the card, scrolling inside its wrap with Time
+at its floor), its sizes (at 1440 by 900 inside the card with every id whole in the mock pass, and at 375 by 800 at its
+narrowest with Time at its floor, scrolling inside its wrap with the page as wide as the window), its columns (Time the
+fill, the Status, Attempts and links cells wrapping), its text at 1920 by 1080 in the mock pass (no client class or
+agent type cut, each read on its own span, and every id whole), the usage-based Cost cell (mock pass: `usage-based`
+under its dollars in the tag, size, weight and ink of a billed row's funding word, its hover `Billed in dollars:
+usage-based`), the table with Time turned off (`table--no-fill` at its content width at 1280 by 800 and 1920 by 1080),
+the Cache warming grid (an odd last card spanning its row, its title in the type of the card before it), the Analytics
+tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming tiles
+rows, the Wasted probes card's among them, wider than its tile, a Cache warming card alone on its row spanning the grid
+and a last card that shares its row on its neighbor's top edge, each figure and card recorded), the Traffic table
 grouped by model (its Error rate column, and the no model row's Error rate a dash in the muted ink and in the type of
 the rate cell beside it, which reads a percent, the row required in the mock pass alone since the router's seed holds no
 request without a model), the request pages' widths, walked on a load of their own once every view's shot is taken, the

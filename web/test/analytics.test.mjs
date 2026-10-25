@@ -802,7 +802,8 @@ test('the idle slots of the plan cards zero-fill against the flags under the equ
 test("the Cost by card's note names the groups unpriced in range up to three, counts them past three, and counts their buckets, singular at one", () => {
   assert.equal(d.unpricedNote([], 0), null, 'nothing unpriced reads no note');
   assert.equal(d.unpricedNote(['research'], 1), 'research unpriced in 1 bucket, drawn as a gap');
-  assert.equal(d.unpricedNote(['a', 'b', 'c'], 5), 'a, b, c unpriced in 5 buckets, drawn as gaps', 'up to three labels joined by commas');
+  assert.equal(d.unpricedNote(['a', 'b', 'c'], 5), 'a · b · c unpriced in 5 buckets, drawn as gaps', 'up to three labels joined by middle dots');
+  assert.equal(d.unpricedNote(['research', 'desktop (deleted, created Oct 11, 2026, 12:15)'], 3), 'research · desktop (deleted, created Oct 11, 2026, 12:15) unpriced in 3 buckets, drawn as gaps', "a deleted holder's label reads whole between the dots");
   assert.equal(d.unpricedNote(['a'], 3), 'a unpriced in 3 buckets, drawn as gaps', 'the gaps follow the buckets');
   assert.equal(d.unpricedNote(['a', 'b', 'c', 'd'], 4), '4 groups unpriced in 4 buckets, drawn as gaps', 'past three labels the note counts the groups');
 });

@@ -6201,6 +6201,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'Retention (hours)',
       "At most the bootstrap's body capture limit, 72 hours here, shown on the Settings page",
     ]);
+    // The new-tab words are PageLink's own sr-only span inside the link, so the name is heard whole before them.
+    const settingsLink = [...(group(dlg, 'Body capture')?.querySelectorAll('a') ?? [])].find((a) => a.getAttribute('href')?.endsWith('/settings'));
+    const linkText = settingsLink?.textContent?.trim() ?? '';
+    results.push({ name: "/pools the Retention hint's link wraps the Settings page's About card whole", ok: linkText === "Settings page's About card (opens in a new tab)", missing: [linkText || 'no Settings link'] });
     const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
     results.push({ name: '/pools capture prefills the pool retention', ok: hours?.value === '24' && hours?.getAttribute('max') === '72', missing: [hours?.value ?? 'absent', hours?.getAttribute('max') ?? 'absent'] });
   }
@@ -16696,7 +16700,7 @@ m.unmount();
 
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Non-200 responses in range, the refused requests left out', 'Refusals by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Failed and incomplete responses in range, the refused requests left out', 'Refusals by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
 {
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
   const hinted = [...(table?.querySelectorAll('thead th') ?? [])].filter((th) => th.querySelector('[title]') !== null).map((th) => [th.textContent?.trim(), th.querySelector('[title]').getAttribute('title')]);

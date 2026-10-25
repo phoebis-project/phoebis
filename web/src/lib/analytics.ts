@@ -451,12 +451,14 @@ export function nativeFiguresOf(window: string, sides: { billed: number | undefi
 }
 /**
  * The Cost by chart's note on the groups it draws as gaps: one label ("research unpriced in 3 buckets, drawn as gaps",
- * "1 bucket, drawn as a gap"), up to three joined by commas, a count past three ("5 groups unpriced in 12 buckets,
+ * "1 bucket, drawn as a gap"), up to three joined by middle dots, a count past three ("5 groups unpriced in 12 buckets,
  * drawn as gaps"), null where no bucket is a gap. `labels` are the unpriced groups' labels in the chart's order.
  */
 export function unpricedNote(labels: readonly string[], buckets: number): string | null {
   if (labels.length === 0 || buckets === 0) return null;
-  const named = labels.length > 3 ? `${fmtInt(labels.length)} groups` : labels.join(', ');
+  // The middle dot joins the labels, since a deleted holder's label carries a comma of its own ("desktop (deleted,
+  // created Oct 11, 2026, 12:15)") and the console already sets a bar's share and its reset apart with it.
+  const named = labels.length > 3 ? `${fmtInt(labels.length)} groups` : labels.join(' · ');
   return `${named} unpriced in ${fmtInt(buckets)} ${buckets === 1 ? 'bucket, drawn as a gap' : 'buckets, drawn as gaps'}`;
 }
 /**

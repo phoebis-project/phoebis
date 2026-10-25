@@ -821,10 +821,10 @@ section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Account
 traffic in this range." What each figure means is on [Statistics](statistics.md).
 
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
-Exhausted), Errors by code ("Non-200 responses in range, the refused requests left out"), Refusals by code ("Requests
-the router refused before any account was asked, not in the counts", or "No request was refused in this range." where
-none was), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the destination's fit,
-`fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
+Exhausted), Errors by code ("Failed and incomplete responses in range, the refused requests left out"), Refusals by code
+("Requests the router refused before any account was asked, not in the counts", or "No request was refused in this
+range." where none was), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the
+destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
 with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
 requests in the warning tone, its hover `12 requests held 14 min in all`, `no request held` on a bucket that held none,
 and its legend line the range's sum, or `none in range` with no chart), Requests by speed, Effort levels, then at full
@@ -903,16 +903,16 @@ subscription side the route could not price on the 7-day window, as when a reque
 reads a dash, its bucket on the Cost by chart a gap, and the Cost split draws no ring for it. The Cost tile's dash
 carries the Dashboard's hover, and the Cost by chart names the groups it draws that read unpriced on the 7-day window on
 a line under its subtitle, `{group} unpriced in {m} buckets, drawn as gaps` for one group (`research unpriced in 1
-bucket, drawn as a gap`), the groups' labels joined by commas for up to three, and `{n} groups unpriced in {m} buckets,
-drawn as gaps` past three. Under All in dollars, Billed dollars and Dollar equivalent Cost draws the tiles Estimated
-cost, Billed dollars or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the chosen group
-as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output) and the Cost
-split as one ring in dollars (Input, Cache read, Cache write, Output). Under Window shares, which reads under the
-account grouping or with one account named in the Accounts filter, the tiles read Window share, Per request and Per 1k
-output, the chart one line per group, the table Plan requests, 5-hour, 7-day, the model week, Per request and Per 1k
-output, and the Cost split the whole in dollars. Every position draws Fast mode spend, and an estimated figure carries
-the `~` and the estimate's hover. The prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost
-model behind the shares and the equivalents on [Plan meter](statistics.md#plan-meter).
+bucket, drawn as a gap`), the groups' labels joined by middle dots for up to three, and `{n} groups unpriced in {m}
+buckets, drawn as gaps` past three. Under All in dollars, Billed dollars and Dollar equivalent Cost draws the tiles
+Estimated cost, Billed dollars or Dollar equivalent, Cost per request and Cost per 1k output tokens, then Cost by the
+chosen group as a chart and a table (Requests, Cost, Input, Cache read, Cache write, Output, Per request, Per 1k output)
+and the Cost split as one ring in dollars (Input, Cache read, Cache write, Output). Under Window shares, which reads
+under the account grouping or with one account named in the Accounts filter, the tiles read Window share, Per request
+and Per 1k output, the chart one line per group, the table Plan requests, 5-hour, 7-day, the model week, Per request and
+Per 1k output, and the Cost split the whole in dollars. Every position draws Fast mode spend, and an estimated figure
+carries the `~` and the estimate's hover. The prices behind the dollars are on [Pricing](statistics.md#pricing), and the
+cost model behind the shares and the equivalents on [Plan meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
