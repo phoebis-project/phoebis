@@ -25,8 +25,8 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    decide, pace_of, projection_of, projections_of, release_reasons, BurnRead, Decided, FailedOver,
-    MigrateReason, Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
+    decide, pace_of, passes_reset, projection_of, projections_of, release_reasons, BurnRead,
+    Decided, FailedOver, MigrateReason, Refusal, SelectRequest, SelectResult, FIVE_HOUR_MS,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -1149,7 +1149,8 @@ pub struct PinStanding {
     pub pin: PinRow,
     pub runway_ms: Option<i64>,
     /// `None` where the pin's account has no projection on any window the model draws (`runway_ms` null too),
-    /// `Some(false)` for an unbounded runway (`runway_ms` null), `Some(true)` for a bounded one (`runway_ms` set).
+    /// `Some(false)` for an unbounded runway, one no burn bounds or one past its window's reset on every window
+    /// (`runway_ms` null), `Some(true)` for a bounded one (`runway_ms` set).
     pub runway_bounded: Option<bool>,
     /// The window the runway reads, `None` unless it is bounded.
     pub binding: Option<String>,
@@ -2728,9 +2729,9 @@ fn decayed(pin: PinRow, now: i64, average_ms: i64) -> PinRow {
 /// fill `ceiling - predicted` over the band's segments, as the projection beside it weighs them. Its burn already
 /// holds the pin, so neither the pin's burn nor a rewrite is added again (that is `fit_of`'s arithmetic for a
 /// destination). `Some(0)` where `predicted` already reaches the ceiling, an unbounded runway (`None` with no binding
-/// window) where the account's burn on every drawn window it projects is zero, and the binding window the shortest.
-/// The outer `None` where the account projects none of the drawn windows: an api_key account, or one with no reading
-/// of them.
+/// window) where on every drawn window it projects the account's burn is zero or the runway passes the window's reset,
+/// since the window resets before the ceiling is reached, and the binding window the shortest of the rest. The outer
+/// `None` where the account projects none of the drawn windows: an api_key account, or one with no reading of them.
 fn standing_runway(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2765,7 +2766,9 @@ fn standing_runway(
             };
             runway_ms
         };
-        bounded.push((window, runway_ms));
+        if !passes_reset(runway_ms, projection.reset, now) {
+            bounded.push((window, runway_ms));
+        }
     }
     projected.then(|| {
         bounded

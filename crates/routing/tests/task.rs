@@ -11212,6 +11212,75 @@ async fn a_pin_migrated_event_carries_the_destinations_fit_runway_and_binding() 
 }
 
 #[tokio::test]
+async fn a_standing_runway_that_reaches_past_its_windows_reset_reads_unbounded() {
+    let store = shedding_store(&["a"]);
+    with_tier(&store, "a");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // The pin's 0.1 of the window an hour fills the 0.2 left under the ceiling in two hours, and the window resets in
+    // one, so the ceiling is never reached before the reset. a holds no weekly reading, so no other window bounds it.
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.75, Some(AT + HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let standing = handle.pins_standing().await.unwrap();
+    let s1 = standing
+        .iter()
+        .find(|p| p.pin.session_id == "s1")
+        .unwrap_or_else(|| panic!("no pin of s1: {standing:?}"));
+    assert_eq!(
+        (s1.runway_ms, s1.runway_bounded, s1.binding.as_deref()),
+        (None, Some(false), None),
+        "a runway past its window's reset reads unbounded"
+    );
+}
+
+#[tokio::test]
+async fn the_window_inside_its_reset_binds_the_standing_runway_where_a_shorter_one_passes_its_reset(
+) {
+    let store = shedding_store(&["a"]);
+    with_tier(&store, "a");
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // The 5-hour window's two hours to the ceiling pass its reset an hour out, while the week's 0.05 left under the
+    // ceiling, at a sixth of the burn, lasts three hours under no reset: the week binds though its runway is longer.
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.75, Some(AT + HOUR)).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.9,
+                    reset: None,
+                    observed_at: AT,
+                    source: WindowSource::Poll,
+                },
+            ),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let standing = handle.pins_standing().await.unwrap();
+    let s1 = standing
+        .iter()
+        .find(|p| p.pin.session_id == "s1")
+        .unwrap_or_else(|| panic!("no pin of s1: {standing:?}"));
+    assert_eq!(
+        (s1.runway_ms, s1.runway_bounded, s1.binding.as_deref()),
+        (Some(3 * HOUR), Some(true), Some(SEVEN_DAY)),
+        "the week binds at its three hours, the 5-hour window's two passing its reset"
+    );
+}
+
+#[tokio::test]
 async fn a_predicted_wall_with_no_reset_holds_back_a_sample_whose_reset_lands_within_a_minute_past_its_length(
 ) {
     use phoebis_routing::RouterEvent;

@@ -457,10 +457,12 @@ of the fit and the Pace score, while every other read keeps it.
 
 A session's runway on an account is the time until that account's projection, with the session's cold rewrite (its last
 prompt as one cache write) added now and its burn added to the account's, reaches `window_ceiling`: none when the
-rewrite alone takes a window there, unbounded when nothing burns. The session fits the account when the runway reaches
-the horizon on every window its model draws, `five_hour`, `seven_day` and the model's own week where it has one. An
-API-key account fits while its worst live rate-limit bucket reads under 1.0. A usage-based seat fits as an API-key
-account does: with no bucket to read, it has room.
+rewrite alone takes a window there, unbounded when nothing burns, and unbounded on the Sessions route and in the
+decision record's fit table where it reaches past the window's next reset, while the fit's verdict reads the computed
+figure against the horizon. The session fits the account when the runway reaches the horizon on every window its model
+draws, `five_hour`, `seven_day` and the model's own week where it has one. An API-key account fits while its worst live
+rate-limit bucket reads under 1.0. A usage-based seat fits as an API-key account does: with no bucket to read, it has
+room.
 
 A move or a placement books its rewrite and its burn on the destination as a reservation, which the destination's
 prediction and burn count until the request's usage replaces it, the request ends without usage, or the reservation
@@ -596,12 +598,13 @@ the pin on every destination, and a cold pin nothing, since its cache is rewritt
 `warm_sessions` `always` every pin its rewrite, as the order ignores warmth there), the first in the order among equals,
 and the marking ends there with the target met. A move's cost is the share its rewrite spends on the scarce weekly
 windows, since the 5-hour window refills. The pin the pick marked carries the note `cheapest` in the round's record and
-event, every pin the pick read carries the runway the gate read for it and its rewrite in the pick's unit, and a pick
-that finds no covering pin with a destination leaves the walk to the order. A pin whose burn carries the removed burn
-past the target stays marked, and the walk stops there. A round that marks nothing records why: `no_runway` when no
-priced pin had a destination, `off_window` when it walked no pin and a pin it left out was off the window that fired,
-`unpriced` when no burn was priced, `last_pin` when the account had one pin on the window, and `standing` when every pin
-walked was a pending move. Either way the round is recorded, so the dwell holds.
+event, every pin the pick read carries the runway the gate read for it, unbounded where it passes its window's reset,
+and its rewrite in the pick's unit, and a pick that finds no covering pin with a destination leaves the walk to the
+order. A pin whose burn carries the removed burn past the target stays marked, and the walk stops there. A round that
+marks nothing records why: `no_runway` when no priced pin had a destination, `off_window` when it walked no pin and a
+pin it left out was off the window that fired, `unpriced` when no burn was priced, `last_pin` when the account had one
+pin on the window, and `standing` when every pin walked was a pending move. Either way the round is recorded, so the
+dwell holds.
 
 A marked session moves at its next request, the request that ran the round included, since the mark check follows the
 round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
@@ -659,27 +662,27 @@ has no weight for or a tier it has no capacity for, reads as none.
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed` or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
 `fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A move a rule's
-gate read adds the destination's fit (`fits`, `rewrite_only` or `least_bad`), its runway and the window that binds it,
-and a failover's move adds its `cause`: for a cooldown its `scope` (`account`, `fast`, `fast_credits` or `model:<id>`),
-its `reason` (the cooldown row's own word, such as `rate_limit`) and its `window`, and for a mark the account's `state`
-and the state's `cause`. A failover with neither, a 401 whose refresh failed with a transient error the request could
-not wait out, carries none. A mark that clears records `mark_cleared` with the reason `healed` (the account's projection
-on the marked window read under the ceiling again, or its stretch under the threshold for a mark the stretch made),
-`moved` or `released`. A reservation that leaves without the usage that would have replaced it records
-`reservation_expired`, with the relay's word for a request that ended without usage (`canceled`, `exhausted`, `refused`
-or `transport_error`) or `timeout` for a booking an hour old. A pin released without a move records `pin_expired` with
-`reasons`, every fact the selection found against the account: `attempted`, `budget` (the pinned member has reached one
-of its spend budgets), `budget_unknown` (the ledger is degraded and the pinned member carries a budget), `cooldown`,
-`deleted`, `expired`, `fast_credits` (a fast request's pinned account whose `fast_credits` row stands or whose usage
-credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking row that stands
-latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve
-(`disconnected`, `funding_required` until its retry is admitted, `reauth_required`, `unpaired`), or `released` when the
-selection found nothing else against the account, as with a move whose destination emptied. A pin whose creating request
-was answered 400, 403 or 404, or was bound to its account and ended at an authentication failure that marked nothing,
-with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records the single
-reason `client_error`: it never served, so the session's next request is placed afresh rather than moved. Releasing a
-session by hand, from the Sessions view ([Sessions](console.md#sessions)) or
-`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+gate read adds the destination's fit (`fits`, `rewrite_only` or `least_bad`), its runway, unbounded where it passes its
+window's reset, and the window that binds it, and a failover's move adds its `cause`: for a cooldown its `scope`
+(`account`, `fast`, `fast_credits` or `model:<id>`), its `reason` (the cooldown row's own word, such as `rate_limit`)
+and its `window`, and for a mark the account's `state` and the state's `cause`. A failover with neither, a 401 whose
+refresh failed with a transient error the request could not wait out, carries none. A mark that clears records
+`mark_cleared` with the reason `healed` (the account's projection on the marked window read under the ceiling again, or
+its stretch under the threshold for a mark the stretch made), `moved` or `released`. A reservation that leaves without
+the usage that would have replaced it records `reservation_expired`, with the relay's word for a request that ended
+without usage (`canceled`, `exhausted`, `refused` or `transport_error`) or `timeout` for a booking an hour old. A pin
+released without a move records `pin_expired` with `reasons`, every fact the selection found against the account:
+`attempted`, `budget` (the pinned member has reached one of its spend budgets), `budget_unknown` (the ledger is degraded
+and the pinned member carries a budget), `cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned
+account whose `fast_credits` row stands or whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one
+whose `fast` row is the blocking row that stands latest), `overage`, `paused`, `spent`, `subscription_ended`,
+`unserved`, the account's state when it cannot serve (`disconnected`, `funding_required` until its retry is admitted,
+`reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a move
+whose destination emptied. A pin whose creating request was answered 400, 403 or 404, or was bound to its account and
+ended at an authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the
+session renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request
+is placed afresh rather than moved. Releasing a session by hand, from the Sessions view
+([Sessions](console.md#sessions)) or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ### Slow-down
 

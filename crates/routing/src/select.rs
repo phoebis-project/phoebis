@@ -2486,6 +2486,9 @@ pub(crate) struct Projection {
     pub at_horizon: f64,
     /// The same burn over `[now, horizon)` as the band weighs it, whose increase `at_horizon` adds.
     pub banded: Banded,
+    /// The reading's reset as `horizon_of` read it, `None` where the reading names none: a runway that reaches past it
+    /// reads unbounded for the displayed figures, since the window resets before the ceiling is reached.
+    pub reset: Option<i64>,
 }
 
 /// The pins the account's pool keeps: a pin under a key of a pool the account left is retained until it ends and
@@ -2532,6 +2535,11 @@ pub(crate) fn horizon_of(
     account_end(snapshot, account_id, now)
         .map_or(horizon, |end| horizon.min(end))
         .max(now)
+}
+
+/// Whether a runway of `runway_ms` from `now` reaches past `reset`: such a runway is displayed as unbounded.
+pub(crate) fn passes_reset(runway_ms: i64, reset: Option<i64>, now: i64) -> bool {
+    reset.is_some_and(|reset| now.saturating_add(runway_ms) > reset)
 }
 
 /// Which burn a projection reads: the achieved burn, what the upstream sees (the weekly trigger, the reported figures),
@@ -2584,6 +2592,7 @@ pub(crate) fn projections_of(
                 horizon: horizon_of(snapshot, account_id, window, &reading, now),
                 at_horizon: reading.utilization,
                 banded: Banded::default(),
+                reset: reading.reset,
             },
         );
     }
@@ -2938,10 +2947,14 @@ pub(crate) fn slowable(request: &SelectRequest, kind: Option<AccountKind>) -> bo
 pub(crate) struct FitRead {
     /// `ending`, `fits`, `least_bad` or `rewrite_only`.
     pub verdict: &'static str,
-    /// The runway on the binding window: `None` for an unbounded one (no burn on it), `Some(0)` when the rewrite
-    /// alone reaches the ceiling.
+    /// The runway on the binding window: `None` for an unbounded one (no burn on it, or a runway past its window's
+    /// reset on every window), `Some(0)` when the rewrite alone reaches the ceiling.
     pub runway_ms: Option<i64>,
     pub binding: Option<String>,
+    /// The runway on the binding window over every bounded window, one past its reset included: what `longest` and
+    /// `runway_ties` rank by, so a window past its reset still orders the placement, while `runway_ms` and `binding`
+    /// show only the windows whose runway ends at or before their reset.
+    pub rank_runway_ms: Option<i64>,
     pub projection: BTreeMap<String, f64>,
     pub horizon: BTreeMap<String, i64>,
     pub rewrite: BTreeMap<String, f64>,
@@ -2983,6 +2996,7 @@ pub(crate) fn fit_of(
         verdict: "least_bad",
         runway_ms: None,
         binding: None,
+        rank_runway_ms: None,
         projection: BTreeMap::new(),
         horizon: BTreeMap::new(),
         rewrite: BTreeMap::new(),
@@ -3039,7 +3053,10 @@ pub(crate) fn fit_of(
     let mut rewrite_lands = true;
     // Every bounded runway with whether it falls short of its horizon: the window the pin reaches first among those
     // it overruns binds, else the first it reaches at all, so a zero runway on any window is the candidate's runway.
+    // `shown` leaves out a window whose runway passes its reset, which the displayed pair reads as unbounded as it
+    // reads a runway no burn bounds, while the verdict and the rank read every bounded window.
     let mut bounded: Vec<(&str, i64, bool)> = Vec::new();
+    let mut shown: Vec<(&str, i64, bool)> = Vec::new();
     for window in plan_windows(&request.canonical_model) {
         let Some(projection) = projections.get(window) else {
             if judge == Judge::Move {
@@ -3098,15 +3115,14 @@ pub(crate) fn fit_of(
             every_fits = false;
         }
         bounded.push((window, runway_ms, short));
+        if !passes_reset(runway_ms, projection.reset, now) {
+            shown.push((window, runway_ms, short));
+        }
     }
-    let binding = bounded
-        .iter()
-        .filter(|(_, _, short)| *short)
-        .min_by_key(|(_, runway_ms, _)| *runway_ms)
-        .or_else(|| bounded.iter().min_by_key(|(_, runway_ms, _)| *runway_ms));
-    if let Some((window, runway_ms, _)) = binding {
+    read.rank_runway_ms = binding_of(&bounded).map(|(_, runway_ms)| runway_ms);
+    if let Some((window, runway_ms)) = binding_of(&shown) {
         read.binding = Some(window.to_string());
-        read.runway_ms = Some(*runway_ms);
+        read.runway_ms = Some(runway_ms);
     }
     read.verdict = if tier.is_none() || unread {
         "least_bad"
@@ -3118,6 +3134,17 @@ pub(crate) fn fit_of(
         "least_bad"
     };
     read
+}
+
+/// The binding window among `runways` with its runway: the shortest of those short of their horizon, else the
+/// shortest of all, one choice for the rank and the displayed pair alike.
+fn binding_of<'w>(runways: &[(&'w str, i64, bool)]) -> Option<(&'w str, i64)> {
+    runways
+        .iter()
+        .filter(|(_, _, short)| *short)
+        .min_by_key(|(_, runway_ms, _)| *runway_ms)
+        .or_else(|| runways.iter().min_by_key(|(_, runway_ms, _)| *runway_ms))
+        .map(|&(window, runway_ms, _)| (window, runway_ms))
 }
 
 /// The record's key for a per-window fact of the fit table, the shed line or the reserve step, spelled once per plan
@@ -3151,7 +3178,7 @@ fn fit_key(kind: &str, window: &str) -> Option<&'static str> {
 
 /// The `fit` walk step over the candidates read, its verdict the order taken (`fits`, `rewrite_only`, `least_bad`)
 /// or `none` when no order holds a candidate. One row per candidate, each fact about its account, with `runway_ms`
-/// absent for an unbounded runway.
+/// absent for an unbounded runway: one no burn bounds, or one past its window's reset on every window.
 pub(crate) fn fit_step(reads: &[(String, FitRead)], verdict: &'static str) -> WalkStep {
     let mut facts = Vec::new();
     for (account_id, read) in reads {
@@ -3338,7 +3365,7 @@ fn order<'a, 'r>(
 fn longest<'a, 'r>(
     candidates: Vec<(&'a Candidate, &'r FitRead)>,
 ) -> Vec<(&'a Candidate, &'r FitRead)> {
-    let key = |read: &FitRead| read.runway_ms.unwrap_or(i64::MAX);
+    let key = |read: &FitRead| read.rank_runway_ms.unwrap_or(i64::MAX);
     let Some(best) = candidates.iter().map(|(_, read)| key(read)).max() else {
         return candidates;
     };
@@ -5961,7 +5988,7 @@ fn runway_ties<'a>(ties: &[&'a Candidate], reads: &[(String, FitRead)]) -> Vec<&
         reads
             .iter()
             .find(|(account_id, _)| *account_id == c.account_id)
-            .map(|(_, read)| read.runway_ms.unwrap_or(i64::MAX))
+            .map(|(_, read)| read.rank_runway_ms.unwrap_or(i64::MAX))
     };
     let Some(best) = ties.iter().filter_map(|c| runway(c)).max() else {
         return Vec::new();
@@ -7745,6 +7772,7 @@ mod runway_tests {
             verdict: "fits",
             runway_ms: Some(runway_ms),
             binding: None,
+            rank_runway_ms: Some(runway_ms),
             projection: BTreeMap::new(),
             horizon: BTreeMap::new(),
             rewrite: BTreeMap::new(),

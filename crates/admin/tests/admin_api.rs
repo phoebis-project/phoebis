@@ -5355,6 +5355,16 @@ async fn sessions_harness_rated(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>
 
 /// Reports `readings` of `account` as an answer's head would land them, read a minute before the rig's clock.
 async fn read_windows(parts: &common::Full, account: &str, readings: &[(&str, f64, Option<i64>)]) {
+    read_windows_at(parts, account, readings, common::NOW - 60_000).await;
+}
+
+/// `read_windows` observed at `observed_at`, since a reading lands only over an older one.
+async fn read_windows_at(
+    parts: &common::Full,
+    account: &str,
+    readings: &[(&str, f64, Option<i64>)],
+    observed_at: i64,
+) {
     let sample = readings.iter().fold(
         phoebis_routing::UtilizationSample::default(),
         |sample, (window, utilization, reset)| {
@@ -5363,7 +5373,7 @@ async fn read_windows(parts: &common::Full, account: &str, readings: &[(&str, f6
                 phoebis_routing::WindowReading {
                     utilization: *utilization,
                     reset: *reset,
-                    observed_at: common::NOW - 60_000,
+                    observed_at,
                     source: phoebis_routing::WindowSource::Head,
                 },
             )
@@ -5385,7 +5395,8 @@ fn within(a: Option<f64>, b: f64) -> bool {
 }
 
 #[tokio::test]
-async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_burn_counted_once() {
+async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_burn_counted_once_and_unbounded_past_the_reset(
+) {
     use common::{login, wait_json, NOW};
     const HOUR: i64 = 3_600_000;
     // One pin on `business` burning five points of its 5-hour window an hour, the window at 0.80 and resetting in four
@@ -5400,6 +5411,29 @@ async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_bur
     })
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
+    // Read first with the 5-hour window resetting in two hours, before its three hours to the ceiling, and the week's
+    // (0.95 - 0.30) / 0.002 = 325 hours past its reset 50 hours out: each window resets before the ceiling is reached.
+    read_windows_at(
+        &parts,
+        "business",
+        &[
+            (phoebis_routing::FIVE_HOUR, 0.80, Some(NOW + 2 * HOUR)),
+            (phoebis_routing::SEVEN_DAY, 0.30, Some(NOW + 50 * HOUR)),
+        ],
+        NOW - 120_000,
+    )
+    .await;
+    let past = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        !session_row(v, "s1")["runway_bounded"].is_null()
+    })
+    .await;
+    let row = session_row(&past, "s1");
+    assert_eq!(
+        (&row["runway_ms"], &row["runway_bounded"]),
+        (&serde_json::Value::Null, &serde_json::json!(false)),
+        "a runway past its window's reset reads unbounded: {row}"
+    );
+    // The newer reading moves the 5-hour reset out to four hours, past the three hours to the ceiling.
     read_windows(
         &parts,
         "business",

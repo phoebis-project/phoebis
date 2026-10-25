@@ -14133,6 +14133,13 @@ fn fact_of<'a>(step: &'a WalkStep, key: &str, account: &str) -> &'a FactValue {
         .value
 }
 
+/// Whether the line carries no fact under `key` about `account`.
+fn no_fact_of(step: &WalkStep, key: &str, account: &str) -> bool {
+    step.facts
+        .iter()
+        .all(|f| f.key != key || f.account_id.as_deref() != Some(account))
+}
+
 fn number(value: &FactValue) -> f64 {
     match value {
         FactValue::Number(n) => *n,
@@ -18263,16 +18270,17 @@ fn a_move_takes_a_destination_the_pin_fits_to_the_horizon_before_any_other() {
         &FactValue::List(vec!["b".into()])
     );
     // b: 0.3 and the rewrite of 0.05 leave 0.6 of the window, which the pin's burn reaches in 60 000 s, past the
-    // three hours to the reset. No pin burns on b, so its projection is its prediction.
+    // three hours to the reset, and its week's runway passes its reset 72 hours out, so b's runway reads unbounded.
+    // No pin burns on b, so its projection is its prediction.
     assert!(close(
         number(fact_of(fit, "projection_five_hour", "b")),
         0.3
     ));
     assert!(close(number(fact_of(fit, "rewrite_five_hour", "b")), 0.05));
-    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(60_000_000));
-    assert_eq!(
-        fact_of(fit, "binding", "b"),
-        &FactValue::Text("five_hour".into())
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "binding", "b"),
+        "{:?}",
+        fit.facts
     );
     assert_eq!(
         fact_of(fit, "verdict", "b"),
@@ -18287,7 +18295,7 @@ fn a_move_takes_a_destination_the_pin_fits_to_the_horizon_before_any_other() {
     let b = candidate(&d.record, "b");
     assert_eq!(
         (b.runway_ms, b.fit, b.binding.as_deref()),
-        (Some(60_000_000), Some("fits"), Some("five_hour"))
+        (None, Some("fits"), None)
     );
     assert_eq!(
         (
@@ -18298,7 +18306,10 @@ fn a_move_takes_a_destination_the_pin_fits_to_the_horizon_before_any_other() {
         "the candidate table carries the projection at the horizon and the horizon"
     );
     let facts = summary_facts(&d);
-    assert_eq!(facts[0], ("runway", FactValue::Int(60_000_000), Some("ms")));
+    assert_eq!(
+        facts[0],
+        ("runway", FactValue::Text("unbounded".into()), Some("text"))
+    );
     assert_eq!(
         facts[1].0, "pick",
         "the placement fact follows the runway: {facts:?}"
@@ -18352,6 +18363,51 @@ fn with_no_fitting_destination_the_rewrite_only_candidate_with_the_longest_runwa
 }
 
 #[test]
+fn a_rewrite_only_candidate_with_a_window_past_its_reset_keeps_the_longest_runways_move() {
+    let s = tiered(gate_pool());
+    let mut st = priced(vec![gated_pin("s1", "a", 1_000.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b's 5-hour window binds at 4 000 s, short of the 10 800 s to its reset, beside a week whose 50 500 s pass its
+    // reset two hours out. c's 5-hour window binds at 3 000 s beside a week inside its reset.
+    st.record_sample(
+        "b",
+        windows_with_resets((0.5, T + 3 * HOUR), (0.1, T + 2 * HOUR), T - 500),
+    );
+    st.record_sample("c", refreshing(0.6, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "rewrite_only");
+    assert_eq!(
+        fact(line(&d.record, "move:spent"), "destinations"),
+        &FactValue::List(vec!["b".into()]),
+        "the longer runway alone, the week past its reset leaving the order as it is"
+    );
+    assert_eq!(
+        (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
+        (
+            &FactValue::Text("five_hour".into()),
+            &FactValue::Int(4_000_000)
+        )
+    );
+    assert_eq!(
+        (fact_of(fit, "binding", "c"), fact_of(fit, "runway_ms", "c")),
+        (
+            &FactValue::Text("five_hour".into()),
+            &FactValue::Int(3_000_000)
+        )
+    );
+}
+
+#[test]
 fn with_nothing_fitting_the_move_lands_least_bad_where_the_strategy_picks() {
     let s = tiered(gate_pool());
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
@@ -18397,7 +18453,8 @@ fn under_priority_two_fitting_candidates_in_one_tier_take_the_longer_runway_with
     });
     let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
     // b: 0.6 of the window left over the pin's burn is 60 000 s, c: 0.4 left is 40 000 s, both past the 10 800 s to
-    // the reset.
+    // the reset, and each week's runway passes its reset 72 hours out: both runways read unbounded, while the
+    // computed figures still break the tie.
     gated_siblings(&mut st, 0.3, 0.5);
     let d = decide(
         &mut st,
@@ -18410,8 +18467,11 @@ fn under_priority_two_fitting_candidates_in_one_tier_take_the_longer_runway_with
         ("b".into(), Some(MigrateReason::Spent))
     );
     let fit = line(&d.record, "fit");
-    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(60_000_000));
-    assert_eq!(fact_of(fit, "runway_ms", "c"), &FactValue::Int(40_000_000));
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "runway_ms", "c"),
+        "{:?}",
+        fit.facts
+    );
     let pick = line(&d.record, "pick");
     assert_eq!(
         fact(pick, "ties"),
@@ -18427,6 +18487,52 @@ fn under_priority_two_fitting_candidates_in_one_tier_take_the_longer_runway_with
         fact(pick, "drawn"),
         &FactValue::Bool(false),
         "one candidate is left after the runway, so nothing is drawn"
+    );
+}
+
+#[test]
+fn under_priority_a_runway_shown_unbounded_past_its_reset_still_breaks_the_tie_by_its_computed_figure(
+) {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..gate_pool()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b, first in the tie, reaches the ceiling past each window's reset: 35 000 s on the 5-hour window against its reset
+    // three hours out, about 140 hours on the week against its reset 72 hours out. c's 60 000 s on the 5-hour window
+    // pass its reset too, while its week's 85 000 s stay inside the 72 hours. b's computed runway is the shorter.
+    st.record_sample("b", refreshing(0.55, T + 3 * HOUR, T + 72 * HOUR, T - 500));
+    st.record_sample(
+        "c",
+        windows_with_resets((0.3, T + 3 * HOUR), (0.8, T + 72 * HOUR), T - 500),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Spent))
+    );
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        fact(pick, "ties"),
+        &FactValue::List(vec!["b".into(), "c".into()])
+    );
+    assert_eq!(
+        fact(pick, "by_runway"),
+        &FactValue::List(vec!["c".into()]),
+        "the computed runway breaks the tie, so b's unbounded display never makes it the longest"
+    );
+    assert_eq!(fact(pick, "drawn"), &FactValue::Bool(false));
+    let fit = line(&d.record, "fit");
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "binding", "b"),
+        "b's runway past every reset is shown unbounded: {:?}",
+        fit.facts
     );
 }
 
@@ -18747,13 +18853,13 @@ fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
     let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(landed(d.result.clone()), ("b".into(), None));
     // b: 0.3 and the 200 000-token rewrite of 0.02 leave 0.63 of the window to the ceiling. The two pins on b burn
-    // 0.00006 of it a second, and the row's own 0.00001 takes the total to 0.00007: 9 000 s. The median's 0.00003
-    // would read 7 000 s.
+    // 0.00006 of it a second, and the row's own 0.00001 takes the total to 0.00007: 9 000 s, past the reset an hour
+    // out, and the week's runway passes its reset three hours out, so the runway reads unbounded.
     let b = candidate(&d.record, "b");
     assert_eq!(
         (b.runway_ms, b.fit, b.binding.as_deref()),
-        (Some(9_000_000), Some("fits"), Some("five_hour")),
-        "the fit reads the row's burn"
+        (None, Some("fits"), None),
+        "a runway past each window's reset reads unbounded"
     );
     let reserve = line(&d.record, "reserve");
     assert!(
@@ -19568,8 +19674,12 @@ fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none(
     for id in ["b", "c"] {
         assert_eq!(fact_of(fit, "verdict", id), &FactValue::Text("fits".into()));
     }
-    assert_eq!(fact_of(fit, "runway_ms", "b"), &FactValue::Int(60_000_000));
-    assert_eq!(fact_of(fit, "runway_ms", "c"), &FactValue::Int(40_000_000));
+    // b's 60 000 s and c's 40 000 s pass the reset three hours out, and each week's runway its reset 72 hours out.
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "runway_ms", "c"),
+        "a runway past each window's reset reads unbounded: {:?}",
+        fit.facts
+    );
     let (st, d) = round(0.92, 0.93);
     assert_eq!(
         landed(d.result.clone()),
@@ -19628,14 +19738,25 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
     assert_eq!(
         landed(second.result.clone()),
         ("c".into(), Some(MigrateReason::Shed)),
-        "the cursor's next turn, though b still reads the longer runway"
+        "the cursor's next turn, though b's computed runway is the longer"
     );
     let fit = line(&second.record, "fit");
-    let runway = |id: &str| match fact_of(fit, "runway_ms", id) {
-        FactValue::Int(ms) => *ms,
-        other => panic!("a bounded runway on {id}: {other:?}"),
-    };
-    assert!(runway("b") > runway("c"), "{:?}", fit.facts);
+    // b's 5-hour runway passes its reset, so its week, inside its reset 72 hours out, binds. Each of c's windows
+    // resets before the ceiling is reached, its 15 000 s past the 10 800 s to the 5-hour reset among them.
+    assert_eq!(
+        (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
+        (
+            &FactValue::Text("seven_day".into()),
+            &FactValue::Int(250_069_444)
+        ),
+        "{:?}",
+        fit.facts
+    );
+    assert!(
+        no_fact_of(fit, "runway_ms", "c") && no_fact_of(fit, "binding", "c"),
+        "{:?}",
+        fit.facts
+    );
     for d in [&first, &second] {
         assert_eq!(
             fact(line(&d.record, "move:shed"), "destinations"),
@@ -19849,6 +19970,128 @@ fn the_binding_window_is_the_one_the_pin_reaches_first_among_those_it_overruns()
             &FactValue::Text("five_hour".into()),
             &FactValue::Int(3_000_000)
         )
+    );
+}
+
+#[test]
+fn a_window_whose_runway_passes_its_reset_leaves_the_binding_to_the_window_inside_its_own() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b's 5-hour window leaves the pin 35 000 s against its reset three hours out, so the window resets before the
+    // ceiling. Its week leaves 85 000 s, past the five-hour horizon and inside its reset 72 hours out, and binds.
+    st.record_sample(
+        "b",
+        windows_with_resets((0.55, T + 3 * HOUR), (0.8, T + 72 * HOUR), T - 500),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "fits");
+    assert_eq!(
+        fact_of(fit, "verdict", "b"),
+        &FactValue::Text("fits".into())
+    );
+    assert!(close(
+        number(fact_of(fit, "projection_five_hour", "b")),
+        0.55
+    ));
+    assert!(close(
+        number(fact_of(fit, "projection_seven_day", "b")),
+        0.8
+    ));
+    assert_eq!(
+        (fact_of(fit, "binding", "b"), fact_of(fit, "runway_ms", "b")),
+        (
+            &FactValue::Text("seven_day".into()),
+            &FactValue::Int(85_000_000)
+        ),
+        "the week inside its reset binds, the 5-hour window past its reset shown unbounded"
+    );
+    let b = candidate(&d.record, "b");
+    assert_eq!(
+        (b.runway_ms, b.fit, b.binding.as_deref()),
+        (Some(85_000_000), Some("fits"), Some("seven_day"))
+    );
+    assert_eq!(
+        (
+            b.windows["five_hour"].horizon,
+            b.windows["seven_day"].horizon
+        ),
+        (Some(T + 3 * HOUR), Some(T + 5 * HOUR)),
+        "the horizons stand at the 5-hour reset and five hours out"
+    );
+}
+
+#[test]
+fn a_candidate_whose_every_runway_passes_its_reset_carries_no_runway_and_no_binding() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = priced(vec![gated_pin("s1", "a", 100.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500));
+    // b leaves the pin 45 000 s on the 5-hour window against its reset two hours out and 265 000 s on the week against
+    // its reset ten hours out: each window resets before the ceiling is reached.
+    st.record_sample(
+        "b",
+        windows_with_resets((0.45, T + 2 * HOUR), (0.5, T + 10 * HOUR), T - 500),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    let fit = line(&d.record, "fit");
+    assert_eq!(fit.verdict, "fits");
+    assert_eq!(
+        fact_of(fit, "verdict", "b"),
+        &FactValue::Text("fits".into())
+    );
+    assert!(close(
+        number(fact_of(fit, "projection_five_hour", "b")),
+        0.45
+    ));
+    assert!(close(
+        number(fact_of(fit, "projection_seven_day", "b")),
+        0.5
+    ));
+    assert!(
+        no_fact_of(fit, "runway_ms", "b") && no_fact_of(fit, "binding", "b"),
+        "a runway past every window's reset is shown unbounded: {:?}",
+        fit.facts
+    );
+    let b = candidate(&d.record, "b");
+    assert_eq!(
+        (b.runway_ms, b.fit, b.binding.as_deref()),
+        (None, Some("fits"), None)
+    );
+    assert_eq!(
+        (
+            b.windows["five_hour"].horizon,
+            b.windows["seven_day"].horizon
+        ),
+        (Some(T + 2 * HOUR), Some(T + 5 * HOUR))
+    );
+    assert_eq!(
+        summary_facts(&d)[0],
+        ("runway", FactValue::Text("unbounded".into()), Some("text"))
     );
 }
 
