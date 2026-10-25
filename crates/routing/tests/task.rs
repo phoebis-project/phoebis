@@ -6176,6 +6176,125 @@ async fn a_spend_windows_reset_is_the_heads_while_ahead_then_rolls_to_the_next_m
     );
 }
 
+#[tokio::test]
+async fn a_polls_share_after_a_head_whose_reset_the_router_holds_lapses_at_that_reset() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10 + HOUR));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(spend_head(0.6, OCT_15, OCT_10)).await;
+    // Each read folds the readings pending before it, so the head lands before the poll whatever their keys' order.
+    spend_window_of(&handle).await;
+    handle
+        .report(credits_at(true, None, Some(30.0), OCT_10 + HOUR))
+        .await;
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.3),
+            share_source: Some("poll"),
+            reset: OCT_15,
+            reset_source: SpendResetSource::Head,
+            observed_at: Some(OCT_10 + HOUR),
+        },
+        "the poll's share stands under the head's reset while that is ahead"
+    );
+    now.store(OCT_15 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: None,
+            share_source: Some("poll"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_10 + HOUR),
+        },
+        "the poll was read under the head's reset, so its share lapses there and not at the estimate over its instant"
+    );
+}
+
+#[tokio::test]
+async fn a_share_only_heads_share_lapses_at_the_reset_an_earlier_head_named() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10 + HOUR));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(spend_head(0.6, OCT_15, OCT_10)).await;
+    spend_window_of(&handle).await;
+    handle
+        .report(Report::SpendHead {
+            account_id: "a".into(),
+            utilization: Some(0.8),
+            reset: None,
+            observed_at: OCT_10 + HOUR,
+            incarnation: 1,
+        })
+        .await;
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.8),
+            share_source: Some("head"),
+            reset: OCT_15,
+            reset_source: SpendResetSource::Head,
+            observed_at: Some(OCT_10 + HOUR),
+        },
+        "the share-only head's share stands under the earlier head's reset"
+    );
+    now.store(OCT_15 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: None,
+            share_source: Some("head"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_10 + HOUR),
+        },
+        "the share-only head names no reset of its own and reads the held one, so its share lapses there"
+    );
+}
+
+#[tokio::test]
+async fn a_head_observed_after_a_poll_leaves_the_polls_share_to_the_estimate_over_its_instant() {
+    let store = seeded_oauth(&["a"]);
+    usage_based_seat(&store, "a");
+    let now = Arc::new(AtomicI64::new(OCT_10 + HOUR));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // A head carrying a share would hold a credits state newer than the slower poll's, which would then fold nothing.
+    handle
+        .report(Report::SpendHead {
+            account_id: "a".into(),
+            utilization: None,
+            reset: Some(OCT_15),
+            observed_at: OCT_10 + HOUR,
+            incarnation: 1,
+        })
+        .await;
+    spend_window_of(&handle).await;
+    handle
+        .report(credits_at(true, None, Some(30.0), OCT_10))
+        .await;
+    now.store(OCT_15 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await,
+        SpendWindow {
+            utilization: Some(0.3),
+            share_source: Some("poll"),
+            reset: NOV_1,
+            reset_source: SpendResetSource::Estimated,
+            observed_at: Some(OCT_10),
+        },
+        "the head came after the poll's reading, so its reset does not govern the poll's share"
+    );
+    now.store(NOV_1 + HOUR, Ordering::SeqCst);
+    assert_eq!(
+        spend_window_of(&handle).await.utilization,
+        None,
+        "the poll's share holds to the estimate over its own instant"
+    );
+}
+
 /// What `handle` answers a plain request and a fast one at `at`.
 async fn standard_and_fast(handle: &RouterHandle, at: i64) -> (SelectResult, SelectResult) {
     let fast = SelectRequest {

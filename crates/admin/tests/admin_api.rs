@@ -1758,6 +1758,136 @@ async fn a_usage_based_account_answers_its_spend_window_with_the_polled_figures_
     );
 }
 
+/// Writes the ledger rows of the seat `id` and reports its router readings, answering the reset the head names: a head
+/// twenty minutes before `NOW` naming the reset an hour after it, then a poll ten minutes before `NOW` carrying the
+/// share 0.41. The poll's row lands in a later bucket than the head's, so the ledger's share read takes the poll's row,
+/// which names no reset and so lapses at the estimate over its bucket start.
+async fn poll_after_a_held_head(parts: &common::Full, id: &str) -> i64 {
+    let (headed_at, polled_at, reset) = (
+        common::NOW - 1_200_000,
+        common::NOW - 600_000,
+        common::NOW + 3_600_000,
+    );
+    for row in [
+        head_row(id, headed_at, None, 0.42, reset),
+        polled_row(id, polled_at, (250_000, 102_500), 0.41, None),
+    ] {
+        parts.db.insert_samples(&[], Some(&row)).unwrap();
+    }
+    parts
+        .router
+        .report(phoebis_routing::Report::SpendHead {
+            account_id: id.into(),
+            utilization: Some(0.42),
+            reset: Some(reset),
+            observed_at: headed_at,
+            incarnation: 1,
+        })
+        .await;
+    // Each read folds the readings pending before it, so the head lands before the poll whatever their keys' order.
+    parts.router.spend_windows().await.unwrap();
+    parts
+        .router
+        .report(phoebis_routing::Report::Credits {
+            account_id: id.into(),
+            state: phoebis_routing::CreditsState {
+                enabled: true,
+                disabled_reason: None,
+                utilization: Some(0.41),
+                observed_at: polled_at,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
+    parts.router.spend_windows().await.unwrap();
+    reset
+}
+
+/// The share and the reset of `account`'s spend window.
+fn spend_share_and_reset(account: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!([
+        account["spend"]["utilization"],
+        account["spend"]["resets_at"],
+        account["spend"]["reset_source"]
+    ])
+}
+
+#[tokio::test]
+async fn a_usage_based_accounts_spend_share_lapses_at_the_held_head_reset_the_router_read_a_later_poll_under(
+) {
+    use common::{login, month_end, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    insert_oauth(&parts, "seat", true);
+    parts.router.reload().await.unwrap();
+    let reset = poll_after_a_held_head(&parts, "seat").await;
+    let held = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        spend_share_and_reset(&held),
+        serde_json::json!([0.41, reset, "head"]),
+        "the poll's share under the head's reset while that is ahead: {held}"
+    );
+    common::step(
+        &parts,
+        std::time::Duration::from_millis((reset - NOW + 1) as u64),
+    );
+    // The step passes the session's idle deadline, so the case logs in again.
+    let cookie = login(&parts.app, "admin-secret").await;
+    let lapsed = account_of(&parts.app, &cookie, "seat").await;
+    assert_eq!(
+        spend_share_and_reset(&lapsed),
+        serde_json::json!([null, month_end(), "estimated"]),
+        "the router read the poll under the head's reset, so the share lapses there, where the ledger's poll row \
+         would hold it to the estimate: {lapsed}"
+    );
+}
+
+#[tokio::test]
+async fn a_usage_based_accounts_spend_reads_the_ledger_rows_share_where_the_router_answers_no_window_or_holds_no_reading_of_the_seat(
+) {
+    use common::{login, month_end, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for seat in ["held", "unread"] {
+        insert_oauth(&parts, seat, true);
+    }
+    parts.router.reload().await.unwrap();
+    let reset = poll_after_a_held_head(&parts, "held").await;
+    parts
+        .db
+        .insert_samples(
+            &[],
+            Some(&polled_row(
+                "unread",
+                NOW - 600_000,
+                (300_000, 75_000),
+                0.25,
+                None,
+            )),
+        )
+        .unwrap();
+    let unread = account_of(&parts.app, &cookie, "unread").await;
+    assert_eq!(
+        spend_share_and_reset(&unread),
+        serde_json::json!([0.25, month_end(), "estimated"]),
+        "the running router holds no reading of the seat, so the share is the ledger row's: {unread}"
+    );
+    common::step(
+        &parts,
+        std::time::Duration::from_millis((reset - NOW + 1) as u64),
+    );
+    parts.router.shutdown().await.unwrap();
+    let cookie = login(&parts.app, "admin-secret").await;
+    let stopped = account_of(&parts.app, &cookie, "held").await;
+    assert_eq!(
+        spend_share_and_reset(&stopped),
+        serde_json::json!([0.41, month_end(), "estimated"]),
+        "a stopped router answers no window, so the share is the ledger's poll row's, lapsing at the estimate over \
+         its bucket start: {stopped}"
+    );
+}
+
 #[tokio::test]
 async fn a_usage_based_accounts_spend_falls_back_to_the_polls_amounts_reads_no_limit_the_body_set_none_and_none_without_a_poll(
 ) {
@@ -1979,7 +2109,7 @@ async fn a_usage_based_accounts_spend_reads_the_estimate_where_the_router_answer
     assert_eq!(
         stopped["spend"]["utilization"],
         serde_json::json!(0.4),
-        "the share is the ledger row's whatever the router answers"
+        "a stopped router answers no window, so the share is the ledger row's"
     );
 }
 

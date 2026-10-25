@@ -1070,10 +1070,13 @@ whatever its heads' overage headers say, so none of the three policies applies t
 overage hand-back or of the return to plan, as an API-key account is not. Its spend cap holds it out instead: with its
 spend share at one or more the seat leaves the eligible set for every model, a live pin's renewal included, until the
 spend window's reset, which is the reset a head's `anthropic-ratelimit-unified-overage-reset` names while that is ahead,
-else 00:00 UTC on the first of the next calendar month. The share expires at the reset it was read under, so once that
-reset passes with no newer poll or head the hold lifts, and the window is drawn with its amounts and no meter until the
-next reading. The fast lane's credits read follows the same expiry: past the reset `org_spend_cap_reached` refuses none
-of the seat's fast requests, while the poll's own reason and a disabled flag still do.
+else 00:00 UTC on the first of the next calendar month. The share expires at the reset it was read under, a head's reset
+where the router holds one observed at or before the reading and that reset is still ahead of the reading, and the
+estimate over the reading's instant otherwise. The account view reads the same lapse from the router wherever it holds
+the reading, so once that reset passes with no newer poll or head the hold lifts, and the window is drawn with its
+amounts and no meter until the next reading. The fast lane's credits read follows the same expiry: past the reset
+`org_spend_cap_reached` refuses none of the seat's fast requests, while the poll's own reason and a disabled flag still
+do.
 
 Under `allow`, a subscription account whose five-hour window, seven-day window or model week is spent stays a candidate
 on the overage path for every model, since extra usage funds every model: the router sends the request, and a `429`
