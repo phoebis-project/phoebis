@@ -115,16 +115,20 @@ export function merged<R>(shown: R[], polled: R[], identity: (row: R) => string,
  * `landedThrough` is the first page's, since a row written between two pages stamps above it and the next poll reads
  * it, where a later page's would skip it.
  *
+ * `landsBelow` says every row of the range is the list's (a fixed-end range whose list answered no next cursor), so a
+ * polled row below its last row lands in the table rather than staying Next's. Under a watermark no row of such a poll
+ * is Next's, so it reads on until the route has no more.
+ *
  * `alive` is read between pages: a poll whose caller is gone stops reading and answers what it read, with no overrun.
  */
-export async function followPages<R>(read: (cursor: string | undefined) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>, known: ReadonlySet<string>, identity: (row: R) => string, below: (row: R) => boolean, stopOnKnown = true, alive: () => boolean = () => true): Promise<{ landedThrough?: number; overrun: string | null; rows: R[] }> {
+export async function followPages<R>(read: (cursor: string | undefined) => Promise<{ landedThrough?: number; nextCursor: string | null; rows: R[] }>, known: ReadonlySet<string>, identity: (row: R) => string, below: (row: R) => boolean, stopOnKnown = true, alive: () => boolean = () => true, landsBelow = false): Promise<{ landedThrough?: number; overrun: string | null; rows: R[] }> {
   const rows: R[] = [];
   let cursor: string | undefined;
   let landedThrough: number | undefined;
   for (let n = 0; n < FOLLOW_PAGES; n += 1) {
     const page = await read(cursor);
     if (n === 0) landedThrough = page.landedThrough;
-    const listed = page.rows.filter((r) => !below(r));
+    const listed = landsBelow ? page.rows : page.rows.filter((r) => !below(r));
     rows.push(...listed);
     const ends = stopOnKnown ? listed.every((r) => known.has(identity(r))) : listed.length < page.rows.length;
     if (page.nextCursor === null || ends || !alive()) return { landedThrough, overrun: null, rows };

@@ -12742,9 +12742,9 @@ m.unmount();
     const held = deferNextCall('listRequests');
     [...page.container.querySelectorAll('.requests__table .empty--error button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
     await page.settle();
-    // The list has no answer yet while the held read runs, so the table draws its loading rows and the bar's count
-    // names the rows the stand-in holds.
-    const drawnNow = () => ({ count: page.container.querySelector('.filter-bar__count')?.textContent ?? null, error: page.container.querySelector('.requests__table .empty--error') !== null, ids: requestRows(page).map(idOf).filter((id) => id !== null), tinted: [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf) });
+    // The list has no answer yet while the held read runs, so the table keeps the stand-in's rows drawn and the bar's
+    // count names them.
+    const drawnNow = () => ({ count: page.container.querySelector('.filter-bar__count')?.textContent ?? null, error: page.container.querySelector('.requests__table .empty--error') !== null, ids: requestRows(page).map(idOf).filter((id) => id !== null), skeleton: page.container.querySelectorAll('.requests__table tbody tr.table__detail').length, tinted: [...page.container.querySelectorAll('.requests__table tbody tr.is-new')].map(idOf) });
     let at = CLOCK_ORIGIN + 5_000;
     tick(5_000);
     await page.settle();
@@ -12774,10 +12774,10 @@ m.unmount();
     results.push({
       name: "/requests the list's late answer replaces the page an auto reload poll stood in for it, and the next poll reads at the list's stamp",
       ok:
-        failed === 'Could not load the request log' && !stood.error && stood.count === '50 shown, more available' && stood.tinted.length === 0 && landed &&
+        failed === 'Could not load the request log' && !stood.error && stood.count === '50 shown, more available' && stood.ids.length === 50 && stood.skeleton === 0 && stood.tinted.length === 0 && landed &&
         !replaced.error && JSON.stringify(replaced.ids) === JSON.stringify(answer.requests.map((r) => r.id)) && replaced.ids.filter((id) => id === LATE).length === 1 && replaced.tinted.length === 0 &&
         sent.length === 1 && sent[0].cursor === undefined && sent[0].landedAfter === answer.landedThrough,
-      missing: [String(failed), `stood ${stood.ids.length} rows, count ${stood.count}, error ${stood.error}, tinted ${stood.tinted.join(' | ')}`, `landed ${landed} by ${isoAt(at)}`, `replaced ${replaced.ids.length} rows of ${answer.requests.length}, error ${replaced.error}, late ${replaced.ids.filter((id) => id === LATE).length}, tinted ${replaced.tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.landedAfter])), `list ${answer.landedThrough}`],
+      missing: [String(failed), `stood ${stood.ids.length} rows, ${stood.skeleton} skeleton rows, count ${stood.count}, error ${stood.error}, tinted ${stood.tinted.join(' | ')}`, `landed ${landed} by ${isoAt(at)}`, `replaced ${replaced.ids.length} rows of ${answer.requests.length}, error ${replaced.error}, late ${replaced.ids.filter((id) => id === LATE).length}, tinted ${replaced.tinted.join(' | ')}`, JSON.stringify(sent.map((q) => [q.cursor, q.landedAfter])), `list ${answer.landedThrough}`],
     });
   }
   {
@@ -20531,6 +20531,22 @@ for (const path of ['/models', '/models#claude-sonnet-4-6']) {
     name: '/sessions Try again under the tiles reads the overview again, the Sessions and Agents tiles titled with the rows the filters hide',
     ok: retries.length === 1 && tiles().every((t) => t.value !== '-' && t.value !== '' && t.title === (['Sessions', 'Agents'].includes(t.label) ? away : null)) && page.container.querySelector('.sessions__notice') === null,
     missing: [JSON.stringify(tiles()), away],
+  });
+  page.unmount();
+}
+{
+  // The notice under the tiles and the card's error state read their failed reads in one order, so with the recipes
+  // and the keys failed and the sessions answered both name the recipes.
+  failNextCall('listKeepaliveRecipes', '/admin/keepalive/recipes', 'recipes locked');
+  failNextCall('listKeys', '/admin/keys', 'the key store is unavailable');
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  await page.settle();
+  const line = page.container.querySelector('.stat-grid + .sessions__notice')?.textContent ?? '';
+  const card = page.container.querySelector('.card--table .empty--error .empty__body')?.textContent ?? null;
+  results.push({
+    name: '/sessions the notice and the card name the same failed read, the recipes before the keys',
+    ok: line.startsWith('Could not load the recipes: recipes locked') && card === 'recipes locked',
+    missing: [line || 'no line under the tiles', card ?? 'no error body in the card'],
   });
   page.unmount();
 }

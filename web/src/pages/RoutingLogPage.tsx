@@ -110,6 +110,7 @@ export function RoutingLogPage() {
     address,
     compare: compareRows,
     error: log.error,
+    fixedEnd: false,
     identity: identityOf,
     intervalMs: polledMs,
     list: log.data,

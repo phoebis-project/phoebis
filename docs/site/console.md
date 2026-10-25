@@ -719,7 +719,9 @@ Auto reload is off when the view opens. The split Refresh button's dropdown sets
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
 ending at the router's clock and a custom range keeping its own end, takes every row that arrived since the read before,
 up to eight pages, and lands a new row at the top in the accent tint until the next read. A long request can finish
-below rows already shown: it lands between rows already shown, in the same tint, on the next auto reload. Past eight
+below rows already shown: it lands between rows already shown, in the same tint, on the next auto reload. On a custom
+range whose rows fit on the page shown, a request that lands below them after a read draws on the next read in the
+accent tint, and where the range runs on past the page a late row below it stays for Next. Past eight
 pages a line reads "More rows arrived than auto reload could fetch. Reload to read them.", and Next reads on from the
 last row the poll fetched, under a preset to the router's clock. A poll whose newest page stood in for a list read that
 failed gives way to the list once it answers. A filter change keeps the interval. The poll waits while the tab is

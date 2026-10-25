@@ -282,6 +282,8 @@ export function SessionsPage() {
   // those reads can end their placeholder with its error. The other tiles read the overview alone.
   const countReads = [readOf('tiles', overview), readOf('sessions', sessions), readOf('recipes', recipes), readOf('keys', keys)];
   const failed = firstFailedRead(countReads);
+  // The card's own reads in the notice's order, so with two of them failed the card and the notice name the same one.
+  const cardFailed = firstFailedRead([readOf('sessions', sessions), readOf('recipes', recipes), readOf('keys', keys)]);
   const reloadOf: Record<string, () => void> = { keys: keys.reload, recipes: recipes.reload, sessions: sessions.reload, tiles: overview.reload };
   // Counted over the rows shown, so the note agrees with the table under it and the count beside it.
   const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
@@ -451,11 +453,11 @@ export function SessionsPage() {
           ) : undefined
         }
       >
-        {rows === null && (sessions.error ?? keys.error ?? recipes.error) ? (
+        {rows === null && cardFailed !== null ? (
           <div style={{ padding: 20 }}>
             <ErrorState
               title="Could not load the sessions"
-              body={sessions.error ?? keys.error ?? recipes.error ?? ''}
+              body={cardFailed.error}
               action={
                 <Button
                   size="sm"

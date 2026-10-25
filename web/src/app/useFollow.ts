@@ -19,6 +19,11 @@ export function useFollow<R>(input: {
   address: string;
   compare: (a: R, b: R) => number;
   error: string | null;
+  /**
+   * Whether the range holds its own end (a custom range), so with no next cursor a late row below the list's last row
+   * is the list's.
+   */
+  fixedEnd: boolean;
   identity: (row: R) => string;
   /** The auto reload interval in milliseconds, 0 for off. */
   intervalMs: number;
@@ -30,7 +35,7 @@ export function useFollow<R>(input: {
   setPaging: Dispatch<SetStateAction<Paging>>;
   stale: boolean;
 }): { error: string | null; fresh: Set<string>; goNext: () => void; goPrevious: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
-  const { address, compare, error, identity, intervalMs, list, paging, paused, read, setPaging, stale } = input;
+  const { address, compare, error, fixedEnd, identity, intervalMs, list, paging, paused, read, setPaging, stale } = input;
   const { cursor, stack, to: pagedTo } = pagingFor(paging, address);
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
@@ -53,9 +58,9 @@ export function useFollow<R>(input: {
   const overrun = following?.overrun ?? null;
   const standIn = following?.standIn ?? null;
   // The poll outlives renders, so it reads the current address, rows and reader through a ref.
-  const latest = useRef({ address, compare, failed: error !== null, identity, mark, overrun, read, shown, standIn });
+  const latest = useRef({ address, compare, failed: error !== null, fixedEnd, identity, list, mark, overrun, read, shown, standIn });
   useLayoutEffect(() => {
-    latest.current = { address, compare, failed: error !== null, identity, mark, overrun, read, shown, standIn };
+    latest.current = { address, compare, failed: error !== null, fixedEnd, identity, list, mark, overrun, read, shown, standIn };
   });
   // A failing streak toasts once: the polls that continue it run quiet, and the one that ends it takes the streak's
   // notice down, as `useAsync`'s refresh does.
@@ -84,7 +89,7 @@ export function useFollow<R>(input: {
     let newest = 0;
     const poll = (returned = false) => {
       const nth = (issued += 1);
-      const { address: polled, compare: order, identity: identify, mark: landedAfter, read: reader, shown: start } = latest.current;
+      const { address: polled, compare: order, fixedEnd, identity: identify, list, mark: landedAfter, read: reader, shown: start } = latest.current;
       // Every page of one poll reads from the same stamp and is handed the same instant, so a reader that bounds its
       // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
       // instant still dates the poll's overrun and stand-in.
@@ -95,7 +100,7 @@ export function useFollow<R>(input: {
       // Before the list answers there is no row to stop at, so the poll reads the newest page alone and keeps the
       // cursor past it for the answer that stands in for a list read that failed.
       const pages: Promise<{ cursor?: string | null; landedThrough?: number; overrun: string | null; rows: R[] }> =
-        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined, () => armed.alive);
+        start === null ? page(undefined).then((p) => ({ cursor: p.nextCursor, landedThrough: p.landedThrough, overrun: null, rows: p.rows })) : followPages(page, new Set(start.map(identify)), identify, below, landedAfter === undefined, () => armed.alive, fixedEnd && list?.nextCursor === null);
       pages.then(
         (polledPages) => {
           if (!armed.alive) return;

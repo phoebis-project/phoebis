@@ -147,6 +147,37 @@ test("under a watermark a page that reaches past the list's last row ends the po
   assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 27).map(byId), 'no row past row 26 lands');
 });
 
+test("on a fixed-end range whose list holds no next cursor a poll lands a row below the list's last row", async () => {
+  // The list holds every row of its range, rows 0 to 24, and row 25 arrived before them all and was written after the
+  // list's read, so it sorts below the list's last row on a page Next never reads.
+  const r = watermarked(26);
+  const shown = r.rows.slice(0, 25);
+  const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown), false, () => true, true);
+  assert.deepEqual(r.reads, [undefined, '25'], 'the poll reads on until the route has no more');
+  assert.equal(polled.overrun, null);
+  assert.deepEqual(polled.rows.map(byId), r.rows.map(byId), 'row 25 lands below row 24');
+});
+
+test("on a fixed-end range whose list holds a next cursor a row below the last row stays Next's", async () => {
+  // The range runs on past the 25 rows the list shows, so the rows below its last row are the pages Next reads.
+  const r = watermarked(60);
+  const shown = r.rows.slice(0, 25);
+  const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown), false, () => true, false);
+  assert.deepEqual(r.reads, [undefined, '25']);
+  assert.equal(polled.overrun, null);
+  assert.deepEqual(polled.rows.map(byId), shown.map(byId), 'no row past row 24 lands');
+});
+
+test('a preset range keeps the rule', async () => {
+  // The first case's route and list read with the flag at its default, as a preset hands it: row 25 stays for Next.
+  const r = watermarked(26);
+  const shown = r.rows.slice(0, 25);
+  const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown), false);
+  assert.deepEqual(r.reads, [undefined, '25']);
+  assert.equal(polled.overrun, null);
+  assert.deepEqual(polled.rows.map(byId), shown.map(byId), 'row 25 stays for Next');
+});
+
 test('an auto reload poll whose caller is gone after its first page reads no more and answers that page with no overrun', async () => {
   // No row the list shows is on the route's first eight pages, so a poll that read on would answer an overrun.
   const r = route(325);
@@ -209,6 +240,7 @@ function follow(props) {
     address: 'q',
     compare: newestFirst,
     error: null,
+    fixedEnd: false,
     identity: byId,
     intervalMs: 5_000,
     list: { nextCursor: '26', rows: r.rows.slice(1, 26) },
@@ -243,6 +275,48 @@ test('the poll reads at the chosen interval through the installed clock', async 
   await settled();
   assert.equal(f.last().rows[0].id, 'row_000', 'the new row lands at the top');
   assert.deepEqual([...f.last().fresh], ['row_000'], 'in the fresh tint');
+});
+
+/**
+ * A reader for a list that shows rows 1 to 25 of `route(27)`, every poll one page: row 0 arrived above the list before
+ * the first poll, and row 26, which arrived before them all and was written after the list's read, comes from the
+ * second poll on, below the list's last row.
+ */
+function lateBelow() {
+  const { rows } = route(27);
+  return { read: async (_cursor, to) => ({ nextCursor: null, rows: to > ORIGIN + 5_000 ? rows : rows.slice(0, 26) }), rows };
+}
+
+const twoPolls = async (clock) => {
+  for (let i = 0; i < 2; i += 1) {
+    act(() => clock.tick(5_000));
+    await settled();
+  }
+};
+
+test("a custom range's poll with no next cursor lands a late row below the last row shown in the accent tint", async () => {
+  const clock = frozen();
+  const { read, rows } = lateBelow();
+  const f = follow({ fixedEnd: true, list: { nextCursor: null, rows: rows.slice(1, 26) }, read });
+  await twoPolls(clock);
+  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.map(byId), ['row_026']], 'the second poll lands row 26 below row 25, tinted');
+});
+
+test("a custom range's poll whose list holds a next cursor leaves a late row below the last row shown to Next", async () => {
+  // The range runs on past the rows shown, so a row below the last of them is on the page Next reads.
+  const clock = frozen();
+  const { read, rows } = lateBelow();
+  const f = follow({ fixedEnd: true, list: { nextCursor: '26', rows: rows.slice(1, 26) }, read });
+  await twoPolls(clock);
+  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'row 26 stays for Next');
+});
+
+test("a preset range's poll with no next cursor leaves a late row below the last row shown to Next", async () => {
+  const clock = frozen();
+  const { read, rows } = lateBelow();
+  const f = follow({ fixedEnd: false, list: { nextCursor: null, rows: rows.slice(1, 26) }, read });
+  await twoPolls(clock);
+  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'row 26 stays for Next');
 });
 
 test('no read while the tab is hidden, and one at once on its return after a full interval', async () => {

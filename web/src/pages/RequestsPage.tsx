@@ -295,6 +295,7 @@ export function RequestsPage() {
     address,
     compare: newestFirst,
     error: requests.error,
+    fixedEnd: custom,
     identity: (r) => r.id,
     intervalMs: polledMs,
     list: requests.data && listed(requests.data),
@@ -402,7 +403,9 @@ export function RequestsPage() {
                 </tr>
               </thead>
               <tbody>
-                {requests.loading && !requests.data
+                {/* A list read in flight over a stand-in page (the poll's newest page holding the place of a read that
+                    failed) keeps the stand-in's rows drawn, so the skeleton rows are the empty table's alone. */}
+                {requests.loading && !requests.data && rows.length === 0
                   ? Array.from({ length: 8 }, (_, i) => (
                       <tr key={i} className="table__detail">
                         <td colSpan={shown.size + 1}>
