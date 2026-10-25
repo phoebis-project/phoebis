@@ -1740,10 +1740,11 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
     assert_eq!(row("silent")["pinned"].as_bool(), Some(true));
 }
 
-/// A pin on plan quota is priced in its account's window, so a tier the store cannot read fails the route rather
-/// than reading as a tier the table does not size.
+/// The route reads each account's tier from the routing snapshot, the selector's own read, so the store's tier column
+/// is not on the route's path and a failed read of it cannot fail the route.
 #[tokio::test]
-async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
+async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tier_read_leaves_it_at_200(
+) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     let store = std::sync::Arc::new(
@@ -1797,32 +1798,10 @@ async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
         .unwrap();
     let parts = common::admin_parts_full_on(store).await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // The tier read names the column, and no other read the route makes does.
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch(
-        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
-    )
-    .unwrap();
-    drop(conn);
-    let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
-    assert_eq!(listed.status(), 500);
-    assert_eq!(
-        json(listed).await,
-        serde_json::json!({"error": "storage failure"})
-    );
-}
-
-/// Only a row priced in the window share reads a tier, so a subscription account with no pin in the window costs the
-/// route no read and cannot fail it.
-#[tokio::test]
-async fn a_failed_tier_read_on_an_account_no_row_prices_leaves_the_sessions_route_at_200() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let store = std::sync::Arc::new(
-        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
-    );
-    let parts = common::admin_parts_full_on(store).await;
-    let cookie = login(&parts.app, "admin-secret").await;
+    // The snapshot takes Max 20x before the column goes, so the pin's zero burn reads a share of 0, where an account
+    // with no tier reads null.
+    set_max_20x(&parts).await;
+    // Every store read of the tier names the column, so it fails from here on.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
@@ -1831,7 +1810,19 @@ async fn a_failed_tier_read_on_an_account_no_row_prices_leaves_the_sessions_rout
     drop(conn);
     let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
     assert_eq!(listed.status(), 200);
-    assert_eq!(json(listed).await, serde_json::json!({"sessions": []}));
+    let sessions = json(listed).await;
+    let row = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_id"] == "planned")
+        .unwrap_or_else(|| panic!("no row for planned: {sessions}"))
+        .clone();
+    assert_eq!(
+        (&row["burn_unit"], &row["burn"]),
+        (&serde_json::json!("window_share"), &serde_json::json!(0.0)),
+        "the pin prices as a share of the snapshot's Max 20x window: {row}"
+    );
 }
 
 #[tokio::test]
