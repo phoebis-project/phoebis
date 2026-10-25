@@ -122,6 +122,11 @@ fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> O
     }
     s.enter().ok()?;
     s.pos += 1;
+    s.ws();
+    if s.eat(b'}') {
+        s.leave();
+        return None;
+    }
     loop {
         s.ws();
         let member_start = s.pos;
@@ -1454,12 +1459,16 @@ mod tests {
             s.depth, 1,
             "the object stays counted while the matched member's value is read"
         );
-        let mut s = scanner_at(br#"{"a":1}"#, 0, 0);
-        assert_eq!(scan_object(&mut s, |key| key == b"b"), None);
-        assert_eq!(
-            s.depth, 0,
-            "an object that closes with no match counts back out"
-        );
+        for object in [&br#"{"a":1}"#[..], b"{}"] {
+            let mut s = scanner_at(object, 0, 0);
+            assert_eq!(scan_object(&mut s, |key| key == b"b"), None);
+            assert_eq!(
+                s.depth,
+                0,
+                "an object that closes with no match counts back out: {}",
+                String::from_utf8_lossy(object)
+            );
+        }
     }
 
     #[test]
@@ -1485,6 +1494,22 @@ mod tests {
         assert_eq!(
             s.depth, 1,
             "the walk counts back out at the closing bracket"
+        );
+    }
+
+    #[test]
+    fn a_walker_one_level_under_the_bound_refuses_its_own_bracket_at_the_bracket() {
+        assert!(
+            matches!(
+                block_array(
+                    &mut scanner_at(b"[]", 0, MAX_DEPTH - 1),
+                    &mut Vec::new(),
+                    false,
+                    Keys::Raw
+                ),
+                Err(CchError::TooDeep(0))
+            ),
+            "the bracket the walker eats itself reaches the bound, with nothing below it for `value` to refuse"
         );
     }
 
