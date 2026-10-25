@@ -1057,7 +1057,8 @@ impl Store {
 
     /// The policy and the members under one transaction, fenced on the `updated_at` the handler read and on `row`'s
     /// incarnation, so an edit read from a deleted pool never lands on one created again under its id. Answers the
-    /// stamp written, which the next fenced edit reads.
+    /// stamp written, which the next fenced edit reads, or the stamp read where the save changes nothing, since the
+    /// stamp moves only with a write.
     pub fn update_pool_with_members(
         &self,
         row: &PoolRow,
@@ -1068,9 +1069,11 @@ impl Store {
         self.update_pool_with_members_and_guardrails(row, expected_updated_at, members, None, actor)
     }
 
-    /// The pool write with the pool's guardrail list, replaced whole in the given order when `Some`. The pool's stamp
-    /// moves, and so does the stamp of every guardrail whose membership in the list changed, so a guardrail save opened
-    /// before the change is refused rather than restoring a detached pool.
+    /// The pool write with the pool's guardrail list, replaced whole in the given order when `Some`. A write moves the
+    /// pool's stamp, and so does the stamp of every guardrail whose membership in the list changed, so a guardrail save
+    /// opened before the change is refused rather than restoring a detached pool. A save that changes no field, no
+    /// policy, no member and no guardrail writes nothing and answers the stamp read, since the stamp moves only with a
+    /// write.
     pub fn update_pool_with_members_and_guardrails(
         &self,
         row: &PoolRow,
@@ -1105,6 +1108,26 @@ impl Store {
             }
             None => Vec::new(),
         };
+        let pairs = pool_pairs(&before, row);
+        let diff = match guardrails {
+            Some(ids) => with_guardrails_change(pairs, &held, ids)?,
+            None => pairs,
+        };
+        let pairs_changed = diff != "{}";
+        // `pool_fields` leaves the keepalive policy out of the pairs, and the `UPDATE` writes it.
+        let policy_changed = before.keepalive_json != row.keepalive_json;
+        let members_changed = match members {
+            Some(members) => stored_members(&tx, &row.id)? != members,
+            None => false,
+        };
+        if !pairs_changed && !policy_changed && !members_changed {
+            // The `UPDATE`'s fence with no write: a moved revision is a write the stale comparison reads, so a save
+            // that changes nothing answers the stamp it read.
+            if before.updated_at != expected_updated_at || before.incarnation != row.incarnation {
+                return Err(StoreError::Stale);
+            }
+            return Ok(before.updated_at);
+        }
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
             "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, window_ceiling = ?7, model_rules_json = ?8, keepalive_json = ?9, body_capture_hours = ?10, prefer_subscription = ?11, shed_cap = ?12, burn_average_seconds = ?13, shed_dwell_seconds = ?14, load_shedding = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, overage_move_grace_minutes = ?20, wind_down_minutes = ?21, cache_ttl_json = ?22, cache_diagnostics = ?23, affinity_mode = ?24, subagent_placement = ?25, session_placement = ?26, min_shared_prefix_tokens = ?27, auto_mode_server = ?28, slow_down = ?29, slow_down_stretch_seconds = ?30, slow_down_hold_seconds = ?31, return_to_plan = ?32, return_to_plan_dwell_seconds = ?33, updated_at = ?34 WHERE id = ?1 AND updated_at = ?35 AND incarnation = ?36",
@@ -1151,12 +1174,10 @@ impl Store {
         if updated == 0 {
             return Err(StoreError::Stale);
         }
-        let pairs = pool_pairs(&before, row);
-        let diff = match guardrails {
-            Some(ids) => with_guardrails_change(pairs, &held, ids)?,
-            None => pairs,
-        };
-        record_change(&tx, at, actor, "pool_updated", &row.id, &diff)?;
+        // A save that changed the member list alone records that list's row and no empty pool edit beside it.
+        if pairs_changed || policy_changed {
+            record_change(&tx, at, actor, "pool_updated", &row.id, &diff)?;
+        }
         if let Some(members) = members {
             set_pool_members_in(&tx, &row.id, members, at, actor)?;
         }
@@ -1219,7 +1240,8 @@ impl Store {
             .map_err(StoreError::from)
     }
 
-    /// Answers the pool's new `updated_at`.
+    /// Answers the pool's `updated_at`: the stamp written where the list changed, and the stamp read where the list
+    /// equals the stored one, since the stamp moves only with a write.
     pub fn set_pool_members(
         &self,
         pool_id: &str,
@@ -1239,7 +1261,9 @@ impl Store {
             return Err(StoreError::PoolNotFound(pool_id.to_string()));
         };
         let at = stamp_past(self.now_ms(), current);
-        set_pool_members_in(&tx, pool_id, members, at, actor)?;
+        if !set_pool_members_in(&tx, pool_id, members, at, actor)? {
+            return Ok(current);
+        }
         tx.commit()?;
         Ok(at)
     }
@@ -2172,16 +2196,40 @@ fn with_guardrails_change(
     Ok(value.to_string())
 }
 
-/// The member half of a pool write on the caller's transaction: every named account checked, the list replaced
-/// whole, and the pool's `updated_at` moved to `at`, so an edit fenced on the stamp it read before this write is
-/// refused rather than landing over it.
+/// The stored member rows of a pool in the order the write inserted them, the shape `MemberWrite` compares against.
+fn stored_members(tx: &Transaction<'_>, pool_id: &str) -> Result<Vec<MemberWrite>, StoreError> {
+    let mut stmt = tx.prepare(
+        "SELECT account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members WHERE pool_id = ?1 ORDER BY rowid",
+    )?;
+    let rows = stmt.query_map(params![pool_id], |r| {
+        Ok(MemberWrite {
+            account_id: r.get(0)?,
+            priority: r.get::<_, i64>(1)? as u32,
+            budget_daily_usd: r.get(2)?,
+            budget_monthly_usd: r.get(3)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(StoreError::from)
+}
+
+/// The member half of a pool write on the caller's transaction. Writes the list where it differs from the stored
+/// rows in any member, position or column, and answers whether it wrote. An equal list moves no stamp and records
+/// nothing. A write checks every named account, replaces the list whole and moves the pool's `updated_at` to `at`,
+/// so an edit fenced on the stamp it read before this write is refused rather than landing over it. The compare
+/// reads the stored rows in `rowid` order, since they carry no position column and `rowid` keeps the request's
+/// order.
 fn set_pool_members_in(
     tx: &Transaction<'_>,
     pool_id: &str,
     members: &[MemberWrite],
     at: i64,
     actor: &str,
-) -> Result<(), StoreError> {
+) -> Result<bool, StoreError> {
+    if stored_members(tx, pool_id)? == members {
+        // A moved revision is a write the stale comparison reads, so a list that changes nothing keeps the stamp.
+        return Ok(false);
+    }
     if tx.execute(
         "UPDATE pools SET updated_at = ?2 WHERE id = ?1",
         params![pool_id, at],
@@ -2231,7 +2279,7 @@ fn set_pool_members_in(
     })).collect::<Vec<_>>() })
     .to_string();
     record_change(tx, at, actor, "pool_members_set", pool_id, &diff)?;
-    Ok(())
+    Ok(true)
 }
 
 const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, incarnation, slow_down, slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds FROM pools";

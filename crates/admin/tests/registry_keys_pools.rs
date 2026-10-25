@@ -4554,3 +4554,101 @@ async fn a_pool_edit_through_the_route_reads_on_the_routing_log_as_the_pairs_of_
         "the two fields the edit changed, each with its value before and after"
     );
 }
+
+#[tokio::test]
+async fn a_pool_save_that_keeps_its_member_list_reads_on_the_routing_log_as_one_pool_edit_and_a_save_that_changes_nothing_as_none(
+) {
+    // The mirror reads the change log every `event_poll`, so a short one lands each save's rows inside the wait.
+    let parts = common::admin_parts_full_retained(phoebis_ledger::LedgerConfig {
+        event_poll: std::time::Duration::from_millis(20),
+        ..phoebis_ledger::LedgerConfig::default()
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let members = r#"[{"account_id":"direct","priority":0,"budget_daily_usd":5}]"#;
+    let created = post(
+        &parts.app,
+        "/admin/pools",
+        &format!(r#"{{"id":"main","label":"Main","strategy":"priority","members":{members}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let created = json(created).await;
+    let log = format!(
+        "/admin/routing-log?kinds=registry_changed&from={}&to={}",
+        common::NOW - 60_000,
+        common::NOW + 60_000
+    );
+    let kinds = |page: &serde_json::Value| {
+        let mut kinds: Vec<String> = page["rows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row["detail"]["kind"].as_str().map(str::to_string))
+            .collect();
+        kinds.sort();
+        kinds
+    };
+    common::wait_json(&parts.app, &log, &cookie, |page| kinds(page).len() == 2).await;
+
+    let patched = patch(
+        &parts.app,
+        "/admin/pools/main",
+        &format!(r#"{{"in_flight_cap":4,"members":{members}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(patched.status(), 200);
+    let page = common::wait_json(&parts.app, &log, &cookie, |page| {
+        kinds(page).iter().any(|kind| kind == "pool_updated")
+    })
+    .await;
+    let after_edit = ["pool_created", "pool_members_set", "pool_updated"];
+    assert_eq!(
+        kinds(&page),
+        after_edit,
+        "the changed setting's row beside the create's two, and none for the list written back unchanged"
+    );
+
+    let read = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pool| pool["id"] == "main")
+        .cloned()
+        .unwrap();
+    let unchanged = |revision: &serde_json::Value| {
+        format!(r#"{{"in_flight_cap":4,"members":{members},"expected_revision":{revision}}}"#)
+    };
+    let saved = patch(
+        &parts.app,
+        "/admin/pools/main",
+        &unchanged(&read["revision"]),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(saved.status(), 200);
+    let saved = json(saved).await;
+    assert_eq!(
+        (&saved["revision"], &saved["updated_at"]),
+        (&read["revision"], &read["updated_at"]),
+        "a save that changes nothing answers the revision and the stamp the read carried"
+    );
+    fake_upstream::stays_for_async(std::time::Duration::from_millis(200), || async {
+        kinds(&json(get(&parts.app, &log, Some(&cookie)).await).await) == after_edit
+    })
+    .await;
+    let stale = patch(
+        &parts.app,
+        "/admin/pools/main",
+        &unchanged(&created["revision"]),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        stale.status(),
+        409,
+        "the same save from a read before the edit is stale"
+    );
+}

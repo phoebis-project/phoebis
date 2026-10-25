@@ -11,7 +11,7 @@ use phoebis_ledger::{
     LedgerDb, QuotaSampleRecord,
 };
 use phoebis_routing::RouterEvent;
-use phoebis_store::{AccountState, StateCause, StorageKey, Store};
+use phoebis_store::{AccountState, MemberWrite, PoolRow, StateCause, StorageKey, Store};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -473,7 +473,16 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
     )
     .await;
     let pool = h.store.pool("main").unwrap().unwrap();
-    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    h.store
+        .update_pool(
+            &PoolRow {
+                label: "Main pool".into(),
+                ..pool.clone()
+            },
+            pool.updated_at,
+            "test",
+        )
+        .unwrap();
     let row = wait_for_async(Duration::from_secs(5), || async {
         h.db.events(0, i64::MAX, 100)
             .await
@@ -497,6 +506,64 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
         detail["diff"].is_object(),
         "the diff is a value, not a string: {detail}"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_pool_save_that_keeps_its_member_list_mirrors_one_event_and_a_save_that_changes_nothing_mirrors_none(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    let members = [MemberWrite {
+        account_id: "a".into(),
+        priority: 0,
+        budget_daily_usd: None,
+        budget_monthly_usd: None,
+    }];
+    let changes = || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "registry_changed")
+            .map(|e| {
+                let detail: serde_json::Value =
+                    serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+                detail["kind"].as_str().unwrap().to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    let read = h.store.pool("main").unwrap().unwrap();
+    let stamp = h
+        .store
+        .update_pool_with_members(
+            &PoolRow {
+                label: "Main pool".into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            Some(&members),
+            "test",
+        )
+        .unwrap();
+    let mirrored = wait_for_async(Duration::from_secs(5), || async {
+        let kinds = changes().await;
+        (!kinds.is_empty()).then_some(kinds)
+    })
+    .await;
+    assert_eq!(
+        mirrored,
+        ["pool_updated"],
+        "the changed setting's event and none for the list written back unchanged"
+    );
+    let edited = h.store.pool("main").unwrap().unwrap();
+    h.store
+        .update_pool_with_members(&edited, stamp, Some(&members), "test")
+        .unwrap();
+    stays_for_async(Duration::from_millis(200), || async {
+        changes().await == ["pool_updated"]
+    })
+    .await;
     up.shutdown().await;
 }
 
