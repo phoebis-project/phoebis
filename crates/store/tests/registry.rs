@@ -3739,6 +3739,33 @@ fn a_member_list_that_differs_in_order_priority_or_budget_writes_the_list_again(
 }
 
 #[test]
+fn a_pool_save_that_changes_the_member_list_alone_records_the_list_and_no_pool_edit_and_moves_the_stamp(
+) {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    budgeted_pool(&store);
+    let read = store.pool("main").unwrap().unwrap();
+    let stored = budgeted_members();
+    let reordered = vec![stored[1].clone(), stored[0].clone()];
+    let start = store.newest_registry_change_id().unwrap().unwrap_or(0);
+    let stamp = store
+        .update_pool_with_members(&read, read.updated_at, Some(&reordered), "test")
+        .unwrap();
+    assert!(stamp > read.updated_at, "the list's write moves the stamp");
+    assert_eq!(store.pool("main").unwrap().unwrap().updated_at, stamp);
+    let kinds: Vec<(String, String)> = store
+        .registry_changes_after(start, 100)
+        .unwrap()
+        .into_iter()
+        .map(|change| (change.kind, change.target))
+        .collect();
+    assert_eq!(
+        kinds,
+        [("pool_members_set".to_string(), "main".to_string())],
+        "the unchanged row's pairs are empty, so the save records the list's row alone"
+    );
+}
+
+#[test]
 fn a_pool_save_that_changes_no_field_no_policy_no_member_and_no_guardrail_writes_nothing_and_answers_the_stamp_it_was_given(
 ) {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
