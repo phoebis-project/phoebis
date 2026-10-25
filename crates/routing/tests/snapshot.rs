@@ -112,6 +112,51 @@ fn term_answers_the_account_it_was_loaded_for_and_none_for_any_other() {
     assert_eq!(s.term("y"), None);
 }
 
+#[test]
+fn priced_tier_answers_the_stored_tier_for_a_plan_the_cost_model_prices_and_none_for_any_other() {
+    // One tier the cost table holds on every term, so the plan word alone decides each reading.
+    const TIER: &str = "default_claude_max_20x";
+    let expected = [
+        ("free", None),
+        ("pro", Some(TIER)),
+        ("max_5x", Some(TIER)),
+        ("max_20x", Some(TIER)),
+        ("max", Some(TIER)),
+        ("team", None),
+        ("enterprise", None),
+        ("usage_based", None),
+    ];
+    let term = |id: &str, plan: Option<&str>| SubscriptionTerm {
+        account_id: id.into(),
+        tier: Some(TIER.into()),
+        plan: plan.map(String::from),
+        ..SubscriptionTerm::default()
+    };
+    let mut terms: Vec<_> = expected
+        .iter()
+        .map(|&(word, _)| term(word, Some(word)))
+        .collect();
+    terms.push(term("unplanned", None));
+    let s = RegistrySnapshot::from_load(
+        RegistryLoad {
+            terms,
+            ..load(None)
+        },
+        DIGEST_KEY,
+        0,
+        1,
+    );
+    for (word, priced) in expected {
+        assert_eq!(s.plan(word), Some(word), "the term reads its own plan word");
+        assert_eq!(s.priced_tier(word), priced, "the {word} plan's priced tier");
+    }
+    assert_eq!(
+        (s.plan("unplanned"), s.priced_tier("unplanned")),
+        (None, None),
+        "a term with no plan prices nothing, whatever its tier"
+    );
+}
+
 /// One `last_user` message condition over `pattern`, so a pattern the compiler refuses fails the whole row.
 fn guardrail(id: &str, enabled: bool, pattern: &str) -> GuardrailRow {
     GuardrailRow {

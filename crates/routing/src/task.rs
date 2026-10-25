@@ -4202,7 +4202,7 @@ impl Task {
                     .clone();
                 // An api_key account bills its tokens and a usage-based seat its spend window, so neither has a plan
                 // window to charge, whatever tier the seat's profile names, and an account whose tier the profile has
-                // not named yet has no factor to price through.
+                // not named yet or whose plan the cost model does not price has no factor to price through.
                 if snapshot.account(&account_id).map(|a| a.kind)
                     != Some(phoebis_store::AccountKind::Oauth)
                     || snapshot.usage_based(&account_id)

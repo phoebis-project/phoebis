@@ -2799,7 +2799,8 @@ pub struct PinHold {
 /// and a factor of 1, and a window at or past the ceiling a stretch of at least `R` and a factor of 0, whatever the
 /// demand. A horizon already reached reads a factor of 0 at or past the ceiling and 1 under it, so no `0 / 0` reaches
 /// the entry. `None` for a pool whose slow-down is off, an api_key account (no 5-hour window), an account with no
-/// 5-hour reading, and one whose tier the profile has not named, which prices no demand.
+/// 5-hour reading, and one whose tier the profile has not named or whose plan the cost model does not price, which
+/// prices no demand.
 pub(crate) fn slow_down_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3008,8 +3009,8 @@ pub(crate) fn fit_of(
         read.verdict = if room { "fits" } else { "least_bad" };
         return read;
     }
-    // An unnamed tier prices neither the rewrite nor the burn, so for a move the figures are the prediction alone and
-    // the verdict stays least bad.
+    // An unnamed tier, or a plan the cost model does not price, prices neither the rewrite nor the burn, so for a move
+    // the figures are the prediction alone and the verdict stays least bad.
     let tier = snapshot.priced_tier(candidate);
     if tier.is_none() && judge == Judge::Placement {
         read.verdict = "fits";
