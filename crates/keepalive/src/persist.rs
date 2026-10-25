@@ -82,6 +82,9 @@ pub(crate) struct PersistedAgent {
     pub generation: u64,
     pub current: Option<PersistedObservation>,
     pub expires: Option<i64>,
+    /// When the released record leaves the engine, as `Agent.leaves_at` carries it, `None` on a record that is not
+    /// released.
+    pub leaves_at: Option<i64>,
     #[serde(with = "exact")]
     pub jitter_frac: f64,
     pub retry_at: Option<i64>,
@@ -420,6 +423,7 @@ impl PersistedAgent {
                 in_overage: o.in_overage,
             }),
             expires: agent.expires,
+            leaves_at: agent.leaves_at,
             jitter_frac: agent.jitter_frac,
             retry_at: agent.retry_at,
             policy: agent.policy.clone(),
@@ -524,6 +528,7 @@ impl PersistedAgent {
         agent.last_prefix = self.last_prefix;
         agent.generation = self.generation;
         agent.expires = self.expires;
+        agent.leaves_at = self.leaves_at;
         agent.jitter_frac = self.jitter_frac;
         agent.retry_at = self.retry_at;
         agent.policy = self.policy;

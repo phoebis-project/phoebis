@@ -340,10 +340,10 @@ impl Inner {
             "heartbeat" => {}
             "session_end" => {
                 let agents: Vec<String> = self.sessions[&key].agents.keys().cloned().collect();
-                for agent in &agents {
+                for agent_id in &agents {
                     self.discard(
                         &key,
-                        agent,
+                        agent_id,
                         Reason::SessionEnded,
                         Some(Wasted::SessionEnded),
                     );
@@ -352,11 +352,12 @@ impl Inner {
                         .get_mut(&key)
                         .unwrap()
                         .agents
-                        .get_mut(agent)
+                        .get_mut(agent_id)
                         .unwrap();
                     agent.set_state(AgentState::Released);
                     // A session's end is no return, so main's window ends with it.
                     agent.close_idle_episode();
+                    self.release_record(&key, agent_id, now, snapshot);
                 }
                 let session = self.sessions.get_mut(&key).unwrap();
                 session.ended = true;
@@ -390,6 +391,7 @@ impl Inner {
                         // settles under it rather than under nothing.
                         agent.last_stop = released;
                         agent.set_state(AgentState::Busy);
+                        agent.leaves_at = None;
                         agent.last_activity = now;
                         agent.idle_ticks = 0;
                         // The restart moves the window's start on purpose, so the floor its release left goes.
@@ -500,12 +502,15 @@ impl Inner {
                         agent.set_state(state);
                     }
                     match state {
-                        AgentState::Released => self.discard(
-                            &key,
-                            &agent_id,
-                            Reason::AgentReleased,
-                            Some(Wasted::Released),
-                        ),
+                        AgentState::Released => {
+                            self.discard(
+                                &key,
+                                &agent_id,
+                                Reason::AgentReleased,
+                                Some(Wasted::Released),
+                            );
+                            self.release_record(&key, &agent_id, now, snapshot);
+                        }
                         AgentState::Unknown => {
                             self.discard(&key, &agent_id, Reason::AgentUnknown, None)
                         }
@@ -583,6 +588,12 @@ impl Inner {
                     return Err(err("stale_sequence", 409));
                 }
                 let revived = session.ended;
+                // A main the revival registers anew takes a slot as any new record does, and a refusal leaves the
+                // session as its end left it.
+                let registers_main = revived && !session.agents.contains_key(MAIN_AGENT);
+                if registers_main && self.agents >= max_agents {
+                    return Err(err("agent_limit", 429));
+                }
                 session.sequence = ev.sequence;
                 session.lease = now + lease_ms;
                 session.attended = true;
@@ -599,10 +610,24 @@ impl Inner {
                     // them again, and every generation stays as the end left it.
                     if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
                         main.set_state(AgentState::Busy);
+                        main.leaves_at = None;
                         main.last_activity = now;
                         main.idle_ticks = 0;
                         // The revival moves the window's start on purpose, so the floor the end left goes.
                         main.idle_window_floor = None;
+                    } else {
+                        // Main's record left one cache TTL after the end, so a resume past it registers main anew as
+                        // a fresh start does.
+                        let incarnation = self.incarnation();
+                        self.sessions
+                            .get_mut(&key)
+                            .expect("the session just read")
+                            .agents
+                            .insert(
+                                MAIN_AGENT.to_string(),
+                                Agent::new(MAIN_AGENT, &key.0, incarnation, now, self.timing),
+                            );
+                        self.agents += 1;
                     }
                     self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
                 }

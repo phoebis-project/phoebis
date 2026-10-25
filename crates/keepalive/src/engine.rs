@@ -13,7 +13,7 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{Band, Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
-use phoebis_relay::{CacheTtlPolicy, Relay};
+use phoebis_relay::{CacheTtl, CacheTtlPolicy, Relay};
 use phoebis_routing::{budget_deadline, listing, MemberSpend, RegistrySnapshot, RouterHandle};
 use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PoolRow, Store};
 use tokio::sync::Notify;
@@ -24,7 +24,7 @@ use crate::breakeven::{
     resolve, resolve_pool, shipped_tightest, Ceilings, FactorRows, ResolvedCeilings,
 };
 use crate::config::{
-    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
+    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS, ONE_HOUR_MS,
 };
 use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
@@ -567,6 +567,9 @@ pub(crate) struct Agent {
     pub body_saved: bool,
     /// When the entry the recipe keeps warm expires. The due time is this less the timing's lead and jitter.
     pub expires: Option<i64>,
+    /// When a released record leaves the engine: the release plus the longest TTL of the pool's cache TTL policy,
+    /// `None` on a record that is not released.
+    pub leaves_at: Option<i64>,
     /// The share of the timing's jitter this schedule takes, rolled once per schedule so the due time holds
     /// still between ticks.
     pub jitter_frac: f64,
@@ -663,6 +666,7 @@ impl Agent {
             body_dirty: false,
             body_saved: true,
             expires: None,
+            leaves_at: None,
             jitter_frac: 0.0,
             retry_at: None,
             policy: KeepalivePolicy::default(),
@@ -2151,7 +2155,58 @@ impl Inner {
         true
     }
 
+    /// Sets the record's leave one pool cache TTL out from `now`, from the snapshot's pool row, on a record its caller
+    /// set released.
+    pub(crate) fn release_record(
+        &mut self,
+        key: &SessionKey,
+        agent_id: &str,
+        now: i64,
+        snapshot: &RegistrySnapshot,
+    ) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        // A pool the snapshot no longer holds, or none for a record that never sent a request, reads the default
+        // policy, whose plan set keeps the hour.
+        let policy = snapshot
+            .pool(&agent.pool_id)
+            .map(|pool| CacheTtlPolicy::from_json(&pool.cache_ttl_json))
+            .unwrap_or_default();
+        agent.leaves_at = Some(now + longest_cache_ttl_ms(&policy));
+        self.touch_agent(key, agent_id);
+    }
+
     pub(crate) fn expire(&mut self, now: i64, expiry_ms: i64) {
+        // A record whose probe is still in flight waits for the result, which settles under the release's label, and
+        // the next sweep takes it.
+        let leaving: Vec<(SessionKey, String)> = self
+            .sessions
+            .iter()
+            .flat_map(|(key, session)| {
+                session
+                    .agents
+                    .iter()
+                    .filter(|(_, agent)| {
+                        agent.state == AgentState::Released
+                            && !agent.in_flight
+                            && agent.leaves_at.is_some_and(|at| now >= at)
+                    })
+                    .map(move |(agent_id, _)| (key.clone(), agent_id.clone()))
+            })
+            .collect();
+        for (key, agent_id) in leaving {
+            self.forget_agent(&key, &agent_id);
+            if let Some(session) = self.sessions.get_mut(&key) {
+                session.agents.remove(&agent_id);
+            }
+            self.agents -= 1;
+            self.touch_session(&key);
+        }
         let lapsed: Vec<SessionKey> = self
             .sessions
             .iter()
@@ -2224,6 +2279,24 @@ impl Inner {
             self.sessions.remove(&key);
         }
     }
+}
+
+/// The longest TTL the policy names in milliseconds, over both rule sets' `main`, `subagent` and model overrides.
+pub(crate) fn longest_cache_ttl_ms(policy: &CacheTtlPolicy) -> i64 {
+    // Whatever `enabled` says: the rules are what a body's markers are completed against, so a resumed agent's next
+    // request can land under the longest of them.
+    [&policy.plan, &policy.metered]
+        .into_iter()
+        .flat_map(|rules| {
+            [rules.main, rules.subagent]
+                .into_iter()
+                .chain(rules.models.iter().flat_map(|m| [m.main, m.subagent]))
+        })
+        .map(|ttl| match ttl {
+            CacheTtl::FiveMinutes => FIVE_MINUTES_MS,
+            CacheTtl::OneHour => ONE_HOUR_MS,
+        })
+        .fold(FIVE_MINUTES_MS, i64::max)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3978,6 +4051,45 @@ mod tests {
             label = next(label);
         }
         assert_eq!(walked, Wasted::ALL.to_vec());
+    }
+
+    #[test]
+    fn the_longest_cache_ttl_reads_both_sets_and_their_model_overrides_while_the_policy_is_off() {
+        let longest =
+            |raw: serde_json::Value| longest_cache_ttl_ms(&CacheTtlPolicy::parse(&raw).unwrap());
+        let five = serde_json::json!({"main": "5m", "subagent": "5m"});
+        let with_model = |main: &str, subagent: &str| {
+            serde_json::json!({
+                "main": "5m",
+                "models": [{"main": main, "model": "claude-opus-4-1", "subagent": subagent}],
+                "subagent": "5m",
+            })
+        };
+        assert_eq!(longest(serde_json::json!({})), ONE_HOUR_MS);
+        assert_eq!(
+            longest(serde_json::json!({"metered": five, "plan": five})),
+            FIVE_MINUTES_MS
+        );
+        for (name, policy) in [
+            (
+                "a metered subagent",
+                serde_json::json!({"metered": {"main": "5m", "subagent": "1h"}, "plan": five}),
+            ),
+            (
+                "a plan main",
+                serde_json::json!({"metered": five, "plan": {"main": "1h", "subagent": "5m"}}),
+            ),
+            (
+                "a metered model's main",
+                serde_json::json!({"metered": with_model("1h", "5m"), "plan": five}),
+            ),
+            (
+                "a plan model's subagent",
+                serde_json::json!({"metered": five, "plan": with_model("5m", "1h")}),
+            ),
+        ] {
+            assert_eq!(longest(policy), ONE_HOUR_MS, "{name}");
+        }
     }
 
     #[test]

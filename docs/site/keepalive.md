@@ -255,10 +255,12 @@ by bucket.
 The Sessions view reads each agent's recipe as one of five states, with the engine's own reason beside it as the cause.
 The cause's sentence shows on hover over the state word and again in the row's expanded detail. Every agent that has
 sent a real request keeps its record in the engine until its session leaves it, and its line in the view with it, so a
-recipe that ended, or a request that was not kept, still shows with its cause. The one line that leaves earlier is a
-subagent's the mod released while its session lives: the view drops it at its next re-read, while the engine keeps the
-record, which refuses a late request and a late probe result under that id and holds its slot of the agent cap until the
-session leaves.
+recipe that ended, or a request that was not kept, still shows with its cause. The one record that leaves earlier is a
+released one, a subagent the mod released while its session lives or any agent its session's end released: the view
+drops a released line under a live session at its next re-read, while the engine keeps the record for one pool cache TTL
+after the release, the longest TTL the pool's cache TTL policy names, refusing a late request and a late probe result
+under that id and holding its slot of the agent cap, and then drops it, its line leaving the view with it. A later start
+under the id registers anew.
 
 The console's words for the causes are in the labels table under [In the console](#in-the-console).
 

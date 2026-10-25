@@ -4,8 +4,11 @@ mod common;
 use axum::body::Body;
 use axum::http::Request;
 use common::*;
+use fake_upstream::Respond;
 use http_body_util::BodyExt;
-use phoebis_keepalive::{keepalive_router, AgentState, CompanionState, ParkKind, EVENTS_PATH};
+use phoebis_keepalive::{
+    keepalive_router, AgentState, CompanionState, Event, EventError, ParkKind, Reason, EVENTS_PATH,
+};
 use phoebis_store::{ApiKeyRow, RulesMode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -113,6 +116,51 @@ fn other_key_row(r: &Rig, id: &str) -> ApiKeyRow {
         retired_secret_last_used_at: None,
         auto_mode_server: None,
     }
+}
+
+/// An `agent_start` for `agent` on the rig's own session, under `generation` where the mod names one.
+fn agent_start(r: &mut Rig, agent: &str, generation: Option<u64>) -> Result<(), EventError> {
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some(agent.into()),
+        request_generation: generation,
+        ..Default::default()
+    })
+    .map(|_| ())
+}
+
+/// An `idle` report for `agent` on the rig's own session under `generation`: the refusal's code and generation, or
+/// `None` where the engine took the report.
+fn idle_report(r: &mut Rig, agent: &str, generation: u64) -> Option<(&'static str, Option<u64>)> {
+    r.event(Event {
+        event: "state".into(),
+        agent_id: Some(agent.into()),
+        state: Some("idle".into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .err()
+    .map(|refused| (refused.code, refused.request_generation))
+}
+
+/// The leave the engine's next save writes for `agent` of the rig's session.
+fn saved_leave(r: &Rig, agent: &str) -> Value {
+    let (_, agents) = r.engine.persist_rows();
+    let row = agents
+        .iter()
+        .find(|row| row.session_id == "session" && row.agent_id == agent)
+        .unwrap_or_else(|| panic!("no row for {agent}"));
+    serde_json::from_str::<Value>(&row.payload).unwrap()["leaves_at"].clone()
+}
+
+/// The agent count the Sessions read shows for the rig's session.
+fn session_agents(r: &Rig) -> usize {
+    r.engine
+        .sessions()
+        .iter()
+        .find(|s| s.session_id == "session")
+        .expect("the rig's session")
+        .agents
 }
 
 #[tokio::test]
@@ -920,6 +968,206 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
     }
 }
 
+/// Under the default policy, whose longest TTL is the hour, a released record answers `agent_released` for an hour
+/// after the release and then leaves: a report under its id answers `unknown_agent`, and the mod's start registers the
+/// agent anew under the cap.
+#[tokio::test]
+async fn a_released_agent_answers_agent_released_for_one_cache_ttl_and_then_registers_anew() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "worker", None).unwrap();
+    r.state("worker", "released");
+    let released = r.status("worker").request_generation;
+    assert_eq!((released, r.engine.stats().agents), (1, 2));
+    r.advance_attended(3_599_999);
+    assert_eq!(
+        idle_report(&mut r, "worker", released),
+        Some(("agent_released", Some(released))),
+        "the record refuses a late report until one cache TTL has passed since the release"
+    );
+    r.advance_attended(1);
+    r.step().await;
+    assert!(
+        r.engine
+            .agent_status("desktop", "session", "worker")
+            .is_none(),
+        "the sweep at the leave removes the record"
+    );
+    assert_eq!(
+        (r.engine.stats().agents, session_agents(&r)),
+        (1, 1),
+        "the engine's count and the session's drop by the record"
+    );
+    assert_eq!(
+        idle_report(&mut r, "worker", released),
+        Some(("unknown_agent", None)),
+        "a report under the id that left answers as for any id the session does not hold"
+    );
+    agent_start(&mut r, "worker", None).expect("a start after the leave registers anew");
+    let anew = r.status("worker");
+    assert_eq!(
+        (anew.request_generation, anew.state),
+        (0, AgentState::Busy),
+        "a new record, not the released one"
+    );
+    assert_eq!((r.engine.stats().agents, session_agents(&r)), (2, 2));
+}
+
+/// A start under the released record's generation before the record left reuses it, and the reuse clears the leave,
+/// so the agent is still there when the release's hour has passed.
+#[tokio::test]
+async fn a_start_before_a_released_agent_leaves_reuses_its_record_and_clears_the_leave() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "worker", None).unwrap();
+    r.state("worker", "released");
+    let released = r.status("worker").request_generation;
+    r.advance_attended(1_000);
+    agent_start(&mut r, "worker", Some(released)).expect("the start reuses the released record");
+    let reused = r.status("worker");
+    assert_eq!(
+        (
+            reused.request_generation,
+            reused.state,
+            r.engine.stats().agents
+        ),
+        (released + 1, AgentState::Busy, 2)
+    );
+    assert_eq!(
+        saved_leave(&r, "worker"),
+        Value::Null,
+        "the reuse clears the leave"
+    );
+    r.advance_attended(3_600_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("worker").state, r.engine.stats().agents),
+        (AgentState::Busy, 2),
+        "the reused record stays past the release's leave"
+    );
+}
+
+/// The leave is the longest TTL the pool's cache TTL policy names, read whatever its `enabled` says: a pool whose four
+/// TTLs are five minutes lets a released record go five minutes after the release.
+#[tokio::test]
+async fn a_released_agent_leaves_after_the_longest_ttl_of_its_pools_cache_ttl_policy() {
+    let mut r = rig(RigSpec {
+        pool: PoolSpec {
+            cache_ttl: r#"{"metered":{"main":"5m","subagent":"5m"},"plan":{"main":"5m","subagent":"5m"}}"#,
+            ..PoolSpec::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    agent_start(&mut r, "worker", None).unwrap();
+    // The record takes its pool from its last real request.
+    r.observe("worker").await;
+    r.state("worker", "released");
+    let released = r.status("worker").request_generation;
+    r.advance_attended(299_999);
+    assert_eq!(
+        idle_report(&mut r, "worker", released),
+        Some(("agent_released", Some(released))),
+        "held until five minutes after the release"
+    );
+    r.advance_attended(1);
+    assert_eq!(
+        idle_report(&mut r, "worker", released),
+        Some(("unknown_agent", None)),
+        "and gone at five minutes"
+    );
+}
+
+/// A released agent that sent a real request keeps its recipe line in the Sessions read while its record is held,
+/// and the line leaves with the record.
+#[tokio::test]
+async fn a_released_agents_recipe_line_leaves_the_sessions_read_with_its_record() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "worker", None).unwrap();
+    r.observe("worker").await;
+    r.state("worker", "released");
+    let lines = |r: &Rig| {
+        r.engine
+            .recipes()
+            .into_iter()
+            .filter(|line| line.agent_id == "worker")
+            .map(|line| line.agent_state)
+            .collect::<Vec<_>>()
+    };
+    r.advance_attended(3_599_999);
+    assert_eq!(lines(&r), vec![AgentState::Released]);
+    r.advance_attended(1);
+    r.step().await;
+    assert!(lines(&r).is_empty(), "the line went with the record");
+}
+
+/// A released record whose probe is still in flight at its leave stays until the result lands, so the result settles
+/// under the release's label rather than as a replaced record's, and the next sweep removes it.
+#[tokio::test]
+async fn a_released_record_with_a_probe_in_flight_at_its_leave_waits_for_the_result() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    agent_start(&mut r, "worker", None).unwrap();
+    r.observe("worker").await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance_attended(270_000);
+    r.engine.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    r.state("worker", "released");
+    r.advance_attended(3_600_000);
+    r.engine.step().await;
+    assert_eq!(
+        r.engine
+            .agent_status("desktop", "session", "worker")
+            .map(|status| (status.state, status.in_flight)),
+        Some((AgentState::Released, true)),
+        "the sweep leaves a record whose probe is still in flight"
+    );
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    r.step().await;
+    assert!(
+        r.engine
+            .agent_status("desktop", "session", "worker")
+            .is_none(),
+        "the sweep after the result removes the record"
+    );
+    let wasted = wait_for(std::time::Duration::from_secs(30), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    phoebis_ledger::hour_of(NOW) - 3_600,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap();
+        let mut reasons: std::collections::BTreeMap<String, u64> = Default::default();
+        for row in rows.iter().filter(|row| row.kind == "probe") {
+            for (reason, count) in &row.wasted_probe_reasons {
+                *reasons.entry(reason.clone()).or_default() += count;
+            }
+        }
+        (!reasons.is_empty()).then_some(reasons)
+    })
+    .await;
+    assert_eq!(
+        wasted,
+        std::collections::BTreeMap::from([("released".to_string(), 1)]),
+        "the late result settles under the release"
+    );
+}
+
 #[tokio::test]
 async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_the_clock_alone() {
     let mut r = rig(RigSpec::default()).await;
@@ -1286,5 +1534,93 @@ async fn a_same_instance_start_revives_an_ended_session_so_a_clear_then_a_resume
             .collect::<Vec<_>>(),
         ["session"],
         "the revived session's next real request arms main again"
+    );
+}
+
+/// The end releases main with the session's other agents, and a same-instance start inside the cache TTL revives main
+/// as before and clears its leave, so main is still there when the end's hour has passed.
+#[tokio::test]
+async fn a_revival_inside_the_cache_ttl_keeps_main_and_clears_its_leave() {
+    let mut r = rig(RigSpec::default()).await;
+    r.event(session_end("session")).unwrap();
+    r.advance(1_000);
+    r.reregister();
+    assert_eq!(
+        saved_leave(&r, "main"),
+        Value::Null,
+        "the revival clears main's leave"
+    );
+    r.advance_attended(3_599_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").state, r.engine.stats().agents),
+        (AgentState::Busy, 1),
+        "the revived main stays past the end's leave"
+    );
+}
+
+/// Once main's record left one cache TTL after the session's end, a same-instance start registers main anew, so a
+/// resume past the hour finds its main.
+#[tokio::test]
+async fn a_revival_after_mains_record_left_registers_main_anew() {
+    let mut r = rig(RigSpec::default()).await;
+    r.event(session_end("session")).unwrap();
+    r.advance(3_600_000);
+    r.step().await;
+    assert!(
+        r.engine
+            .agent_status("desktop", "session", "main")
+            .is_none(),
+        "main's record left one cache TTL after the end"
+    );
+    assert_eq!(r.engine.stats().agents, 0);
+    let revived = r.reregister();
+    assert_eq!(
+        serde_json::to_value(&revived.agents).unwrap(),
+        json!([{"agent_id": "main", "request_generation": 0, "state": "busy"}]),
+        "the acknowledgment lists the new main"
+    );
+    let main = r.status("main");
+    assert_eq!(
+        (main.request_generation, main.state, main.reason),
+        (0, AgentState::Busy, Reason::AwaitingRequest)
+    );
+    assert_eq!((r.engine.stats().agents, session_agents(&r)), (1, 1));
+}
+
+/// The revival that registers main anew counts against the agent cap as any new record does, and a refused one leaves
+/// the session ended.
+#[tokio::test]
+async fn a_revival_that_would_register_main_past_the_agent_cap_answers_agent_limit() {
+    let mut r = rig(RigSpec {
+        limits: phoebis_keepalive::KeepaliveLimits {
+            max_agents: 1,
+            ..RigSpec::default().limits
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.event(session_end("session")).unwrap();
+    r.advance(3_600_000);
+    r.step().await;
+    r.event(session_start("other"))
+        .expect("the slot main's record left takes another session");
+    let refused = r.event(session_start("session")).unwrap_err();
+    assert_eq!((refused.code, refused.status), ("agent_limit", 429));
+    assert!(
+        r.engine
+            .agent_status("desktop", "session", "main")
+            .is_none(),
+        "the refused revival registered no main"
+    );
+    assert_eq!(
+        r.event(Event {
+            event: "heartbeat".into(),
+            ..Default::default()
+        })
+        .unwrap_err()
+        .code,
+        "instance_ended",
+        "and left the session ended"
     );
 }

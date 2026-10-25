@@ -12,8 +12,8 @@ use common::*;
 use fake_upstream::Respond;
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
-    Ack, CompanionState, Engine, Event, EventError, KeepaliveLimits, KeepalivePolicy, Reason,
-    LEASE_MS,
+    Ack, AgentState, CompanionState, Engine, Event, EventError, KeepaliveLimits, KeepalivePolicy,
+    Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
@@ -984,6 +984,58 @@ async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_pr
     );
 }
 
+/// An `agent_start` for `agent` on the rig's own session, with the refusal's code and status.
+fn agent_start(r: &mut Rig, agent: &str) -> Result<(), (&'static str, u16)> {
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some(agent.into()),
+        ..Default::default()
+    })
+    .map(|_| ())
+    .map_err(|refused| (refused.code, refused.status))
+}
+
+/// A released record holds its slot of the agent cap until it leaves one cache TTL after its release, so a session at
+/// the cap admits a new agent once its released records have left.
+#[tokio::test]
+async fn a_session_at_the_agent_limit_frees_a_slot_when_its_released_record_leaves() {
+    let mut r = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_agents: 2,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    agent_start(&mut r, "worker").unwrap();
+    assert_eq!(
+        agent_start(&mut r, "other"),
+        Err(("agent_limit", 429)),
+        "main and the worker fill the cap"
+    );
+    r.state("worker", "released");
+    assert_eq!(
+        agent_start(&mut r, "other"),
+        Err(("agent_limit", 429)),
+        "the released record still holds its slot"
+    );
+    r.advance_attended(3_599_999);
+    assert_eq!(
+        (agent_start(&mut r, "other"), r.engine.stats().agents),
+        (Err(("agent_limit", 429)), 2),
+        "until one cache TTL has passed since the release"
+    );
+    r.advance_attended(1);
+    r.step().await;
+    assert_eq!(
+        r.engine.stats().agents,
+        1,
+        "the leave frees the released record's slot"
+    );
+    assert_eq!(agent_start(&mut r, "other"), Ok(()));
+    assert_eq!(r.engine.stats().agents, 2);
+}
+
 /// The credit after a restart reads the newest unanswered probe's coverage, entry, unit and model, and its settlement
 /// its usage, its account tier, its exchange instant and its band, so a probe nobody answered before the flush comes
 /// back with all eight.
@@ -1047,6 +1099,95 @@ async fn a_restart_restores_an_unanswered_probe_with_what_its_credit_and_its_set
     assert!(
         probe["id"].as_str().is_some_and(|id| !id.is_empty()),
         "the probe names its request: {probe}"
+    );
+}
+
+/// A released record's leave rides its saved row, so a restart restores the record with it and the first tick past
+/// the leave removes the record and its row.
+#[tokio::test]
+async fn a_restored_released_record_leaves_at_the_first_tick_past_its_saved_leave() {
+    let mut r = rig(on_disk()).await;
+    agent_start(&mut r, "sub").unwrap();
+    let released_at = r.now();
+    r.state("sub", "released");
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_field(&r, "session", "sub", "leaves_at"),
+        serde_json::json!(released_at + 3_600_000),
+        "the save writes the leave"
+    );
+    let second = r.restart().await;
+    second.load_persisted().await;
+    r.advance(3_599_999);
+    second.step().await;
+    assert_eq!(
+        second
+            .agent_status("desktop", "session", "sub")
+            .map(|status| status.state),
+        Some(AgentState::Released),
+        "the restored record is held until its leave"
+    );
+    r.advance(1);
+    second.step().await;
+    assert!(
+        second.agent_status("desktop", "session", "sub").is_none(),
+        "the first tick past the leave removes the record"
+    );
+    assert_eq!(second.stats().agents, 1);
+    second.flush_persisted().await;
+    assert_eq!(
+        saved_agents(&r)
+            .iter()
+            .map(|a| a.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["main"],
+        "the record's row left the registry with it"
+    );
+}
+
+/// A saved released record whose payload carries no leave loads with none and stays past the hour a leave would have
+/// ended, as serde reads a missing `Option` member.
+#[tokio::test]
+async fn a_saved_released_record_without_a_leave_loads_with_none_and_stays() {
+    let mut r = rig(on_disk()).await;
+    agent_start(&mut r, "sub").unwrap();
+    r.state("sub", "released");
+    let (sessions, mut agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    for row in agents.iter_mut().filter(|row| row.agent_id == "sub") {
+        let mut payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
+        payload
+            .as_object_mut()
+            .expect("the payload is an object")
+            .remove("leaves_at");
+        row.payload = payload.to_string();
+    }
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions,
+            agents,
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let (_, loaded) = second.persist_rows();
+    let sub = loaded
+        .iter()
+        .find(|row| row.agent_id == "sub")
+        .expect("the record without a leave loads");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&sub.payload).unwrap()["leaves_at"],
+        serde_json::Value::Null
+    );
+    r.advance(3_600_000);
+    second.step().await;
+    assert_eq!(
+        second
+            .agent_status("desktop", "session", "sub")
+            .map(|status| status.state),
+        Some(AgentState::Released),
+        "a record with no leave stays"
     );
 }
 

@@ -443,9 +443,10 @@ which the client has not spawned or given a turn since, is not adopted again wha
 ends the run the router holds, and the mod sends the release once more when none is still queued, so a router restored
 from a save older than the release learns of it. A state the router holds wrongly is sent again. An agent only the mod
 holds is announced with `agent_start` and its state. An entry the router holds as `released` is skipped both ways, so a
-subagent the mod holds as parked stays released on the router until its next report starts it again with `agent_start`.
-An agent the answer names while the mod's release of it still waits in the queue stays unannounced, so the agent's next
-run starts it again with `agent_start`.
+subagent the mod holds as parked stays released on the router until its next report starts it again with `agent_start`,
+which registers it anew where the record left one pool cache TTL after the release ([The five
+states](keepalive.md#the-five-states)). An agent the answer names while the mod's release of it still waits in the queue
+stays unannounced, so the agent's next run starts it again with `agent_start`.
 
 A refusal takes one of two shapes. A missing, malformed, ambiguous or refused key is answered the relay's way, the same
 `401` in Anthropic's error shape that `/v1/messages` answers, with `x-phoebis-error-code` naming an `auth_*` code
