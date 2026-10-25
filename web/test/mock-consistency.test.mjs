@@ -488,7 +488,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`the story's usage-based seat knows its allowance as an API key does, and the walk's spent rule reads it as holding allowance, at ${at}`, async () => {
+  test(`the story's usage-based seat knows its allowance as an API key does, and its plan windows are absent, so holdsAllowance reads true for it at the walk's two sites, at ${at}`, async () => {
     const all = await decisionsOf(await story);
     const records = all.filter((r) => r.candidates.some((c) => c.accountId === 'contract'));
     assert.ok(records.length > 0, 'a record names the seat');

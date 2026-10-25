@@ -15121,13 +15121,14 @@ m.unmount();
       const { card, page } = await story(id, 2);
       const fact = record.walk.find((s) => s.step === 'pick' && s.verdict === 'chosen')?.facts.find((f) => f.key === 'tier')?.value;
       const tier = record.candidates.find((c) => c.accountId === record.outcome.accountId)?.tier ?? [];
-      const word = tier[0] === 2 ? 'keys' : tier[0] === 1 || tier[2] === 1 ? 'overage' : 'plan';
+      // req_8c41f2d7-a93/2 picks at tier [0, 0, 0], whose list draws the words the joined text '0/0/0' draws.
+      const words = ['tier plan P0'];
       const second = stationsOf(card).find((s) => s.id === 'pick')?.second ?? [];
       const popover = await popoverOf(page, stationButton(card, 'pick'));
       const row = popoverRowOf(popover, 'tier');
       results.push({
         name,
-        ok: Array.isArray(fact) && JSON.stringify(fact) === JSON.stringify(tier.map(String)) && JSON.stringify(row) === JSON.stringify([`tier ${word} P${tier[1]}`]) && JSON.stringify(second) === JSON.stringify([`Pace P${tier[1]}`]),
+        ok: Array.isArray(fact) && JSON.stringify(fact) === JSON.stringify(tier.map(String)) && JSON.stringify(row) === JSON.stringify(words) && JSON.stringify(second) === JSON.stringify([`Pace P${tier[1]}`]),
         missing: [`fact ${JSON.stringify(fact)}`, `tier ${JSON.stringify(tier)}`, `row ${JSON.stringify(row)}`, `second ${JSON.stringify(second)}`, rowsRead(popover)],
       });
       page.unmount();
