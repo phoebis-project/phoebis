@@ -8,12 +8,13 @@ use phoebis_ledger::{
     burn_rows, burn_series, burn_series_over, deltas_of, fold_account, fold_event, fold_keepalive,
     held_series, hour_ceil, hour_of, key_request_totals, list_requests, member_spends,
     moves_by_reason, placements, price_equivalent, price_shares, read_account_rollups,
-    read_rollups, request_totals, rewrite_series, run_retention_blocking, series, series_paged,
-    session_identities, AttemptRecord, BudgetedMember, CostRevisions, EventRecord, FundingFilter,
-    GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow,
-    PlanTables, PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
-    RollupSelect, SeriesFilter, SharePricing, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING,
-    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    read_rollups, refusal_categories, request_totals, rewrite_series, run_retention_blocking,
+    series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
+    EventRecord, FundingFilter, GroupRow, Histogram, KeepaliveDelta, LedgerConfig, LedgerDb,
+    LiveKeys, ModelPrice, ModelRow, PlanTables, PriceRevisions, PriceTable, RequestFilter,
+    RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, SharePricing, Speed,
+    WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
+    PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_routing::{
     PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -1265,6 +1266,79 @@ fn a_flagged_request_folds_into_its_hours_refusals_map_and_under_no_other_figure
         request_figures(&rows[0]),
         ("k".to_string(), 0, 0, 0, BTreeMap::new(), 0, blocked(1)),
         "the refusal sits in the map alone: no request, no rejected, no uncached request, no error, no duration"
+    );
+}
+
+/// A request served on `account`, its one attempt answering `stop_reason` with `category`.
+fn plant_stop(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    account: &str,
+    stop_reason: &str,
+    category: Option<&str>,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at,
+        finished_at: Some(received_at + 500),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: account.into(),
+        account_kind: "oauth".into(),
+        upstream_status: Some(200),
+        outcome: "succeeded".into(),
+        stop_reason: Some(stop_reason.into()),
+        refusal_category: category.map(String::from),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+}
+
+#[test]
+fn the_refusal_count_reads_each_served_refusal_in_range_under_its_category_the_largest_count_first()
+{
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_stop(&db, "h1", 1_000, "a", "refusal", Some("harmful_request"));
+    plant_stop(&db, "h2", 2_000, "a", "refusal", Some("harmful_request"));
+    plant_stop(&db, "t1", 3_000, "a", "refusal", Some("restricted_topic"));
+    plant_stop(&db, "n1", 4_000, "a", "refusal", None);
+    // Left out: two answers of another stop reason, and a refusal past the range.
+    plant_stop(&db, "e1", 5_000, "a", "end_turn", None);
+    plant_stop(&db, "u1", 6_000, "a", "tool_use", None);
+    plant_stop(&db, "late", 20_000, "a", "refusal", Some("harmful_request"));
+    // Another account's refusal, which the account filter leaves out.
+    plant_stop(&db, "b1", 7_000, "b", "refusal", Some("restricted_topic"));
+    let count = |accounts: &[&str]| {
+        let filter = RequestFilter {
+            accounts: accounts.iter().map(|a| a.to_string()).collect(),
+            ..Default::default()
+        };
+        db.read_blocking(|c| refusal_categories(c, &filter, &LiveKeys::default(), 0, 10_000))
+            .unwrap()
+    };
+    let pairs = |rows: &[(&str, u64)]| -> Vec<(String, u64)> {
+        rows.iter().map(|(c, n)| (c.to_string(), *n)).collect()
+    };
+    assert_eq!(
+        count(&["a"]),
+        pairs(&[("harmful_request", 2), ("-", 1), ("restricted_topic", 1)]),
+        "the largest count first, then the category in byte order, `-` for the refusal that named none"
+    );
+    assert_eq!(
+        count(&[]),
+        pairs(&[("harmful_request", 2), ("restricted_topic", 2), ("-", 1)]),
+        "without the account filter the other account's refusal joins its category"
     );
 }
 

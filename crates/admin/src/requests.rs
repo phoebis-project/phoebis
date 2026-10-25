@@ -864,6 +864,12 @@ pub(crate) struct RequestsQuery {
     pub turn_origins: Option<String>,
     /// A comma list of reasons, read off the serving attempt, any name the beta sent.
     pub cache_miss_reasons: Option<String>,
+    /// A comma list of stop reasons, read off the serving attempt, the last one, `-` for a request whose serving
+    /// attempt carries none or that no attempt served.
+    pub stop_reasons: Option<String>,
+    /// A comma list of refusal categories, read off the serving attempt as `stop_reasons` is, `-` for a request with
+    /// none.
+    pub refusal_categories: Option<String>,
     /// A comma list of efforts as the rollups fold them: a level, `none`, `other`.
     pub efforts: Option<String>,
     /// A comma list of classes as the rollups fold them: the class, `-`, `other`.
@@ -952,6 +958,8 @@ pub(crate) async fn list(
         request_classes: list_param(&q, "request_classes"),
         classifiers: list_param(&q, "classifiers"),
         guardrails: list_param(&q, "guardrails"),
+        stop_reasons: list_param(&q, "stop_reasons"),
+        refusal_categories: list_param(&q, "refusal_categories"),
     };
     if !phoebis_ledger::patterns_within_bounds(filter.user_agent.as_slice())
         || !phoebis_ledger::patterns_within_bounds(filter.client.as_slice())

@@ -104,43 +104,43 @@
           {
             "key": "business",
             "label": "business",
-            "requests": 4,
-            "succeeded": 3,
+            "requests": 7,
+            "succeeded": 6,
             "rate_limited": 0,
             "failed": 0,
             "exhausted": 0,
             "rejected": 0,
-            "attempts": 5,
+            "attempts": 8,
             "failovers": 1,
             "incomplete": 1,
-            "cache_hits": 4,
+            "cache_hits": 7,
             "cache_misses": 0,
             "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 2500,
+              "cache_read": 4000,
               "cache_write_1h": 0,
-              "cache_write_5m": 1000,
-              "output": 500,
-              "thinking": 200,
-              "uncached_input": 5000,
+              "cache_write_5m": 1600,
+              "output": 800,
+              "thinking": 320,
+              "uncached_input": 8000,
               "web_fetch": 0,
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.00025,
-              "cache_write": 0.0025,
-              "input": 0.01,
-              "output": 0.005
+              "cache_read": 0.0004000000000000001,
+              "cache_write": 0.004,
+              "input": 0.016,
+              "output": 0.008
             },
-            "cost_usd": 0.017750000000000002,
+            "cost_usd": 0.0284,
             "errors": {
               "stream_incomplete": 1
             },
             "refused": 0,
             "refusals": {},
             "cache_miss_reasons": {
-              "none": 4
+              "none": 7
             },
             "histograms": {
               "duration_ms": [
@@ -181,7 +181,7 @@
                 0,
                 0,
                 0,
-                4,
+                7,
                 0,
                 0,
                 0,
@@ -238,7 +238,7 @@
                 0,
                 0,
                 0,
-                3,
+                6,
                 0,
                 0,
                 0,
@@ -302,7 +302,7 @@
                 0,
                 0,
                 0,
-                3,
+                6,
                 0,
                 0,
                 0,
@@ -373,7 +373,7 @@
                 0,
                 0,
                 0,
-                3,
+                6,
                 0,
                 0,
                 0,
@@ -455,25 +455,25 @@
             "wasted_probe_usd": 0.0,
             "wasted_probe_reasons": {},
             "cost_shares": {
-              "five_hour": 0.000017625,
-              "seven_day": 4.7e-6
+              "five_hour": 0.00004406250000000001,
+              "seven_day": 0.00001175
             },
             "cache_shares": {
               "five_hour": {
-                "read": 1.25e-7,
-                "write": 2.5e-6
+                "read": 3.1249999999999997e-7,
+                "write": 6.25e-6
               },
               "seven_day": {
-                "read": 3.3333333333333334e-8,
-                "write": 6.666666666666667e-7
+                "read": 8.333333333333334e-8,
+                "write": 1.6666666666666667e-6
               }
             },
             "probe_shares": {},
-            "plan_requests": 3,
-            "plan_output_tokens": 300,
+            "plan_requests": 6,
+            "plan_output_tokens": 600,
             "cost_equivalent": {
-              "five_hour": 0.000017625,
-              "seven_day": 4.7e-6
+              "five_hour": 0.00004406250000000001,
+              "seven_day": 0.00001175
             },
             "unpriced": {
               "five_hour": false,
@@ -481,12 +481,12 @@
             },
             "cache_equivalent": {
               "five_hour": {
-                "read": 1.25e-7,
-                "write": 2.5e-6
+                "read": 3.1249999999999997e-7,
+                "write": 6.25e-6
               },
               "seven_day": {
-                "read": 3.3333333333333334e-8,
-                "write": 6.666666666666667e-7
+                "read": 8.333333333333334e-8,
+                "write": 1.6666666666666667e-6
               }
             },
             "probe_equivalent": {},
@@ -505,10 +505,10 @@
               "output": 0.002
             },
             "equivalent_split": {
-              "input": 2.666666666666667e-6,
-              "cache_read": 3.3333333333333334e-8,
-              "cache_write": 6.666666666666667e-7,
-              "output": 1.3333333333333334e-6
+              "input": 6.666666666666667e-6,
+              "cache_read": 8.333333333333334e-8,
+              "cache_write": 1.6666666666666667e-6,
+              "output": 3.3333333333333333e-6
             },
             "estimated": false,
             "probe_estimated": false

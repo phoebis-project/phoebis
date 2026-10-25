@@ -1246,8 +1246,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         bodies: None,
     });
     // A request the usage-based seat served, billed in dollars under the seat's own funding word, so the request rows
-    // carry the attempt's class with one true. The oldest row and in no session, so the list's first rows keep their
-    // places and the session rows their counts. The seat has no plan window, so its attempt carries no 5-hour reading.
+    // carry the attempt's class with one true. In no session, so the list's first rows keep their places and the
+    // session rows their counts. The seat has no plan window, so its attempt carries no 5-hour reading.
     let seat_at = refused_at - 600;
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -1270,6 +1270,27 @@ async fn every_route_is_captured_and_holds_its_shape() {
         }],
         bodies: None,
     });
+    // Three answers the upstream refused, each served with the stop reason `refusal`, one category twice and another
+    // once, so the request rows carry the refused attempts' responses and the refusal count its rows. Older than every
+    // other row and in no session, so the list's first rows keep their places and the session rows their counts.
+    for (id, at, category) in [
+        ("r-refused-1", seat_at - 1_800, "harmful_request"),
+        ("r-refused-2", seat_at - 1_200, "harmful_request"),
+        ("r-refused-3", seat_at - 600, "restricted_topic"),
+    ] {
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                session_id: None,
+                ..request(key_generation, id, at, "desktop", "s1", 200, "succeeded")
+            },
+            attempts: vec![AttemptRecord {
+                stop_reason: Some("refusal".into()),
+                refusal_category: Some(category.into()),
+                ..attempt(id, 1, "business", 200, "succeeded", at)
+            }],
+            bodies: None,
+        });
+    }
     parts
         .keepalive
         .apply_event(
@@ -1506,7 +1527,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 10
+        v["requests"].as_array().unwrap().len() == 13
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
@@ -1783,6 +1804,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (
             "analytics_reconciliations",
             "/admin/analytics/reconciliations",
+        ),
+        (
+            "analytics_refusal_categories",
+            "/admin/analytics/refusal_categories?range=24h",
         ),
         ("analytics_rewrites", "/admin/analytics/rewrites?range=24h"),
         (

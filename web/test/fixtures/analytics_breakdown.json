@@ -9,36 +9,36 @@
         "key": "desktop",
         "label": "desktop",
         "key_id": "desktop",
-        "requests": 8,
-        "succeeded": 6,
+        "requests": 11,
+        "succeeded": 9,
         "rate_limited": 0,
         "failed": 1,
         "exhausted": 0,
         "rejected": 0,
-        "attempts": 9,
+        "attempts": 12,
         "failovers": 1,
         "incomplete": 1,
-        "cache_hits": 8,
+        "cache_hits": 11,
         "cache_misses": 0,
         "uncached": 0,
         "expired_between_turns": 0,
         "tokens": {
-          "cache_read": 4500,
+          "cache_read": 6000,
           "cache_write_1h": 0,
-          "cache_write_5m": 1800,
-          "output": 900,
-          "thinking": 360,
-          "uncached_input": 9000,
+          "cache_write_5m": 2400,
+          "output": 1200,
+          "thinking": 480,
+          "uncached_input": 12000,
           "web_fetch": 0,
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.00045,
-          "cache_write": 0.004,
-          "input": 0.016,
-          "output": 0.008
+          "cache_read": 0.0006000000000000002,
+          "cache_write": 0.0055,
+          "input": 0.022,
+          "output": 0.011
         },
-        "cost_usd": 0.02845,
+        "cost_usd": 0.039099999999999996,
         "errors": {
           "stream_incomplete": 1,
           "upstream_error": 1
@@ -49,7 +49,7 @@
           "guardrail_blocked": 1
         },
         "cache_miss_reasons": {
-          "none": 7,
+          "none": 10,
           "pending": 1
         },
         "histograms": {
@@ -91,7 +91,7 @@
             0,
             0,
             0,
-            8,
+            11,
             0,
             0,
             0,
@@ -148,7 +148,7 @@
             0,
             0,
             0,
-            7,
+            10,
             0,
             0,
             0,
@@ -212,7 +212,7 @@
             0,
             0,
             0,
-            7,
+            10,
             0,
             0,
             0,
@@ -283,7 +283,7 @@
             0,
             0,
             0,
-            7,
+            10,
             0,
             0,
             0,
@@ -327,19 +327,19 @@
           },
           "output_tps": {
             "p50": 168.48548794358348,
-            "p90": 495.8068241684641,
+            "p90": 168.48548794358348,
             "p95": 495.8068241684641,
             "p99": 495.8068241684641
           },
           "ttfb_ms": {
             "p50": 117.57432659207082,
-            "p90": 495.8068241684641,
+            "p90": 117.57432659207082,
             "p95": 495.8068241684641,
             "p99": 495.8068241684641
           },
           "ttft_ms": {
             "p50": 289.0263910022442,
-            "p90": 710.4974114426765,
+            "p90": 289.0263910022442,
             "p95": 710.4974114426765,
             "p99": 710.4974114426765
           }
@@ -367,11 +367,11 @@
         "cost_shares": null,
         "cache_shares": null,
         "probe_shares": null,
-        "plan_requests": 5,
-        "plan_output_tokens": 500,
+        "plan_requests": 8,
+        "plan_output_tokens": 800,
         "cost_equivalent": {
-          "five_hour": 0.0000393625,
-          "seven_day": 0.000010496666666666667
+          "five_hour": 0.0000658,
+          "seven_day": 0.000017546666666666666
         },
         "unpriced": {
           "five_hour": false,
@@ -379,12 +379,12 @@
         },
         "cache_equivalent": {
           "five_hour": {
-            "read": 2.7916666666666666e-7,
-            "write": 5.583333333333335e-6
+            "read": 4.666666666666666e-7,
+            "write": 9.333333333333334e-6
           },
           "seven_day": {
-            "read": 7.444444444444444e-8,
-            "write": 1.488888888888889e-6
+            "read": 1.2444444444444446e-7,
+            "write": 2.4888888888888894e-6
           }
         },
         "probe_equivalent": {},
@@ -403,10 +403,10 @@
           "output": 0.004
         },
         "equivalent_split": {
-          "input": 5.955555555555555e-6,
-          "cache_read": 7.444444444444444e-8,
-          "cache_write": 1.488888888888889e-6,
-          "output": 2.977777777777778e-6
+          "input": 9.955555555555556e-6,
+          "cache_read": 1.2444444444444446e-7,
+          "cache_write": 2.4888888888888894e-6,
+          "output": 4.977777777777779e-6
         },
         "estimated": true,
         "probe_estimated": false

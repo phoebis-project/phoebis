@@ -72,6 +72,7 @@ const REFUSALS: &[(&str, &[u16])] = &[
     ("analytics_guardrails", &[400, 500]),
     ("analytics_placements", &[400, 500]),
     ("analytics_reconciliations", &[500]),
+    ("analytics_refusal_categories", &[400, 500]),
     ("analytics_rewrites", &[400, 500]),
     ("analytics_series", &[400, 500]),
     ("attention_show", &[500]),
@@ -135,6 +136,7 @@ const EXAMPLE_FILES: &[&str] = &[
     "analytics_guardrails",
     "analytics_placements",
     "analytics_reconciliations",
+    "analytics_refusal_categories",
     "analytics_rewrites",
     "analytics_series",
     "analytics_series_accounts",
@@ -194,6 +196,10 @@ const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
     (
         "analytics_reconciliations",
         Some(("analytics_reconciliations", 200)),
+    ),
+    (
+        "analytics_refusal_categories",
+        Some(("analytics_refusal_categories", 200)),
     ),
     ("analytics_rewrites", Some(("analytics_rewrites", 200))),
     ("analytics_series", Some(("analytics_series", 200))),
@@ -580,8 +586,8 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         document["paths"].as_object().unwrap().len(),
-        56,
-        "the admin listener's 56 paths"
+        57,
+        "the admin listener's 57 paths"
     );
     assert_eq!(
         phoebis_admin::path_count(),
@@ -590,8 +596,8 @@ async fn every_route_of_the_table_is_an_operation_and_the_plain_routes_are_the_l
     );
     assert_eq!(
         operations(&document).len(),
-        69,
-        "the admin listener's 69 operations"
+        70,
+        "the admin listener's 70 operations"
     );
 }
 
@@ -755,8 +761,8 @@ async fn every_example_is_its_fixtures_body_member_and_the_count_holds() {
     );
     assert_eq!(
         EXAMPLE_FILES.len(),
-        46,
-        "45 success answers and the replay's held answer"
+        47,
+        "46 success answers and the replay's held answer"
     );
     // The places the fixture manifest targets, each with the stems it attaches: a place carries as many examples
     // as stems, so a fixture attached twice or to the wrong place fails here, while a hand-written example (a

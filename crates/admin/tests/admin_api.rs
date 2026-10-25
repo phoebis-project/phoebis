@@ -2304,6 +2304,121 @@ async fn an_attempt_on_a_usage_based_seat_answers_its_class_and_one_on_a_plan_ac
     );
 }
 
+/// The request log narrows on the serving attempt's stop reason and refusal category, and a kept row answers both
+/// words off its attempt's response, the row itself carrying neither.
+#[tokio::test]
+async fn the_request_list_filters_on_the_serving_attempts_stop_reason_and_refusal_category() {
+    use common::{get, json, login, wait_json};
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let served = |id: &str, at: i64, answer: Option<(&str, Option<&str>)>| Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(if answer.is_some() { 200 } else { 503 }),
+            outcome: if answer.is_some() {
+                "succeeded"
+            } else {
+                "exhausted"
+            }
+            .into(),
+            attempts: answer.is_some() as u32,
+            ..Default::default()
+        },
+        attempts: answer
+            .map(|(stop_reason, category)| AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "business".into(),
+                account_kind: "oauth".into(),
+                started_at: at,
+                outcome: "succeeded".into(),
+                stop_reason: Some(stop_reason.into()),
+                refusal_category: category.map(String::from),
+                ..Default::default()
+            })
+            .into_iter()
+            .collect(),
+        bodies: None,
+    };
+    parts.ledger.record(served(
+        "r-harmful",
+        now - 4_000,
+        Some(("refusal", Some("harmful_request"))),
+    ));
+    parts
+        .ledger
+        .record(served("r-bare", now - 3_000, Some(("refusal", None))));
+    parts
+        .ledger
+        .record(served("r-ended", now - 2_000, Some(("end_turn", None))));
+    parts.ledger.record(served("r-unserved", now - 1_000, None));
+    wait_json(&parts.app, "/admin/requests", &cookie, |v| {
+        v["requests"].as_array().is_some_and(|rows| rows.len() == 4)
+    })
+    .await;
+    let listed = |query: &'static str| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let page =
+                json(get(&app, &format!("/admin/requests?{query}"), Some(&cookie)).await).await;
+            page["requests"]
+                .as_array()
+                .unwrap_or_else(|| panic!("a page of rows: {page}"))
+                .clone()
+        }
+    };
+    let ids = |rows: &[serde_json::Value]| -> Vec<String> {
+        rows.iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let refused = listed("stop_reasons=refusal").await;
+    assert_eq!(
+        ids(&refused),
+        ["r-bare", "r-harmful"],
+        "the refusal stop keeps the two refusals"
+    );
+    for row in &refused {
+        let response = &row["attempts"][0]["response"];
+        assert_eq!(response["stop_reason"], "refusal", "{row}");
+        assert!(
+            row.get("stop_reason").is_none() && row.get("refusal_category").is_none(),
+            "the row carries the words on its attempt alone: {row}"
+        );
+    }
+    assert_eq!(
+        (
+            refused[0]["attempts"][0]["response"]["refusal_category"].clone(),
+            refused[1]["attempts"][0]["response"]["refusal_category"].clone(),
+        ),
+        (
+            serde_json::Value::Null,
+            serde_json::json!("harmful_request")
+        ),
+        "each kept row's serving attempt answers the category it stored"
+    );
+    assert_eq!(
+        ids(&listed("refusal_categories=-").await),
+        ["r-unserved", "r-ended", "r-bare"],
+        "`-` keeps every request whose serving attempt names no category, and the one no attempt served"
+    );
+    assert_eq!(
+        ids(&listed("stop_reasons=refusal&refusal_categories=-").await),
+        ["r-bare"],
+        "the two filters conjoin, so `-` beside the refusal stop keeps the refusal that named no category"
+    );
+}
+
 #[tokio::test]
 async fn a_confirm_on_a_slot_sealed_under_another_key_answers_409_naming_the_account() {
     use common::{get, json, login, post};

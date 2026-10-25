@@ -115,6 +115,13 @@ map, in pages, resumed after a stopped start, and an hour whose rows the retenti
 counts. With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
 `stats.rollup_retention_days` keeps, so a refusal in an hour the rollup purge removed writes no row into it.
 
+An upstream's refusal is a served request: the serving attempt records the answer's `stop_reason` `refusal` with the
+`refusal_category` and the recommended model its `stop_details` named, the request's outcome stays `succeeded`, and the
+figures count it as any served request. `GET /admin/requests` filters on `stop_reasons` and `refusal_categories`, each
+read off the serving attempt with `-` for a request whose serving attempt carries none or that no attempt served, and
+`GET /admin/analytics/refusal_categories` counts the refused requests in range per category, `-` for a refusal with
+none, read off the attempts at the request.
+
 ## Quota samples
 
 Quota samples arrive from two sources. Every response head from an OAuth account carries the unified rate-limit

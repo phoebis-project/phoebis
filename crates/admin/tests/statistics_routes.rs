@@ -2343,6 +2343,125 @@ async fn the_reconciliations_route_lists_the_trailing_thirty_days_under_the_acco
 }
 
 #[tokio::test]
+async fn the_refusal_count_route_answers_the_range_and_its_categories_under_the_account_filter() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let (harmful, topic) = (Some("harmful_request"), Some("restricted_topic"));
+    for (id, at, account, stop_reason, category) in [
+        ("h1", now - 5 * HOUR, "business", "refusal", harmful),
+        ("h2", now - 4 * HOUR, "business", "refusal", harmful),
+        ("t1", now - 3 * HOUR, "business", "refusal", topic),
+        ("n1", now - 2 * HOUR, "business", "refusal", None),
+        ("t2", now - HOUR, "other", "refusal", topic),
+        // Left out: an answer of another stop reason, and a refusal older than the default range.
+        ("e1", now - HOUR, "business", "end_turn", None),
+        ("old", now - DAY - HOUR, "business", "refusal", harmful),
+    ] {
+        let Record::Request {
+            request,
+            mut attempts,
+            bodies,
+        } = record(id, at, "claude-sonnet-5", "s1")
+        else {
+            unreachable!("record writes a request")
+        };
+        attempts[0].account_id = account.into();
+        attempts[0].stop_reason = Some(stop_reason.into());
+        attempts[0].refusal_category = category.map(String::from);
+        parts.ledger.record(Record::Request {
+            request,
+            attempts,
+            bodies,
+        });
+    }
+    wait_json(
+        &parts.app,
+        &format!("/admin/requests?from={}", now - 2 * DAY),
+        &cookie,
+        |v| v["requests"].as_array().is_some_and(|rows| rows.len() == 7),
+    )
+    .await;
+    let read = |query: String| {
+        let app = parts.app.clone();
+        let cookie = cookie.clone();
+        async move {
+            json(
+                get(
+                    &app,
+                    &format!("/admin/analytics/refusal_categories{query}"),
+                    Some(&cookie),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    let rows = |body: &serde_json::Value| -> Vec<(String, u64)> {
+        body["rows"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a list of rows: {body}"))
+            .iter()
+            .map(|r| {
+                (
+                    r["category"].as_str().unwrap().to_string(),
+                    r["requests"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let pairs = |rows: &[(&str, u64)]| -> Vec<(String, u64)> {
+        rows.iter().map(|(c, n)| (c.to_string(), *n)).collect()
+    };
+    let every = read(String::new()).await;
+    assert_eq!(keys_in_order(&every), ["from", "to", "rows"], "{every}");
+    assert_eq!(
+        (every["from"].as_i64(), every["to"].as_i64()),
+        (Some(now - DAY), Some(now)),
+        "the default range is the trailing 24 hours"
+    );
+    assert_eq!(
+        rows(&every),
+        pairs(&[("harmful_request", 2), ("restricted_topic", 2), ("-", 1)]),
+        "the largest count first and the category among equals, the other stop and the older refusal left out"
+    );
+    assert_eq!(
+        every["rows"][0],
+        serde_json::json!({"category": "harmful_request", "requests": 2}),
+        "a row is its category and its count"
+    );
+    let business = read("?range=24h&accounts=business".into()).await;
+    assert_eq!(
+        rows(&business),
+        pairs(&[("harmful_request", 2), ("-", 1), ("restricted_topic", 1)]),
+        "the account filter keeps the refusals its accounts served"
+    );
+    let wider = read(format!("?range={},{now}&accounts=business", now - 2 * DAY)).await;
+    assert_eq!(
+        (wider["from"].as_i64(), wider["to"].as_i64()),
+        (Some(now - 2 * DAY), Some(now)),
+        "a custom range answers its own bounds"
+    );
+    assert_eq!(
+        rows(&wider),
+        pairs(&[("harmful_request", 3), ("-", 1), ("restricted_topic", 1)]),
+        "the wider range takes the older refusal in"
+    );
+    let bad = get(
+        &parts.app,
+        "/admin/analytics/refusal_categories?range=2d",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(bad.status(), 400);
+    assert_eq!(
+        json(bad).await["error"],
+        "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"
+    );
+}
+
+#[tokio::test]
 async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

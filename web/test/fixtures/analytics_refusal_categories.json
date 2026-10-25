@@ -1,0 +1,17 @@
+{
+  "route": "GET /admin/analytics/refusal_categories?range=24h",
+  "body": {
+    "from": 1791634600000,
+    "to": 1791721000000,
+    "rows": [
+      {
+        "category": "harmful_request",
+        "requests": 2
+      },
+      {
+        "category": "restricted_topic",
+        "requests": 1
+      }
+    ]
+  }
+}

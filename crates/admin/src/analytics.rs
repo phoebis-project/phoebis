@@ -12,7 +12,7 @@ use phoebis_ledger::{
     hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
     parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
     session_burn_series, AccountRollupRow, FundingFilter, HourlyWindowSample, LedgerError,
-    LiveKeys, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
+    LiveKeys, RequestFilter, RollupFilter, SeriesFilter, SharePricing, GROUP_BYS,
 };
 use phoebis_routing::{term, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, SubscriptionTerm};
@@ -243,6 +243,28 @@ pub(crate) struct BurnQuery {
 pub(crate) struct ReconciliationsQuery {
     /// A comma-separated list. Absent answers every account's windows.
     pub accounts: Option<String>,
+}
+
+/// `GET /admin/analytics/refusal_categories`' query.
+// Declared for the document alone, since the handler reads the request by hand.
+#[allow(dead_code)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct RefusalCategoriesQuery {
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
+    pub range: Option<String>,
+    /// A comma-separated list, read as the request log reads `keys`.
+    pub keys: Option<String>,
+    /// A comma-separated list.
+    pub pools: Option<String>,
+    /// A comma-separated list, matching the serving attempt's account as the request log does.
+    pub accounts: Option<String>,
+    /// A comma-separated list.
+    pub models: Option<String>,
+    /// A comma-separated list.
+    pub kinds: Option<String>,
+    /// `true`/`1`.
+    pub include_probes: Option<bool>,
 }
 
 pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
@@ -1079,6 +1101,72 @@ pub(crate) async fn reconciliations(
     .into_response()
 }
 
+/// The requests in range whose serving attempt the upstream answered with the stop reason `refusal`, counted per
+/// category, the largest count first and then the category.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RefusalCategories {
+    pub from: i64,
+    pub to: i64,
+    pub rows: Vec<RefusalCategoryRow>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RefusalCategoryRow {
+    /// The category the upstream's `stop_details` named, `-` for a refusal with none.
+    #[schema(example = "-")]
+    pub category: String,
+    pub requests: u64,
+}
+
+/// Read the refused requests per category.
+#[utoipa::path(
+    get,
+    path = "/admin/analytics/refusal_categories",
+    operation_id = "analytics_refusal_categories",
+    tag = "Analytics",
+    params(RefusalCategoriesQuery),
+    responses(
+        (status = 200, description = "The rows over the range.", body = RefusalCategories),
+        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 500, response = LedgerFailure),
+    ),
+)]
+pub(crate) async fn refusal_categories(
+    State(state): State<Arc<AdminState>>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let (from, to) = match parse_range(q.get("range").map(String::as_str), (state.clock)()) {
+        Ok(r) => r,
+        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+    };
+    let filter = RequestFilter {
+        keys: list(&q, "keys"),
+        pools: list(&q, "pools"),
+        accounts: list(&q, "accounts"),
+        models: list(&q, "models"),
+        kinds: list(&q, "kinds"),
+        include_probes: flag(&q, "include_probes"),
+        ..Default::default()
+    };
+    let live = LiveKeys::from_snapshot(&state.router.snapshot());
+    let rows = match state
+        .ledger
+        .db()
+        .read(move |c| phoebis_ledger::refusal_categories(c, &filter, &live, from, to))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return ledger_failure(e),
+    };
+    let rows = rows
+        .into_iter()
+        .map(|(category, requests)| RefusalCategoryRow { category, requests })
+        .collect();
+    Json(RefusalCategories { from, to, rows }).into_response()
+}
+
 /// The rewrite tokens per bucket, the moves over the range and the slow-down's held time per bucket.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -1261,8 +1349,8 @@ pub(crate) async fn guardrails(
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalyticsAccounts, Budgets, Burn, GuardrailCounts, Placements, Reconciliations, Rewrites,
-        WindowSample,
+        AnalyticsAccounts, Budgets, Burn, GuardrailCounts, Placements, Reconciliations,
+        RefusalCategories, Rewrites, WindowSample,
     };
     use crate::openapi::round_trip::{fixture, round_trips};
     use crate::openapi::{BreakdownRow, SeriesPointView};
@@ -1303,6 +1391,7 @@ mod tests {
         round_trips::<GuardrailCounts>("analytics_guardrails");
         round_trips::<Placements>("analytics_placements");
         round_trips::<Reconciliations>("analytics_reconciliations");
+        round_trips::<RefusalCategories>("analytics_refusal_categories");
         round_trips::<Rewrites>("analytics_rewrites");
         for stem in ["analytics_series", "analytics_series_accounts"] {
             round_trips::<SeriesTwin>(stem);

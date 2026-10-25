@@ -879,6 +879,7 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("analytics_guardrails", "200"),
     fixture!("analytics_placements", "200"),
     fixture!("analytics_reconciliations", "200"),
+    fixture!("analytics_refusal_categories", "200"),
     fixture!("analytics_rewrites", "200"),
     fixture!("analytics_series", "200"),
     fixture!("analytics_series_accounts", "200"),

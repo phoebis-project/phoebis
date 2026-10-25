@@ -153,6 +153,11 @@ pub struct RequestFilter {
     pub classifiers: Vec<String>,
     /// Keep the requests a listed guardrail matched, `-` the requests no guardrail matched.
     pub guardrails: Vec<String>,
+    /// Keep the requests whose serving attempt, the last one, answered a stop reason in the list, `-` a request whose
+    /// serving attempt carries none or that no attempt served.
+    pub stop_reasons: Vec<String>,
+    /// Keep the requests whose serving attempt answered a refusal category in the list, `-` as for `stop_reasons`.
+    pub refusal_categories: Vec<String>,
 }
 
 fn in_list(
@@ -378,6 +383,20 @@ fn filter_clauses(filter: &RequestFilter, live: &LiveKeys) -> (Vec<Box<dyn ToSql
             "(SELECT a.cache_miss_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1) IN ({marks})"
         ));
     }
+    // The serving attempt is the last, as for the accounts. A NULL matches no list, so a serving attempt that names no
+    // word, or a request no attempt served, reads as `-`.
+    if !filter.stop_reasons.is_empty() {
+        let marks = bind_all(&filter.stop_reasons, &mut args);
+        clauses.push(format!(
+            "COALESCE((SELECT a.stop_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), '-') IN ({marks})"
+        ));
+    }
+    if !filter.refusal_categories.is_empty() {
+        let marks = bind_all(&filter.refusal_categories, &mut args);
+        clauses.push(format!(
+            "COALESCE((SELECT a.refusal_category FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), '-') IN ({marks})"
+        ));
+    }
     if !filter.efforts.is_empty() {
         let marks = bind_all(&filter.efforts, &mut args);
         clauses.push(format!(
@@ -584,6 +603,38 @@ pub fn list_request_page(
         next,
         landed_through,
     })
+}
+
+/// The requests in `[from, to]` under `filter` whose serving attempt's `stop_reason` is `refusal`, counted per
+/// category (`-` for a refusal with none), the largest count first and then the category. Read off the attempts at the
+/// request, since no rollup carries the category.
+pub fn refusal_categories(
+    conn: &Connection,
+    filter: &RequestFilter,
+    live: &LiveKeys,
+    from: i64,
+    to: i64,
+) -> Result<Vec<(String, u64)>, LedgerError> {
+    let filter = RequestFilter {
+        from: Some(from),
+        to: Some(to),
+        ..filter.clone()
+    };
+    let (args, mut clauses) = filter_clauses(&filter, live);
+    clauses.push(
+        "(SELECT a.stop_reason FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1) = 'refusal'"
+            .into(),
+    );
+    let sql = format!(
+        "SELECT COALESCE((SELECT a.refusal_category FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), '-') AS category, \
+         COUNT(*) AS requests FROM requests WHERE {} GROUP BY category ORDER BY requests DESC, category",
+        clauses.join(" AND ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// The same three queries `LedgerDb::request` runs, over a connection the caller already holds.

@@ -2256,6 +2256,137 @@ fn the_cache_miss_reason_filter_reads_the_serving_attempt_alone_and_passes_any_n
     );
 }
 
+/// Writes request `id`, served by one attempt on `served`'s `(account, stop_reason, refusal_category)` after a 429 on
+/// `a` where `retried` is set, or by no attempt where `served` is `None`.
+fn plant_stops(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    retried: bool,
+    served: Option<(&str, &str, Option<&str>)>,
+) {
+    let mut attempts = Vec::new();
+    if let Some((account, stop_reason, category)) = served {
+        if retried {
+            attempts.push(AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                upstream_status: Some(429),
+                outcome: "rate_limited".into(),
+                ..Default::default()
+            });
+        }
+        attempts.push(AttemptRecord {
+            request_id: id.into(),
+            attempt: attempts.len() as u32 + 1,
+            account_id: account.into(),
+            account_kind: "oauth".into(),
+            upstream_status: Some(200),
+            outcome: "succeeded".into(),
+            stop_reason: Some(stop_reason.into()),
+            refusal_category: category.map(String::from),
+            ..Default::default()
+        });
+    }
+    let request = RequestRecord {
+        id: id.into(),
+        received_at,
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: if attempts.is_empty() {
+            "exhausted"
+        } else {
+            "succeeded"
+        }
+        .into(),
+        attempts: attempts.len() as u32,
+        ..Default::default()
+    };
+    db.insert_request(&request, &attempts, None).unwrap();
+}
+
+#[test]
+fn the_stop_reason_and_refusal_category_filters_read_the_serving_attempt_and_dash_a_request_without_one(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_stops(
+        &db,
+        "harm-a",
+        5,
+        false,
+        Some(("a", "refusal", Some("harmful_request"))),
+    );
+    // The 429 on `a` ahead of the serving attempt on `b` carries no stop reason, so a read of any attempt but the last
+    // would list this request under `-` and under the account `a`.
+    plant_stops(
+        &db,
+        "harm-b",
+        4,
+        true,
+        Some(("b", "refusal", Some("harmful_request"))),
+    );
+    plant_stops(&db, "bare", 3, false, Some(("a", "refusal", None)));
+    plant_stops(&db, "ended", 2, false, Some(("a", "end_turn", None)));
+    plant_stops(&db, "unserved", 1, false, None);
+    let listed = |stop_reasons: &[&str], refusal_categories: &[&str], accounts: &[&str]| {
+        let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect();
+        listed_ids(
+            &db,
+            &RequestFilter {
+                stop_reasons: words(stop_reasons),
+                refusal_categories: words(refusal_categories),
+                accounts: words(accounts),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(
+        listed(&[], &["harmful_request"], &[]),
+        ["harm-a", "harm-b"],
+        "the category keeps the refusals that named it"
+    );
+    assert_eq!(
+        listed(&[], &["-"], &[]),
+        ["bare", "ended", "unserved"],
+        "`-` keeps every request whose serving attempt names no category, and the one no attempt served"
+    );
+    assert_eq!(
+        listed(&["refusal"], &["-"], &[]),
+        ["bare"],
+        "with the refusal stop, `-` keeps the refusal that named no category"
+    );
+    assert_eq!(listed(&["end_turn"], &[], &[]), ["ended"]);
+    assert_eq!(
+        listed(&["refusal"], &[], &[]),
+        ["harm-a", "harm-b", "bare"],
+        "the refusal stop keeps every refusal, a category or none"
+    );
+    assert_eq!(
+        listed(&["-"], &[], &[]),
+        ["unserved"],
+        "`-` keeps the request no attempt served, and the earlier 429 is no serving attempt"
+    );
+    assert_eq!(
+        listed(&[], &["harmful_request"], &["a"]),
+        ["harm-a"],
+        "the account filter narrows the category to the account that served the refusal"
+    );
+    assert_eq!(
+        listed(&["refusal"], &[], &["a"]),
+        ["harm-a", "bare"],
+        "the account filter narrows the refusal stop the same way"
+    );
+    assert_eq!(
+        listed(&[], &[], &[]),
+        ["harm-a", "harm-b", "bare", "ended", "unserved"],
+        "empty lists narrow nothing"
+    );
+}
+
 /// A row's own `landed_at`, as the ledger wrote it.
 fn landed_at(db: &LedgerDb, id: &str) -> Option<i64> {
     db.read_blocking(|c| {
