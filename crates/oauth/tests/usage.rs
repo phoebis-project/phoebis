@@ -168,8 +168,8 @@ fn a_null_alias_key_without_limits_yields_no_fable_window() {
 mod service {
     use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
     use phoebis_oauth::{
-        Clock, CredentialManager, PollFault, PollIssue, PollOutcome, Refused, UsageError,
-        UsageService,
+        BackoffEdge, Clock, CredentialManager, PollFault, PollIssue, PollOutcome, Refused,
+        UsageError, UsageService,
     };
     use phoebis_profile::{
         claude_code_2_1_269_linux_x64,
@@ -185,7 +185,7 @@ mod service {
     };
     use std::sync::{
         atomic::{AtomicI64, Ordering},
-        Arc,
+        Arc, Mutex,
     };
     use std::time::Duration;
 
@@ -709,6 +709,53 @@ mod service {
         );
         assert_eq!(service.held_for("a"), None);
         assert_eq!(usage_requests(&up), 5);
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_plan_ended_pause_closes_an_open_backoff_run_and_fires_its_end() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![rate_limited_bare()]).await;
+        let service = service_for(&up, store_with_bundle_until(1_000_000 + 86_400_000), &now);
+
+        service.poll("a").await.unwrap();
+        now.store(1_120_000, Ordering::SeqCst);
+        service.poll("a").await.unwrap();
+        let edges = Arc::new(Mutex::new(Vec::new()));
+        service.set_on_backoff(Arc::new({
+            let edges = edges.clone();
+            move |edge: BackoffEdge| edges.lock().unwrap().push(edge)
+        }));
+        now.store(1_200_000, Ordering::SeqCst);
+        service.plan_ended("a");
+        let status = service.poll_status("a").unwrap();
+        assert_eq!(
+            (
+                status.backoff_since,
+                status.rate_limited_in_a_row,
+                status.last_error.as_deref()
+            ),
+            (None, 0, Some("plan ended")),
+            "the pause closes the run and names itself"
+        );
+        assert_eq!(
+            *edges.lock().unwrap(),
+            [BackoffEdge::Ended {
+                account_id: "a".into(),
+                at: 1_200_000,
+                since: 1_000_000,
+                attempts: 2,
+                resumed_at: 1_200_000,
+            }],
+            "the run's end reaches the hook, from its first 429 to the pause"
+        );
+
+        service.plan_ended("a");
+        assert_eq!(
+            edges.lock().unwrap().len(),
+            1,
+            "a flagged account with no open run fires no edge"
+        );
         up.shutdown().await;
     }
 

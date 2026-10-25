@@ -2223,7 +2223,8 @@ pub(crate) struct Account {
     pub subscription: Option<AccountSubscription>,
     /// The account's quota windows: the router's reported sample first and the ledger's samples of the last day for
     /// the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and for an `oauth`
-    /// account in the `disconnected` or `reauth_required` state, whose last reading the view no longer answers.
+    /// account in the `disconnected` or `reauth_required` state or flagged `plan_ended_at`, whose last reading the view
+    /// no longer answers.
     pub windows: Vec<AccountWindow>,
     /// The account's slow-down entry in force as the router reads it, null on an api_key account, an untiered account
     /// or one with no 5-hour reading, an account in no pool, a pool with the slow-down off, and an account no pinned
@@ -2602,14 +2603,15 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             trial_ends_at: s.trial_ends_at,
             ends_at: term.ends_at,
         });
-    // The token manager hands out no token for an `oauth` account in either state, its credential gone or refused, so
-    // neither the poll nor a request reads it until it pairs again: what the router and the ledger still hold is its
-    // last reading, which both paths below would draw as live.
+    // The token manager hands out no token for an `oauth` account in either state, and a flagged account's poll is
+    // paused and its routing reads it as past its end, so neither the poll nor a request reads the account until it
+    // pairs again or a profile read finds a plan: what the router and the ledger still hold is its last reading, which
+    // both paths below would draw as live.
     let windows_withheld = row.kind == AccountKind::Oauth
-        && matches!(
+        && (matches!(
             row.state,
             AccountState::Disconnected | AccountState::ReauthRequired
-        );
+        ) || term.plan_ended_at.is_some());
     // The router holds a reading the moment the poll or a head reports it, while the ledger's row waits on the writer,
     // so a refresh's reading shows as soon as the refresh answers. The ledger's rows fill each plan window the router
     // holds no reading of, and every window of an api_key account.

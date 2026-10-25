@@ -576,7 +576,7 @@ windows rather than the events, so a restart holds it again at the first fold to
 | `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
-| `poll_backoff` | warning | the polled account | a poll answers clean |
+| `poll_backoff` | warning | the polled account | a poll answers clean, or the account is flagged plan ended |
 | `model_unweighted` | warning | the model | a later subscription request on the model is priced at a cost model entry that weighs it, or the router restarts |
 | `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind that ended in the last eight days with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no such window remains |
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
@@ -642,8 +642,9 @@ subject is the pool the record was served under, or `-` for a record without one
 id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names the accounts.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
-thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,
-and how many 429s the endpoint answered in a row.
+thirty minutes, counted from the run's first 429. The condition clears with the account's plan-ended pause as well,
+since the paused poll sends no clean answer. The detail gives when the run started, when the next attempt comes, and how
+many 429s the endpoint answered in a row.
 
 **`model_unweighted`** holds while a model the cost model does not weigh has served plan-funded requests since the
 start, each priced at the weight of the latest weighed model of its model tier and marked estimated wherever its figure

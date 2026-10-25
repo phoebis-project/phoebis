@@ -3544,6 +3544,27 @@ async fn a_reauth_required_oauth_account_answers_no_window_whatever_the_router_a
     }
 }
 
+/// A flagged account stays `ready`, so its poll standing reads whole, `held_until` included, and the flag alone
+/// withholds the windows.
+#[tokio::test]
+async fn a_plan_ended_oauth_account_answers_no_window_while_the_flag_stands_and_its_windows_again_once_it_clears(
+) {
+    let (h, cookie, before) = business_with_both_windows_paths().await;
+    let flagged_at = common::NOW - 60_000;
+    assert!(h.store.set_plan_ended("business", flagged_at).unwrap());
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["windows"], serde_json::json!([]), "{after}");
+        assert_eq!(after["state"], "ready", "{after}");
+        assert_eq!(after["plan_ended_at"], flagged_at, "{after}");
+        assert_eq!(after["fast_lane"], before["fast_lane"], "{after}");
+        assert_eq!(after["usage"], before["usage"], "{after}");
+    }
+    assert!(h.store.clear_plan_ended("business").unwrap());
+    for after in business_as_read_and_listed(&h, &cookie).await {
+        assert_eq!(after["windows"], before["windows"], "{after}");
+    }
+}
+
 #[tokio::test]
 async fn a_ready_oauth_account_answers_the_windows_the_router_and_the_ledger_hold() {
     let (h, cookie, before) = business_with_both_windows_paths().await;

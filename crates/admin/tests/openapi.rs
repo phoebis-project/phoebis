@@ -1339,8 +1339,8 @@ async fn the_attempt_declares_the_serving_accounts_usage_based_class() {
 }
 
 #[tokio::test]
-async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_account_answers_none()
-{
+async fn the_account_windows_doc_says_a_disconnected_reauth_required_or_plan_ended_oauth_account_answers_none(
+) {
     let (_app, _up, document) = document().await;
     let windows = &document["components"]["schemas"]["Account"]["properties"]["windows"];
     // utoipa joins the doc comment's lines with line breaks, which the reference renders as spaces.
@@ -1352,14 +1352,14 @@ async fn the_account_windows_doc_says_a_disconnected_or_reauth_required_oauth_ac
         Some(
             "The account's quota windows: the router's reported sample first and the ledger's samples of the last day \
              for the rest, the ledger's alone for an `api_key` account. Empty for an account with no reading, and \
-             for an `oauth` account in the `disconnected` or `reauth_required` state, whose last reading the view no \
-             longer answers."
+             for an `oauth` account in the `disconnected` or `reauth_required` state or flagged `plan_ended_at`, \
+             whose last reading the view no longer answers."
         ),
         "{windows}"
     );
     assert_eq!(
         windows["type"], "array",
-        "the member stays an array, empty for the two states: {windows}"
+        "the member stays an array, empty for the two states and the flag: {windows}"
     );
 }
 

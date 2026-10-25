@@ -81,8 +81,9 @@ pub struct PollStatus {
 }
 
 /// One edge of an account's usage backoff, fired where the service moves `CachedEntry.backoff_since`: a run starts
-/// on the first 429 of either endpoint (`endpoint` names it) and ends on the next clean usage answer. Called with
-/// the cache lock released, after the entry landed, so a hook may take any lock of its own.
+/// on the first 429 of either endpoint (`endpoint` names it) and ends on the next clean usage answer or at the
+/// account's plan-ended pause. Called with the cache lock released, after the entry landed, so a hook may take any lock
+/// of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackoffEdge {
     Started {
@@ -631,36 +632,54 @@ impl UsageService {
     }
 
     /// Records that the account's profile reports no plan, so the poll sends it no usage request: the standing's last
-    /// error names the pause, and the snapshot keeps the windows it last read.
+    /// error names the pause, and the snapshot keeps the windows it last read. A backoff run open at the pause ends
+    /// with it, its `Ended` edge handed to the hook as a clean answer's is.
     pub fn plan_ended(&self, account_id: &str) {
-        let mut cache = self.inner.cache.lock().expect(LOCK_POISONED);
-        if let Some(entry) = cache.get_mut(account_id) {
-            entry.last_error = Some(PLAN_ENDED.into());
-            return;
-        }
-        // A start reads the profile before any usage request, so the pause has no entry to name it on yet.
         let at = (self.inner.clock)();
-        let identity = self.inner.identity(account_id).unwrap_or_default();
-        cache.insert(
-            account_id.to_string(),
-            CachedEntry {
-                fetched_at: at,
-                identity,
-                not_before: at,
-                snapshot: empty_snapshot(
-                    account_id,
-                    Some(identity.lifecycle_generation),
-                    at,
-                    PLAN_ENDED.into(),
-                ),
-                held_by: USAGE_ENDPOINT,
-                backoff_since: None,
-                last_clean_at: None,
-                last_error: Some(PLAN_ENDED.into()),
-                last_outcome: PollOutcome::Failed,
-                rate_limited_in_a_row: 0,
-            },
-        );
+        let edge = {
+            let mut cache = self.inner.cache.lock().expect(LOCK_POISONED);
+            match cache.get_mut(account_id) {
+                Some(entry) => {
+                    entry.last_error = Some(PLAN_ENDED.into());
+                    // The paused poll sends no usage request, so the clean answer that ends a run never comes: a
+                    // run left open would hold `poll_backoff` and keep the ledger's end row unwritten until a restart.
+                    let edge = entry.backoff_since.take().map(|since| BackoffEdge::Ended {
+                        account_id: account_id.to_string(),
+                        at,
+                        since,
+                        attempts: std::mem::take(&mut entry.rate_limited_in_a_row),
+                        resumed_at: at,
+                    });
+                    self.inner.backoff_hook(edge)
+                }
+                None => {
+                    // A start reads the profile before any usage request, so the pause has no entry to name it on yet.
+                    let identity = self.inner.identity(account_id).unwrap_or_default();
+                    cache.insert(
+                        account_id.to_string(),
+                        CachedEntry {
+                            fetched_at: at,
+                            identity,
+                            not_before: at,
+                            snapshot: empty_snapshot(
+                                account_id,
+                                Some(identity.lifecycle_generation),
+                                at,
+                                PLAN_ENDED.into(),
+                            ),
+                            held_by: USAGE_ENDPOINT,
+                            backoff_since: None,
+                            last_clean_at: None,
+                            last_error: Some(PLAN_ENDED.into()),
+                            last_outcome: PollOutcome::Failed,
+                            rate_limited_in_a_row: 0,
+                        },
+                    );
+                    None
+                }
+            }
+        };
+        announce(edge);
     }
 
     /// Ends the pause `plan_ended` recorded, for a profile that reports a plan again, by clearing its sentence alone.
