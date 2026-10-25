@@ -44,7 +44,8 @@ files were built from, a banner above the top bar reads `The router runs a newer
 it up.` beside a "Reload" button, and it stays in view with the top bar until the page reloads. The time format lives
 under `phoebis.timeFormat` (`24h` by default). The theme, the time format and the unit are browser preferences, which
 the Settings view's Appearance card also sets, and nothing in the shell changes a router setting. On a narrow window a
-menu button opens the sidebar over the view.
+menu button opens the sidebar over the view. At a phone's width the top bar wraps a view title it cannot hold beside its
+controls onto a second line.
 
 The Accounts, Analytics and Pools views load their code on first open. A view that fails to draw tells a bundle that
 changed under the tab ("This page could not load") from an error while drawing ("This page hit an error"), each with its

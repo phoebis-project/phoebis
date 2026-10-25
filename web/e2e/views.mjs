@@ -1084,13 +1084,37 @@ function routingLogCells(kinds) {
 }
 
 /**
+ * The top bar's title and last control for the routing log's phone read. The title's lines are counted by their text
+ * boxes' tops as `topBarFits` counts them, and the last control's right edge is read against the window's width less
+ * the bar's right padding, so a bar that grows past the window fails as well.
+ */
+function phoneTopBar() {
+  const bar = document.querySelector('.topbar');
+  const title = bar?.querySelector('.topbar__title');
+  const last = bar?.querySelector('.topbar__right')?.lastElementChild;
+  if (!bar || !title || !last) return null;
+  const range = document.createRange();
+  range.selectNodeContents(title);
+  const text = range.getBoundingClientRect();
+  const box = bar.getBoundingClientRect();
+  return {
+    box: [Math.round(box.top), Math.round(box.bottom)],
+    edge: [Math.round(last.getBoundingClientRect().right), Math.round(window.innerWidth - parseFloat(getComputedStyle(bar).paddingRight))],
+    lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size,
+    text: [Math.round(text.top), Math.round(text.bottom)],
+    title: title.textContent,
+  };
+}
+
+/**
  * The routing log's columns at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800: the chevron 24 px, Kind 166,
  * Session 70, By 152, Fact 189 and Link 64 at every width, Account 178 under 1420 px and 146 from it, Model 192 from
  * 1420 px alone, and Time, the fill, the rest. On the three wide viewports the table is as wide as its card with
  * nothing to scroll sideways and Time takes the card less the other columns within 1 px: 147 px at 1280 and 1440, and
  * at 1920 the room for each request id under the time, which no line there cuts. At 375 the table keeps its 990 px
  * minimum, Time 147 px, and scrolls inside its wrap, the page as wide as its table card and the document as wide as the
- * window. Each column from Time to Link holds its longest cell (`routingLogCells`), with no slack, so a column narrower
+ * window, and the top bar draws its title on at most two lines inside the bar and its last control inside its padding.
+ * Each column from Time to Link holds its longest cell (`routingLogCells`), with no slack, so a column narrower
  * than it fails, Account aside: it cuts a line past its width by design, and it fails under the longest account id with
  * its padding. A line cut on purpose (the request link under the time, the agent line under the session, an Account
  * line past the column) that does not end behind an ellipsis fails. From 1420 px the model stands in its own column
@@ -1133,7 +1157,8 @@ async function routingLogColumns(theme) {
           measurements.push(`${theme} /routing-log columns ${under}skipped: the seed draws no row older than a day (${got.rows} rows under 7d)`);
           break;
         }
-        measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify({ ...got, dated: time.dated.length, split: time.split })}`);
+        const bar = width < 900 ? await page.evaluate(phoneTopBar) : undefined;
+        measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify({ ...got, bar, dated: time.dated.length, split: time.split })}`);
         if (mock && got.rows === 0) say(`${where} no rows to measure`);
         if (under !== '' && time.dated.length === 0) say(`${where} no Time cell prints its date, so the dated form is not measured`);
         if (got.fact !== fact) say(`${where} the Fact column is ${got.fact}px, not ${fact}px`);
@@ -1151,6 +1176,11 @@ async function routingLogColumns(theme) {
           if (got.scroll <= got.client) say(`${where} the table takes ${got.table}px of its ${got.client}px wrap without scrolling inside it`);
           if (got.document.scroll > got.document.inner) say(`${where} the document needs ${got.document.scroll}px of the ${got.document.inner}px window, so it scrolls sideways`);
           for (const what of compare(got.page === null ? null : { width: Math.round(got.page) }, got.card === null ? null : { width: Math.round(got.card) }, ['width'], `${where} the page against its table card`)) say(what);
+          if (bar === null) say(`${where} the top bar misses its title or its right group`);
+          else {
+            if (bar.lines > 2 || bar.text[0] < bar.box[0] || bar.text[1] > bar.box[1]) say(`${where} the top bar's title ${JSON.stringify(bar.title)} draws over ${bar.lines} lines from ${bar.text[0]} to ${bar.text[1]} px in the bar's ${bar.box[0]} to ${bar.box[1]} px`);
+            if (bar.edge[0] > bar.edge[1]) say(`${where} the top bar's last control ends at ${bar.edge[0]}, past its padding at ${bar.edge[1]}`);
+          }
         } else {
           if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
           if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
@@ -4716,7 +4746,7 @@ async function burnGridFour(theme) {
       const grid = document.querySelector('.burn-grid');
       if (!grid) return null;
       const box = (c) => ({ left: Math.round(c.getBoundingClientRect().left), title: c.querySelector('.card__title')?.textContent?.trim() ?? '', top: Math.round(c.getBoundingClientRect().top), width: Math.round(c.getBoundingClientRect().width) });
-      return { cards: [...grid.children].map(box), row: Math.round(grid.getBoundingClientRect().width) };
+      return { cards: [...grid.children].map(box), gap: parseFloat(getComputedStyle(grid).columnGap), row: Math.round(grid.getBoundingClientRect().width) };
     });
     measurements.push(`${theme} /analytics burn grid at 1440 by 900 ${JSON.stringify(read)}`);
     if (read === null) {
@@ -4729,7 +4759,7 @@ async function burnGridFour(theme) {
     }
     const rows = Object.values(Object.groupBy(read.cards, (c) => c.top));
     if (rows.length !== 2 || rows.some((r) => r.length !== 2)) say(`the four cards sit ${rows.map((r) => r.length).join(', ')} to a row, not two per row`);
-    const half = { width: Math.round((read.row - 18) / 2) };
+    const half = { width: Math.round((read.row - read.gap) / 2) };
     for (const c of read.cards) {
       for (const what of compare({ width: c.width }, half, ['width'], `${c.title} against half the ${read.row}px row less half the gap`)) say(what);
       if (Math.abs(c.width - read.row) <= 1) say(`${c.title} spans the ${read.row}px row`);

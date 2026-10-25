@@ -34,11 +34,11 @@ one top), the sidebar's Expert view row above the version line, the routing log'
 Account 178 px under 1420 px and 146 px from it, Model at 192 px from 1420 px alone with the model beneath the account
 under it, and Time the fill: on the three wide viewports the table its card's width with nothing to scroll sideways and
 Time the card less the other columns, 147 px at 1280 and 1440, with no request link under a time cut at 1920, and at 375
-the table at its 990 px minimum scrolling inside its wrap with the page's width the window's and its table card's, each
-column as wide as its longest cell with no slack, the morning dated time under the 12-hour setting among Time's, a line
-cut on purpose behind an ellipsis, and again under the 7-day range on the state changes with each dated Time cell on one
-line), an account edit's Account cell under the 24-hour range on the registry and state changes (the link the cell reads
-off the change's
+the table at its 990 px minimum scrolling inside its wrap with the page's width the window's and its table card's, the
+top bar's title on at most two lines inside the bar and its last control inside its padding, each column as wide as its
+longest cell with no slack, the morning dated time under the 12-hour setting among Time's, a line cut on purpose behind
+an ellipsis, and again under the 7-day range on the state changes with each dated Time cell on one line), an account
+edit's Account cell under the 24-hour range on the registry and state changes (the link the cell reads off the change's
 target, against the account link of a state change in type, ink, height, left edge and top, and against the pool's and
 the key's links of the other registry rows in all but their left edge, which their muted word moves), a cleared window's
 By chip under the 7-day range on the cleared and spent windows (against a spent window's chip in type, ink, height,
