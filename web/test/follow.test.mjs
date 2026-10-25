@@ -319,6 +319,20 @@ test("a preset range's poll with no next cursor leaves a late row below the last
   assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'row 26 stays for Next');
 });
 
+test("a custom range's poll over a stale list with no next cursor leaves a late row below the last row shown to Next", async () => {
+  // After the first poll the list answers another query, one with no next cursor, while this query's own list holds
+  // one. That cursor is the other query's, so it hands the poll no landing.
+  const clock = frozen();
+  const { read, rows } = lateBelow();
+  const f = follow({ fixedEnd: true, list: { nextCursor: '26', rows: rows.slice(1, 26) }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  f.render({ list: { nextCursor: null, rows: rows.slice(1, 26) }, stale: true });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.slice(0, 26).map(byId), []], 'row 26 stays for Next');
+});
+
 test('no read while the tab is hidden, and one at once on its return after a full interval', async () => {
   const clock = frozen();
   const f = follow();

@@ -58,9 +58,9 @@ export function useFollow<R>(input: {
   const overrun = following?.overrun ?? null;
   const standIn = following?.standIn ?? null;
   // The poll outlives renders, so it reads the current address, rows and reader through a ref.
-  const latest = useRef({ address, compare, failed: error !== null, fixedEnd, identity, list, mark, overrun, read, shown, standIn });
+  const latest = useRef({ address, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn });
   useLayoutEffect(() => {
-    latest.current = { address, compare, failed: error !== null, fixedEnd, identity, list, mark, overrun, read, shown, standIn };
+    latest.current = { address, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn };
   });
   // A failing streak toasts once: the polls that continue it run quiet, and the one that ends it takes the streak's
   // notice down, as `useAsync`'s refresh does.
