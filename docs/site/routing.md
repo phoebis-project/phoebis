@@ -313,8 +313,9 @@ answers every request over a channel, so two concurrent first requests of the sa
 accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
 One read comes ahead of a live pin's renewal, the moves and the strategy: a body carrying a fallback credit token the
-relay remembers is placed on the account that issued it, where that account is eligible and under its cap, and the
-record's `pin` step reads `match` with the fact `credit` naming it ([The relay](relay.md#admission)).
+relay remembers is placed on the account that issued it, where that account is eligible and under its cap, or already
+holds the session's live pin, and the record's `pin` step reads `match` with the fact `credit` naming it ([The
+relay](relay.md#admission)).
 
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
 holds wins first, for a main conversation and a subagent alike. Both rungs read entries of the request's own cache lane

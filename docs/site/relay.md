@@ -69,11 +69,11 @@ whose own refusals are on [When nothing can serve](routing.md#when-nothing-can-s
 
 A refusal's answer can carry a fallback credit token in its `stop_details`, which the client sends at the top of its
 next body. The router keeps the issuing account for that token in memory for an hour, as a digest and nothing of the
-token itself, and places the next body carrying it on that account where the account is eligible and under its cap,
-ahead of a live pin's renewal, the moves and the pool's strategy. The router assumes the credit applies on the issuing
-account, which is what the upstream's `400` on another organization says. Nothing of the token reaches a log line, a
-decision record or a request row, a body capture keeping it as it keeps every other byte of the body, and the body goes
-upstream as the client sent it.
+token itself, and places the next body carrying it on that account where the account is eligible and under its cap, or
+already holds the session's live pin, ahead of a live pin's renewal, the moves and the pool's strategy. The router
+assumes the credit applies on the issuing account, which is what the upstream's `400` on another organization says.
+Nothing of the token reaches a log line, a decision record or a request row, a body capture keeping it as it keeps every
+other byte of the body, and the body goes upstream as the client sent it.
 
 ## The body edits
 

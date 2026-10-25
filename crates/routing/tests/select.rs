@@ -1150,7 +1150,27 @@ fn credit_reason() -> FactValue {
 
 #[test]
 fn a_body_carrying_a_known_credit_token_lands_on_the_issuing_account_ahead_of_pace() {
-    let (s, mut st) = credit_pool();
+    let (_, mut st) = credit_pool();
+    // b ten minutes from its end, inside the default thirty-minute wind-down, so the `no_fit` partition passes it over
+    // and the account the credit lands on carries a partition's label.
+    let s = snapshot_with_terms(
+        Pool {
+            strategy: Strategy::Pace,
+            members: vec![("a", 0), ("b", 0)],
+            ..Pool::default()
+        },
+        vec![SubscriptionTerm {
+            account_id: "b".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            canceled: true,
+            ends_at: Some(1_000 + 10 * MINUTE),
+            tier: None,
+            usage_based: false,
+            plan: None,
+            plan_ended_at: None,
+        }],
+    );
     let fresh = request(&s, None, CREDIT_MODEL, true, &[], 1_000);
     assert_eq!(
         picked(&select(&mut st, &s, &fresh, &mut rng()).0),
@@ -1208,6 +1228,12 @@ fn a_body_carrying_a_known_credit_token_lands_on_the_issuing_account_ahead_of_pa
         Some(&credit_reason()),
         "the summary names the credit as what placed the request"
     );
+    assert_eq!(candidate(&d.record, "b").partition, Some("no_fit"));
+    assert_eq!(
+        sel.trace.skipped,
+        Vec::new(),
+        "the credit placed the request on b, so the trace does not also pass b over"
+    );
 }
 
 #[test]
@@ -1255,15 +1281,29 @@ fn a_credit_token_naming_an_account_that_does_not_take_the_model_leaves_the_walk
 
 #[test]
 fn a_credit_token_hands_a_live_pin_on_another_account_to_the_issuing_account() {
-    let (s, mut st) = credit_pool();
-    let opening = request(&s, Some("s-handed"), CREDIT_MODEL, true, &[], 1_000);
-    assert_eq!(picked(&select(&mut st, &s, &opening, &mut rng()).0), "a");
-    let req = credited(
-        request(&s, Some("s-handed"), CREDIT_MODEL, true, &[], 2_000),
-        "b",
-        1,
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0), ("c", 0)],
+        ..Pool::default()
+    });
+    let old = seeded_pin("s-handed", "a", T);
+    // a's 5-hour window spent, so the spent rule moves the pin off a, and Pace ranks c, the emptier sibling, ahead of
+    // the issuer among the rule's destinations.
+    let state = || {
+        let mut st = loaded(vec![old.clone()]);
+        st.record_sample("a", sample(1.0, 0.1, T - 500));
+        st.record_sample("b", sample(0.5, 0.5, T - 500));
+        st.record_sample("c", sample(0.2, 0.2, T - 500));
+        st
+    };
+    let req = request(&s, Some("s-handed"), CREDIT_MODEL, true, &[], T + 1_000);
+    assert_eq!(
+        landed(select(&mut state(), &s, &req, &mut rng()).0),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "without the token the spent rule fires"
     );
-    let d = decide(&mut st, &s, &req, &mut rng());
+    let mut st = state();
+    let d = decide(&mut st, &s, &credited(req, "b", 1), &mut rng());
     let SelectResult::Selected(sel) = &d.result else {
         panic!("expected a selection, got {:?}", d.result)
     };
@@ -1293,7 +1333,12 @@ fn a_credit_token_hands_a_live_pin_on_another_account_to_the_issuing_account() {
         "the row on a leaves as a move's source does: {:?}",
         d.writes
     );
-    assert_eq!(pinned(&st, "s-handed").account_id, "b");
+    let handed = pinned(&st, "s-handed");
+    assert_eq!(handed.account_id, "b");
+    assert_eq!(
+        handed.last_input_tokens, old.last_input_tokens,
+        "the new row carries the last prompt over, as a fired move's does"
+    );
     assert_eq!(
         d.record.outcome.pin_written.as_ref().map(|p| p.action),
         Some("created")
@@ -1337,6 +1382,11 @@ fn a_credit_token_naming_the_live_pins_account_renews_the_pin_with_the_moves_not
         "a",
         "the strategy favors a"
     );
+    // b at its cap, which the credited renewal reads no more than any renewal does.
+    let cap = s.pool("p").unwrap().failover.in_flight_cap;
+    let _held: Vec<_> = (0..cap)
+        .map(|_| st.in_flight().dispatched("b", 1_500))
+        .collect();
     let req = credited(
         request(&s, Some("s-renewed"), CREDIT_MODEL, true, &[], 2_000),
         "b",

@@ -85,6 +85,29 @@ fn refusal_held_open(token: &str) -> Respond {
     }
 }
 
+/// A refusal answered whole as one JSON document, its details carrying the fallback credit token `token`.
+fn refusal_answer(token: &str) -> Respond {
+    let answer = serde_json::json!({
+        "id": "msg_refused",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_sequence": null,
+        "stop_details": {
+            "type": "refusal",
+            "category": "harmful_request",
+            "fallback_credit_token": token,
+        },
+        "usage": {"input_tokens": 1, "output_tokens": 0},
+    });
+    Respond::Json {
+        status: 200,
+        headers: vec![("content-type".into(), "application/json".into())],
+        body: serde_json::to_vec(&answer).expect("a Value always encodes"),
+    }
+}
+
 /// A rate limit `a` answers once, which fails the first turn over to `b` and cools `a` for its one second.
 fn rate_limited() -> Respond {
     Respond::Json {
@@ -185,6 +208,19 @@ fn credit_of(record: &DecisionRecord) -> (&str, Option<&FactValue>) {
     )
 }
 
+/// `account`'s `standing` fact on the walk's `eligible` line.
+fn standing_of<'a>(record: &'a DecisionRecord, account: &str) -> Option<&'a FactValue> {
+    record
+        .walk
+        .iter()
+        .find(|w| w.step == "eligible")
+        .expect("every walk records its eligible set")
+        .facts
+        .iter()
+        .find(|f| f.key == "standing" && f.account_id.as_deref() == Some(account))
+        .map(|f| &f.value)
+}
+
 fn step_past_the_cooldown(h: &Harness) {
     h.clock.fetch_add(PAST_THE_COOLDOWN_MS, Ordering::SeqCst);
 }
@@ -257,6 +293,29 @@ async fn the_next_body_carrying_a_refusals_credit_token_lands_on_the_issuer_whil
 }
 
 #[tokio::test]
+async fn the_next_body_carrying_a_json_refusals_credit_token_lands_on_the_issuer() {
+    let up = upstream(refusal_answer(TOKEN)).await;
+    let h = harness(&up, &accounts(), pool()).await;
+    let mut decisions = h.router.subscribe_events();
+    assert_eq!(
+        served(&h, turn(&fresh_session(), None)).await.0,
+        "b",
+        "the rate limit failed the turn over to b"
+    );
+    step_past_the_cooldown(&h);
+    let (account, request_id) = served(&h, turn(&fresh_session(), Some(TOKEN))).await;
+    assert_eq!(
+        account, "b",
+        "the whole answer's token lands the next body on its issuer, though a answers again and comes first"
+    );
+    assert_eq!(
+        credit_of(&decision(&mut decisions, &request_id).await),
+        ("match", Some(&FactValue::Text("b".into())))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_credit_token_places_as_today_once_its_issuer_is_created_again_under_its_id() {
     let up = upstream(refusal_stream(TOKEN)).await;
     let h = harness(&up, &accounts(), pool()).await;
@@ -309,9 +368,12 @@ async fn a_credit_token_places_as_today_once_its_issuer_is_created_again_under_i
         account, "a",
         "the holder created again under the id is another account, which the credit does not reach"
     );
+    let record = decision(&mut decisions, &request_id).await;
+    assert_eq!(credit_of(&record).1, None);
     assert_eq!(
-        credit_of(&decision(&mut decisions, &request_id).await).1,
-        None
+        standing_of(&record, "b"),
+        Some(&FactValue::Text("eligible".into())),
+        "the holder created again can serve, so its incarnation and not its standing kept the credit off it"
     );
     up.shutdown().await;
 }
