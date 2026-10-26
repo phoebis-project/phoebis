@@ -2,8 +2,9 @@
 # Each case pins a rule a real capture leans on, checked here without the client: the leaf a receiver presents
 # chains to the run's own CA and names the control hosts, mkcerts.sh refuses to start on a host without openssl,
 # and control_receiver.py answers the control calls with the committed canned bodies, records each call, and keeps
-# serving after a client that drops its tunnel before the handshake. Every case runs against a throwaway tree,
-# never /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
+# serving after a client that drops its tunnel before the handshake. The resign example's --write mode leaves a body
+# stamped with the digits the signer computes over its own bytes. Every case runs against a throwaway tree, never
+# /tmp/cc-capture or ~/.claude, and reaches no host off loopback.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -153,5 +154,37 @@ five="$three
 4 api.anthropic.com:443 GET /api/oauth/profile HTTP/1.1 -> 200"
 got=$(summarize "$recording") || fail "the recording written on SIGTERM does not parse: $got"
 [[ "$got" == "$five" ]] || fail "the recording written on SIGTERM reads: $got"
+
+# --- resign --write ---
+
+# scripts/build-fixtures.py redacts a fresh body's ids before it writes the fixture, so the digits the client signed
+# no longer match the bytes, and the write mode stores the digits the signer computes over what the file now holds.
+# The compare run that follows exits 0 only when the stored digits are the signer's. A message is read from its own
+# stream, so cargo's output while the first run builds the example stays out of the compared text.
+resign() {
+  CARGO_INCREMENTAL=0 cargo run -q --manifest-path "$here/Cargo.toml" -p phoebis-cch --example resign -- "$@"
+}
+placeholder='{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=1; cch=00000;"}],"messages":[]}'
+body="$tmp/body.json"
+printf '%s' "$placeholder" >"$body"
+out=$(resign --write "$body" 2>"$tmp/resign.err") || fail "resign --write failed: $out $(<"$tmp/resign.err")"
+stamp=$(grep -oE 'cch=[0-9a-f]{5};' "$body") || fail "resign --write left no cch= stamp: $(<"$body")"
+[[ "$stamp" != "cch=00000;" ]] || fail "resign --write left the placeholder cch=00000 in place"
+[[ "$(<"$body")" == "${placeholder/cch=00000;/$stamp}" ]] \
+  || fail "resign --write changed more than the cch= digits: $(<"$body")"
+[[ "$out" == "resign: $body: 00000 -> ${stamp:4:5}" ]] || fail "resign --write printed: $out"
+out=$(resign "$body" 2>&1) || fail "the compare run after resign --write reports drift: $out"
+out=$(resign --write "$body" 2>"$tmp/resign.err") || fail "a second resign --write failed: $out $(<"$tmp/resign.err")"
+[[ "$out" == "resign: $body: unchanged" ]] || fail "a second resign --write printed: $out"
+
+# A body without a stamp is refused as the compare run refuses it, and the file is left as it was.
+bare='{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=1;"}],"messages":[]}'
+printf '%s' "$bare" >"$tmp/bare.json"
+status=0
+out=$(resign --write "$tmp/bare.json" 2>"$tmp/resign.err") || status=$?
+[[ "$status" -eq 1 ]] || fail "resign --write on a body without a stamp exited $status, want 1: $(<"$tmp/resign.err")"
+grep -qxF "resign: $tmp/bare.json: the billing block carries no cch= stamp" "$tmp/resign.err" \
+  || fail "resign --write on a body without a stamp printed: $(<"$tmp/resign.err")"
+[[ "$(<"$tmp/bare.json")" == "$bare" ]] || fail "resign --write rewrote a body without a stamp: $(<"$tmp/bare.json")"
 
 echo "capture-tooling: ok"

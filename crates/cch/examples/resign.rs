@@ -3,6 +3,9 @@
 //! The fixture drift check masks the per-capture `cch=` value out of its body comparison, because a fresh capture
 //! mints a new `cc_prompt_id` and so a new hash with no protocol change. That leaves the hash itself unchecked, so
 //! scripts/build-fixtures.py runs this example once per freshly captured body that carries a stamp.
+//!
+//! With `--write` it stores the computed digits in the file instead, because the builder redacts a body before it
+//! writes the fixture and the stamp has to follow the redacted bytes.
 
 use std::process::ExitCode;
 
@@ -10,8 +13,10 @@ use std::process::ExitCode;
 const DIGITS: usize = 5;
 
 fn main() -> ExitCode {
-    let Some(path) = std::env::args().nth(1) else {
-        eprintln!("usage: resign <body-file>");
+    let mut args = std::env::args().skip(1).peekable();
+    let write = args.next_if(|arg| arg == "--write").is_some();
+    let Some(path) = args.next() else {
+        eprintln!("usage: resign [--write] <body-file>");
         return ExitCode::FAILURE;
     };
     let body = match std::fs::read(&path) {
@@ -36,6 +41,18 @@ fn main() -> ExitCode {
     let span = loc.digits_start..loc.digits_start + DIGITS;
     let captured = String::from_utf8_lossy(&body[span.clone()]).into_owned();
     let computed = String::from_utf8_lossy(&signed[span]).into_owned();
+    if write {
+        if captured == computed {
+            println!("resign: {path}: unchanged");
+            return ExitCode::SUCCESS;
+        }
+        if let Err(err) = std::fs::write(&path, &signed) {
+            eprintln!("resign: {path}: {err}");
+            return ExitCode::FAILURE;
+        }
+        println!("resign: {path}: {captured} -> {computed}");
+        return ExitCode::SUCCESS;
+    }
     println!("captured={captured} computed={computed}");
     if captured == computed {
         ExitCode::SUCCESS
