@@ -18030,7 +18030,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   cadence.restore();
   results.push({
     name: "/analytics the unused allowance card reads again after a weekly reset passes and not at the list's cadence, under a custom range whose end is ahead too",
-    ok: mounted === 1 && polled === 1 && moved === 2 && opened > moved && ticked === 0,
+    ok: mounted === 1 && polled === 1 && moved === 2 && opened === moved + 1 && ticked === 0,
     missing: [`${mounted} at mount, ${polled} after a tick, ${moved} after the reset, ${opened - moved} on the custom range's mount, ${ticked} over its two ticks`],
   });
 }

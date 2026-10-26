@@ -78,8 +78,8 @@ test('a figure reads a dash where the plan is Free, the cost model sizes no capa
   for (const unit of EQUIVALENT_UNITS) {
     const free = d.allowanceFigure(0.33, 'seven_day', FREE, COSTS, unit);
     assert.deepEqual(free, { kind: 'unpriced', text: '-', title: d.ALLOWANCE_UNPRICED_TITLE }, `${unit}: a Free plan reads its Pro tier's capacity no more`);
-    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', { plan: 'team', tier: 'default_claude_team' }, COSTS, unit).kind, 'unpriced', `${unit}: a tier the cost model lacks`);
-    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day_fable', { plan: null, tier: null }, COSTS, unit).kind, 'unpriced', `${unit}: no stored tier`);
+    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day', { plan: 'max_20x', tier: 'default_claude_team' }, COSTS, unit).kind, 'unpriced', `${unit}: a tier the cost model lacks`);
+    assert.deepEqual(d.allowanceFigure(0.33, 'seven_day_fable', { plan: 'pro', tier: null }, COSTS, unit).kind, 'unpriced', `${unit}: no stored tier`);
   }
   assert.equal(d.ALLOWANCE_UNPRICED_TITLE, "Unpriced: the cost model holds no capacity for this account's plan");
   assert.notEqual(d.ALLOWANCE_UNPRICED_TITLE, d.UNPRICED_TITLE, "the analytics library's own title keeps its words beside this one");
