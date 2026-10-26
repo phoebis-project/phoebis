@@ -107,6 +107,8 @@ const VIEWS = [
   { path: '/sessions', title: 'Sessions', wait: '.sessions-table', slug: 'sessions' },
   { path: '/settings', title: 'Settings', wait: '.envdl', slug: 'settings' },
   { path: '/routing-log', title: 'Routing log', wait: '.routing-log__table', slug: 'routing-log' },
+  // The router's seed reconciles no window, so its view draws the empty rows alone: the shot is the mock pass's.
+  { path: '/meter', title: 'Meter', wait: '.meter-table', slug: 'meter', mockOnly: true },
 ];
 
 /** How far the page's clock moves per step. */
@@ -1420,19 +1422,115 @@ async function pinShedMark(theme) {
 }
 
 /**
- * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
- * Routing log link, and with the log open both are drawn and the link is the active one.
+ * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor a link of
+ * the group, and with the Routing log or the Meter view open the heading stands over the Routing log and Meter links in
+ * that order, the open view's link the active one.
  */
 async function diagnosticsNav(theme, path) {
   const read = await page.evaluate(() => {
-    const link = document.querySelector('nav.nav a[href="/routing-log"]');
-    return { active: link?.classList.contains('is-active') ?? null, heading: document.querySelector('nav.nav .nav__heading')?.textContent ?? null, link: link !== null };
+    const heading = document.querySelector('nav.nav .nav__heading');
+    const links = [...document.querySelectorAll('nav.nav a[href="/routing-log"], nav.nav a[href="/meter"]')];
+    const active = links.find((a) => a.classList.contains('is-active')) ?? null;
+    return {
+      active: active?.getAttribute('href') ?? null,
+      heading: heading?.textContent ?? null,
+      links: links.map((a) => a.getAttribute('href')),
+      over: heading !== null && active !== null ? heading.getBoundingClientRect().bottom <= active.getBoundingClientRect().top : null,
+    };
   });
   measurements.push(`${theme} ${path} diagnostics group ${JSON.stringify(read)}`);
-  if (path === '/routing-log') {
-    if (read.heading !== 'Diagnostics' || !read.link || read.active !== true) failures.push(`${theme} /routing-log: the sidebar reads ${JSON.stringify(read)}, not the Diagnostics heading over the active Routing log link`);
-  } else if (read.heading !== null || read.link) {
+  if (path === '/routing-log' || path === '/meter') {
+    if (read.heading !== 'Diagnostics' || JSON.stringify(read.links) !== '["/routing-log","/meter"]' || read.active !== path || read.over !== true) failures.push(`${theme} ${path}: the sidebar reads ${JSON.stringify(read)}, not the Diagnostics heading over the Routing log and Meter links with ${path} active`);
+  } else if (read.heading !== null || read.links.length > 0) {
     failures.push(`${theme} ${path}: the sidebar draws ${JSON.stringify(read)} with the expert view off`);
+  }
+}
+
+/**
+ * The Meter view's two group tables at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800, under the Routing log's
+ * own reads: each fit column as wide as its widest cell within 1 px past the 30 px gutter, Account the one fill and at
+ * least its 132 px floor, and on the three wide viewports each table inside its wrap with nothing to scroll sideways. At
+ * 375 the document is as wide as the window, each table wider than its card scrolls inside its `.table-wrap`, and the
+ * first line's Latest ratio cell ends inside the wrap, in view with no scroll. At 1280 a collapsed line is 37.8 px
+ * within 0.5 px, the badged line (nightly's 5-hour one in the mock's story) as tall as a plain one, and the height of
+ * one open group, nightly's 5-hour line with its first page of windows, goes to the measurements. The viewport is the
+ * pass's again after, every group shut. The mock pass's alone, since the router's seed reconciles no window.
+ */
+async function meterColumns(theme) {
+  const say = (what) => failures.push(`${theme} /meter: ${what}`);
+  const LINE_PX = 37.8;
+  try {
+    for (const [width, height] of [
+      [1280, 800],
+      [1440, 900],
+      [1920, 1080],
+      [375, 800],
+    ]) {
+      const where = `at ${width} by ${height}`;
+      await page.setViewportSize({ height, width });
+      await settle();
+      for (const selector of ['.meter-table--weekly', '.meter-table--five-hour']) await tableColumns(theme, 'meter', selector, ['Account'], 1, { overflowRecorded: width < 900 });
+      const got = await page.evaluate(() => {
+        const tenths = (n) => Math.round(n * 10) / 10;
+        return {
+          document: { inner: window.innerWidth, scroll: document.documentElement.scrollWidth },
+          tables: [...document.querySelectorAll('.meter-table')].map((table) => {
+            const wrap = table.closest('.table-wrap');
+            const fill = table.querySelector(':scope > thead th.col-fill');
+            const ratio = table.querySelector(':scope > tbody > tr.meter-row')?.children[3] ?? null;
+            return {
+              client: wrap?.clientWidth ?? null,
+              fill: fill ? { minWidth: getComputedStyle(fill).minWidth, width: tenths(fill.getBoundingClientRect().width) } : null,
+              ratioRight: ratio && wrap ? tenths(ratio.getBoundingClientRect().right - wrap.getBoundingClientRect().left) : null,
+              scroll: table.scrollWidth,
+              selector: table.classList.contains('meter-table--weekly') ? 'weekly' : 'five-hour',
+            };
+          }),
+        };
+      });
+      measurements.push(`${theme} /meter columns ${where} ${JSON.stringify(got)}`);
+      if (got.tables.length !== 2) say(`${where} draws ${got.tables.length} group tables, not the weekly and the 5-hour one`);
+      for (const t of got.tables) {
+        const name = `${where} the ${t.selector} table`;
+        if (t.fill === null || t.fill.width < 132 || t.fill.minWidth !== '132px') say(`${name}'s Account column reads ${JSON.stringify(t.fill)}, under its 132 px floor`);
+        if (width < 900) {
+          if (t.scroll <= t.client) say(`${name} takes ${t.scroll}px of its ${t.client}px wrap without scrolling inside it`);
+          if (t.ratioRight === null || t.ratioRight > t.client) say(`${name}'s first Latest ratio cell ends at ${t.ratioRight}px, past its ${t.client}px wrap`);
+        } else if (t.scroll > t.client) say(`${name} scrolls sideways (${t.scroll}px in ${t.client}px)`);
+      }
+      if (width < 900 && got.document.scroll > got.document.inner) say(`${where} the document needs ${got.document.scroll}px of the ${got.document.inner}px window, so it scrolls sideways`);
+    }
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    const lines = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.meter-table--five-hour > tbody > tr.meter-row')];
+      const line = (tr) => (tr ? { account: tr.children[1]?.textContent?.trim() ?? null, height: Math.round(tr.getBoundingClientRect().height * 10) / 10 } : null);
+      return { badged: line(rows.find((tr) => tr.children[3]?.querySelector('.badge'))), plain: line(rows.find((tr) => !tr.children[3]?.querySelector('.badge'))) };
+    });
+    const nightly = page.locator('.meter-table--five-hour > tbody > tr.meter-row').filter({ has: page.locator('.badge') }).first();
+    await nightly.locator('.srow__chevron').click();
+    await settle();
+    await page.mouse.move(0, 0);
+    await settle();
+    const open = await nightly.evaluate((tr) => {
+      const detail = tr.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null;
+      const tenths = (n) => Math.round(n * 10) / 10;
+      return detail ? { detail: tenths(detail.getBoundingClientRect().height), group: tenths(detail.getBoundingClientRect().bottom - tr.getBoundingClientRect().top), windows: detail.querySelectorAll('tbody tr').length } : null;
+    });
+    await nightly.locator('.srow__chevron').click();
+    await settle();
+    measurements.push(`${theme} /meter lines at 1280 by 800 ${JSON.stringify({ ...lines, open })}`);
+    for (const [name, line] of Object.entries(lines)) {
+      if (line === null) say(`no ${name} 5-hour line to measure`);
+      else if (Math.abs(line.height - LINE_PX) > 0.5) say(`the ${name} line of ${line.account} is ${line.height}px, not ${LINE_PX}px`);
+    }
+    const rounded = (l) => l && { height: Math.round(l.height) };
+    for (const what of compare(rounded(lines.badged), rounded(lines.plain), ['height'], 'the badged 5-hour line against a plain one')) say(what);
+    if (open === null) say('the badged 5-hour line opens no group');
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await atRest();
   }
 }
 
@@ -4894,11 +4992,9 @@ async function planLegend(theme) {
  * 20x figure, so its width is recorded at 1280 by 800 and every column sits inside its wrap, and in the mock's story a
  * row draws that second line. Every budget row draws its bar, one row per budgeted period, and in the mock's story the
  * member past its budget carries the at-budget badge, and the subscription member's spend leads with the muted word
- * metered in the figure's own type. Meter reconciliation sits in the Burn section beside Member budgets and is read
- * against it on the title and head types, the card width and, where both draw figures, their type, and in the mock's
- * story its one badge marks nightly's 5-hour window. The router's seed places nothing and budgets no member, so there
- * the tables draw their empty rows. Each section shows on its own tab, so the Cache tables are read there and Member
- * budgets and Meter reconciliation on Burn.
+ * metered in the figure's own type. The Burn section's cards end on Member budgets after the charts, with no
+ * reconciliation card among them. The router's seed places nothing and budgets no member, so there the tables draw their
+ * empty rows. Each section shows on its own tab, so the Cache tables are read there and Member budgets on Burn.
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -4933,7 +5029,6 @@ async function analyticsTables(theme) {
         };
       };
       const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === 5);
-      const reconciledRows = [...(card('Meter reconciliation')?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === 7);
       const atBudget = (tr) => [...tr.querySelectorAll('.badge')].find((b) => b.textContent?.trim() === 'at budget');
       const spent = (tr) => tr.children[2].querySelector('.num');
       const word = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}` : null);
@@ -4944,13 +5039,12 @@ async function analyticsTables(theme) {
           return bar ? `${Math.round(bar.getBoundingClientRect().width)}x${Math.round(bar.getBoundingClientRect().height)}` : null;
         }),
         budgets: box('Member budgets'),
+        burn: [...(document.querySelector('.analytics-section#burn')?.querySelectorAll('.card__title') ?? [])].map((t) => t.textContent?.trim() ?? ''),
         cache: box('Cache by model'),
         metered: budgetRows
           .filter((tr) => spent(tr)?.querySelector('.muted'))
           .map((tr) => ({ account: tr.children[1].textContent?.trim(), figure: word(spent(tr)), text: spent(tr)?.textContent, word: word(spent(tr)?.querySelector('.muted')) })),
-        offWindows: reconciledRows.filter((tr) => tr.querySelector('.badge')).map((tr) => [tr.children[0].textContent?.trim(), tr.children[1].textContent?.trim()]),
         placements: box('Placements by rung'),
-        reconciliation: box('Meter reconciliation'),
       };
     });
   try {
@@ -4967,8 +5061,7 @@ async function analyticsTables(theme) {
     failures.push(...compare(read.budgets, read.placements, ['title', 'head'], `${theme} /analytics: "Member budgets" against "Placements by rung"`));
     if (read.placements?.section !== 'cache') say(`the placements card sits in ${read.placements?.section}, not the Cache section`);
     if (read.budgets?.section !== 'burn') say(`the member budgets card sits in ${read.budgets?.section}, not the Burn section`);
-    failures.push(...compare(read.reconciliation, read.budgets, ['title', 'head', 'width', ...drawn(read.reconciliation, read.budgets, ['figure'])], `${theme} /analytics: "Meter reconciliation" against "Member budgets"`));
-    if (read.reconciliation?.section !== 'burn') say(`the meter reconciliation card sits in ${read.reconciliation?.section}, not the Burn section`);
+    if (read.burn.at(-1) !== 'Member budgets' || read.burn.length < 2 || read.burn.includes('Meter reconciliation')) say(`the Burn section's cards read ${JSON.stringify(read.burn)}, not the charts closed by Member budgets`);
     for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
     if (mock) {
       if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
@@ -4977,7 +5070,6 @@ async function analyticsTables(theme) {
       if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['research'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on research alone`);
       if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['primary', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on primary alone`);
       for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.account} reads ${r.word}, not the figure's ${r.figure}`);
-      if (JSON.stringify(read.offWindows) !== JSON.stringify([['nightly', '5h']])) say(`the off ratio's badge sits on ${JSON.stringify(read.offWindows)}, not on nightly's 5-hour window alone`);
     }
   } finally {
     await tabTo(theme, 'Traffic');
@@ -5040,8 +5132,8 @@ async function analyticsAllowanceTable(theme) {
  * landing tab (its group column the fill, Key under the default grouping) and the Guardrails card above it (Guardrail),
  * the misses-by-reason breakdown (Key again, its ten figure headers wrapped so the group column keeps its room, each
  * known reason's header its short word with the full label on its title) and the placements table on Cache (Rung), and
- * the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor) with the meter
- * reconciliation (Upstream). The view returns to Traffic afterwards, as the other Analytics checks leave it.
+ * the member budgets on Burn (Pool and Account, the Spent column as wide as its meter's floor). The view returns to
+ * Traffic afterwards, as the other Analytics checks leave it.
  */
 async function analyticsColumns(theme) {
   await tableColumns(theme, 'analytics', '#traffic .card--table:not(.analytics-guardrails) table', ['Key']);
@@ -5066,7 +5158,6 @@ async function analyticsColumns(theme) {
     await tableColumns(theme, 'analytics', '.placements-table', ['Rung']);
     if (!(await tabTo(theme, 'Burn'))) return;
     await tableColumns(theme, 'analytics', '.budgets-table', ['Pool', 'Account']);
-    await tableColumns(theme, 'analytics', '.reconciliations-table', ['Upstream']);
   } finally {
     await tabTo(theme, 'Traffic');
   }
@@ -6963,14 +7054,15 @@ async function accountsCardToggles(theme) {
 }
 
 /**
- * The Accounts detail's grid after the 7-day trend, which holds "Allowance left at reset", on the story's first
- * account: at 1280 by 800 and 375 by 800 its card spans the detail pane's content width as the Usage and Requests cards
- * do, in their title's type, and at 1440 by 900, where the pane sets the Usage card beside Identity, the one card spans
- * its auto-fit grid. At each width the grid stays inside the pane's content box, nothing in it scrolls sideways,
- * every card's right edge sits inside it and inside the window, and the page is as wide as the window, since a grid
- * minimum wider than the phone's pane would widen the pane with it. The cards, the grid, the pane and the page go to
- * the measurements, and the viewport is the pass's again after. The mock pass's alone, since the router's seed answers
- * no allowance route on this branch.
+ * The Accounts detail's grid after the 7-day trend, which holds "Allowance left at reset" and "Meter drift", on the
+ * story's first account. At 1280 by 800 and 375 by 800 the two stack, the drift card under the allowance card, each
+ * spanning the detail pane's content width as the Usage and Requests cards do, in their title's type. At 1440 by 900,
+ * where the pane sets the Usage card beside Identity, the two sit side by side on one top, their widths within 1 px,
+ * each under half the pane and as wide as the Usage card, in its title's type. At each width the grid stays inside the
+ * pane's content box, nothing in it scrolls sideways, every card's right edge sits inside it and inside the window, and
+ * the page is as wide as the window, since a grid minimum wider than the phone's pane would widen the pane with it. The
+ * cards, the grid, the pane and the page go to the measurements, and the viewport is the pass's again after. The mock
+ * pass's alone, since the router's seed answers no allowance route on this branch and reconciles no window.
  */
 async function accountsMeterCards(theme) {
   const say = (what) => failures.push(`${theme} /accounts allowance grid: ${what}`);
@@ -6985,7 +7077,8 @@ async function accountsMeterCards(theme) {
         if (!el) return null;
         const title = el.querySelector('.card__title');
         const s = title ? getComputedStyle(title) : null;
-        return { title: s ? `${s.fontFamily}/${s.fontSize}/${s.fontWeight}` : null, width: tenths(el.getBoundingClientRect().width) };
+        const b = el.getBoundingClientRect();
+        return { bottom: tenths(b.bottom), title: s ? `${s.fontFamily}/${s.fontSize}/${s.fontWeight}` : null, top: tenths(b.top), width: tenths(b.width) };
       };
       const s = getComputedStyle(pane);
       const g = grid.getBoundingClientRect();
@@ -6993,6 +7086,7 @@ async function accountsMeterCards(theme) {
         allowance: box(card('Allowance left at reset')),
         cards: [...grid.children].map((c) => ({ right: tenths(c.getBoundingClientRect().right), title: c.querySelector('.card__title')?.textContent?.trim() ?? null })),
         content: tenths(pane.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)),
+        drift: box(card('Meter drift')),
         grid: { client: grid.clientWidth, right: tenths(g.right), scroll: grid.scrollWidth, width: tenths(g.width) },
         page: { client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth },
         requests: box(card('Requests')),
@@ -7010,18 +7104,28 @@ async function accountsMeterCards(theme) {
       await settle();
       const at = await read();
       measurements.push(`${theme} /accounts allowance grid ${where} ${JSON.stringify(at)}`);
-      if (at === null || at.allowance === null) {
-        say(`${where}: no "Allowance left at reset" card in a grid of its own`);
+      if (at === null || at.allowance === null || at.drift === null) {
+        say(`${where}: no "Allowance left at reset" and "Meter drift" pair in a grid of its own`);
         continue;
       }
+      if (JSON.stringify(at.cards.map((c) => c.title)) !== '["Allowance left at reset","Meter drift"]') say(`${where}: the grid holds ${JSON.stringify(at.cards.map((c) => c.title))}`);
       const rounded = (b) => b && { title: b.title, width: Math.round(b.width) };
-      if (Math.abs(at.allowance.width - at.content) > 1) say(`${where}: the card is ${at.allowance.width}px across a ${at.content}px pane`);
-      if (width === 1440) {
-        for (const what of compare(rounded(at.allowance), rounded(at.usage), ['title'], `${where}: the card against the Usage card`)) say(what);
-      } else {
-        for (const what of compare(rounded(at.allowance), rounded(at.usage), ['title', 'width'], `${where}: the card against the Usage card`)) say(what);
-        for (const what of compare(rounded(at.allowance), rounded(at.requests), ['title', 'width'], `${where}: the card against the Requests card`)) say(what);
+      for (const [name, card] of [
+        ['the allowance card', at.allowance],
+        ['the drift card', at.drift],
+      ]) {
+        for (const what of compare(rounded(card), rounded(at.usage), ['title', 'width'], `${where}: ${name} against the Usage card`)) say(what);
+        if (width === 1440) {
+          if (card.width > at.content / 2) say(`${where}: ${name} is ${card.width}px, over half the ${at.content}px pane`);
+        } else {
+          if (Math.abs(card.width - at.content) > 1) say(`${where}: ${name} is ${card.width}px across a ${at.content}px pane`);
+          for (const what of compare(rounded(card), rounded(at.requests), ['title', 'width'], `${where}: ${name} against the Requests card`)) say(what);
+        }
       }
+      if (width === 1440) {
+        for (const what of compare({ top: Math.round(at.drift.top) }, { top: Math.round(at.allowance.top) }, ['top'], `${where}: the drift card beside the allowance card`)) say(what);
+        if (Math.abs(at.drift.width - at.allowance.width) > 1) say(`${where}: the drift card is ${at.drift.width}px beside the allowance card's ${at.allowance.width}px`);
+      } else if (at.drift.top < at.allowance.bottom) say(`${where}: the drift card's top ${at.drift.top}px is above the allowance card's bottom ${at.allowance.bottom}px, not stacked under it`);
       if (at.grid.width > at.content + 1) say(`${where}: the grid is ${at.grid.width}px in a ${at.content}px pane`);
       if (at.grid.scroll > at.grid.client) say(`${where}: the grid scrolls ${at.grid.scroll}px in its ${at.grid.client}px`);
       for (const c of at.cards.filter((x) => x.right > at.grid.right + 1)) say(`${where}: "${c.title}" ends at ${c.right}px past the grid's ${at.grid.right}px`);
@@ -10911,6 +11015,10 @@ try {
         if (mock) await pinShedMark(theme);
         await firstDecisionOpen(theme);
         await pagerControls(theme, view.path);
+      }
+      if (view.path === '/meter') {
+        await meterColumns(theme);
+        await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/quota') {
         // First, since it loads the view again, which the measures after it and the shot then read as it first drew.

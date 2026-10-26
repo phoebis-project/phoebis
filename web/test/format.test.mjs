@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
+const { earlierHolderLabel, equivalentShort, ESTIMATED_TITLE, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtEquivalent, fmtHours, fmtHourTick, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, forkLabel, instant, pct, placementHit, setTimeFormat, shareLabel, shareShort, shortModel, undatedModel, usdTickDigits } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -82,6 +82,20 @@ test("a log row's time within a day of now reads the clock alone, and one a day 
   try {
     assert.match(fmtDatedTime('2026-09-16T13:05:09Z', now), /^01:05:09\sPM$/, 'the time format reaches the clock alone');
     assert.match(fmtDatedTime('2026-09-14T21:12:05Z', now), /^Sep 14 09:12:05\sPM$/, 'and the dated form');
+  } finally {
+    setTimeFormat('24h');
+  }
+});
+
+test("a window's end carries its date whatever its distance from now, the time in the viewer's cycle", () => {
+  // Read in UTC, the zone the file runs in: a viewer elsewhere reads the day and the hour of their own zone.
+  const now = Date.parse('2026-09-16T14:30:00Z');
+  assert.equal(fmtDated(Date.parse('2026-09-16T13:11:00Z')), 'Sep 16 13:11', 'a window that ended today keeps its date, where instant drops it');
+  assert.equal(instant(Date.parse('2026-09-16T13:11:00Z'), now), '13:11');
+  assert.equal(fmtDated(Date.parse('2026-08-30T03:05:00Z')), 'Aug 30 03:05');
+  setTimeFormat('12h');
+  try {
+    assert.match(fmtDated(Date.parse('2026-09-16T13:11:00Z')), /^Sep 16 01:11\sPM$/, 'the time format reaches the time');
   } finally {
     setTimeFormat('24h');
   }

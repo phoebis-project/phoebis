@@ -34,9 +34,10 @@ a "Retry" button that reads the session again. A session that ends while a view 
 `Your session ended, so log in again.`
 
 The sidebar reads the brand "Phoebis Router" over the views in this order: Dashboard, Quota, Accounts, Pools, Keys,
-Guardrails, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log,
-shown while the expert view is on or while the open view is a diagnostics view, so a link into the log opens it whatever
-the mode and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the router's version
+Guardrails, Requests, Analytics, Sessions, Settings. Under them a group headed "Diagnostics" holds Routing log and
+Meter, shown while the expert view is on or while the open view is a diagnostics view, so a link into either view opens
+it whatever the mode and leaves the mode as you set it. The sidebar's foot carries the "Expert view" switch and the
+router's version
 as `v{version}`. The top bar reads the open view's title (the document title is `{title} - Phoebis Router`), the "Unit"
 switch with its legend's button, "Log out", and the theme switch "Theme" with Light, Dark and System, stored under
 `phoebis.theme` (`system` until you pick one). When the router answers from a build other than the one the console's
@@ -114,8 +115,8 @@ bar after `over`, the lowest factor of its spans and the pool's threshold. Each 
 the pool's shedding rounds, the account's moves and spent windows, its spent windows, or its slow-down starts and ends,
 from the moment the condition began. An account whose meter drifted reads
 `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, each off window with the ratio the meter charged against the
-cost model, under the label "Meter drift against the table", and opens the [Analytics](#analytics) view on the account
-with the Burn section in view. A parked ledger record adds "Replay parked records", which answers
+cost model, under the label "Meter drift against the table", and opens the [Meter](#meter) view on the account. A
+parked ledger record adds "Replay parked records", which answers
 `Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
 answer together, the button and its answer take a second row.
 
@@ -330,6 +331,12 @@ weekly reset recorded yet. The first shows once this account's week ends." befor
 once per account, again on the bar's Refresh and once a weekly window resets, and a failed read draws its error with Try
 again.
 
+"Meter drift" draws, beside it, one line per window kind the account's completed windows hold: the newest completed
+window's ratio of the upstream's rise over the router's priced share (a warning badge where the rise and the priced
+share each reach 5% and the ratio leaves 0.8 to 1.25, muted where the band does not judge it), its end and the windows
+off the band over all of the trailing 30 days, with "Meter" opening the [Meter](#meter) view on the account, or "No
+completed window yet".
+
 "Cooling down" lists Scope ("Whole account", "Fast mode", "Fast mode credits" or the model), Reason and Until with a
 Clear button per row, or "Nothing cooling down", and Clear asks "Clear cooldown": "The account becomes eligible
 immediately. If the account is still rate limited, the next request re-enters cooldown." "Pool" links the pool with
@@ -388,8 +395,8 @@ the detail and the age take a line of their own under the badge. The pool's own 
 destination row open the [routing log](#routing-log) on its exhausted decisions or its shedding rounds since the
 condition began, and an account's Destination spent within the hour row opens it on the account's moves and spent
 windows, its Wall reached under the ceiling row on its spent windows, and its Slowed past twice the stretch row on its
-slow-down starts and ends. An account's Meter drift against the table row opens [Analytics](#analytics) on the account
-with the Burn section in view.
+slow-down starts and ends. An account's Meter drift against the table row opens the [Meter](#meter) view on the
+account.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `metered P{n}` where the pool
 prefers subscription accounts, the metered tier holding the API-key accounts and the usage-based seats), Account,
@@ -892,14 +899,8 @@ capacity for on that window, prices no share there and draws no point, under a "
 shares an account whose tier the cost model does not size reads "tier unknown". Spend per minute charts the dollars
 alone, a subscription account's among them for its fast-mode and overage answers. With the Model week card drawn, the
 four cards sit two by two in the window widths where three would otherwise share a row with the fourth alone (1344 px to
-1701 px). The Meter reconciliation card stands between the charts and Member budgets, one row per completed 5-hour,
-7-day or Fable window of an account, newest first: Upstream, Window, Ended, Rise (the rise the upstream's readings
-showed), Predicted (the share the router priced for its own requests in it, with the charts' `~` and its estimate hover
-where an attempt in it was priced at a model tier's estimate), Ratio, with a warning badge on a ratio under 0.8 or over
-1.25 once the rise and the predicted share each reach 5%, and Requests. It reads the trailing 30 days under the Accounts
-filter whatever the range. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row
-per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
-reported".
+1701 px). The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a
+member carries, a member at its budget marked and one the ledger has not reported on reading "not reported".
 
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart shading the peak band](assets/analytics-burn-dark.png#only-dark)
@@ -1336,3 +1337,49 @@ routing conditions' dashboard items and pool card rows on the pool's shedding ro
 windows, its spent windows, or its slow-down starts and ends, from the moment the condition began, the "Routing log"
 action on an account's Requests card on the account's rows over the last hour, and a model a decision card, an event's
 detail or a log row names on the model's rows over the last 24 hours.
+
+## Meter
+
+![The Meter view: the groups per account and window kind](assets/meter-light.png#only-light)
+![The Meter view: the groups per account and window kind](assets/meter-dark.png#only-dark)
+
+The Meter view sits under the sidebar's Diagnostics heading after the Routing log, shown while the expert view is on or
+while the view is open, and every link into it opens it whatever the mode. It lists each subscription account's
+completed windows of the last 30 days, the rise the upstream's readings showed against the share the router priced for
+its own requests in each, grouped by account and window kind.
+
+The filter bar holds one row: Add filter over Account, and at the right edge the split Refresh button and the count of
+groups and windows the filter keeps (`{n} groups, {m} windows`). The view offers no range, since it reads the trailing
+30 days. The Account filter stands as a chip ("account: nightly") on a line under the bar and lives in the page's
+address (`accounts=nightly`), so a narrowed view is a link and Back returns to the view before it. Auto reload is off
+when the view opens, and the split Refresh button's dropdown sets it as on the Routing log, out of the page's address.
+Under the bar a line reads "Each subscription account's completed windows of the last 30 days, grouped by account and
+window kind: the rise the upstream's readings showed against the share the router priced for its own requests in it. 1.1
+means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked."
+
+Two cards list the groups, "Weekly windows" (the 7-day window and each model week) above "5-hour windows", each with
+"Expand all" in its head, which opens every group of its card. A group is one account's windows of one kind, the groups
+by account id and, inside an account, the 7-day window before the model weeks, and a window kind an account never
+reported draws no group. A collapsed group is one line: Account (a link to the account), Window ("7-day", "Fable",
+"5-hour"), Latest ratio, Off (the count of off windows, or "none"), "Ratio, 30 days" (the spark), Latest end (its date
+always written) and Windows (the count). A click on the line or Enter on it opens the group, its chevron turning down,
+and a second closes it. An open group lists its windows newest first, the newest 10 of a 5-hour group and the newest 25
+of a weekly one, under Ended, Rise, Predicted (with the charts' `~` and its estimate hover where an attempt in it was
+priced at a model tier's estimate), Ratio and Requests, then `{n} of {m} windows, newest first` with "Show 25 more". A
+group's open state belongs to the page, so a reload or a link opens every group shut.
+
+The spark charts the group's windows over the 30 days to the newest window the view lists, so every line reads one axis:
+the ratio's base-2 log clipped to 0.5 and 2, the band 0.8 to 1.25 shaded with the 1.0 line in it, the windows the band
+judges joined in a line, each off window a dot in the warning tone, and with eight judged windows or fewer each judged
+window a dot too. A window whose rise or priced share is under 5% stays out, and the spark's hover counts the judged,
+the off and the left-out windows (`{j} judged, {o} off, {l} unjudged`).
+
+A ratio takes the warning badge where the rise and the priced share each reach 5% and it leaves 0.8 to 1.25, the test
+the Meter drift condition reads, with the four decimals on hover. A ratio the band does not judge reads muted, its hover
+saying "the rise or the priced share is under 5%, so the band does not judge this ratio".
+
+With no completed window under the filter each card reads "No completed window yet", naming the accounts the bar narrows
+to (`No completed window yet for {accounts}`), and a read that failed draws its error with Try again.
+
+The [Dashboard](#dashboard)'s Meter drift against the table item, a [pool](#pools) card's row of that condition and the
+"Meter" action of an [account](#accounts)'s Meter drift card open the view narrowed to the account.

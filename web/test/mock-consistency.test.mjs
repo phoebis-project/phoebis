@@ -2555,22 +2555,68 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([item.detail.slowed_ms, item.detail.bar_ms, item.detail.factor_min], [7_700_000, 3_600_000, 0.35], "the closed span of 86 min 20 s and the open one since 13:48, past twice work's 30 minutes");
   });
 
-  test(`the mock's reconciliations name the story's accounts and one off row, at ${at}`, async () => {
+  test(`the mock's reconciliations name the story's accounts, and of each account's newest windows nightly's 5-hour one alone reads off, at ${at}`, async () => {
     const s = await story;
     const { reconciliations } = await s.api.getAnalyticsReconciliations();
     const oauth = new Set(s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.id));
     for (const r of reconciliations) assert.ok(oauth.has(r.accountId), `${r.accountId}'s window names an OAuth account of the story`);
-    const off = reconciliations.filter((r) => s.lib.ratioOff(r));
-    assert.deepEqual(off.map((r) => [r.accountId, r.window]), [['nightly', 'five_hour']], 'one row reads off the band');
-    // The condition reads each window's newest row, so the off row is the one it holds on.
-    const [newest] = reconciliations.filter((r) => r.accountId === 'nightly' && r.window === 'five_hour').sort((x, y) => Date.parse(y.windowEnd) - Date.parse(x.windowEnd));
-    assert.equal(off[0], newest, "the off row is nightly's newest 5-hour window");
+    // The newest row of each window kind is the summary's line, and the condition reads the newest row whose rise reaches
+    // the floor: every newest row is judged, so the two read one row.
+    const latest = [...new Set(reconciliations.map((r) => r.accountId))].flatMap((id) => s.lib.latestPerWindow(reconciliations.filter((r) => r.accountId === id)));
+    for (const r of latest) assert.ok(s.lib.judged(r), `${r.accountId}'s newest ${r.window} window reaches the floor on its rise and its priced share`);
+    const off = latest.filter((r) => s.lib.ratioOff(r));
+    assert.deepEqual(off.map((r) => [r.accountId, r.window]), [['nightly', 'five_hour']], "of the newest windows nightly's 5-hour one alone reads off the band");
     const drift = s.attention.filter((i) => i.kind === 'meter_drift');
     assert.deepEqual(
       drift.map((i) => [i.subject.id, i.since, i.detail.windows.map((w) => [w.window, w.ratio, w.observed_rise, w.window_end])]),
       [[off[0].accountId, off[0].windowEnd, [[off[0].window, off[0].ratio, off[0].observedRise, Date.parse(off[0].windowEnd)]]]],
       "the meter drift item names the off row's account, dated from its window's end",
     );
+  });
+
+  test(`the mock's reconciliations read as each priced account's windows over the trailing 30 days, at ${at}`, async () => {
+    const s = await story;
+    const { reconciliations: rows } = await s.api.getAnalyticsReconciliations();
+    // The ledger reconciles a window the router priced a request in: legacy stopped a week back, while reserve, spare and
+    // the seat priced nothing, sunset is in no pool and an API key reports no plan window.
+    const current = ['nightly', 'primary', 'secondary', 'studio'];
+    assert.deepEqual([...new Set(rows.map((r) => r.accountId))].sort(), ['legacy', ...current], 'the accounts with rows');
+    const order = (x, y) => Date.parse(y.windowEnd) - Date.parse(x.windowEnd) || (x.accountId < y.accountId ? -1 : x.accountId > y.accountId ? 1 : 0) || (x.window < y.window ? -1 : x.window > y.window ? 1 : 0);
+    assert.ok(
+      rows.every((r, i) => i === 0 || order(rows[i - 1], r) <= 0),
+      "the rows run newest first, then by account and window, the route's order",
+    );
+    for (const r of rows) {
+      const end = Date.parse(r.windowEnd);
+      const where = `${r.accountId} ${r.window} ending ${r.windowEnd}`;
+      assert.equal(r.ratio, r.observedRise / r.predictedShare, `${where}: the ratio is the rise over the share`);
+      assert.ok(end >= s.now - 30 * DAY && end < Date.parse(r.computedAt) && Date.parse(r.computedAt) <= s.now, `${where}: inside the 30 days, reconciled after its end and before now`);
+      assert.ok(Date.parse(r.firstReadingAt) < Date.parse(r.lastReadingAt) && Date.parse(r.lastReadingAt) <= end, `${where}: its readings inside the window`);
+    }
+    for (const id of ['legacy', ...current]) {
+      const a = s.accounts.find((x) => x.id === id);
+      const mine = rows.filter((r) => r.accountId === id);
+      assert.deepEqual([...new Set(mine.map((r) => r.window))].sort(), ['five_hour', 'seven_day', ...(a.fableWindow ? ['seven_day_fable'] : [])], `${id} reconciles its 5-hour and 7-day windows, and a Fable week where it reports one`);
+      for (const [window, id5, period] of [
+        ['five_hour', '5h', 5 * HOUR],
+        ['seven_day', '7d', 7 * DAY],
+        ['seven_day_fable', null, 7 * DAY],
+      ]) {
+        const ends = mine.filter((r) => r.window === window).map((r) => Date.parse(r.windowEnd));
+        if (ends.length === 0) continue;
+        const gaps = ends.slice(1).map((e, i) => ends[i] - e);
+        if (window === 'five_hour') assert.ok(ends.length > 10 && gaps.every((g) => g >= period), `${id}'s 5-hour windows end at least 5 hours apart, more of them than an open group lists at first`);
+        else assert.ok(ends.length >= 2 && gaps.every((g) => g === period), `${id}'s ${window} windows end a week apart`);
+        if (id === 'legacy') assert.ok(ends[0] < s.now - 7 * DAY, "legacy's history stops before its idle week");
+        else {
+          const live = id5 === null ? a.fableWindow : a.windows.find((w) => w.id === id5);
+          assert.equal(ends[0], Date.parse(live.resetsAt) - period, `${id}'s newest ${window} window ends where its current one began`);
+        }
+      }
+    }
+    const nightly = rows.filter((r) => r.accountId === 'nightly' && r.window === 'five_hour');
+    assert.ok(nightly.filter((r) => s.lib.ratioOff(r)).length >= 3 && s.lib.ratioOff(nightly[0]), "nightly's 5-hour windows read off the band at least three times, the newest among them");
+    assert.ok(rows.some((r) => !s.lib.judged(r)), 'a window under the floor shows a ratio the band does not judge');
   });
 
   test(`the slow-down's story: the slowed request's hold and renewal on work, the round its stretch fired for the annex, the failover's cause on all and studio's span rows, at ${at}`, async () => {

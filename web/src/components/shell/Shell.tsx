@@ -6,7 +6,7 @@ import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync, useMediaQuery } from '@/lib/hooks';
 import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
-import { IconArrowRight, IconChart, IconFunnel, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
+import { IconActivity, IconArrowRight, IconChart, IconFunnel, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 import { UnitLegend, UnitSwitch } from '@/components/ui/UnitControls';
 
@@ -26,7 +26,10 @@ const NAV: NavItem[] = [
 ];
 
 /** The views an operator opens to see why the router did what it did, kept out of the way of the daily ones. */
-const DIAGNOSTICS: NavItem[] = [{ to: '/routing-log', label: 'Routing log', icon: <IconRoute size={16} /> }];
+const DIAGNOSTICS: NavItem[] = [
+  { to: '/routing-log', label: 'Routing log', icon: <IconRoute size={16} /> },
+  { to: '/meter', label: 'Meter', icon: <IconActivity size={16} /> },
+];
 
 export const PAGE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
@@ -34,6 +37,7 @@ export const PAGE_TITLES: Record<string, string> = {
   '/analytics': 'Analytics',
   '/guardrails': 'Guardrails',
   '/keys': 'Keys',
+  '/meter': 'Meter',
   '/pools': 'Pools',
   '/quota': 'Quota',
   '/requests': 'Requests',

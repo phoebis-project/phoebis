@@ -16,7 +16,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, createElement: h, createMemoryRouter, createRoot, lazy, Outlet, PageLoadFailed, RouterProvider, Suspense } = await import('./dist/ui.js');
+const { act, api, createElement: h, createMemoryRouter, createRoot, lazy, MeterPage, Outlet, PAGE_TITLES, PageLoadFailed, RouterProvider, Suspense } = await import('./dist/ui.js');
 const { reloadOnChunkFailure } = await import('./dist/api.js');
 
 const roots = [];
@@ -135,4 +135,25 @@ test("a page chunk that fails with WebKit's import error reads as a failed chunk
   const second = await quietly(() => load(env, lazy(reloadOnChunkFailure(webkit, env))));
   assert.deepEqual(outlet(second), ['Pools', 'This page could not load', "The console's files changed under this tab, and a reload did not fetch the current ones. Reload to try again.", 'Reload']);
   assert.equal(env.reloads, 1, 'the first failure reloads the tab once and the second throws to the element');
+});
+
+test('the Meter view draws at /meter with its two cards, its title named for the shell', async () => {
+  // The answers are the case's own, so the page reads no router: one completed 5-hour window and one 7-day window.
+  const end = Date.parse('2026-09-16T13:11:00Z');
+  const window = (name, observedRise, predictedShare) => ({ accountId: 'acct-a', computedAt: new Date(end + 2_220_000).toISOString(), estimated: 0, firstReadingAt: new Date(end - 3_600_000).toISOString(), lastReadingAt: new Date(end - 60_000).toISOString(), observedRise, predictedShare, ratio: observedRise / predictedShare, requests: 12, window: name, windowEnd: new Date(end).toISOString() });
+  const { getAnalyticsReconciliations, listAccounts } = api;
+  api.getAnalyticsReconciliations = async () => ({ reconciliations: [window('five_hour', 0.3, 0.3), window('seven_day', 0.5, 0.5)], requestRetentionDays: 30 });
+  api.listAccounts = async () => [{ id: 'acct-a', label: 'acct-a' }];
+  try {
+    const router = createMemoryRouter([{ path: '/', element: h('div', { 'data-shell': '' }, h(Outlet)), children: [{ path: 'meter', element: h(MeterPage) }] }], { initialEntries: ['/meter'] });
+    const container = document.body.appendChild(document.createElement('div'));
+    const root = createRoot(container);
+    roots.push(root);
+    act(() => root.render(h(RouterProvider, { router })));
+    await settled();
+    assert.deepEqual([...container.querySelectorAll('[data-shell] .card__title')].map((t) => t.textContent), ['Weekly windows', '5-hour windows'], 'the weekly card above the 5-hour one');
+    assert.equal(PAGE_TITLES['/meter'], 'Meter', "the shell's title for the path");
+  } finally {
+    Object.assign(api, { getAnalyticsReconciliations, listAccounts });
+  }
 });

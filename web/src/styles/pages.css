@@ -3038,6 +3038,120 @@
   padding: 5px 12px 5px 0;
 }
 
+/* The Meter view: a group line on the Sessions view's open-row pattern, an open group's windows in a nested table. The
+   account is the group's name, so its fill keeps a floor of sixteen mono characters at a phone's width, and a set wider
+   than its card scrolls inside `.table-wrap`. */
+.meter-table .col-fill {
+  min-width: 132px;
+}
+
+/* The table's own selector, so the cells' padding rule does not widen the gutter past its 30 px. */
+.meter-table .meter-table__gutter {
+  width: 30px;
+  padding-right: 0;
+}
+
+/* On the line's baseline the 14 px chevron would raise the line box a pixel past a plain row's. */
+.meter-table__gutter .srow__chevron {
+  margin-top: 2px;
+  vertical-align: top;
+}
+
+/* The badge's 22 px would push a badged line past a plain one's 37.8 px, so it sits in the line's height. */
+.meter-row .badge {
+  margin-block: -2px;
+}
+
+/* The 24 px spark in 6 px of padding keeps the line at a plain row's 37.8 px. The table's own selector, since the
+   table's 9 px cell padding would outrank a class alone. */
+.meter-table td.meter-row__spark {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+/* The Sessions detail's accent rule on the left marks the windows as the open line's. */
+.meter-detail {
+  margin: 0;
+  border-left: 2px solid var(--accent);
+}
+
+.meter-detail__table th {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.meter-detail__more {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  border-top: 1px solid var(--hairline);
+}
+
+/* A block box, so the line keeps no baseline gap under the 24 px figure, and its dots draw whole at the edges. */
+.meter-spark {
+  display: block;
+  overflow: visible;
+}
+
+.meter-spark__band {
+  fill: var(--good-track);
+}
+
+.meter-spark__mid {
+  stroke: var(--good);
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+}
+
+.meter-spark__line {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1;
+}
+
+.meter-spark__dot {
+  fill: var(--ink-2);
+}
+
+.meter-spark__dot--off {
+  fill: var(--warning);
+  stroke: var(--warning-ink);
+  stroke-width: 0.75;
+}
+
+/* The drift summary: one fact row per window kind, the ratio first, then the window it reads. */
+.meter-drift__line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  align-items: baseline;
+}
+
+/* A slot as wide as the widest badged ratio, the figure set right in it: a plain ratio keeps the badge's 8 px inset, so
+   the digits of the lines end on one edge whether a badge is drawn or not. The slot keeps the line's 20 px, so a
+   badged line is no taller than a plain one. */
+.meter-drift__ratio {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  width: 46px;
+  height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-drift__ratio > .num {
+  padding-right: 8px;
+}
+
+.meter-drift__meta {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
 /* The list views' bar: a 32 px row, the search the one slot that yields, and the chip line under it. A row narrower
    than its slots wraps the trailing ones to a second line rather than run past the page. */
 .filter-bar {
@@ -3803,11 +3917,6 @@
 
 .budgets-table .meter {
   min-width: 140px;
-}
-
-/* Alternating rows, as the data tables draw them, so a window's figures read across its row. */
-.reconciliations-table tr.is-alt td {
-  background: var(--surface-2);
 }
 
 .stat__value.is-critical {

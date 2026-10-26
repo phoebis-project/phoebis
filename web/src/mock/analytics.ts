@@ -13,6 +13,7 @@ import { endOf } from '@/lib/quota';
 import { ACCOUNTS } from './accounts';
 import { keyById } from './pools';
 import { clock } from './requests';
+import { createRng } from './rng';
 import type { EventSeed } from './routingLog';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
@@ -767,10 +768,10 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
 export const REQUEST_RETENTION_DAYS = 365;
 
 /** A window the hourly fold closed within the hour after its reset, its ratio the rise over the share as stored. */
-const reconciled = (accountId: string, window: string, endMs: number, readings: [number, number], observedRise: number, predictedShare: number, requests: number): Reconciliation => ({
+const reconciled = (accountId: string, window: string, endMs: number, readings: [number, number], observedRise: number, predictedShare: number, requests: number, estimated = 0): Reconciliation => ({
   accountId,
   computedAt: iso(endMs + 37 * MINUTE),
-  estimated: 0,
+  estimated,
   firstReadingAt: iso(readings[0]),
   lastReadingAt: iso(readings[1]),
   observedRise,
@@ -782,12 +783,11 @@ const reconciled = (accountId: string, window: string, endMs: number, readings: 
 });
 
 /**
- * The story's completed windows, newest first as the route orders them, an account's newest of each window ending where
- * its current one began. Every ratio sits near 1 but nightly's newest 5-hour window, which ended at the 13:11 reset of
- * the window the poll read at its limit at 12:01: its readings rose 0.3 against the 0.15 the router priced, twice the
- * table.
+ * The story's own completed windows, an account's newest of each window ending where its current one began. Every
+ * ratio sits near 1 but nightly's newest 5-hour window, which ended at the 13:11 reset of the window the poll read at
+ * its limit at 12:01: its readings rose 0.3 against the 0.15 the router priced, twice the table.
  */
-export const RECONCILIATIONS: Reconciliation[] = [
+const STORY_ROWS: Reconciliation[] = [
   reconciled('nightly', 'five_hour', clock(13, 11), [clock(10, 52), clock(13, 10)], 0.3, 0.15, 64),
   reconciled('primary', 'five_hour', clock(11, 44), [clock(7, 3), clock(11, 38)], 0.52, 0.5, 212),
   reconciled('studio', 'five_hour', clock(10, 29), [clock(6, 9), clock(10, 26)], 0.38, 0.4, 37),
@@ -796,6 +796,92 @@ export const RECONCILIATIONS: Reconciliation[] = [
   reconciled('primary', 'seven_day', NOW - 3 * DAY - 18 * HOUR - 20 * MINUTE, [NOW - 10 * DAY - 16 * HOUR, NOW - 3 * DAY - 18 * HOUR - 32 * MINUTE], 0.64, 0.62, 2_350),
   reconciled('nightly', 'seven_day', NOW - 5 * DAY - 5 * HOUR - 48 * MINUTE, [NOW - 12 * DAY - 2 * HOUR, NOW - 5 * DAY - 6 * HOUR - 13 * MINUTE], 0.71, 0.69, 1_480),
 ];
+
+/** One window kind's history before the story's rows: where its newest drawn window ends and the figures it draws. */
+interface History {
+  accountId: string;
+  window: string;
+  /** Where the newest drawn window ends: a period before the story's own row of the kind, else where the current window
+   *  began, or where a history that stopped ends. */
+  newestEnd: number;
+  /** The range a drawn window's rise and its requests fall in, as the account's sessions burn the window. */
+  rise: [number, number];
+  requests: [number, number];
+  /** The chance a 5-hour gap is an idle stretch, then the fewest and the most hours one runs. */
+  idle?: [number, number, number];
+  /** The drawn windows, by their place in the chain from the newest, that read off the band, at these ratios. */
+  off?: Record<number, number>;
+  /** The drawn 5-hour windows whose rise stays under the band's 5% floor, by their place. */
+  quiet?: number[];
+  /** The drawn windows whose attempts the router priced at a model tier's estimate, by their place, with the count. */
+  estimated?: Record<number, number>;
+}
+
+const FIVE_HOURS = 5 * HOUR;
+const WEEK = 7 * DAY;
+/** The span the route answers: a window that ended before it has left the answer. */
+const SPAN_START = NOW - 30 * DAY;
+/** The rise in whole percents, as the readings move, and the priced share at four decimals. */
+const percent = (n: number) => Math.round(n * 100) / 100;
+const fourth = (n: number) => Math.round(n * 10_000) / 10_000;
+
+const HISTORIES: History[] = [
+  { accountId: 'primary', window: 'five_hour', newestEnd: clock(11, 44) - FIVE_HOURS, rise: [0.28, 0.66], requests: [90, 240], idle: [0.25, 4, 11], off: { 13: 1.34 }, quiet: [21] },
+  { accountId: 'secondary', window: 'five_hour', newestEnd: NOW - 4 * HOUR - 35 * MINUTE, rise: [0.3, 0.8], requests: [40, 160], idle: [0.3, 5, 14], quiet: [9, 26] },
+  // Nightly's batch runs the window hard, and the meter charged it off the table twice more in the month.
+  { accountId: 'nightly', window: 'five_hour', newestEnd: NOW - 15 * HOUR - 50 * MINUTE - FIVE_HOURS, rise: [0.35, 0.82], requests: [50, 190], idle: [0.2, 3, 9], off: { 3: 1.46, 17: 0.72 }, quiet: [6], estimated: { 1: 3, 12: 5 } },
+  { accountId: 'studio', window: 'five_hour', newestEnd: clock(10, 29) - FIVE_HOURS, rise: [0.12, 0.45], requests: [5, 40], idle: [0.6, 10, 30], quiet: [2, 8] },
+  // Legacy's credential lapsed two days back and its account served nothing for a week, so its history stopped there.
+  { accountId: 'legacy', window: 'five_hour', newestEnd: NOW - 8 * DAY - HOUR, rise: [0.2, 0.55], requests: [20, 90], idle: [0.35, 6, 16] },
+  { accountId: 'primary', window: 'seven_day', newestEnd: NOW - 3 * DAY - 18 * HOUR - 20 * MINUTE - WEEK, rise: [0.55, 0.8], requests: [1_900, 2_600] },
+  { accountId: 'primary', window: 'seven_day_fable', newestEnd: NOW - 3 * DAY - 18 * HOUR - 20 * MINUTE, rise: [0.08, 0.2], requests: [120, 340] },
+  { accountId: 'secondary', window: 'seven_day', newestEnd: NOW - DAY - 21 * HOUR - 55 * MINUTE, rise: [0.6, 0.9], requests: [700, 1_300], off: { 2: 1.31 } },
+  { accountId: 'nightly', window: 'seven_day', newestEnd: NOW - 5 * DAY - 5 * HOUR - 48 * MINUTE - WEEK, rise: [0.6, 0.85], requests: [1_200, 1_700] },
+  { accountId: 'nightly', window: 'seven_day_fable', newestEnd: NOW - 5 * DAY - 5 * HOUR - 48 * MINUTE, rise: [0.45, 0.7], requests: [300, 520], estimated: { 0: 6 } },
+  { accountId: 'studio', window: 'seven_day', newestEnd: NOW - 2 * DAY - 14 * HOUR - 40 * MINUTE, rise: [0.25, 0.45], requests: [60, 140] },
+  { accountId: 'studio', window: 'seven_day_fable', newestEnd: NOW - 2 * DAY - 14 * HOUR - 40 * MINUTE - WEEK, rise: [0.15, 0.3], requests: [14, 40] },
+  { accountId: 'legacy', window: 'seven_day', newestEnd: NOW - 9 * DAY - 2 * HOUR, rise: [0.4, 0.7], requests: [500, 900] },
+];
+
+/**
+ * Each history's windows from its newest back over the trailing 30 days, drawn from one seed so every load reads one
+ * set: a 5-hour window starts at its predecessor's reset or after an idle stretch, so consecutive ends lie at least
+ * five hours apart, and a week ends a week after the one before. A ratio sits near the table unless the history marks
+ * the window off, and a quiet window's rise stays under the 5% floor the band judges from.
+ */
+function drawHistories(): Reconciliation[] {
+  const rng = createRng(0x6d65_7465);
+  return HISTORIES.flatMap((h) => {
+    const weekly = h.window !== 'five_hour';
+    const period = weekly ? WEEK : FIVE_HOURS;
+    const rows: Reconciliation[] = [];
+    for (let end = h.newestEnd, place = 0; end >= SPAN_START; place += 1) {
+      const quiet = h.quiet?.includes(place) ?? false;
+      const rise = quiet ? percent(rng.float(0.01, 0.04)) : percent(rng.float(h.rise[0], h.rise[1]));
+      const ratio = h.off?.[place] ?? (quiet ? rng.float(0.5, 2.2) : rng.float(0.9, 1.12));
+      const share = fourth(rise / ratio);
+      const first = end - period + (weekly ? rng.int(1, 8) * HOUR : rng.int(2, 30) * MINUTE);
+      const last = end - (weekly ? rng.int(10, 60) : rng.int(1, 8)) * MINUTE;
+      const requests = quiet ? rng.int(1, 6) : rng.int(h.requests[0], h.requests[1]);
+      rows.push(reconciled(h.accountId, h.window, end, [first, last], rise, share, requests, h.estimated?.[place] ?? 0));
+      const idle = !weekly && h.idle !== undefined && rng.chance(h.idle[0]);
+      end -= period + (weekly ? 0 : idle ? rng.int(h.idle![1], h.idle![2]) * HOUR : rng.int(0, 40) * MINUTE);
+    }
+    return rows;
+  });
+}
+
+const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The completed windows of the story's priced accounts over the trailing 30 days, newest first and then by account and
+ * window as the route orders them: the story's own rows the newest of their windows, and before them each account's
+ * history, every ratio the rise over the share as stored. Legacy's history stops before its idle week, and reserve,
+ * spare, the seat, sunset and the API keys priced nothing the ledger could reconcile.
+ */
+export const RECONCILIATIONS: Reconciliation[] = [...STORY_ROWS, ...drawHistories()].sort(
+  (x, y) => Date.parse(y.windowEnd) - Date.parse(x.windowEnd) || byteOrder(x.accountId, y.accountId) || byteOrder(x.window, y.window),
+);
 
 /** The reconciled windows as the route answers them, narrowed to the Accounts filter, every account's without one. */
 export function reconciliationsOf(rows: Reconciliation[], filters: Pick<AnalyticsQuery, 'accountIds'> = {}): ReconciliationsAnswer {
@@ -806,7 +892,6 @@ export function reconciliationsOf(rows: Reconciliation[], filters: Pick<Analytic
 /** The route's keys of the weekly windows the quota history names by the console's ids. */
 const WEEKLY_KEY: Record<string, string> = { '7d': 'seven_day', '7d_fable': 'seven_day_fable' };
 const isWeekly = (window: string) => window === 'seven_day' || window.startsWith('seven_day_');
-const byteOrder = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
  * The term's end the route reads at `at`: the saved end while canceled, else a trial end still ahead, and the

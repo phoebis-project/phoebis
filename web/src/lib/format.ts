@@ -238,6 +238,14 @@ export function instant(ms: number, now: number): string {
 }
 
 /**
+ * An instant with its date always written ("Sep 16 13:11"): the Meter's window ends are read against each other across
+ * days, so a window that ended today carries its date as `instant` would drop it.
+ */
+export function fmtDated(ms: number): string {
+  return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(new Date(ms).toISOString())}`;
+}
+
+/**
  * The clock time within a day of `now`, else the date before it ("Sep 14 09:12:05"), the seconds kept and the threshold
  * `instant`'s, so the two agree on which rows carry a date.
  */

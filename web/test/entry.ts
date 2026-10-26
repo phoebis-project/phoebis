@@ -22,6 +22,7 @@ export * from '@/lib/forms';
 export * from '@/lib/guardrails';
 export * from '@/lib/keepalive';
 export * from '@/lib/menu';
+export * from '@/lib/meter';
 export * from '@/lib/pattern';
 export * as modelPatterns from '@/lib/patterns';
 export * from '@/lib/presets';

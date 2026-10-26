@@ -45,6 +45,7 @@ test('an item opens the page where its condition is fixed, and an item without a
   assert.equal(attentionHref(item('client_drift', { link: { id: 'laptop', page: 'keys' } }), NOW), '/keys#laptop');
   assert.equal(attentionHref(item('client_drift', { link: { id: 'a b#c', page: 'keys' } }), NOW), '/keys#a%20b%23c', 'an id travels encoded');
   assert.equal(attentionHref(item('client_drift'), NOW), null, 'a drift refusal that carried no key has nothing to open');
+  assert.equal(attentionHref(item('meter_drift', { link: { id: 'nightly', page: 'accounts' } }), NOW), '/meter?accounts=nightly', 'a meter drift opens the Meter view narrowed to its account');
   assert.equal(attentionHref(item('writer_degraded', { subject: { id: 'routing', label: 'routing', type: 'router' } }), NOW), null, "the router's own component has nothing to open");
   // An estimated weight shows in the cost reference dialog, which no address opens, so the item has nothing to open.
   const unweighted = { detail: { model: 'claude-sonnet-4-6', requests: 12, tier: 'sonnet', weight_of: 'claude-sonnet-5-5' }, kind: 'model_unweighted', pools: [], since: NOW, subject: { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', type: 'model' } };
@@ -243,7 +244,7 @@ test('the four routing conditions read the count, the setting and the start on t
   for (const kind of ['wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long']) assert.equal(attentionDetail(item(kind, { ...account, detail: {} }), NOW), attentionWords(item(kind, { ...account, detail: {} }), NOW).replace(/^primary: /, ''), `${kind}'s row reads the words without the subject`);
 });
 
-test('a meter drift item words its off windows and opens the Burn tab on the account', () => {
+test('a meter drift item words its off windows and opens the Meter view on the account', () => {
   // A local clock time, so the words read 14:20 in any zone, and it lies within a day of NOW there.
   const since = new Date(2026, 8, 18, 14, 20).toISOString();
   const account = { link: { id: 'acct-a', page: 'accounts' }, pools: ['main'], since, subject: { id: 'acct-a', label: 'acct-a', type: 'account' } };
@@ -258,7 +259,7 @@ test('a meter drift item words its off windows and opens the Burn tab on the acc
   assert.equal(attentionWords(fable, NOW), 'acct-a: Fable charged 0.7x the table, since 14:20', 'a ratio drops its one trailing zero');
   assert.equal(ATTENTION_TONE.meter_drift, 'warning');
   const url = new URL(attentionHref(drift, NOW), 'http://console.test');
-  assert.deepEqual([url.pathname, Object.fromEntries(url.searchParams), url.hash], ['/analytics', { accounts: 'acct-a' }, '#burn'], 'Analytics on the account with the Burn section in view');
+  assert.deepEqual([url.pathname, Object.fromEntries(url.searchParams), url.hash], ['/meter', { accounts: 'acct-a' }, ''], 'the Meter view on the account');
   assert.equal(attentionLogLine(drift, NOW), null, 'the item opens no routing log');
 });
 

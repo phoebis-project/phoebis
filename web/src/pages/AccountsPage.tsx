@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError } from '@/api';
-import type { Account, AllowanceAccount, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, SubscriptionCosts } from '@/api/types';
+import type { Account, AllowanceAccount, AllowanceWindow, PairingConfirmed, PairingPreview, PairingSession, QuotaHistory, ReconciliationsAnswer, SubscriptionCosts } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
@@ -15,19 +15,21 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { ACCOUNTS_CODEC } from '@/lib/address';
+import { ACCOUNTS_CODEC, METER_CODEC } from '@/lib/address';
 import { FREE_NOTE, allowanceFigure, allowanceSpan, allowanceSubtitle, allowanceWindows, newestResets, resetDate, resetHover, resetInstant, type AllowanceFigure } from '@/lib/allowance';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
+import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow, useQueryFilters } from '@/lib/hooks';
+import { latestPerWindow, meterGroups, meterWindowWord } from '@/lib/meter';
 import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, isFastScope, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { speedHover } from '@/lib/selection';
 import { joinTrend } from '@/lib/trend';
 import type { UnitPosition } from '@/lib/unit';
 import { WINDOW_HOURS, WINDOW_LABEL, windowKeyId } from '@/lib/windows';
+import { MeterRatio } from '@/pages/MeterPage';
 
 /** The Status dimension's options, in the labels' order. */
 const STATUS_OPTIONS = { status: ACCOUNT_STATUSES.map((s) => ({ label: STATUS_LABEL[s], value: s })) };
@@ -281,6 +283,9 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
     .map((w) => w.resetsAt ?? '')
     .join(',');
   const allowance = useAsync(() => (allowanceShown ? api.getAnalyticsUnusedAllowance(allowanceSpan(clock.now()), { accountIds: [account.id] }) : Promise.resolve(null)), [account.id, generation, weeklyResetsAt]);
+  // The ledger reconciles hourly, so the drift card reads once per account and on the bar's Refresh, never at the list's
+  // cadence, and it reconciles plan windows alone, which neither an API-key account nor a seat reports.
+  const drift = useAsync(() => (allowanceShown ? api.getAnalyticsReconciliations({ accountIds: [account.id] }) : Promise.resolve(null)), [account.id, generation]);
   const [busy, setBusy] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
@@ -737,6 +742,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onBusyChange
             }}
             unit={unit}
           />
+          <DriftCard accountId={account.id} answer={drift.data} error={drift.error} onRetry={drift.reload} />
         </div>
       )}
 
@@ -853,6 +859,57 @@ function AllowanceCard({ answer, costs, error, onRetry, unit }: { answer: Allowa
           </div>
           {answer.plan === 'free' && unit !== 'share' && <p className="muted detail__note">{FREE_NOTE}</p>}
         </>
+      )}
+    </Card>
+  );
+}
+
+const DRIFT_SUBTITLE = "The latest completed window of each kind, the upstream's rise over the router's priced share, and the windows off the band in 30 days";
+
+/**
+ * "Meter drift", one line per window kind the account's completed windows hold, in the windows' order: the newest
+ * window's ratio, its end and the windows off the band over the trailing 30 days. `answer` is null while the read runs.
+ */
+function DriftCard({ accountId, answer, error, onRetry }: { accountId: string; answer: ReconciliationsAnswer | null; error: string | null; onRetry: () => void }) {
+  const rows = answer === null ? null : answer.reconciliations.filter((r) => r.accountId === accountId);
+  const groups = rows === null ? [] : Object.values(meterGroups(rows)).flat();
+  return (
+    <Card title="Meter drift" subtitle={DRIFT_SUBTITLE} actions={<Link to={`/meter?${METER_CODEC.toParams({ accounts: [accountId] })}`}>Meter</Link>}>
+      {error !== null ? (
+        <ErrorState
+          title="Could not load the meter reconciliation"
+          body={error}
+          action={
+            <Button size="sm" onClick={onRetry}>
+              Try again
+            </Button>
+          }
+        />
+      ) : rows === null ? (
+        <Skeleton height={60} />
+      ) : rows.length === 0 ? (
+        <p className="muted">No completed window yet</p>
+      ) : (
+        <KeyValue
+          rows={latestPerWindow(rows).map((latest) => {
+            const group = groups.find((g) => g.window === latest.window);
+            const off = group?.off ?? 0;
+            const windows = group?.rows.length ?? 1;
+            return {
+              label: meterWindowWord(latest.window),
+              value: (
+                <span className="meter-drift__line">
+                  <span className="meter-drift__ratio">
+                    <MeterRatio row={latest} />
+                  </span>
+                  <span className="meter-drift__meta" title={`ended ${fmtAbsolute(latest.windowEnd)}, ${off} of the ${windows} ${windows === 1 ? 'window' : 'windows'} of the last 30 days off the band`}>
+                    {`${fmtDated(Date.parse(latest.windowEnd))}, ${off} of ${windows} off`}
+                  </span>
+                </span>
+              ),
+            };
+          })}
+        />
       )}
     </Card>
   );

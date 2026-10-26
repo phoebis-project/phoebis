@@ -657,9 +657,9 @@ reads a ratio outside 0.8 to 1.25 between the rise the upstream's readings showe
 its own requests in it, and only where the rise and the priced share both reach 5%, since one reading step over a
 smaller priced share reads far off. The ledger reconciles each account's completed 5-hour, 7-day and Fable windows every
 hour, prices the plan-funded attempts inside them under each attempt's regime, and keeps the rows for 30 days, which the
-Meter reconciliation card of the [Analytics](console.md#analytics) view lists. The condition reads only a window that
-ended inside the last eight days while the card keeps its rows for 30, so an account that serves nothing leaves the
-condition within eight days of its newest window's end. A window's rise is read between two readings of one source, the
+[Meter](console.md#meter) view lists. The condition reads only a window that ended inside the last eight days while the
+view keeps its rows for 30, so an account that serves nothing leaves the condition within eight days of its newest
+window's end. A window's rise is read between two readings of one source, the
 poll's where the window saw two or more polls and the head's otherwise, since the head truncates the percent the poll
 rounds, and the attempts priced are those completed between the two. A fall inside a window splits its run, except a
 head at most one percent under the poll before it, and the parts' rises and priced shares sum into the window's one row.
@@ -667,7 +667,7 @@ A window whose reset slid, a later reading naming a later reset while its own st
 subject is the account, and the item dates from the oldest off window's end. The detail names the off windows with their
 ratios, the cost model's source and the revision in force, since the fix is the cost model file. The dashboard's line
 reads it under the label "Meter drift against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`,
-and it opens the Analytics view on the account with the Burn section in view.
+and it opens the Meter view on the account.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is

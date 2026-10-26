@@ -225,6 +225,9 @@ export const ROUTING_LOG_DIMENSIONS: Dimension[] = [
   { field: 'session', group: 'Subject', kind: 'id', label: 'Session', mono: true, word: 'session' },
 ];
 
+/** Account alone: the route answers the trailing 30 days whatever the range, so the view offers none. */
+export const METER_DIMENSIONS: Dimension[] = [ACCOUNT];
+
 /** Routing, Request, Subject. The client pattern travels as `class` and reads "client", as on Requests. */
 export const ANALYTICS_DIMENSIONS: Dimension[] = [
   { ...ACCOUNT, mono: true },

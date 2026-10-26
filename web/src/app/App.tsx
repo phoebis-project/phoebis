@@ -6,6 +6,7 @@ import { reloadOnChunkFailure } from '@/lib/chunks';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { GuardrailsPage } from '@/pages/GuardrailsPage';
 import { KeysPage } from '@/pages/KeysPage';
+import { MeterPage } from '@/pages/MeterPage';
 import { QuotaPage } from '@/pages/QuotaPage';
 import { RequestsPage } from '@/pages/RequestsPage';
 import { RoutingLogPage } from '@/pages/RoutingLogPage';
@@ -46,6 +47,7 @@ export const routes = [
       { path: 'requests', element: <RequestsPage /> },
       { path: 'requests/:requestId', element: <RequestsPage /> },
       { path: 'routing-log', element: <RoutingLogPage /> },
+      { path: 'meter', element: <MeterPage /> },
       { path: 'sessions', element: <SessionsPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],

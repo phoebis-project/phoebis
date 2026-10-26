@@ -1,5 +1,5 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
-import { ANALYTICS_CODEC } from './address';
+import { METER_CODEC } from './address';
 import { fmtAbsolute, fmtRelative, instant as clockInstant } from './format';
 import { WINDOW_WORD, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { speedWord } from './selection';
@@ -71,9 +71,9 @@ function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'account
 
 /**
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
- * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens Analytics on
- * the account with the Burn section in view, where the reconciled windows behind it are listed. Every other kind opens
- * the account, pool or key where it is fixed. Null when the item names none, and for a kind this console does not
+ * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens the Meter view
+ * narrowed to the account, where its reconciled windows are listed. Every other kind opens the account, pool or key
+ * where it is fixed. Null when the item names none, and for a kind this console does not
  * know whatever its link, since the console cannot say what the page would fix.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
@@ -84,7 +84,7 @@ export function attentionHref(item: LinkedItem, now: number): string | null {
   if (pool !== null) return logHref({ pools: [pool], kinds: ['exhausted'], ...since });
   const condition = conditionLog(item);
   if (condition !== null) return logHref({ ...condition.log, ...since });
-  if (item.kind === 'meter_drift' && link.page === 'accounts') return `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.fromParams(new URLSearchParams()), accounts: [link.id] })}#burn`;
+  if (item.kind === 'meter_drift' && link.page === 'accounts') return `/meter?${METER_CODEC.toParams({ accounts: [link.id] })}`;
   const id = encodeURIComponent(link.id);
   return link.page === 'accounts' ? `/accounts/${id}` : `/${link.page}#${id}`;
 }

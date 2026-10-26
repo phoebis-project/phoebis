@@ -653,8 +653,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
       ? [['Model weight estimated: claude-sonnet-4-6', 'badge--warning', null, [attentionDetail(unweighted, Date.now()), `model: ${unweighted.detail.model}`, `requests: ${unweighted.detail.requests}`, `tier: ${unweighted.detail.tier}`, `weight_of: ${unweighted.detail.weight_of}`]]]
       : []),
     // Nightly's meter drift ranks after the model's item and before the routing conditions, reads its off window and
-    // opens Analytics on the account.
-    ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/analytics', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows.map((w) => ({ ...w, window_end: fmtAbsolute(new Date(w.window_end).toISOString()) })))}`]],
+    // opens the Meter view on the account.
+    ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/meter', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows.map((w) => ({ ...w, window_end: fmtAbsolute(new Date(w.window_end).toISOString()) })))}`]],
     // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log.
     // Nightly's walls, its poll's edge and the 429's head after the clear, have no 5-hour round before them, so they
     // name no projection.
@@ -4817,6 +4817,150 @@ m.unmount();
   });
   watched.unmount();
 }
+{
+  // "Meter drift" over the mock's reconciled windows (`RECONCILIATIONS` in mock/analytics.ts), second in the grid beside
+  // "Allowance left at reset": primary's newest 5-hour window ended at the 11:44 reset (0.52 over 0.5), its newest 7-day
+  // and Fable weeks where its current ones began, and nightly's newest 5-hour window ended at the 13:11 reset, charged
+  // twice the table (0.3 over 0.15). Every line is read off the answer the card was handed. The smoke runs under TZ=UTC,
+  // so each end reads its UTC text, where a viewer's zone would move its day and hour.
+  const SUBTITLE = "The latest completed window of each kind, the upstream's rise over the router's priced share, and the windows off the band in 30 days";
+  const UNJUDGED = 'the rise or the priced share is under 5%, so the band does not judge this ratio';
+  const WORD = { five_hour: '5-hour', seven_day: '7-day', seven_day_fable: 'Fable' };
+  // The band's rule as the console reads it: a rise and a priced share each of 5% or more, a ratio outside 0.8 to 1.25.
+  const judged = (r) => r.observedRise >= 0.05 && r.predictedShare >= 0.05;
+  const isOff = (r) => judged(r) && (r.ratio < 0.8 || r.ratio > 1.25);
+  const text = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+  const dated = (iso) => `${new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' })}`;
+  const cardOf = (page) => [...page.container.querySelectorAll('.detail .card')].find((c) => text(c.querySelector('.card__title')) === 'Meter drift') ?? null;
+  const driftOf = (page) => {
+    const card = cardOf(page);
+    if (!card) return null;
+    const grid = card.parentElement;
+    const link = card.querySelector('.card__actions a');
+    return {
+      action: [text(link), link?.getAttribute('href') ?? null],
+      empty: text(card.querySelector(':scope > p.muted')),
+      error: text(card.querySelector('.empty--error .empty__title')),
+      grid: [grid?.className ?? null, [...(grid?.children ?? [])].map((c) => text(c.querySelector('.card__title')))],
+      lines: [...card.querySelectorAll('.kv__row')].map((row) => ({
+        badge: row.querySelector('.meter-drift__ratio .badge')?.className ?? null,
+        label: text(row.querySelector('dt')),
+        meta: [text(row.querySelector('.meter-drift__meta')), row.querySelector('.meter-drift__meta')?.getAttribute('title') ?? null],
+        ratio: [text(row.querySelector('.meter-drift__ratio')), row.querySelector('.meter-drift__ratio > *')?.getAttribute('title') ?? null, row.querySelector('.meter-drift__ratio .muted') !== null],
+      })),
+      subtitle: text(card.querySelector('.card__subtitle')),
+    };
+  };
+  /** The lines an account's rows read: per window kind, in the windows' order, the newest row and the kind's off count. */
+  const linesOf = (rows) =>
+    Object.keys(WORD)
+      .filter((w) => rows.some((r) => r.window === w))
+      .map((w) => {
+        const mine = rows.filter((r) => r.window === w).sort((x, y) => Date.parse(y.windowEnd) - Date.parse(x.windowEnd));
+        const [latest] = mine;
+        const off = mine.filter(isOff).length;
+        return {
+          badge: isOff(latest) ? 'badge badge--warning' : null,
+          label: WORD[w],
+          meta: [`${dated(latest.windowEnd)}, ${off} of ${mine.length} off`, `ended ${fmtAbsolute(latest.windowEnd)}, ${off} of the ${mine.length} ${mine.length === 1 ? 'window' : 'windows'} of the last 30 days off the band`],
+          ratio: [latest.ratio.toFixed(2), judged(latest) ? latest.ratio.toFixed(4) : `${latest.ratio.toFixed(4)}, ${UNJUDGED}`, !judged(latest)],
+        };
+      });
+  const seen = recordedCalls('getAnalyticsReconciliations');
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  seen.restore();
+  const asked = seen.calls.map((c) => JSON.stringify(c.args));
+  const answered = seen.calls[0]?.answer?.reconciliations ?? [];
+  const primary = driftOf(page);
+  const want = linesOf(answered);
+  results.push({
+    name: '/accounts/primary "Meter drift" sits second in the grid beside the allowance block, its one read narrowed to the account, one line per window kind with the newest window\'s ratio, its end and the off windows of the 30 days',
+    ok:
+      primary !== null &&
+      JSON.stringify(primary.grid) === JSON.stringify(['detail__grid detail__grid--meter', ['Allowance left at reset', 'Meter drift']]) &&
+      primary.subtitle === SUBTITLE &&
+      JSON.stringify(seen.calls.map((c) => c.args)) === '[[{"accountIds":["primary"]}]]' &&
+      answered.length > 0 &&
+      answered.every((r) => r.accountId === 'primary') &&
+      JSON.stringify(primary.lines.map((l) => l.label)) === '["5-hour","7-day","Fable"]' &&
+      JSON.stringify(primary.lines) === JSON.stringify(want) &&
+      primary.lines[0].ratio[0] === '1.04' &&
+      primary.lines[0].meta[0].startsWith('Sep 16 11:44, '),
+    missing: [JSON.stringify(primary), JSON.stringify(want), ...asked],
+  });
+  const link = cardOf(page)?.querySelector('.card__actions a');
+  link?.click();
+  await page.settle();
+  const landed = page.location();
+  results.push({
+    name: '/accounts/primary the drift card\'s "Meter" action opens the Meter view narrowed to the account',
+    ok: JSON.stringify(primary?.action) === '["Meter","/meter?accounts=primary"]' && `${landed.pathname}${landed.search}` === '/meter?accounts=primary',
+    missing: [JSON.stringify(primary?.action), JSON.stringify(landed)],
+  });
+  page.unmount();
+
+  const nightlyRead = recordedCalls('getAnalyticsReconciliations');
+  const nightly = await mount('/accounts/nightly', { now: CLOCK_ORIGIN });
+  nightlyRead.restore();
+  const nightlyRows = nightlyRead.calls[0]?.answer?.reconciliations ?? [];
+  const night = driftOf(nightly);
+  results.push({
+    name: "/accounts/nightly the drift card badges the 5-hour line's ratio, its newest window ending at the 13:11 reset charged twice the table",
+    ok: JSON.stringify(night?.lines) === JSON.stringify(linesOf(nightlyRows)) && night?.lines[0]?.badge === 'badge badge--warning' && JSON.stringify(night?.lines[0]?.ratio) === '["2.00","2.0000",false]' && night.lines[0].meta[0].startsWith('Sep 16 13:11, ') && night.lines.slice(1).every((l) => l.badge === null),
+    missing: [JSON.stringify(night), JSON.stringify(linesOf(nightlyRows))],
+  });
+  nightly.unmount();
+
+  // Reserve priced nothing, so the ledger reconciled none of its windows.
+  const quiet = await mount('/accounts/reserve', { now: CLOCK_ORIGIN });
+  const none = driftOf(quiet);
+  results.push({ name: '/accounts/reserve an account with no completed window reads the empty words in the lines\' place', ok: none?.empty === 'No completed window yet' && none.lines.length === 0, missing: [JSON.stringify(none)] });
+  quiet.unmount();
+
+  // An API-key account and a usage-based seat reconcile no plan window, so neither draws the card nor reads its route.
+  const unread = countCalls('getAnalyticsReconciliations');
+  const drawn = [];
+  for (const id of ['annex', 'contract']) {
+    const other = await mount(`/accounts/${id}`, { now: CLOCK_ORIGIN });
+    if (driftOf(other) !== null) drawn.push(id);
+    other.unmount();
+  }
+  unread.restore();
+  results.push({ name: '/accounts an API-key account and a usage-based seat draw no drift card and read no reconciliations route', ok: drawn.length === 0 && unread.calls.length === 0, missing: [`drawn on ${JSON.stringify(drawn)}`, `${unread.calls.length} reads`] });
+
+  // A failed read draws the error state with Try again, which reads the route again and draws the lines.
+  failNextCall('getAnalyticsReconciliations', '/admin/analytics/reconciliations', 'ledger locked');
+  const failed = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const down = driftOf(failed);
+  [...(cardOf(failed)?.querySelectorAll('button') ?? [])].find((b) => text(b) === 'Try again')?.click();
+  await failed.settle();
+  const back = driftOf(failed);
+  // A page that never read the route leaves the failure armed, so the method goes back before the checks after this.
+  delete api.getAnalyticsReconciliations;
+  results.push({
+    name: '/accounts/primary a failed drift read draws the error state with Try again, which draws the lines',
+    ok: down?.error === 'Could not load the meter reconciliation' && down.lines.length === 0 && JSON.stringify(back?.lines) === JSON.stringify(want) && back?.error === null,
+    missing: [JSON.stringify(down), JSON.stringify(back?.lines ?? null)],
+  });
+  failed.unmount();
+
+  // The card reads once per account and again on the bar's Refresh, never at the list's 5 s cadence, since the ledger
+  // reconciles hourly.
+  const watched = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const reads = countCalls('getAnalyticsReconciliations');
+  tick(5_000);
+  await watched.settle();
+  const polled = reads.calls.length;
+  watched.container.querySelector('.refresh-control__body[aria-label="Refresh"]')?.click();
+  await watched.settle();
+  reads.restore();
+  results.push({
+    name: "/accounts/primary the drift card reads again on Refresh and not at the list's cadence",
+    ok: polled === 0 && reads.calls.length === 1 && JSON.stringify(reads.calls[0]) === '[{"accountIds":["primary"]}]',
+    missing: [`${polled} after the poll, ${reads.calls.length} after Refresh`, ...reads.calls.map((c) => JSON.stringify(c))],
+  });
+  watched.unmount();
+}
 await readsAgain('/accounts', 'listAccounts', 5_000);
 
 // Picks an Analytics tab on the given mount and lets its section's reads land; a check reads its counts afterwards.
@@ -5241,7 +5385,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Client drift', '2.1.271', '/keys#laptop'],
           ['Funding required', 'Overflow workspace', '/accounts/overflow'],
           ['Usage poll backing off', 'secondary', '/accounts/secondary'],
-          ['Meter drift against the table', 'nightly', '/analytics'],
+          ['Meter drift against the table', 'nightly', '/meter'],
           ['Wall reached under the ceiling', 'nightly', '/routing-log'],
           ['Wall reached under the ceiling', 'secondary', '/routing-log'],
           ['Destination spent within the hour', 'nightly', '/routing-log'],
@@ -5465,7 +5609,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Client drift', '/keys#laptop'],
           ['Funding required', '/accounts/overflow'],
           ['Usage poll backing off', '/accounts/secondary'],
-          ['Meter drift against the table', '/analytics?accounts=nightly#burn'],
+          ['Meter drift against the table', '/meter?accounts=nightly'],
           ['Wall reached under the ceiling', sinceThen({ accounts: 'nightly', kinds: 'window_spent' }, since('wall_reached', 'nightly'))],
           ['Wall reached under the ceiling', sinceThen({ accounts: 'secondary', kinds: 'window_spent' }, since('wall_reached', 'secondary'))],
           ['Destination spent within the hour', sinceThen({ accounts: 'nightly', kinds: 'pin_migrated,window_spent' }, since('destination_spent', 'nightly'))],
@@ -14930,7 +15074,7 @@ m.unmount();
     const open = {
       active: group?.querySelector('a.nav__link.is-active')?.getAttribute('href') ?? null,
       heading: group?.querySelector('.nav__heading')?.textContent ?? null,
-      links: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim()).slice(-2),
+      links: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim()).slice(-3),
       title: [document.title, m.container.querySelector('.topbar__title')?.textContent],
     };
     const expert = localStorage.getItem('phoebis.expertView');
@@ -14945,9 +15089,9 @@ m.unmount();
     if (expert === null) localStorage.removeItem('phoebis.expertView');
     else localStorage.setItem('phoebis.expertView', expert);
     results.push({
-      name: '/routing-log sits under the Diagnostics heading, active while open, and the heading is absent on the Dashboard with the expert view off',
+      name: '/routing-log sits under the Diagnostics heading before Meter, active while open, and the heading is absent on the Dashboard with the expert view off',
       ok:
-        open.heading === 'Diagnostics' && open.active === '/routing-log' && JSON.stringify(open.links) === JSON.stringify(['Settings', 'Routing log']) && JSON.stringify(open.title) === JSON.stringify(['Routing log - Phoebis Router', 'Routing log']) &&
+        open.heading === 'Diagnostics' && open.active === '/routing-log' && JSON.stringify(open.links) === JSON.stringify(['Settings', 'Routing log', 'Meter']) && JSON.stringify(open.title) === JSON.stringify(['Routing log - Phoebis Router', 'Routing log']) &&
         !dashboard.heading && !dashboard.link && expertOn.heading === 'Diagnostics' && expertOn.active === false,
       missing: [JSON.stringify(open), JSON.stringify(dashboard), JSON.stringify(expertOn)],
     });
@@ -16651,6 +16795,303 @@ m.unmount();
     results.push({ name: '/routing-log no chip, value or cell joins values with a comma or a semicolon, the user agent and the When excepted', ok: scanned.length > 40 && read > 1000 && wrong.length === 0, missing: [`${scanned.length} panels, ${read} read`, ...wrong.slice(0, 8)] });
   }
   m.unmount();
+}
+
+// The Meter view in the Diagnostics group over the mock's reconciled windows (`RECONCILIATIONS` in mock/analytics.ts):
+// nightly's newest 5-hour window ended at the 13:11 reset charged twice the table, three of its 5-hour windows off the
+// band, and studio's 5-hour group none. Every count and figure is read off the answer the page was handed through the
+// call layer, so the story's figures are the fold's over the route's rows. The smoke runs under TZ=UTC, so an end reads
+// its UTC text, where a viewer's zone would move its day and hour.
+{
+  const METER_HINT =
+    "Each subscription account's completed windows of the last 30 days, grouped by account and window kind: the rise the upstream's readings showed against the share the router priced for its own requests in it. 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked.";
+  const UNJUDGED = 'the rise or the priced share is under 5%, so the band does not judge this ratio';
+  const WORD = { five_hour: '5-hour', seven_day: '7-day', seven_day_fable: 'Fable' };
+  const WEEKLY = 'Weekly windows';
+  const FIVE = '5-hour windows';
+  const DAY = 24 * 3_600_000;
+  // The band's rule as the console reads it: a rise and a priced share each of 5% or more, a ratio outside 0.8 to 1.25.
+  const judged = (r) => r.observedRise >= 0.05 && r.predictedShare >= 0.05;
+  const isOff = (r) => judged(r) && (r.ratio < 0.8 || r.ratio > 1.25);
+  const text = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+  const clockOf = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' });
+  const dated = (iso) => `${new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${clockOf(iso)}`;
+  // The nested table's Ended cell reads `instant`: the clock alone within a day of now, the date before it further off.
+  const instantOf = (iso) => (Math.abs(Date.parse(iso) - CLOCK_ORIGIN) < DAY ? clockOf(iso) : dated(iso));
+  const cardOf = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => text(c.querySelector('.card__title')) === title);
+  const linesOf = (page, title) => [...(cardOf(page, title)?.querySelectorAll('.meter-table > tbody > tr.meter-row') ?? [])];
+  const lineOf = (page, title, account, word) => linesOf(page, title).find((tr) => text(tr.children[1]) === account && text(tr.children[2]) === word);
+  const drawn = (page, title) => linesOf(page, title).map((tr) => [text(tr.children[1]), text(tr.children[2])]);
+  const countOf = (page) => text(page.container.querySelector('.filter-bar__count'));
+  /** The groups an answer folds to, by account id and, inside an account, the windows' order. */
+  const groupsOf = (rows) => {
+    const rank = (w) => Object.keys(WORD).indexOf(w);
+    const keys = [...new Set(rows.map((r) => `${r.accountId}\u0000${r.window}`))].map((k) => k.split('\u0000'));
+    return keys.sort(([a, x], [b, y]) => (a < b ? -1 : a > b ? 1 : rank(x) - rank(y))).map(([a, w]) => [a, WORD[w]]);
+  };
+
+  // With the expert view off the Dashboard draws no Diagnostics group, and the Meter view opens anyway.
+  const expert = localStorage.getItem('phoebis.expertView');
+  localStorage.removeItem('phoebis.expertView');
+  const dashboard = await mount('/');
+  const hidden = { heading: dashboard.container.querySelector('.nav__heading') !== null, link: dashboard.container.querySelector('a[href="/meter"]') !== null };
+  dashboard.unmount();
+  const seen = recordedCalls('getAnalyticsReconciliations');
+  const page = await mount('/meter', { now: CLOCK_ORIGIN });
+  seen.restore();
+  const rows = seen.calls[0]?.answer?.reconciliations ?? [];
+  const group = page.container.querySelector('nav.nav > .nav__group');
+  const nav = {
+    active: group?.querySelector('a.nav__link.is-active')?.getAttribute('href') ?? null,
+    heading: text(group?.querySelector('.nav__heading')),
+    links: [...(group?.querySelectorAll('a.nav__link') ?? [])].map((a) => [text(a), a.getAttribute('href')]),
+    title: [document.title, text(page.container.querySelector('.topbar__title'))],
+  };
+  results.push({
+    name: '/meter opens with the expert view off under the Diagnostics heading after Routing log, its link active, while the Dashboard draws no group',
+    ok:
+      !hidden.heading &&
+      !hidden.link &&
+      localStorage.getItem('phoebis.expertView') === null &&
+      nav.heading === 'Diagnostics' &&
+      nav.active === '/meter' &&
+      JSON.stringify(nav.links) === JSON.stringify([['Routing log', '/routing-log'], ['Meter', '/meter']]) &&
+      JSON.stringify(nav.title) === JSON.stringify(['Meter - Phoebis Router', 'Meter']),
+    missing: [JSON.stringify(hidden), JSON.stringify(nav)],
+  });
+  if (expert !== null) localStorage.setItem('phoebis.expertView', expert);
+
+  // The bar: Add filter over Account alone, no range, the split Refresh with auto reload Off, the count of the groups and
+  // the windows the route answered, and under it the old card's hint.
+  addFilterButton(page)?.click();
+  await page.settle(100);
+  const offered = filterRows().map((r) => text(r.firstElementChild));
+  await closeBoxes(page);
+  const groups = groupsOf(rows);
+  const bar = page.container.querySelector('.filter-bar');
+  results.push({
+    name: '/meter its bar offers Account alone and no range, counts the groups and windows the route answered, opens with auto reload Off and carries the hint under it',
+    ok:
+      rows.length > 0 &&
+      JSON.stringify(seen.calls.map((c) => c.args)) === '[[{"accountIds":[]}]]' &&
+      JSON.stringify(offered) === '["Account"]' &&
+      bar?.querySelector('[aria-label="Range"]') === null &&
+      countOf(page) === `${groups.length} groups, ${rows.length} windows` &&
+      intervalWord(page) === 'Off' &&
+      text(page.container.querySelector('.page-head__meta')) === METER_HINT,
+    missing: [JSON.stringify(offered), countOf(page) ?? 'no count', `${groups.length} groups, ${rows.length} windows`, intervalWord(page) ?? 'no interval', text(page.container.querySelector('.page-head__meta')) ?? 'no hint'],
+  });
+
+  // The two cards and their collapsed lines.
+  const titles = [...page.container.querySelectorAll('.card__title')].map(text);
+  const actions = [WEEKLY, FIVE].map((t) => [...(cardOf(page, t)?.querySelectorAll('.card__actions button') ?? [])].map(text));
+  const weeklyWant = groups.filter(([, w]) => w !== '5-hour');
+  const fiveWant = groups.filter(([, w]) => w === '5-hour');
+  results.push({
+    name: '/meter draws Weekly windows above 5-hour windows, each with Expand all, one collapsed line per account and window kind by account id, the 7-day window before the Fable week',
+    ok:
+      JSON.stringify(titles) === JSON.stringify([WEEKLY, FIVE]) &&
+      JSON.stringify(actions) === '[["Expand all"],["Expand all"]]' &&
+      weeklyWant.length > 0 &&
+      fiveWant.length > 0 &&
+      JSON.stringify(drawn(page, WEEKLY)) === JSON.stringify(weeklyWant) &&
+      JSON.stringify(drawn(page, FIVE)) === JSON.stringify(fiveWant) &&
+      page.container.querySelectorAll('tr.srow__detail').length === 0,
+    missing: [JSON.stringify(titles), JSON.stringify(actions), JSON.stringify(drawn(page, WEEKLY)), JSON.stringify(weeklyWant), JSON.stringify(drawn(page, FIVE)), JSON.stringify(fiveWant)],
+  });
+  {
+    const table = cardOf(page, FIVE)?.querySelector('.meter-table');
+    const read = columnClasses(table);
+    const heads = [...(table?.querySelectorAll(':scope > thead th') ?? [])].map(text);
+    results.push({
+      name: '/meter every header cell after the gutter is fit or fill, and Account is the one fill column',
+      ok: JSON.stringify(heads) === JSON.stringify(['', 'Account', 'Window', 'Latest ratio', 'Off', 'Ratio, 30 days', 'Latest end', 'Windows']) && read.heads[0] === 'none' && read.heads.slice(1).every((c) => c === 'fit' || c === 'fill') && JSON.stringify(read.fills) === '["Account"]' && read.rows > 0 && read.cellsOff.length === 0,
+      missing: [JSON.stringify(heads), JSON.stringify(read.heads), JSON.stringify(read.fills), `${read.rows} rows`, ...read.cellsOff.slice(0, 5)],
+    });
+    fillTitles('/meter every Account cell of the 5-hour table carries its own text as its title', table);
+    fillTitles('/meter every Account cell of the weekly table carries its own text as its title', cardOf(page, WEEKLY)?.querySelector('.meter-table'));
+  }
+  const nightlyRows = rows.filter((r) => r.accountId === 'nightly' && r.window === 'five_hour');
+  const [newest] = nightlyRows;
+  const line = lineOf(page, FIVE, 'nightly', '5-hour');
+  const lineRead = line && {
+    account: [text(line.children[1].querySelector('a')), line.children[1].querySelector('a')?.getAttribute('href') ?? null, line.children[1].classList.contains('mono')],
+    end: [text(line.children[6]), line.children[6].getAttribute('title')],
+    keys: [line.getAttribute('aria-expanded'), line.getAttribute('tabindex'), line.className],
+    off: text(line.children[4]),
+    ratio: [line.children[3].querySelector('.badge')?.className ?? null, text(line.children[3]), line.children[3].querySelector('.badge')?.getAttribute('title') ?? null],
+    spark: [line.children[5].querySelector('svg')?.getAttribute('width') ?? null, line.children[5].querySelector('svg')?.getAttribute('height') ?? null, line.children[5].querySelector('svg > title')?.textContent ?? null],
+    windows: text(line.children[7]),
+  };
+  const lineWant = newest && {
+    account: ['nightly', '/accounts/nightly', true],
+    end: ['Sep 16 13:11', fmtAbsolute(newest.windowEnd)],
+    keys: ['false', '0', 'srow meter-row'],
+    off: '3',
+    ratio: ['badge badge--warning', '2.00', '2.0000'],
+    spark: ['120', '24', `${nightlyRows.filter(judged).length} judged, 3 off, ${nightlyRows.filter((r) => !judged(r)).length} unjudged`],
+    windows: fmtInt(nightlyRows.length),
+  };
+  results.push({
+    name: "/meter nightly's collapsed 5-hour line reads the account link, the latest ratio badged, its three off windows, the spark's counts, the latest end with its date and the windows",
+    ok: nightlyRows.filter(isOff).length === 3 && lineRead !== undefined && JSON.stringify(lineRead) === JSON.stringify(lineWant),
+    missing: [JSON.stringify(lineRead ?? null), JSON.stringify(lineWant ?? null)],
+  });
+  const plain = lineOf(page, FIVE, 'studio', '5-hour');
+  const studioRows = rows.filter((r) => r.accountId === 'studio' && r.window === 'five_hour');
+  results.push({
+    name: "/meter studio's 5-hour line reads none off in the muted ink, its latest ratio plain with the four decimals on hover",
+    ok: studioRows.length > 0 && studioRows.filter(isOff).length === 0 && text(plain?.children[4]) === 'none' && plain?.children[4].querySelector('.muted') !== null && plain?.children[3].querySelector('.badge') === null && text(plain?.children[3]) === studioRows[0].ratio.toFixed(2) && plain?.children[3].querySelector('.num')?.getAttribute('title') === studioRows[0].ratio.toFixed(4),
+    missing: [JSON.stringify(plain ? [...plain.children].map(text) : null)],
+  });
+
+  // Nightly's 5-hour line opens to its newest ten windows in the old card's columns, then "Show 25 more".
+  line?.click();
+  await page.settle(100);
+  const detailOf = (tr) => (tr?.nextElementSibling?.classList.contains('srow__detail') ? tr.nextElementSibling : null);
+  const openRead = () => {
+    const detail = detailOf(line);
+    const inner = detail?.querySelector('table');
+    return {
+      detail: detail?.className ?? null,
+      head: [...(inner?.querySelectorAll(':scope > thead th') ?? [])].map(text),
+      line: [line?.className ?? null, line?.getAttribute('aria-expanded') ?? null],
+      more: [text(detail?.querySelector('.meter-detail__more > span')), text(detail?.querySelector('.meter-detail__more button'))],
+      // The nested table sits in the outer one's body, so its rows are read from its own body alone.
+      rows: [...(inner?.querySelectorAll(':scope > tbody > tr') ?? [])],
+    };
+  };
+  const opened = openRead();
+  const cellsOf = (tr) => [...tr.children].map(text);
+  const rowWant = (r) => [instantOf(r.windowEnd), fmtShare(r.observedRise), `${r.estimated > 0 ? '~' : ''}${fmtShare(r.predictedShare)}`, r.ratio.toFixed(2), fmtInt(r.requests), ''];
+  const firstRows = opened.rows.map(cellsOf);
+  results.push({
+    name: "/meter nightly's 5-hour line opens to its newest ten windows, the badge on the newest, then the count line with Show 25 more",
+    ok:
+      opened.detail === 'srow__detail table__detail' &&
+      JSON.stringify(opened.line) === '["srow meter-row is-open","true"]' &&
+      JSON.stringify(opened.head) === JSON.stringify(['Ended', 'Rise', 'Predicted', 'Ratio', 'Requests', '']) &&
+      nightlyRows.length > 10 &&
+      JSON.stringify(firstRows) === JSON.stringify(nightlyRows.slice(0, 10).map(rowWant)) &&
+      opened.rows[0]?.children[3].querySelector('.badge--warning') !== null &&
+      opened.rows[0]?.children[0].getAttribute('title') === `${fmtAbsolute(newest.windowEnd)}, reconciled ${fmtAbsolute(newest.computedAt)}` &&
+      JSON.stringify(opened.more) === JSON.stringify([`10 of ${nightlyRows.length} windows, newest first`, 'Show 25 more']),
+    missing: [JSON.stringify(opened.line), opened.detail ?? 'no detail', JSON.stringify(opened.head), JSON.stringify(opened.more), ...firstRows.map((r) => r.join(' | ')), ...nightlyRows.slice(0, 10).map((r) => rowWant(r).join(' | '))],
+  });
+  [...(detailOf(line)?.querySelectorAll('.meter-detail__more button') ?? [])][0]?.click();
+  await page.settle(100);
+  const more = openRead();
+  const shown = Math.min(35, nightlyRows.length);
+  const unjudgedAt = nightlyRows.slice(0, shown).findIndex((r) => !judged(r));
+  const estimatedAt = nightlyRows.slice(0, shown).findIndex((r) => r.estimated > 0);
+  const unjudgedCell = more.rows[unjudgedAt]?.children[3].querySelector('.num');
+  const estimatedCell = more.rows[estimatedAt]?.children[2];
+  results.push({
+    name: "/meter Show 25 more lists 25 more of nightly's windows, a ratio the band does not judge muted with its reason, an estimated share under its ~",
+    ok:
+      more.rows.length === shown &&
+      JSON.stringify(more.rows.map(cellsOf)) === JSON.stringify(nightlyRows.slice(0, shown).map(rowWant)) &&
+      JSON.stringify(more.more) === JSON.stringify(shown < nightlyRows.length ? [`${shown} of ${nightlyRows.length} windows, newest first`, 'Show 25 more'] : [null, null]) &&
+      unjudgedAt >= 0 &&
+      unjudgedCell?.classList.contains('muted') === true &&
+      unjudgedCell.getAttribute('title') === `${nightlyRows[unjudgedAt].ratio.toFixed(4)}, ${UNJUDGED}` &&
+      estimatedAt >= 0 &&
+      estimatedCell?.getAttribute('title') === `${fmtShare(nightlyRows[estimatedAt].predictedShare)}. ${ESTIMATED_TITLE}.`,
+    missing: [`${more.rows.length} rows of ${shown}`, JSON.stringify(more.more), `unjudged at ${unjudgedAt}: ${unjudgedCell?.outerHTML ?? 'none'}`, `estimated at ${estimatedAt}: ${estimatedCell?.outerHTML ?? 'none'}`],
+  });
+
+  // Enter on a focused line opens it as a click does, and Expand all opens every group of its own card.
+  plain?.focus();
+  pressKey('Enter', plain);
+  await page.settle(100);
+  [...(cardOf(page, WEEKLY)?.querySelectorAll('.card__actions button') ?? [])].find((b) => text(b) === 'Expand all')?.click();
+  await page.settle(100);
+  const openOf = (title) => linesOf(page, title).filter((tr) => tr.getAttribute('aria-expanded') === 'true').map((tr) => [text(tr.children[1]), text(tr.children[2])]);
+  results.push({
+    name: '/meter Enter opens a focused line, and Expand all opens every group of its card and leaves the other card as it stands',
+    ok: JSON.stringify(openOf(WEEKLY)) === JSON.stringify(weeklyWant) && cardOf(page, WEEKLY)?.querySelectorAll('tr.srow__detail').length === weeklyWant.length && JSON.stringify(openOf(FIVE)) === JSON.stringify([['nightly', '5-hour'], ['studio', '5-hour']]),
+    missing: [JSON.stringify(openOf(WEEKLY)), JSON.stringify(openOf(FIVE))],
+  });
+
+  // Auto reload is off at open, so the view reads the route once, and the split button's Refresh reads it again.
+  const reads = countCalls('getAnalyticsReconciliations');
+  tick(60_000);
+  await page.settle();
+  const idle = reads.calls.length;
+  page.container.querySelector('.refresh-control__body[aria-label="Refresh"]')?.click();
+  await page.settle();
+  reads.restore();
+  results.push({ name: '/meter reads no row on its own with auto reload Off, and Refresh reads the route again', ok: idle === 0 && reads.calls.length === 1, missing: [`${idle} reads after a minute`, `${reads.calls.length} after Refresh`] });
+
+  // A click on the account link inside a line follows it, and never opens the line first.
+  const weeklyLine = lineOf(page, WEEKLY, 'nightly', '7-day');
+  weeklyLine?.querySelector('a')?.click();
+  await page.settle();
+  results.push({ name: "/meter the account link inside a line opens the account's detail", ok: page.location().pathname === '/accounts/nightly', missing: [JSON.stringify(page.location())] });
+  page.unmount();
+
+  // The Accounts filter narrows the view with its chip and its address, as the drift condition's link opens it.
+  const narrowed = recordedCalls('getAnalyticsReconciliations');
+  const filtered = await mount('/meter', { now: CLOCK_ORIGIN });
+  const picked = await pick(filtered, 'Account', 'nightly');
+  narrowed.restore();
+  const last = narrowed.calls.at(-1);
+  const mine = last?.answer?.reconciliations ?? [];
+  results.push({
+    name: "/meter the Accounts filter narrows the groups to nightly's three with the chip account: nightly and the address",
+    ok:
+      picked &&
+      chipRead(filtered, 'account') === 'account: nightly' &&
+      filtered.location().search === '?accounts=nightly' &&
+      JSON.stringify(last?.args) === '[{"accountIds":["nightly"]}]' &&
+      mine.length > 0 &&
+      mine.every((r) => r.accountId === 'nightly') &&
+      JSON.stringify(drawn(filtered, WEEKLY)) === '[["nightly","7-day"],["nightly","Fable"]]' &&
+      JSON.stringify(drawn(filtered, FIVE)) === '[["nightly","5-hour"]]' &&
+      countOf(filtered) === `3 groups, ${mine.length} windows`,
+    missing: [String(picked), chipRead(filtered, 'account'), filtered.location().search, JSON.stringify(last?.args), JSON.stringify(drawn(filtered, WEEKLY)), countOf(filtered) ?? 'no count'],
+  });
+  filtered.unmount();
+  const linked = await mount('/meter?accounts=nightly', { now: CLOCK_ORIGIN });
+  results.push({
+    name: "/meter opened on /meter?accounts=nightly, the drift condition's link, reads the chip and nightly's groups alone",
+    ok: chipRead(linked, 'account') === 'account: nightly' && JSON.stringify([...drawn(linked, WEEKLY), ...drawn(linked, FIVE)]) === '[["nightly","7-day"],["nightly","Fable"],["nightly","5-hour"]]',
+    missing: [chipRead(linked, 'account'), JSON.stringify([...drawn(linked, WEEKLY), ...drawn(linked, FIVE)])],
+  });
+  linked.unmount();
+
+  // Reserve priced nothing, so a filter on it reads the empty words naming it, and the empty store reads them bare.
+  const quiet = await mount('/meter?accounts=reserve', { now: CLOCK_ORIGIN });
+  const quietRead = [WEEKLY, FIVE].map((t) => text(cardOf(quiet, t)?.querySelector('.meter-table tbody td')));
+  quiet.unmount();
+  localStorage.setItem('phoebis.mockEmpty', '1');
+  const empty = await mount('/meter', { now: CLOCK_ORIGIN });
+  const emptyRead = [WEEKLY, FIVE].map((t) => text(cardOf(empty, t)?.querySelector('.meter-table tbody td')));
+  const emptyCount = countOf(empty);
+  empty.unmount();
+  localStorage.removeItem('phoebis.mockEmpty');
+  results.push({
+    name: '/meter with no completed window reads "No completed window yet" in each card, naming the account the bar narrows to',
+    ok: JSON.stringify(emptyRead) === '["No completed window yet","No completed window yet"]' && emptyCount === '0 groups, 0 windows' && JSON.stringify(quietRead) === '["No completed window yet for reserve","No completed window yet for reserve"]',
+    missing: [JSON.stringify(emptyRead), emptyCount ?? 'no count', JSON.stringify(quietRead)],
+  });
+
+  // A failed read draws the error state with Try again in each card, as the Routing log draws its own, and Try again
+  // reads the route again and draws the groups.
+  failNextCall('getAnalyticsReconciliations', '/admin/analytics/reconciliations', 'ledger locked');
+  const failed = await mount('/meter', { now: CLOCK_ORIGIN });
+  const errors = [WEEKLY, FIVE].map((t) => [text(cardOf(failed, t)?.querySelector('.empty--error .empty__title')), text(cardOf(failed, t)?.querySelector('.empty--error .empty__body')), text(cardOf(failed, t)?.querySelector('.empty--error button'))]);
+  [...(cardOf(failed, FIVE)?.querySelectorAll('.empty--error button') ?? [])][0]?.click();
+  await failed.settle();
+  const back = drawn(failed, FIVE);
+  // A page that never read the route leaves the failure armed, so the method goes back before the checks after this.
+  delete api.getAnalyticsReconciliations;
+  failed.unmount();
+  results.push({
+    name: '/meter a failed read draws the error state with Try again, which draws the groups',
+    ok: JSON.stringify(errors) === JSON.stringify([['Could not load the meter reconciliation', 'ledger locked', 'Try again'], ['Could not load the meter reconciliation', 'ledger locked', 'Try again']]) && JSON.stringify(back) === JSON.stringify(fiveWant),
+    missing: [JSON.stringify(errors), JSON.stringify(back)],
+  });
 }
 
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters
@@ -19872,29 +20313,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       JSON.stringify(budgetRows.filter((tr) => tr.children[2]?.textContent?.includes('not reported')).map((tr) => tr.children[1]?.textContent?.trim())) === JSON.stringify(unreported),
     missing: budgeted.rows.map((r) => r.join(' | ')),
   });
-  // The reconciled windows sit between the burn charts and the budgets. The story's one off window is nightly's newest
-  // 5-hour one, charged twice the table.
-  columnsMarked('/analytics the reconciliation table marks Upstream as its fill column', m.container.querySelector('.reconciliations-table'), ['Upstream']);
-  fillTitles('/analytics every Upstream cell of the reconciliation table carries its own text as its title', m.container.querySelector('.reconciliations-table'));
-  const reconciled = tableOf('Meter reconciliation');
-  const reconciledRows = [...(card('Meter reconciliation')?.querySelectorAll('tbody tr') ?? [])];
-  const badged = reconciledRows.filter((tr) => tr.querySelector('.badge') !== null);
-  const burnCards = [...(card('Meter reconciliation')?.closest('.analytics-section')?.querySelectorAll('.card__title') ?? [])].map((t) => t.textContent?.trim());
+  // The Burn section closes on Member budgets after the charts, and draws no reconciliation card: the reconciled
+  // windows are the Meter view's.
+  const burnCards = [...(m.container.querySelector('.analytics-section#burn')?.querySelectorAll('.card__title') ?? [])].map((t) => t.textContent?.trim());
   results.push({
-    name: '/analytics the Meter reconciliation card lists each completed window with the off ratio badged',
-    ok:
-      card('Meter reconciliation')?.closest('.analytics-section')?.id === 'burn' &&
-      burnCards.indexOf('Meter reconciliation') > 0 &&
-      burnCards.indexOf('Meter reconciliation') === burnCards.indexOf('Member budgets') - 1 &&
-      card('Meter reconciliation')?.querySelector('.card__subtitle')?.textContent ===
-        "For each completed 5-hour, 7-day and Fable window, the rise the upstream's readings showed against the share the router priced for its own requests in it: 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked." &&
-      JSON.stringify(reconciled.heads) === JSON.stringify(['Upstream', 'Window', 'Ended', 'Rise', 'Predicted', 'Ratio', 'Requests']) &&
-      reconciledRows.length > 2 &&
-      reconciledRows.every((tr, i) => tr.classList.contains('is-alt') === (i % 2 === 1)) &&
-      JSON.stringify([...new Set(reconciled.rows.map((r) => r[1]))].sort()) === JSON.stringify(['5h', '7d', 'Fable']) &&
-      JSON.stringify(badged.map((tr) => [tr.children[0]?.textContent?.trim(), tr.children[1]?.textContent?.trim(), [...tr.children[5].querySelectorAll('.badge')].map((b) => [b.className, b.textContent?.trim()])])) ===
-        JSON.stringify([['nightly', '5h', [['badge badge--warning', '2.00']]]]),
-    missing: [JSON.stringify(burnCards), JSON.stringify(reconciled.heads), ...reconciledRows.map((tr) => `${tr.className || 'no class'}: ${[...tr.children].map((td) => td.textContent?.trim()).join(' | ')}`)],
+    name: '/analytics the Burn section closes on Member budgets after the charts, with no reconciliation card',
+    ok: JSON.stringify(burnCards) === JSON.stringify(['5-hour per hour', '7-day per hour', 'Model week per hour', 'Spend per minute', 'Member budgets']),
+    missing: burnCards,
   });
 }
 {

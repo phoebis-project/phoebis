@@ -46,8 +46,13 @@ padding and top, the width its text needs recorded, and the By column as wide as
 two pins the story stamps in the mock pass alone (on the next request of the shed session and of the failed-over
 session, the origin chip opening on `shed from` or `failed over from`, against the chip of the instant beside it in box,
 type, ink and top, its label against that chip's label in type and ink, and its text whole), the Diagnostics group
-(neither its heading nor the Routing log link on the dashboard with the expert view off, both with the log open and the
-link active), pool chips, the caching controls, the Load shedding switch against Migrate when spent, the Burn average
+(neither its heading nor a link of it on the dashboard with the expert view off, and with the Routing log or the Meter
+view open the heading over the two links in that order and the open view's link active), the Meter view's group tables
+at 1280 by 800, 1440 by 900, 1920 by 1080 and 375 by 800 (mock pass: each fit column as wide as its widest cell past the
+30 px gutter, Account the fill at its 132 px floor or wider, each table inside its wrap on the three wide viewports, and
+at 375 the document as wide as the window with each table scrolling inside its wrap and the first Latest ratio cell in
+view, a collapsed line 37.8 px at 1280 by 800 badged or plain, and an open group's height recorded), pool chips, the
+caching controls, the Load shedding switch against Migrate when spent, the Burn average
 field's hint in the expert view (ending on the preset that unlocks the field, against the Window ceiling field's hint
 beside it in type, ink, line height, margin, left edge and top, and as wide as its field), the Wind down and Retention
 hints of the pool dialog (the Wind down hint naming the canceled subscription against the Return dwell hint beside it,
@@ -79,9 +84,10 @@ seat's spend bar there at 1280 and 400 by 800 (mock pass: its row as wide as a w
 edge where the two share a column, the amount spent of the limit in its head, and its reset on one line inside the bar
 with the estimate's word muted and its sentence on hover), the plan badges' words on the seat's row and the plan-ended
 account's row against the first other row's, the Accounts detail's allowance grid at 1280 by 800, 1440 by 900 and 375 by
-800 (mock pass: "Allowance left at reset" across the pane's content box at each width, as wide as the Usage and Requests
-cards and in their title's type at 1280 and 375 px and alone in its grid at 1440 px, the grid inside the pane with
-nothing in it scrolling sideways and every card's right edge inside it),
+800 (mock pass: "Allowance left at reset" and "Meter drift" stacked across the pane's content box at 1280 and 375 px,
+each as wide as the Usage and Requests cards and in their title's type, and at 1440 px side by side on one top, as wide
+as each other and as the Usage card and each under half the pane, the grid inside the pane with nothing in it scrolling
+sideways and every card's right edge inside it),
 the account lines, the Quota cards' poll lines (short of the
 Refresh pill and inside the card, the backoff line in the serious ink, none wrapping, a failed poll's reason cut inside
 its line and whole in its title where a listed card draws one), the Quota cards' chips and reset cells (each chip and
@@ -124,9 +130,10 @@ request tile's first figure, and the Cost by card's note on a line of its own un
 edge, in its type and ink, its text recorded), the burn cards (an odd last card spanning its row, and in the mock pass
 four cards two by two at 1440 by 900 under the key grouping), the Errors by code card's subtitle (its text, in the type
 and ink of the Refusals by code card's subtitle), the plan legend's estimated entry (a hollow swatch) and model unlisted
-entry, the placement and budget tables, the Unused allowance by account card (mock pass: below Accounts in range, its
-columns under the width rule with Account the fill at 1280 by 800, and its Account column at 375 by 800 at least 132 px
-with a 132 px min-width, as wide as Accounts in range's),
+entry, the placement and budget tables (the Burn section's cards closing on Member budgets after the charts), the Unused
+allowance by account card (mock pass: below Accounts in range, its columns under the width rule with Account the fill at
+1280 by 800, and its Account column at 375 by 800 at least 132 px with a 132 px min-width, as wide as Accounts in
+range's),
 the Analytics tables' columns, each read on the tab that draws it (the Traffic
 breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Cache by model's
 width recorded under native with every column inside its wrap at 1280 by 800 and in the mock pass a cost cell's billed

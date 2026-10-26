@@ -269,6 +269,13 @@ export const ROUTING_LOG_CODEC = codecOf<LogFilters>({
   range: { default: '1h', kind: 'range', presets: RANGE_PRESETS },
 });
 
+/** The Meter view's one filter. */
+export interface MeterAddress {
+  accounts: string[];
+}
+
+export const METER_CODEC = codecOf<MeterAddress>({ accounts: list('accounts') });
+
 export interface KeysAddress {
   pools: string[];
   search: string;

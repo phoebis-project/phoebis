@@ -6,7 +6,7 @@ import { api } from '@/api';
 import { windowId } from '@/api/decode';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, ReconciliationsAnswer, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -20,19 +20,19 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { addressWindow, ANALYTICS_CODEC, type AnalyticsAddress, RANGE_PRESETS } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceColumnWord, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, ratioOff, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, GROUPED_SHARE_NOTE, MAX_BURN_LINES, NATIVE_7D_SUBSET, NATIVE_SUBSET, ONE_ACCOUNT_SHARE_NOTE, UNIT_SUBSET, addReadWrite, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, modelGroupLabel, moveLabel, nativeCellOf, netSaving, niceAxisTop, oneAccountGroupOf, oneAccountShares, own, placementCells, placementRungLabel, planRowsRequired, probeMarked, probesRequired, readBurn, sampledWindows, savingRequired, shareLines, shareRow, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, weekColumnOf, weekKeyOf, weekLabelOf, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
 import { bandRuns } from '@/lib/costs';
 import { ANALYTICS_DIMENSIONS, chipText } from '@/lib/filterBar';
 import { effectiveInterval, readEnd, spanEnded } from '@/lib/follow';
-import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtEquivalent, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, instant, pct, shareLabel, shortId, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
+import { ESTIMATED_TITLE, equivalentShort, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtEquivalent, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, pct, shareLabel, shortId, upperFirst, usdTickDigits, withEstimate } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useQueryFilters, useRangeTakenAt, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
 import { linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
-import { WINDOW_WORD, words } from '@/lib/routingLog';
+import { words } from '@/lib/routingLog';
 import { UNIT_FUNDING, UNIT_POSITIONS, type UnitPosition } from '@/lib/unit';
 import { WINDOW_LABEL } from '@/lib/windows';
 
@@ -455,8 +455,6 @@ export function AnalyticsPage() {
     reload,
   );
   const budgets = useAsync(() => (tab === 'burn' ? api.analyticsBudgets() : Promise.resolve(null)), [tab]);
-  // The route reads the trailing 30 days whatever the range, so the Accounts filter alone narrows the card.
-  const reconciliations = useAsync(() => (tab === 'burn' ? api.getAnalyticsReconciliations({ accountIds: filters.accountId }) : Promise.resolve(null)), [tab, filters.accountId]);
   // With no filter and no session the page's breakdown is the range's whole key list on its grouping.
   const plain = sessionId === null && filters.accountId.length === 0 && filters.keyId.length === 0 && filters.model.length === 0 && filters.poolId.length === 0 && classPattern.trim() === '' && userAgentPattern.trim() === '' && !includeProbes && agentGroups === undefined;
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId, generation, plain && groupBy === DIM_GROUP.accountId ? breakdown : undefined);
@@ -493,14 +491,13 @@ export function AnalyticsPage() {
   const stale = series.stale || breakdown.stale || log.stale;
   // An outage of the ledger fails the section and filter-choice reads with these three, and Try again and the bar's
   // Refresh are the controls that read again, so they read everything the view draws from: the reads keyed on the
-  // window through the moved end and the generation in one update, so none runs twice, and the three with no window
-  // by reloading.
+  // window through the moved end and the generation in one update, so none runs twice, and the two with no window by
+  // reloading.
   const retry = () => {
     setNow(clock.now());
     setGeneration((g) => g + 1);
     budgets.reload();
     costSettings.reload();
-    reconciliations.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -762,7 +759,6 @@ export function AnalyticsPage() {
             sized={sized}
             slotOf={slotOf}
           />
-          <ReconciliationTable answer={reconciliations.stale ? null : reconciliations.data} error={reconciliations.error} now={now} />
           <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
         </Section>
       )}
@@ -2740,65 +2736,6 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
               <tr>
                 <td colSpan={6} className={error ? '' : 'muted'}>
                   {error ? <ErrorState title="Could not load the placements" body={error} /> : rows === null ? <Skeleton height={22} /> : 'No placements in range'}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  );
-}
-
-const RECONCILIATION_HINT =
-  "For each completed 5-hour, 7-day and Fable window, the rise the upstream's readings showed against the share the router priced for its own requests in it: 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked.";
-
-/** Each account's completed windows against the meter, newest first, with a ratio the condition marks badged. */
-function ReconciliationTable({ answer, error, now }: { answer: ReconciliationsAnswer | null; error: string | null; now: number }) {
-  const rows = answer?.reconciliations ?? null;
-  return (
-    <Card title="Meter reconciliation" subtitle={RECONCILIATION_HINT} padded={false} className="card--table">
-      <div className="table-wrap">
-        <table className="table reconciliations-table">
-          <thead>
-            <tr>
-              <th className="col-fill">Upstream</th>
-              <th className="col-fit">Window</th>
-              <th className="col-fit">Ended</th>
-              <th className="right col-fit">Rise</th>
-              <th className="right col-fit">Predicted</th>
-              <th className="right col-fit">Ratio</th>
-              <th className="right col-fit">Requests</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rows ?? []).map((r, i) => (
-              <tr key={`${r.accountId}-${r.window}-${r.windowEnd}`} className={i % 2 === 1 ? 'is-alt' : undefined}>
-                <td className="mono col-fill" title={r.accountId}>
-                  <Link to={`/accounts/${encodeURIComponent(r.accountId)}`}>{r.accountId}</Link>
-                </td>
-                <td className="col-fit">{own(WINDOW_WORD, r.window) ? WINDOW_WORD[r.window] : r.window}</td>
-                <td className="col-fit" title={`${fmtAbsolute(r.windowEnd)}, reconciled ${fmtAbsolute(r.computedAt)}`}>
-                  <span className="num">{instant(Date.parse(r.windowEnd), now)}</span>
-                </td>
-                <td className="right num col-fit">{fmtShare(r.observedRise)}</td>
-                <td
-                  className="right num col-fit"
-                  title={r.estimated > 0 ? withEstimate(fmtShare(r.predictedShare), true) : undefined}
-                >
-                  {r.estimated > 0 ? `~${fmtShare(r.predictedShare)}` : fmtShare(r.predictedShare)}
-                </td>
-                {/* A ratio just past an edge prints as the edge at two decimals, so the title carries four. */}
-                <td className="right num col-fit" title={r.ratio.toFixed(4)}>
-                  {ratioOff(r) ? <Badge tone="warning">{r.ratio.toFixed(2)}</Badge> : r.ratio.toFixed(2)}
-                </td>
-                <td className="right num col-fit">{fmtInt(r.requests)}</td>
-              </tr>
-            ))}
-            {(rows === null || rows.length === 0) && (
-              <tr>
-                <td colSpan={7} className={error ? '' : 'muted'}>
-                  {error ? <ErrorState title="Could not load the meter reconciliation" body={error} /> : rows === null ? <Skeleton height={22} /> : 'No completed window yet'}
                 </td>
               </tr>
             )}
