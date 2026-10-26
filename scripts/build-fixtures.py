@@ -33,6 +33,7 @@ CONTROL_PLANE = {
     "control_profile.http",
     "control_roles.http",
     "control_token.http",
+    "control_token_code.http",
     "control_usage.http",
     "hello_control.hex",
     "responses/profile.json",
@@ -100,6 +101,12 @@ PROMPT_ID_PLACEHOLDER = "33333333-3333-4333-8333-333333333333"
 REQUEST_ID_PLACEHOLDER = "22222222-2222-4222-8222-222222222222"
 SESSION_ID_PLACEHOLDER = "11111111-1111-4111-8111-111111111111"
 
+# The authorization-code grant's two nonces, which the client mints with randomBytes(32) for every login. A code
+# fixture that kept them would report drift on every later capture of the same build. check() writes its fresh side
+# through control() as well, so two logins of one build write the same bytes.
+CODE_VERIFIER_PLACEHOLDER = "CODE-VERIFIER-PLACEHOLDER"
+STATE_PLACEHOLDER = "STATE-PLACEHOLDER"
+
 
 def redact(line: str) -> str:
     line = re.sub(r"Bearer sk-ant-oat01-\S+", "Bearer sk-ant-oat01-PLACEHOLDER", line)
@@ -148,9 +155,63 @@ def head(entry, content_length=None):
 def control(entry, name, out):
     body = entry.get("body", "")
     body = re.sub(r"sk-ant-ort01-\S+?\"", 'sk-ant-ort01-PLACEHOLDER"', body)
+    body = re.sub(r'"code_verifier":"[^"]*"', f'"code_verifier":"{CODE_VERIFIER_PLACEHOLDER}"', body)
+    body = re.sub(r'"state":"[^"]*"', f'"state":"{STATE_PLACEHOLDER}"', body)
     lines = [entry["request_line"]] + [redact(h) for h in entry["headers"]]
     lines = [l if not l.startswith("Content-Length:") else f"Content-Length: {len(body)}" for l in lines]
     (out / name).write_bytes(("\r\n".join(lines) + "\r\n\r\n").encode() + body.encode())
+
+
+def control_fixtures(control_dir: pathlib.Path, out: pathlib.Path, responses: pathlib.Path) -> list[str]:
+    """Write the control fixtures from the control receiver's recordings in `control_dir`, one file per phase, and
+    copy the canned responses the receiver answered with from `responses` into `out/responses/`.
+
+    Each fixture is the first request of its kind across the phase files in name order, so a retried refresh grant
+    leaves the first one pinned. A grant or read the recording lacks writes nothing, for check() to report as not
+    captured. Returns the names of the fixtures written.
+    """
+    if not control_dir.is_dir():
+        raise SystemExit(f"{control_dir} is not a directory of control recordings")
+    (out / "responses").mkdir(parents=True, exist_ok=True)
+    entries = []
+    for path in sorted(control_dir.glob("*.json")):
+        entries.extend(json.load(open(path)))
+    # A connection that failed before its request was read leaves an error entry with no request line.
+    requests = [e for e in entries if "request_line" in e]
+
+    def grant(entry):
+        try:
+            body = json.loads(entry.get("body", ""))
+        except ValueError:
+            return None
+        return body.get("grant_type") if isinstance(body, dict) else None
+
+    def first(method, path, grant_type):
+        for entry in requests:
+            parts = entry["request_line"].split(" ")
+            if len(parts) < 2 or parts[0] != method or parts[1].split("?", 1)[0] != path:
+                continue
+            if grant_type is None or grant(entry) == grant_type:
+                return entry
+        return None
+
+    written = []
+    for name, method, path, grant_type in (
+        ("control_profile.http", "GET", "/api/oauth/profile", None),
+        ("control_roles.http", "GET", "/api/oauth/claude_cli/roles", None),
+        ("control_token.http", "POST", "/v1/oauth/token", "refresh_token"),
+        ("control_token_code.http", "POST", "/v1/oauth/token", "authorization_code"),
+        ("control_usage.http", "GET", "/api/oauth/usage", None),
+    ):
+        entry = first(method, path, grant_type)
+        if entry is not None:
+            control(entry, name, out)
+            written.append(name)
+    # The builder's own write passes the committed responses as the source and the tree holding them as `out`.
+    if (out / "responses").resolve() != responses.resolve():
+        for name in ("profile.json", "roles.json", "token.json", "usage.json"):
+            shutil.copyfile(responses / name, out / "responses" / name)
+    return written
 
 
 def inference_entries(cm: list) -> list:
@@ -168,11 +229,12 @@ def count_entries(cm: list) -> list:
     return [(i, e) for i, e in enumerate(cm) if e["request_line"].startswith("POST /v1/messages/count_tokens")]
 
 
-def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True) -> None:
+def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True, control: pathlib.Path | None = None) -> None:
     """Write the fixture tree at `out`, sourced from the capture directory `src`.
 
-    `src/mitm/` is optional: a capture without it holds the inference plane only, and the control fixtures and
-    canned responses are left unwritten for `check()` to report as not captured.
+    The control plane is read from the control receiver's recordings in `control`, or in `src/control/` when
+    `control` is None and that directory exists. A capture without either holds the inference plane only, and the
+    control fixtures and canned responses are left unwritten for `check()` to report as not captured.
 
     The bodies are written redacted, and with `resign` their cch digits are re-signed over the redacted bytes.
     `check()` builds with `resign` off, since its comparison masks the digits and `check_hashes` grades the raw
@@ -223,26 +285,12 @@ def build(src: pathlib.Path, out: pathlib.Path, resign: bool = True) -> None:
         ctl = next((h for h in conn if h.get("hello_len") == CONTROL_HELLO_LEN), None)
         if ctl is not None:
             (out / "hello_control.hex").write_text(ctl["raw_hex"] + "\n")
-    if not (src / "mitm").is_dir():
-        return
-    login = json.load(open(src / "mitm/login.json"))
-    status = json.load(open(src / "mitm/status.json"))
-    control(login[0], "control_token.http", out)
-    control(login[1], "control_profile.http", out)
-    control(login[3], "control_roles.http", out)
-    control(status[15], "control_usage.http", out)
-    # The tunnel harness answered these synthetic bodies; they are the fake upstream's canned responses.
-    harness = (src / "mitm/mitm5.py").read_text()
-    for name, var in [("token", "TOKEN"), ("profile", "PROFILE"), ("usage", "USAGE")]:
-        m = re.search(rf"^{var}=json\.dumps\((.*)\)\.encode\(\)$", harness, re.M)
-        assert m, f"mitm5.py no longer defines {var} as a single json.dumps(...).encode() literal"
-        value = eval(m.group(1), {"False": False, "None": None, "True": True})
-        if name == "token":
-            # The canned token response's access/refresh tokens are credential-shaped; redact them like every other.
-            value["access_token"] = "sk-ant-oat01-PLACEHOLDER"
-            value["refresh_token"] = "sk-ant-ort01-PLACEHOLDER"
-        (out / "responses" / f"{name}.json").write_text(json.dumps(value, separators=(",", ":")) + "\n")
-    (out / "responses/roles.json").write_text('{"organization_role":"admin","workspace_role":"workspace_admin"}\n')
+    if control is None:
+        control = src / "control"
+        if not control.is_dir():
+            return
+    # The control receiver answers from the committed responses, so they are the canned bodies this capture saw.
+    control_fixtures(control, out, FIXTURES / "responses")
 
 
 def build_count(src: pathlib.Path, out: pathlib.Path) -> None:
@@ -262,8 +310,9 @@ def build_count(src: pathlib.Path, out: pathlib.Path) -> None:
                 f"{src}/{mode}/clean_modes.json declares Content-Length {declared} on its count_tokens entry, "
                 f"but the body captured beside it is {len(body)} bytes"
             )
-        (out / f"{mode}.json").write_bytes(body)
-        (out / f"{mode}.http").write_bytes(head(entry, len(body)))
+        written = redact_body(body)
+        (out / f"{mode}.json").write_bytes(written)
+        (out / f"{mode}.http").write_bytes(head(entry, len(written)))
 
 
 def mask_hello(raw: bytes) -> bytes:
@@ -323,6 +372,9 @@ def _self_test() -> None:
     _self_test_redact_head()
     _self_test_build_redacts()
     _self_test_resign_written()
+    _self_test_control_selection()
+    _self_test_build_reads_control()
+    _self_test_build_count_redacts()
 
 
 def _self_test_declared_length() -> None:
@@ -373,10 +425,11 @@ def _self_test_count_selector() -> None:
     print("self-test passed: the inference selector and the count selector take one entry each")
 
 
-def _count_capture(root: pathlib.Path, session: bytes) -> pathlib.Path:
+def _count_capture(root: pathlib.Path, session: bytes, members: bytes = b"") -> pathlib.Path:
     """A capture directory shaped like the one the count script writes: one inference entry and one count entry
-    per mode, the count body carrying a per-run session id for the normaliser to mask."""
-    content = rb'{\"session_id\":\"' + session + rb'\"}'
+    per mode, the count body carrying the escaped `members` given and a per-run session id for the normalizer to
+    mask."""
+    content = b"{" + members + rb'\"session_id\":\"' + session + rb'\"}'
     body = rb'{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"' + content + rb'"}]}'
     for mode in COUNT_MODES:
         (root / mode).mkdir(parents=True)
@@ -422,7 +475,8 @@ def _self_test_capture_partition() -> None:
         build_count(capture, tree)
         # The committed copy carries the session id of another run: a count body reaches normalize_body only
         # because normalize_tree routes count_ names to it, and without that this reads as drift.
-        stale = (tree / "count_oauth.json").read_bytes().replace(recorded, b"b2b1f4ca-1f6e-4a52-9d54-2f9b4a6c0e11")
+        written = (tree / "count_oauth.json").read_bytes()
+        stale = written.replace(SESSION_ID_PLACEHOLDER.encode(), b"b2b1f4ca-1f6e-4a52-9d54-2f9b4a6c0e11")
         (tree / "count_oauth.json").write_bytes(stale)
         if check_count(capture, tree) != 0:
             raise AssertionError("check_count reported drift against the fixtures it just built")
@@ -533,7 +587,7 @@ def _self_test_redact_head() -> None:
     """A written head carries the session and request placeholders, and the credentials and the Host line
     redact as before."""
     cases = {
-        "Authorization: Bearer sk-ant-oat01-REAL": "Authorization: Bearer sk-ant-oat01-PLACEHOLDER",
+        "Authorization: Bearer sk-ant-oat01-DUMMYOAUTH": "Authorization: Bearer sk-ant-oat01-PLACEHOLDER",
         "Host: 127.0.0.1:48442": "Host: api.anthropic.com",
         "x-api-key: sk-ant-api03-capture-dummy": "x-api-key: sk-ant-api03-PLACEHOLDER",
         "X-Claude-Code-Session-Id: " + _TEST_SESSION_ID.decode(): f"X-Claude-Code-Session-Id: {SESSION_ID_PLACEHOLDER}",
@@ -626,6 +680,202 @@ def _self_test_resign_written() -> None:
                 del os.environ["PATH"]
             else:
                 os.environ["PATH"] = saved_path
+
+
+def _control_entry(seq: int, request_line: str, body: str = "") -> dict:
+    """A request entry in the layout scripts/capture/control_receiver.py records."""
+    host = "platform.claude.com" if " /v1/oauth/" in request_line else "api.anthropic.com"
+    headers = ["Accept: application/json, text/plain, */*", f"Host: {host}"]
+    if body:
+        headers += ["Content-Type: application/json", f"Content-Length: {len(body)}"]
+    return {
+        "seq": seq,
+        "target": f"{host}:443",
+        "request_line": request_line,
+        "headers": headers,
+        "body": body,
+        "answered": 200,
+    }
+
+
+def _code_grant(state: str, verifier: str) -> str:
+    """An authorization-code grant body carrying the two nonces given."""
+    members = {"grant_type": "authorization_code", "code": "DUMMYCODE", "state": state, "code_verifier": verifier}
+    return json.dumps(members, separators=(",", ":"))
+
+
+def _self_test_control_selection() -> None:
+    """The first request of each kind becomes its fixture, a grant the recording lacks writes nothing, the code
+    grant's nonces leave no trace in its fixture, and the canned responses land beside the fixtures."""
+    refresh = '{"grant_type":"refresh_token","refresh_token":"sk-ant-ort01-X"}'
+    retry = '{"grant_type":"refresh_token","refresh_token":"sk-ant-ort01-Y","scope":"user:inference"}'
+    first_nonces = ("A" * 43, "B" * 43)
+    other_nonces = ("C" * 43, "D" * 43)
+    responses_names = ("profile.json", "roles.json", "token.json", "usage.json")
+    all_names = [
+        "control_profile.http",
+        "control_roles.http",
+        "control_token.http",
+        "control_token_code.http",
+        "control_usage.http",
+    ]
+
+    def recording(root: pathlib.Path, nonces: tuple | None) -> pathlib.Path:
+        """Two phase files in the receiver's layout, opening with a failed connection's error entry, the code
+        grant left out when `nonces` is None."""
+        root.mkdir()
+        first = [
+            {"seq": 0, "target": "?", "error": "ConnectionError('closed after 0 bytes of an unfinished head')"},
+            _control_entry(1, "POST /v1/oauth/token HTTP/1.1", refresh),
+            _control_entry(2, "POST /v1/oauth/token HTTP/1.1", retry),
+            _control_entry(3, "GET /api/oauth/profile HTTP/1.1"),
+        ]
+        second = [_control_entry(4, "GET /api/oauth/claude_cli/roles HTTP/1.1")]
+        if nonces is not None:
+            second.append(_control_entry(5, "POST /v1/oauth/token HTTP/1.1", _code_grant(*nonces)))
+        second.append(_control_entry(6, "GET /api/oauth/usage?x=1 HTTP/1.1"))
+        # Written in reverse, so the order read is the names' rather than the order the files were made in.
+        (root / "phase-2.json").write_text(json.dumps(second))
+        (root / "phase-1.json").write_text(json.dumps(first))
+        return root
+
+    def split(path: pathlib.Path) -> tuple[list, bytes]:
+        head_bytes, _, body = path.read_bytes().partition(b"\r\n\r\n")
+        return head_bytes.decode().split("\r\n"), body
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        responses = root / "responses"
+        responses.mkdir()
+        for name in responses_names:
+            (responses / name).write_text(json.dumps({"canned": name}) + "\n")
+
+        full = root / "full"
+        names = control_fixtures(recording(root / "control-full", first_nonces), full, responses)
+        if sorted(names) != all_names:
+            raise AssertionError(f"control_fixtures returned {names}, want {all_names}")
+        written = sorted(p.name for p in full.glob("control_*.http"))
+        if written != all_names:
+            raise AssertionError(f"control_fixtures wrote {written}, want {all_names}")
+        _, body = split(full / "control_token.http")
+        if body != b'{"grant_type":"refresh_token","refresh_token":"sk-ant-ort01-PLACEHOLDER"}':
+            raise AssertionError(f"the token fixture carries {body!r}, want the first refresh grant redacted")
+        lines, body = split(full / "control_token_code.http")
+        for wanted in (
+            b'"grant_type":"authorization_code"',
+            b'"code_verifier":"' + CODE_VERIFIER_PLACEHOLDER.encode() + b'"',
+            b'"state":"' + STATE_PLACEHOLDER.encode() + b'"',
+        ):
+            if wanted not in body:
+                raise AssertionError(f"the code fixture carries no {wanted!r}: {body!r}")
+        for nonce in first_nonces:
+            if nonce.encode() in body:
+                raise AssertionError(f"the code fixture kept the nonce {nonce!r}")
+        if f"Content-Length: {len(body)}" not in lines:
+            raise AssertionError(f"the code fixture's head declares no Content-Length {len(body)}: {lines!r}")
+        usage_line = split(full / "control_usage.http")[0][0]
+        if usage_line != "GET /api/oauth/usage?x=1 HTTP/1.1":
+            raise AssertionError(f"the usage fixture opens with {usage_line!r}, want its query kept")
+        for name in responses_names:
+            if (full / "responses" / name).read_bytes() != (responses / name).read_bytes():
+                raise AssertionError(f"control_fixtures did not copy responses/{name}")
+        print("self-test passed: control_fixtures takes the first request of each kind and copies the responses")
+
+        # The builder's own write reads the canned responses from the tree it writes to.
+        control_fixtures(root / "control-full", full, full / "responses")
+        for name in responses_names:
+            if (full / "responses" / name).read_bytes() != (responses / name).read_bytes():
+                raise AssertionError(f"control_fixtures changed responses/{name} copying it onto itself")
+        print("self-test passed: control_fixtures leaves the responses alone when source and target are one")
+
+        partial = root / "partial"
+        names = control_fixtures(recording(root / "control-partial", None), partial, responses)
+        want = [name for name in all_names if name != "control_token_code.http"]
+        if sorted(names) != want or (partial / "control_token_code.http").exists():
+            raise AssertionError(f"a recording without a code grant wrote {names}, want {want}")
+        print("self-test passed: a recording without a code grant writes the four other fixtures")
+
+        again = root / "again"
+        control_fixtures(recording(root / "control-again", other_nonces), again, responses)
+        if (again / "control_token_code.http").read_bytes() != (full / "control_token_code.http").read_bytes():
+            raise AssertionError("two code grants differing in their nonces alone wrote different fixtures")
+        print("self-test passed: two code grants differing in their nonces alone write the same fixture")
+
+        reordered = {"code_verifier": other_nonces[1], "grant_type": "authorization_code", "state": other_nonces[0]}
+        entry = _control_entry(7, "POST /v1/oauth/token HTTP/1.1", json.dumps(reordered, separators=(",", ":")))
+        control(entry, "reordered.http", root)
+        body = (root / "reordered.http").read_bytes()
+        if any(nonce.encode() in body for nonce in other_nonces):
+            raise AssertionError(f"control kept a nonce of a grant in another member order: {body!r}")
+        print("self-test passed: control replaces the nonces in any member order")
+
+
+def _self_test_build_reads_control() -> None:
+    """build reads the control plane from the capture's control/ directory, or from the directory `control`
+    names in its place, copies the committed canned responses beside it, and refuses a `control` that is not a
+    directory."""
+    refresh = '{"grant_type":"refresh_token","refresh_token":"sk-ant-ort01-X"}'
+    token = _control_entry(0, "POST /v1/oauth/token HTTP/1.1", refresh)
+    profile = _control_entry(1, "GET /api/oauth/profile HTTP/1.1")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        src = _inference_capture(root / "capture")
+        (src / "control").mkdir()
+        (src / "control" / "refresh.json").write_text(json.dumps([token, profile]))
+        named = root / "named"
+        named.mkdir()
+        (named / "refresh.json").write_text(json.dumps([token]))
+
+        build(src, root / "own", resign=False)
+        own = sorted(p.name for p in (root / "own").glob("control_*.http"))
+        if own != ["control_profile.http", "control_token.http"]:
+            raise AssertionError(f"the build of a capture with control/ wrote {own}")
+        for name in ("profile.json", "roles.json", "token.json", "usage.json"):
+            if (root / "own" / "responses" / name).read_bytes() != (FIXTURES / "responses" / name).read_bytes():
+                raise AssertionError(f"the build wrote a responses/{name} other than the committed one")
+        print("self-test passed: build reads the capture's control/ directory and copies the committed responses")
+
+        build(src, root / "other", resign=False, control=named)
+        other = sorted(p.name for p in (root / "other").glob("control_*.http"))
+        if other != ["control_token.http"]:
+            raise AssertionError(f"the build given another control directory wrote {other}")
+        print("self-test passed: build reads the control directory it is given in place of the capture's")
+
+        try:
+            build(src, root / "missing", resign=False, control=root / "absent")
+        except SystemExit as e:
+            if str(root / "absent") not in str(e):
+                raise AssertionError(f"the build refused for the wrong reason: {e}") from e
+            print("self-test passed: build refuses a control directory that does not exist")
+        else:
+            raise AssertionError("the build went on with a control directory that does not exist")
+
+
+def _self_test_build_count_redacts() -> None:
+    """A written count body carries the placeholders in place of the capture's ids, and its head declares the
+    length of the body written."""
+    # The emptied account_uuid shortens the body, so a head sized from the captured body would declare too much.
+    members = rb'\"device_id\":\"' + _TEST_DEVICE_ID + rb'\",\"account_uuid\":\"' + _TEST_ACCOUNT_UUID + rb'\",'
+    with tempfile.TemporaryDirectory() as tmp:
+        capture = _count_capture(pathlib.Path(tmp) / "capture", _TEST_SESSION_ID, members)
+        out = pathlib.Path(tmp) / "out"
+        out.mkdir()
+        build_count(capture, out)
+        for mode in COUNT_MODES:
+            body = (out / f"{mode}.json").read_bytes()
+            for wanted in (
+                rb'\"device_id\":\"' + DEVICE_ID_PLACEHOLDER.encode() + rb'\"',
+                rb'\"session_id\":\"' + SESSION_ID_PLACEHOLDER.encode() + rb'\"',
+            ):
+                if wanted not in body:
+                    raise AssertionError(f"build_count wrote {mode}.json without {wanted!r}")
+            for original in (_TEST_ACCOUNT_UUID, _TEST_DEVICE_ID, _TEST_SESSION_ID):
+                if original in body:
+                    raise AssertionError(f"build_count kept {original!r} in {mode}.json")
+            lines = (out / f"{mode}.http").read_bytes().decode().split("\r\n")
+            if f"Content-Length: {len(body)}" not in lines:
+                raise AssertionError(f"build_count wrote {mode}.http without Content-Length {len(body)}")
+        print("self-test passed: build_count writes redacted bodies and heads sized to them")
 
 
 def _self_test_mask_hello() -> None:
@@ -722,7 +972,7 @@ def _self_test_normalize_body() -> None:
     reduced_head = b"POST /v1/messages HTTP/1.1\r\nx-app: cli\r\n\r\n"
     restored_head = (
         b"POST /v1/messages HTTP/1.1\r\nx-app: cli\r\n"
-        b"x-client-request-id: 33333333-3333-4333-8333-333333333333\r\n\r\n"
+        b"x-client-request-id: " + _TEST_REQUEST_ID + b"\r\n\r\n"
     )
     classed_head = b"POST /v1/messages HTTP/1.1\r\nx-app: cli\r\nx-claude-code-request-class: main\r\n\r\n"
     assert reduced_body != restored_body and reduced_head != restored_head, "self-test feeds identical fixtures"
@@ -952,10 +1202,15 @@ def partition_names(committed: dict, fresh: dict, uncaptured_set: set) -> tuple[
     return others, counts, diffs
 
 
-def check(capture_dir: pathlib.Path, baseline: pathlib.Path | None = None, skip_hashes: bool = False) -> int:
+def check(
+    capture_dir: pathlib.Path,
+    baseline: pathlib.Path | None = None,
+    skip_hashes: bool = False,
+    control: pathlib.Path | None = None,
+) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         fresh_dir = pathlib.Path(tmp) / "fixtures"
-        build(capture_dir, fresh_dir, resign=False)
+        build(capture_dir, fresh_dir, resign=False, control=control)
         if THROUGH_ROUTER:
             for line in restored_report(fresh_dir):
                 print(line)
@@ -1052,6 +1307,11 @@ def main() -> int:
         metavar="DIR",
         help="build (or --check) the count_tokens fixtures from the capture directory the count script wrote",
     )
+    parser.add_argument(
+        "--control",
+        metavar="DIR",
+        help="read the control plane from this directory of control receiver recordings instead of capture_dir/control",
+    )
     parser.add_argument("--self-test", action="store_true", help="run mask_hello's bounds-check self-test and exit")
     args = parser.parse_args()
     if args.self_test:
@@ -1067,10 +1327,11 @@ def main() -> int:
         print("count fixtures written:", sorted(COUNT_FIXTURES))
         return 0
     src = pathlib.Path(args.capture_dir).expanduser()
+    control = pathlib.Path(args.control).expanduser() if args.control else None
     if args.check:
         baseline = pathlib.Path(args.baseline).expanduser() if args.baseline else None
-        return check(src, baseline=baseline, skip_hashes=args.skip_hash_check)
-    build(src, FIXTURES)
+        return check(src, baseline=baseline, skip_hashes=args.skip_hash_check, control=control)
+    build(src, FIXTURES, control=control)
     print("fixtures written:", sorted(p.name for p in FIXTURES.rglob("*") if p.is_file()))
     return 0
 
